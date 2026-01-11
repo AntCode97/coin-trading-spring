@@ -41,9 +41,9 @@ echo -e "Tag: ${YELLOW}${TAG}${NC}"
 echo -e "Build Options: ${YELLOW}${BUILD_OPTS:-none}${NC}"
 echo ""
 
-# Docker 로그인 확인
+# Docker 로그인 확인 (credsStore 또는 auths 존재 여부)
 echo -e "${YELLOW}[1/4] Docker Hub 로그인 확인...${NC}"
-if ! docker info 2>/dev/null | grep -q "Username"; then
+if ! grep -qE '"(credsStore|auths)"' ~/.docker/config.json 2>/dev/null; then
     echo -e "${RED}Docker Hub에 로그인되어 있지 않습니다.${NC}"
     echo -e "다음 명령으로 로그인하세요: docker login"
     exit 1
