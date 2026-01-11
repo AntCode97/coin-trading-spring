@@ -51,8 +51,8 @@ spring:
       chat:
         options:
           model: gpt-5-mini
-          max-completion-tokens: 4096
-          temperature: 0.3
+#          max-completion-tokens: 4096
+#          temperature: 0.3
 
     # Google Gemini (현재 비활성화 - project-id 필수 문제)
     # google:
