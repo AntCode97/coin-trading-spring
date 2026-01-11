@@ -1,10 +1,10 @@
 package com.ant.cointrading.optimizer
 
 import com.ant.cointrading.config.LlmProperties
-import com.ant.cointrading.config.TradingProperties
 import com.ant.cointrading.notification.SlackNotifier
 import com.ant.cointrading.repository.AuditLogEntity
 import com.ant.cointrading.repository.AuditLogRepository
+import com.ant.cointrading.service.LlmPromptService
 import com.ant.cointrading.service.ModelSelector
 import com.fasterxml.jackson.databind.ObjectMapper
 import jakarta.annotation.PostConstruct
@@ -44,12 +44,12 @@ import java.time.temporal.ChronoUnit
 @Component
 class LlmOptimizer(
     private val llmProperties: LlmProperties,
-    private val tradingProperties: TradingProperties,
     private val optimizerTools: OptimizerTools,
     private val slackNotifier: SlackNotifier,
     private val auditLogRepository: AuditLogRepository,
     private val objectMapper: ObjectMapper,
-    private val modelSelector: ModelSelector
+    private val modelSelector: ModelSelector,
+    private val llmPromptService: LlmPromptService
 ) {
 
     private val log = LoggerFactory.getLogger(LlmOptimizer::class.java)
@@ -163,70 +163,17 @@ class LlmOptimizer(
     }
 
     /**
-     * 시스템 프롬프트 생성
+     * 시스템 프롬프트 로드 (DB에서 조회, 없으면 기본값)
      */
     private fun buildSystemPrompt(): String {
-        return """
-당신은 암호화폐 자동 매매 시스템의 전략 최적화 전문가입니다.
-
-## 역할
-- 거래 성과를 분석하고 전략 파라미터를 최적화합니다.
-- 제공된 도구(Tool)를 사용하여 데이터를 조회하고 설정을 변경합니다.
-
-## 사용 가능한 도구
-
-### 분석 도구
-- getPerformanceSummary(days): 최근 N일 성과 요약 조회
-- getStrategyPerformance(): 전략별 성과 비교
-- getDailyPerformance(days): 일별 성과 추이
-- getOptimizationReport(): 시스템 최적화 리포트
-- getRecentTrades(limit): 최근 거래 내역
-
-### 설정 조회 도구
-- getStrategyConfig(): 현재 전략 설정 조회
-- getStrategyGuide(): 전략별 가이드
-
-### 설정 변경 도구 (신중하게 사용)
-- setStrategy(strategyType): 전략 유형 변경
-- setMeanReversionThreshold(threshold): Mean Reversion 임계값 변경
-- setRsiThresholds(oversold, overbought): RSI 임계값 변경
-- setBollingerParams(period, stdDev): 볼린저 밴드 파라미터 변경
-- setGridLevels(levels): Grid 레벨 수 변경
-- setGridSpacing(spacingPercent): Grid 간격 변경
-- setDcaInterval(intervalMs): DCA 매수 간격 변경
-
-## 주의사항
-1. 먼저 getPerformanceSummary와 getStrategyConfig로 현재 상태를 파악하세요.
-2. getOptimizationReport로 시스템 권장사항을 확인하세요.
-3. 파라미터 변경은 명확한 근거가 있을 때만 수행하세요.
-4. 급격한 변경보다 점진적인 조정을 선호하세요.
-5. 변경 후 결과를 명확히 요약해 주세요.
-
-## 과적합 방지
-- 최근 며칠의 데이터만으로 큰 변경을 하지 마세요.
-- 30일 이상의 데이터를 기반으로 판단하세요.
-- 확실하지 않으면 변경하지 않는 것이 낫습니다.
-""".trimIndent()
+        return llmPromptService.getSystemPrompt()
     }
 
     /**
-     * 사용자 프롬프트 생성
+     * 사용자 프롬프트 로드 (DB에서 조회, 없으면 기본값)
      */
     private fun buildUserPrompt(): String {
-        return """
-최근 30일간의 거래 성과를 분석하고, 필요한 경우 전략 파라미터를 최적화해 주세요.
-
-다음 단계로 진행해 주세요:
-1. getPerformanceSummary(30)로 최근 30일 성과 확인
-2. getStrategyConfig()로 현재 전략 설정 확인
-3. getOptimizationReport()로 시스템 권장사항 확인
-4. 필요시 getStrategyPerformance()로 전략별 성과 비교
-5. 분석 결과를 바탕으로 파라미터 조정 여부 결정
-6. 조정이 필요하면 해당 설정 변경 도구 호출
-7. 최종 분석 결과 및 조치 사항 요약
-
-변경이 필요 없다면 "현재 설정 유지"라고 답변하고 그 이유를 설명해 주세요.
-""".trimIndent()
+        return llmPromptService.getUserPrompt()
     }
 
     /**

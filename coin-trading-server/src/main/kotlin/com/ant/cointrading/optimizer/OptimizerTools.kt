@@ -5,6 +5,7 @@ import com.ant.cointrading.config.StrategyType
 import com.ant.cointrading.mcp.tool.PerformanceTools
 import com.ant.cointrading.mcp.tool.StrategyTools
 import com.ant.cointrading.repository.TradeRepository
+import com.ant.cointrading.service.LlmPromptService
 import com.fasterxml.jackson.databind.ObjectMapper
 import org.slf4j.LoggerFactory
 import org.springframework.ai.tool.annotation.Tool
@@ -21,6 +22,7 @@ import org.springframework.stereotype.Component
  * 1. 성과 분석 도구 - 거래 성과 조회 및 분석
  * 2. 전략 조회 도구 - 현재 전략 설정 확인
  * 3. 전략 변경 도구 - 파라미터 조정 (안전장치 적용)
+ * 4. 프롬프트 자기 개선 도구 - 프롬프트 조회 및 수정
  */
 @Component
 class OptimizerTools(
@@ -28,7 +30,8 @@ class OptimizerTools(
     private val strategyTools: StrategyTools,
     private val tradingProperties: TradingProperties,
     private val tradeRepository: TradeRepository,
-    private val objectMapper: ObjectMapper
+    private val objectMapper: ObjectMapper,
+    private val llmPromptService: LlmPromptService
 ) {
 
     private val log = LoggerFactory.getLogger(OptimizerTools::class.java)
@@ -229,5 +232,74 @@ class OptimizerTools(
         strategyTools.setDcaInterval(intervalMs)
         val hours = intervalMs / 3600000.0
         return "DCA 매수 간격이 ${String.format("%.1f", hours)}시간으로 변경되었습니다."
+    }
+
+    // ===========================================
+    // 프롬프트 자기 개선 도구
+    // ===========================================
+
+    @Tool(description = """
+        현재 활성화된 모든 프롬프트 목록을 조회합니다.
+        프롬프트 이름, 버전, 사용 횟수, 성과 점수 등을 확인할 수 있습니다.
+    """)
+    fun getActivePrompts(): String {
+        log.info("[Tool] getActivePrompts 호출")
+        val result = llmPromptService.getAllActivePrompts()
+        return objectMapper.writeValueAsString(result)
+    }
+
+    @Tool(description = """
+        특정 프롬프트의 변경 히스토리를 조회합니다.
+        각 버전의 변경 이유, 생성자, 성과 점수를 확인할 수 있습니다.
+        promptName: optimizer_system 또는 optimizer_user
+    """)
+    fun getPromptHistory(
+        @ToolParam(description = "프롬프트 이름 (optimizer_system 또는 optimizer_user)") promptName: String
+    ): String {
+        log.info("[Tool] getPromptHistory 호출: promptName=$promptName")
+        val result = llmPromptService.getPromptHistory(promptName)
+        return objectMapper.writeValueAsString(result)
+    }
+
+    @Tool(description = """
+        프롬프트를 업데이트합니다. 새 버전이 생성되고 이전 버전은 비활성화됩니다.
+
+        주의사항:
+        - 프롬프트 변경은 신중하게 결정해야 합니다.
+        - 반드시 변경 이유를 명시해야 합니다.
+        - 최소 100자 이상의 프롬프트를 입력해야 합니다.
+
+        promptName: optimizer_system (시스템 프롬프트) 또는 optimizer_user (사용자 프롬프트)
+    """)
+    fun updatePrompt(
+        @ToolParam(description = "프롬프트 이름 (optimizer_system 또는 optimizer_user)") promptName: String,
+        @ToolParam(description = "새로운 프롬프트 내용 (최소 100자)") newContent: String,
+        @ToolParam(description = "변경 이유 (필수)") reason: String
+    ): String {
+        log.info("[Tool] updatePrompt 호출: promptName=$promptName, reason=$reason")
+
+        // 허용된 프롬프트 이름만 수정 가능
+        if (promptName !in listOf("optimizer_system", "optimizer_user")) {
+            return "허용되지 않은 프롬프트 이름입니다. 가능한 값: optimizer_system, optimizer_user"
+        }
+
+        val result = llmPromptService.updatePrompt(
+            promptName = promptName,
+            newContent = newContent,
+            reason = reason,
+            createdBy = "LLM"
+        )
+
+        return if (result.success) {
+            """
+            프롬프트 업데이트 성공!
+            - 프롬프트: $promptName
+            - 새 버전: v${result.newVersion}
+            - 이전 버전: v${result.previousVersion ?: "없음"}
+            - 이유: $reason
+            """.trimIndent()
+        } else {
+            "프롬프트 업데이트 실패: ${result.message}"
+        }
     }
 }
