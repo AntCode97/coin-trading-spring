@@ -84,10 +84,10 @@ bithumb:
   access-key: ${BITHUMB_ACCESS_KEY:}
   secret-key: ${BITHUMB_SECRET_KEY:}
 
-# Slack 알림 설정
+# Slack Bot 알림 설정
 slack:
-  webhook:
-    url: ${SLACK_WEBHOOK_URL:}
+  token: ${SLACK_TOKEN:}
+  channel: ${SLACK_CHANNEL:coin-bot-alert}
 
 # 자동 거래 설정
 trading:

@@ -11,26 +11,25 @@ import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 
 /**
- * Slack 알림 전송
+ * Slack Bot API를 통한 알림 전송
  */
 @Component
 class SlackNotifier(
     private val webClient: WebClient
 ) {
-
     private val log = LoggerFactory.getLogger(SlackNotifier::class.java)
 
-    @Value("\${slack.webhook-url:}")
-    private lateinit var webhookUrl: String
+    @Value("\${slack.token:}")
+    private lateinit var token: String
+
+    @Value("\${slack.channel:coin-bot-alert}")
+    private lateinit var channel: String
 
     private val dateFormatter = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss")
         .withZone(ZoneId.of("Asia/Seoul"))
 
-    /**
-     * 거래 알림
-     */
     fun sendTradeNotification(signal: TradingSignal, result: OrderResult) {
-        if (webhookUrl.isBlank()) return
+        if (token.isBlank()) return
 
         val emoji = when {
             result.isSimulated -> ":test_tube:"
@@ -57,11 +56,8 @@ class SlackNotifier(
         sendMessage(message)
     }
 
-    /**
-     * 경고 알림
-     */
     fun sendWarning(market: String, message: String) {
-        if (webhookUrl.isBlank()) return
+        if (token.isBlank()) return
 
         val text = """
             :warning: 경고
@@ -74,11 +70,8 @@ class SlackNotifier(
         sendMessage(text)
     }
 
-    /**
-     * 에러 알림
-     */
     fun sendError(market: String, message: String) {
-        if (webhookUrl.isBlank()) return
+        if (token.isBlank()) return
 
         val text = """
             :x: 에러 발생
@@ -91,16 +84,13 @@ class SlackNotifier(
         sendMessage(text)
     }
 
-    /**
-     * 일일 리포트
-     */
     fun sendDailyReport(
         totalPnl: String,
         totalPnlPercent: String,
         trades: Int,
         winRate: String
     ) {
-        if (webhookUrl.isBlank()) return
+        if (token.isBlank()) return
 
         val emoji = if (totalPnl.startsWith("-")) ":small_red_triangle_down:" else ":small_green_triangle:"
 
@@ -116,11 +106,8 @@ class SlackNotifier(
         sendMessage(message)
     }
 
-    /**
-     * 시스템 알림
-     */
     fun sendSystemNotification(title: String, message: String) {
-        if (webhookUrl.isBlank()) return
+        if (token.isBlank()) return
 
         val text = """
             :robot_face: $title
@@ -135,12 +122,20 @@ class SlackNotifier(
     private fun sendMessage(text: String) {
         try {
             webClient.post()
-                .uri(webhookUrl)
-                .bodyValue(mapOf("text" to text))
+                .uri("https://slack.com/api/chat.postMessage")
+                .header("Authorization", "Bearer $token")
+                .header("Content-Type", "application/json")
+                .bodyValue(mapOf("channel" to channel, "text" to text))
                 .retrieve()
-                .bodyToMono(String::class.java)
+                .bodyToMono(Map::class.java)
                 .subscribe(
-                    { log.debug("Slack 알림 전송 완료") },
+                    { response ->
+                        if (response["ok"] == true) {
+                            log.debug("Slack 알림 전송 완료")
+                        } else {
+                            log.error("Slack 알림 실패: ${response["error"]}")
+                        }
+                    },
                     { error -> log.error("Slack 알림 전송 실패: ${error.message}") }
                 )
         } catch (e: Exception) {
