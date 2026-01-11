@@ -1,6 +1,3 @@
-### ============================================
-### 트레이딩 상태 조회
-### ============================================
 
 ### 전체 마켓 상태 조회
 GET {{host}}/api/trading/status
@@ -18,22 +15,15 @@ Accept: application/json
 GET {{host}}/api/trading/markets
 Accept: application/json
 
-### ============================================
-### 전략 (Strategy) 관리
-### ============================================
 
-### 사용 가능한 전략 목록
-# DCA, Grid, Mean Reversion, Order Book Imbalance 등
+
+### 사용 가능한 전략 목록 DCA, Grid, Mean Reversion, Order Book Imbalance 등
 GET {{host}}/api/trading/strategies
 Accept: application/json
 
 ### 현재 전략 설정 조회
 GET {{host}}/api/trading/strategy/config
 Accept: application/json
-
-### ============================================
-### 리스크 관리
-### ============================================
 
 ### BTC 리스크 통계 (잔고 100만원 기준)
 GET {{host}}/api/trading/risk/BTC_KRW?balance=1000000
@@ -47,12 +37,7 @@ Accept: application/json
 GET {{host}}/api/trading/risk/BTC_KRW
 Accept: application/json
 
-### ============================================
-### 수동 분석 트리거
-### ============================================
-
-### BTC 수동 분석 실행
-# 현재 시장 상황을 분석하고 매매 시그널 반환
+### BTC 수동 분석 실행 - 현재 시장 상황을 분석하고 매매 시그널 반환
 POST {{host}}/api/trading/analyze/BTC_KRW
 Accept: application/json
 
