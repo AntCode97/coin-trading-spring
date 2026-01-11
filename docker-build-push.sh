@@ -56,10 +56,11 @@ echo -e "${YELLOW}[2/4] Gradle 빌드...${NC}"
 ./gradlew :coin-trading-server:build -x test --no-daemon
 echo -e "${GREEN}Gradle 빌드 완료${NC}"
 
-# Docker 이미지 빌드
+# Docker 이미지 빌드 (linux/amd64 for NAS)
 echo ""
-echo -e "${YELLOW}[3/4] Docker 이미지 빌드...${NC}"
+echo -e "${YELLOW}[3/4] Docker 이미지 빌드 (linux/amd64)...${NC}"
 docker build ${BUILD_OPTS} \
+    --platform linux/amd64 \
     -t ${DOCKER_USERNAME}/coin-trading-server:${TAG} \
     -t ${DOCKER_USERNAME}/coin-trading-server:latest \
     -f coin-trading-server/Dockerfile .
