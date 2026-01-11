@@ -1,8 +1,8 @@
 package com.ant.cointrading.mcp.tool
 
 import com.ant.cointrading.api.bithumb.BithumbPublicApi
-import org.springframework.ai.tool.annotation.Tool
-import org.springframework.ai.tool.annotation.ToolParam
+import org.springaicommunity.mcp.annotation.McpTool
+import org.springaicommunity.mcp.annotation.McpToolParam
 import org.springframework.stereotype.Component
 import java.math.BigDecimal
 import java.math.RoundingMode
@@ -16,11 +16,11 @@ class TechnicalAnalysisTools(
     private val publicApi: BithumbPublicApi
 ) {
 
-    @Tool(description = "RSI(상대강도지수)를 계산합니다. 과매수(>70)/과매도(<30) 판단에 사용됩니다.")
+    @McpTool(description = "RSI(상대강도지수)를 계산합니다. 과매수(>70)/과매도(<30) 판단에 사용됩니다.")
     fun calculateRsi(
-        @ToolParam(description = "마켓 ID (예: KRW-BTC)") market: String,
-        @ToolParam(description = "RSI 계산 기간 (기본값: 14)") period: Int,
-        @ToolParam(description = "시간 간격: day, minute60 등") interval: String
+        @McpToolParam(description = "마켓 ID (예: KRW-BTC)") market: String,
+        @McpToolParam(description = "RSI 계산 기간 (기본값: 14)") period: Int,
+        @McpToolParam(description = "시간 간격: day, minute60 등") interval: String
     ): Map<String, Any> {
         val ohlcv = publicApi.getOhlcv(market, interval, period + 50, null)
         if (ohlcv == null || ohlcv.size < period + 1) {
@@ -79,13 +79,13 @@ class TechnicalAnalysisTools(
         )
     }
 
-    @Tool(description = "MACD(이동평균수렴확산)를 계산합니다. 추세 전환 신호 감지에 사용됩니다.")
+    @McpTool(description = "MACD(이동평균수렴확산)를 계산합니다. 추세 전환 신호 감지에 사용됩니다.")
     fun calculateMacd(
-        @ToolParam(description = "마켓 ID (예: KRW-BTC)") market: String,
-        @ToolParam(description = "빠른 이동평균 기간 (기본값: 12)") fastPeriod: Int,
-        @ToolParam(description = "느린 이동평균 기간 (기본값: 26)") slowPeriod: Int,
-        @ToolParam(description = "시그널 라인 기간 (기본값: 9)") signalPeriod: Int,
-        @ToolParam(description = "시간 간격: day, minute60 등") interval: String
+        @McpToolParam(description = "마켓 ID (예: KRW-BTC)") market: String,
+        @McpToolParam(description = "빠른 이동평균 기간 (기본값: 12)") fastPeriod: Int,
+        @McpToolParam(description = "느린 이동평균 기간 (기본값: 26)") slowPeriod: Int,
+        @McpToolParam(description = "시그널 라인 기간 (기본값: 9)") signalPeriod: Int,
+        @McpToolParam(description = "시간 간격: day, minute60 등") interval: String
     ): Map<String, Any> {
         val requiredData = slowPeriod + signalPeriod + 50
         val ohlcv = publicApi.getOhlcv(market, interval, requiredData, null)
@@ -129,12 +129,12 @@ class TechnicalAnalysisTools(
         )
     }
 
-    @Tool(description = "볼린저 밴드를 계산합니다. 변동성과 가격 범위 분석에 사용됩니다.")
+    @McpTool(description = "볼린저 밴드를 계산합니다. 변동성과 가격 범위 분석에 사용됩니다.")
     fun calculateBollingerBands(
-        @ToolParam(description = "마켓 ID (예: KRW-BTC)") market: String,
-        @ToolParam(description = "이동평균 기간 (기본값: 20)") period: Int,
-        @ToolParam(description = "표준편차 배수 (기본값: 2)") stdDev: Double,
-        @ToolParam(description = "시간 간격: day, minute60 등") interval: String
+        @McpToolParam(description = "마켓 ID (예: KRW-BTC)") market: String,
+        @McpToolParam(description = "이동평균 기간 (기본값: 20)") period: Int,
+        @McpToolParam(description = "표준편차 배수 (기본값: 2)") stdDev: Double,
+        @McpToolParam(description = "시간 간격: day, minute60 등") interval: String
     ): Map<String, Any> {
         val ohlcv = publicApi.getOhlcv(market, interval, period + 10, null)
         if (ohlcv == null || ohlcv.size < period) {
@@ -180,11 +180,11 @@ class TechnicalAnalysisTools(
         )
     }
 
-    @Tool(description = "이동평균선(SMA, EMA)을 계산합니다. 추세 분석에 사용됩니다.")
+    @McpTool(description = "이동평균선(SMA, EMA)을 계산합니다. 추세 분석에 사용됩니다.")
     fun calculateMovingAverages(
-        @ToolParam(description = "마켓 ID (예: KRW-BTC)") market: String,
-        @ToolParam(description = "이동평균 기간들 (쉼표로 구분, 예: 5,10,20,50,200)") periods: String,
-        @ToolParam(description = "시간 간격: day, minute60 등") interval: String
+        @McpToolParam(description = "마켓 ID (예: KRW-BTC)") market: String,
+        @McpToolParam(description = "이동평균 기간들 (쉼표로 구분, 예: 5,10,20,50,200)") periods: String,
+        @McpToolParam(description = "시간 간격: day, minute60 등") interval: String
     ): Map<String, Any> {
         val periodList = periods.split(",").map { it.trim().toInt() }
         val maxPeriod = periodList.maxOrNull() ?: 200

@@ -2,8 +2,8 @@ package com.ant.cointrading.mcp.tool
 
 import com.ant.cointrading.repository.DailyStatsRepository
 import com.ant.cointrading.repository.TradeRepository
-import org.springframework.ai.tool.annotation.Tool
-import org.springframework.ai.tool.annotation.ToolParam
+import org.springaicommunity.mcp.annotation.McpTool
+import org.springaicommunity.mcp.annotation.McpToolParam
 import org.springframework.stereotype.Component
 import java.time.Instant
 import java.time.LocalDate
@@ -23,9 +23,9 @@ class PerformanceTools(
     private val dailyStatsRepository: DailyStatsRepository
 ) {
 
-    @Tool(description = "최근 거래 기록을 조회합니다.")
+    @McpTool(description = "최근 거래 기록을 조회합니다.")
     fun getRecentTrades(
-        @ToolParam(description = "조회할 거래 수 (최대 100)") limit: Int
+        @McpToolParam(description = "조회할 거래 수 (최대 100)") limit: Int
     ): List<Map<String, Any?>> {
         val trades = tradeRepository.findTop100ByOrderByCreatedAtDesc()
             .take(limit.coerceAtMost(100))
@@ -47,9 +47,9 @@ class PerformanceTools(
         }
     }
 
-    @Tool(description = "전체 거래 성과 요약을 조회합니다.")
+    @McpTool(description = "전체 거래 성과 요약을 조회합니다.")
     fun getPerformanceSummary(
-        @ToolParam(description = "분석 기간 (일): 7, 30, 90 등") days: Int
+        @McpToolParam(description = "분석 기간 (일): 7, 30, 90 등") days: Int
     ): Map<String, Any> {
         val since = Instant.now().minus(days.toLong(), ChronoUnit.DAYS)
         val trades = tradeRepository.findByCreatedAtBetween(since, Instant.now())
@@ -110,10 +110,10 @@ class PerformanceTools(
         )
     }
 
-    @Tool(description = "특정 전략의 성과를 분석합니다.")
+    @McpTool(description = "특정 전략의 성과를 분석합니다.")
     fun getStrategyPerformance(
-        @ToolParam(description = "전략 이름: DCA, GRID, MEAN_REVERSION") strategy: String,
-        @ToolParam(description = "분석 기간 (일)") days: Int
+        @McpToolParam(description = "전략 이름: DCA, GRID, MEAN_REVERSION") strategy: String,
+        @McpToolParam(description = "분석 기간 (일)") days: Int
     ): Map<String, Any> {
         val since = Instant.now().minus(days.toLong(), ChronoUnit.DAYS)
         val trades = tradeRepository.findByStrategyAndCreatedAtBetween(strategy.uppercase(), since, Instant.now())
@@ -163,9 +163,9 @@ class PerformanceTools(
         )
     }
 
-    @Tool(description = "일별 성과 추이를 조회합니다.")
+    @McpTool(description = "일별 성과 추이를 조회합니다.")
     fun getDailyPerformance(
-        @ToolParam(description = "조회할 일수 (최대 30)") days: Int
+        @McpToolParam(description = "조회할 일수 (최대 30)") days: Int
     ): List<Map<String, Any>> {
         val stats = dailyStatsRepository.findTop30ByOrderByDateDesc()
             .take(days.coerceAtMost(30))
@@ -182,7 +182,7 @@ class PerformanceTools(
         }
     }
 
-    @Tool(description = "전략 최적화를 위한 분석 보고서를 생성합니다.")
+    @McpTool(description = "전략 최적화를 위한 분석 보고서를 생성합니다.")
     fun getOptimizationReport(): Map<String, Any> {
         val last30Days = Instant.now().minus(30, ChronoUnit.DAYS)
         val last7Days = Instant.now().minus(7, ChronoUnit.DAYS)

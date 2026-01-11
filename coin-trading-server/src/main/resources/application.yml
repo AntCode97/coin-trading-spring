@@ -7,7 +7,7 @@ spring:
   main:
     banner-mode: off
 
-  # Google GenAI AutoConfiguration 비활성화 (project-id 필수 요구 문제)
+  # Google GenAI만 비활성화 (project-id 필수 문제)
   autoconfigure:
     exclude:
       - org.springframework.ai.model.google.genai.autoconfigure.chat.GoogleGenAiChatAutoConfiguration
@@ -63,33 +63,20 @@ spring:
     #         temperature: 0.3
     #         max-output-tokens: 4096
 
-    # MCP Server 설정
+    # MCP Server 설정 (Stateless HTTP)
     mcp:
       server:
         enabled: true
-        name: coin-trading-server
+        protocol: STATELESS
+        name: coin-trading-mcp
         version: 1.0.0
         type: SYNC
-        protocol: STATELESS
+        request-timeout: 30s
         instructions: |
-          암호화폐 자동 매매 서버입니다.
-          - 시장 데이터 조회 및 기술적 분석
-          - 거래 실행 및 잔고 조회
-          - 전략 파라미터 조회 및 수정
-          - 거래 성과 분석
-
+          암호화폐 자동 매매 서버 MCP API.
+          Tools: 시장 데이터, 기술적 분석, 거래 실행, 전략 관리, 성과 분석
         stateless:
           mcp-endpoint: /mcp
-
-        capabilities:
-          tool: true
-          resource: true
-          prompt: true
-
-        request-timeout: 30s
-
-        annotation-scanner:
-          enabled: true
 
 # Bithumb API 설정
 bithumb:

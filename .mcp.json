@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "coin-trading": {
+      "type": "sse",
+      "url": "http://localhost:8080/mcp"
+    }
+  }
+}

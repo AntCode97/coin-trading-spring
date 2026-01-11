@@ -198,7 +198,7 @@ class SettingsController(
         return ResponseEntity.ok(mapOf(
             "success" to true,
             "availableProviders" to modelSelector.getAvailableProviders(),
-            "allProviders" to ModelSelector.AVAILABLE_PROVIDERS,
+            "allProviders" to modelSelector.getProviderModels().keys,
             "providerModels" to modelSelector.getProviderModels()
         ))
     }

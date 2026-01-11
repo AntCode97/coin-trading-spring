@@ -1,8 +1,8 @@
+# NAS용 Docker Compose
+# 이미 빌드된 이미지를 Docker Hub에서 pull해서 사용
+
 services:
   coin-trading:
-    build:
-      context: .
-      dockerfile: coin-trading-server/Dockerfile
     image: dbswns97/coin-trading-server:latest
     container_name: coin-trading-server
     ports:

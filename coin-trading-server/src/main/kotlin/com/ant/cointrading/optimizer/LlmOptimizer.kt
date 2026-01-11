@@ -77,10 +77,13 @@ class LlmOptimizer(
     }
 
     /**
-     * 현재 설정된 모델로 ChatClient 생성
+     * 현재 설정된 모델로 ChatClient 생성 (tools 포함)
      */
     private fun createChatClient(): ChatClient {
-        return modelSelector.createChatClient(optimizerTools)
+        return modelSelector.getChatClient()
+            .mutate()
+            .defaultTools(optimizerTools)
+            .build()
     }
 
     /**

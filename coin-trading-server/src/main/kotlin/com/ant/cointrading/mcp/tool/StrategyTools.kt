@@ -4,8 +4,8 @@ import com.ant.cointrading.config.StrategyConfig
 import com.ant.cointrading.config.StrategyType
 import com.ant.cointrading.config.TradingProperties
 import org.slf4j.LoggerFactory
-import org.springframework.ai.tool.annotation.Tool
-import org.springframework.ai.tool.annotation.ToolParam
+import org.springaicommunity.mcp.annotation.McpTool
+import org.springaicommunity.mcp.annotation.McpToolParam
 import org.springframework.stereotype.Component
 
 /**
@@ -19,7 +19,7 @@ class StrategyTools(
 ) {
     private val log = LoggerFactory.getLogger(javaClass)
 
-    @Tool(description = "현재 활성화된 전략과 모든 파라미터를 조회합니다.")
+    @McpTool(description = "현재 활성화된 전략과 모든 파라미터를 조회합니다.")
     fun getStrategyConfig(): Map<String, Any> {
         val config = tradingProperties.strategy
         return mapOf(
@@ -43,9 +43,9 @@ class StrategyTools(
         )
     }
 
-    @Tool(description = "활성 전략을 변경합니다. 사용 가능: DCA, GRID, MEAN_REVERSION")
+    @McpTool(description = "활성 전략을 변경합니다. 사용 가능: DCA, GRID, MEAN_REVERSION")
     fun setStrategy(
-        @ToolParam(description = "전략 유형: DCA, GRID, MEAN_REVERSION") strategyType: String
+        @McpToolParam(description = "전략 유형: DCA, GRID, MEAN_REVERSION") strategyType: String
     ): Map<String, Any> {
         return try {
             val type = StrategyType.valueOf(strategyType.uppercase())
@@ -64,9 +64,9 @@ class StrategyTools(
         }
     }
 
-    @Tool(description = "DCA 전략의 매수 간격을 변경합니다 (시간 단위).")
+    @McpTool(description = "DCA 전략의 매수 간격을 변경합니다 (시간 단위).")
     fun setDcaInterval(
-        @ToolParam(description = "DCA 매수 간격 (시간 단위, 예: 24 = 하루에 한번)") intervalHours: Long
+        @McpToolParam(description = "DCA 매수 간격 (시간 단위, 예: 24 = 하루에 한번)") intervalHours: Long
     ): Map<String, Any> {
         if (intervalHours < 1 || intervalHours > 720) {
             return mapOf("success" to false, "error" to "간격은 1~720시간 사이여야 합니다")
@@ -81,9 +81,9 @@ class StrategyTools(
         )
     }
 
-    @Tool(description = "Grid 전략의 그리드 레벨 수를 변경합니다.")
+    @McpTool(description = "Grid 전략의 그리드 레벨 수를 변경합니다.")
     fun setGridLevels(
-        @ToolParam(description = "그리드 레벨 수 (3~20)") levels: Int
+        @McpToolParam(description = "그리드 레벨 수 (3~20)") levels: Int
     ): Map<String, Any> {
         if (levels < 3 || levels > 20) {
             return mapOf("success" to false, "error" to "그리드 레벨은 3~20 사이여야 합니다")
@@ -97,9 +97,9 @@ class StrategyTools(
         )
     }
 
-    @Tool(description = "Grid 전략의 그리드 간격(%)을 변경합니다.")
+    @McpTool(description = "Grid 전략의 그리드 간격(%)을 변경합니다.")
     fun setGridSpacing(
-        @ToolParam(description = "그리드 간격 (%, 0.5~5.0)") spacingPercent: Double
+        @McpToolParam(description = "그리드 간격 (%, 0.5~5.0)") spacingPercent: Double
     ): Map<String, Any> {
         if (spacingPercent < 0.5 || spacingPercent > 5.0) {
             return mapOf("success" to false, "error" to "그리드 간격은 0.5~5.0% 사이여야 합니다")
@@ -113,9 +113,9 @@ class StrategyTools(
         )
     }
 
-    @Tool(description = "Mean Reversion 전략의 임계값(표준편차 배수)을 변경합니다.")
+    @McpTool(description = "Mean Reversion 전략의 임계값(표준편차 배수)을 변경합니다.")
     fun setMeanReversionThreshold(
-        @ToolParam(description = "평균회귀 임계값 (표준편차 배수, 1.0~3.0)") threshold: Double
+        @McpToolParam(description = "평균회귀 임계값 (표준편차 배수, 1.0~3.0)") threshold: Double
     ): Map<String, Any> {
         if (threshold < 1.0 || threshold > 3.0) {
             return mapOf("success" to false, "error" to "임계값은 1.0~3.0 사이여야 합니다")
@@ -129,10 +129,10 @@ class StrategyTools(
         )
     }
 
-    @Tool(description = "RSI 과매도/과매수 기준을 변경합니다.")
+    @McpTool(description = "RSI 과매도/과매수 기준을 변경합니다.")
     fun setRsiThresholds(
-        @ToolParam(description = "RSI 과매도 기준 (10~40)") oversold: Int,
-        @ToolParam(description = "RSI 과매수 기준 (60~90)") overbought: Int
+        @McpToolParam(description = "RSI 과매도 기준 (10~40)") oversold: Int,
+        @McpToolParam(description = "RSI 과매수 기준 (60~90)") overbought: Int
     ): Map<String, Any> {
         if (oversold < 10 || oversold > 40) {
             return mapOf("success" to false, "error" to "과매도 기준은 10~40 사이여야 합니다")
@@ -155,10 +155,10 @@ class StrategyTools(
         )
     }
 
-    @Tool(description = "볼린저 밴드 파라미터를 변경합니다.")
+    @McpTool(description = "볼린저 밴드 파라미터를 변경합니다.")
     fun setBollingerParams(
-        @ToolParam(description = "볼린저 밴드 기간 (10~50)") period: Int,
-        @ToolParam(description = "표준편차 배수 (1.0~3.0)") stdDev: Double
+        @McpToolParam(description = "볼린저 밴드 기간 (10~50)") period: Int,
+        @McpToolParam(description = "표준편차 배수 (1.0~3.0)") stdDev: Double
     ): Map<String, Any> {
         if (period < 10 || period > 50) {
             return mapOf("success" to false, "error" to "기간은 10~50 사이여야 합니다")
@@ -178,7 +178,7 @@ class StrategyTools(
         )
     }
 
-    @Tool(description = "각 전략에 대한 설명과 권장 사용 시나리오를 제공합니다.")
+    @McpTool(description = "각 전략에 대한 설명과 권장 사용 시나리오를 제공합니다.")
     fun getStrategyGuide(): Map<String, Any> {
         return mapOf(
             "strategies" to listOf(

@@ -45,4 +45,4 @@ bin/
 ### Environment Variables ###
 .env
 .env.local
-.env.*.local
+.env.*.local.idea/httpClient/
