@@ -35,8 +35,13 @@ class ModelSelector(
         val provider = getCurrentProvider()
         return clients[provider]
             ?: clients.values.firstOrNull()
-            ?: throw IllegalStateException("사용 가능한 ChatClient 없음")
+            ?: throw IllegalStateException(
+                "사용 가능한 ChatClient 없음. " +
+                "SPRING_AI_ANTHROPIC_API_KEY 또는 SPRING_AI_OPENAI_API_KEY 환경변수를 설정하세요."
+            )
     }
+
+    fun isAvailable(): Boolean = clients.isNotEmpty()
 
     fun setProvider(provider: String): Boolean {
         if (provider !in clients.keys) {

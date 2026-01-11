@@ -54,8 +54,8 @@ Bithumb 암호화폐 거래소를 위한 **Spring Boot** 기반 자동화 트레
 |------|------|
 | JDK | 25 |
 | Kotlin | 2.3.0 |
-| Spring Boot | 4.0.1 |
-| Spring AI | 1.1.1 (Anthropic + OpenAI) |
+| Spring Boot | 3.5.9 |
+| Spring AI | 1.1.2 (Anthropic + OpenAI) |
 | Gradle | 9.2.1 (Kotlin DSL) |
 | MySQL | 8.x |
 
@@ -219,6 +219,66 @@ HIGH_CONFIDENCE_THRESHOLD = 85.0         // 고신뢰도 임계값
 THIN_LIQUIDITY_THRESHOLD = 5.0           // 얇은호가 임계값
 ```
 
+### 7. Spring Boot 3.5.9 + Spring AI 1.1.2 호환성
+
+Spring Boot 4.0.x와 Spring AI 1.1.x의 호환성 문제로 다운그레이드:
+
+```
+Spring Boot: 4.0.1 → 3.5.9
+Spring AI: 1.1.1 → 1.1.2
+```
+
+**LlmConfig 변경**: `@ConditionalOnBean` → `ObjectProvider` 방식
+
+```kotlin
+@Bean("anthropicChatClient")
+fun anthropicChatClient(chatModelProvider: ObjectProvider<AnthropicChatModel>): ChatClient? {
+    val chatModel = chatModelProvider.ifAvailable
+    return chatModel?.let { ChatClient.create(it) }
+}
+```
+
+**bootRun 환경변수 자동 로드**: `build.gradle.kts`에서 `.env` 파일 파싱
+
+```kotlin
+tasks.named<BootRun>("bootRun") {
+    workingDir = rootProject.projectDir
+    val envFile = rootProject.file(".env")
+    if (envFile.exists()) {
+        envFile.readLines()
+            .filter { it.isNotBlank() && !it.startsWith("#") && it.contains("=") }
+            .forEach { line ->
+                val (key, value) = line.split("=", limit = 2)
+                environment(key.trim(), value.trim())
+            }
+    }
+}
+```
+
+### 8. 미체결 주문 비동기 관리 (PendingOrderManager)
+
+지정가 주문 후 즉시 체결되지 않으면 백그라운드에서 관리:
+
+```kotlin
+// PendingOrderEntity - 미체결 주문 DB 저장
+@Entity
+data class PendingOrderEntity(
+    val orderId: String,
+    val market: String,
+    val orderType: String,  // BUY/SELL
+    var status: String,     // PENDING/FILLED/CANCELLED/TIMEOUT
+    val limitPrice: BigDecimal,
+    val quantity: BigDecimal
+)
+
+// PendingOrderManager - 주기적 체결 확인
+@Scheduled(fixedDelay = 5000)
+suspend fun checkPendingOrders() {
+    // 미체결 주문 체결 여부 확인
+    // 타임아웃 시 취소 → 시장가 전환
+}
+```
+
 ---
 
 ## 배포
@@ -325,40 +385,46 @@ Claude Code에서 MCP 연결 후 사용 가능한 도구:
 7. ~~**지정가 기본 주문**~~ ✅ 완료
    - 최유리 호가 지정가 주문 (슬리피지 최소화)
    - 퀀트 지식 기반 시장가 전환 조건
+8. ~~**Spring AI 호환성**~~ ✅ 완료
+   - Spring Boot 3.5.9 + Spring AI 1.1.2
+   - ObjectProvider 기반 ChatClient 생성
+9. ~~**미체결 주문 관리**~~ ✅ 완료
+   - PendingOrderManager 비동기 처리
+   - DB 저장 및 재시작 시 복원
 
-8. **김치 프리미엄 모니터링**
-   - 해외 거래소 가격 연동 (Binance API)
-   - 프리미엄 계산 및 알림
+10. **김치 프리미엄 모니터링**
+    - 해외 거래소 가격 연동 (Binance API)
+    - 프리미엄 계산 및 알림
 
-9. **MCP 도구 응답 개선**
+11. **MCP 도구 응답 개선**
    - TechnicalAnalysisTools data class 변환
    - TradingTools data class 변환
    - StrategyTools data class 변환
 
 ### Phase 3: 확장
 
-10. **Funding Rate Arbitrage**
+12. **Funding Rate Arbitrage**
     - 현물 Long + 무기한 선물 Short
     - Binance/Bybit 선물 API 연동
 
-11. **백테스팅 프레임워크**
+13. **백테스팅 프레임워크**
     - 과거 데이터로 전략 검증
     - Walk-forward 최적화
 
-12. **다중 거래소 차익거래**
+14. **다중 거래소 차익거래**
     - Upbit, Coinone 연동
 
 ### Phase 4: 운영 고도화
 
-13. **Prometheus/Grafana 모니터링**
+15. **Prometheus/Grafana 모니터링**
     - Actuator 메트릭 수집
     - 실시간 대시보드
 
-14. **분산 락 (다중 인스턴스)**
+16. **분산 락 (다중 인스턴스)**
     - MySQL 기반 분산 락
 
-15. **자동 복구 시스템**
-    - 미체결 주문 자동 처리
+17. **자동 복구 시스템**
+    - ~~미체결 주문 자동 처리~~ ✅ PendingOrderManager
     - CircuitBreaker 상태 영속화
 
 ---

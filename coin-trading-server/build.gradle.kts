@@ -11,8 +11,8 @@ kotlin {
 }
 
 dependencies {
-    // Spring AI BOM (1.1.1 - Google GenAI 지원 추가)
-    implementation(platform("org.springframework.ai:spring-ai-bom:1.1.1"))
+    // Spring AI BOM (1.1.2 - Spring Boot 3.5.x 호환)
+    implementation(platform("org.springframework.ai:spring-ai-bom:1.1.2"))
 
     // Kotlin
     implementation("org.jetbrains.kotlin:kotlin-reflect")
@@ -29,10 +29,10 @@ dependencies {
     // Spring AI MCP Server
     implementation("org.springframework.ai:spring-ai-starter-mcp-server-webmvc")
 
-    // Spring AI Model Providers (다양한 LLM 지원)
-    implementation("org.springframework.ai:spring-ai-anthropic")
-    implementation("org.springframework.ai:spring-ai-openai")
-    implementation("org.springframework.ai:spring-ai-starter-model-google-genai")
+    // Spring AI Model Providers (starter - Spring Boot 3.5.x 호환)
+    implementation("org.springframework.ai:spring-ai-starter-model-anthropic")
+    implementation("org.springframework.ai:spring-ai-starter-model-openai")
+    // Google GenAI는 project-id 필수 문제로 비활성화
 
     // MySQL
     runtimeOnly("com.mysql:mysql-connector-j")
@@ -46,7 +46,7 @@ dependencies {
     runtimeOnly("io.jsonwebtoken:jjwt-impl:0.12.6")
     runtimeOnly("io.jsonwebtoken:jjwt-jackson:0.12.6")
 
-    // Environment Variables
+    // Environment Variables (.env 파일 로드)
     implementation("me.paulschwarz:spring-dotenv:4.0.0")
 
     // Configuration Processor
@@ -66,4 +66,20 @@ tasks.withType<org.jetbrains.kotlin.gradle.tasks.KotlinCompile> {
 
 tasks.withType<Test> {
     useJUnitPlatform()
+}
+
+// bootRun 시 루트 디렉토리에서 실행 (.env 파일 읽기 위함)
+tasks.named<org.springframework.boot.gradle.tasks.run.BootRun>("bootRun") {
+    workingDir = rootProject.projectDir
+
+    // .env 파일에서 환경변수 로드
+    val envFile = rootProject.file(".env")
+    if (envFile.exists()) {
+        envFile.readLines()
+            .filter { it.isNotBlank() && !it.startsWith("#") && it.contains("=") }
+            .forEach { line ->
+                val (key, value) = line.split("=", limit = 2)
+                environment(key.trim(), value.trim())
+            }
+    }
 }

@@ -41,7 +41,8 @@ class OrderExecutor(
     private val tradeRepository: TradeRepository,
     private val circuitBreaker: CircuitBreaker,
     private val marketConditionChecker: MarketConditionChecker,
-    private val slackNotifier: SlackNotifier
+    private val slackNotifier: SlackNotifier,
+    private val pendingOrderManager: PendingOrderManager
 ) {
 
     private val log = LoggerFactory.getLogger(OrderExecutor::class.java)
@@ -53,8 +54,8 @@ class OrderExecutor(
         const val STATUS_CHECK_MAX_DELAY_MS = 2000L
 
         // 지정가 주문 설정
-        const val LIMIT_ORDER_WAIT_MS = 3000L           // 지정가 주문 대기 시간
-        const val LIMIT_ORDER_FALLBACK_TO_MARKET = true // 미체결 시 시장가 전환
+        const val QUICK_FILL_CHECK_MS = 500L            // 빠른 체결 확인 대기 시간
+        const val QUICK_FILL_CHECK_RETRIES = 2          // 빠른 확인 재시도 횟수
 
         // 슬리피지 경고 임계값
         const val SLIPPAGE_WARNING_PERCENT = 0.5
@@ -155,6 +156,11 @@ class OrderExecutor(
 
     /**
      * 실제 주문 실행
+     *
+     * 20년차 퀀트의 주문 실행 전략:
+     * 1. 지정가 주문 → 빠른 체결 확인 → 성공 or PendingOrderManager 위임
+     * 2. 시장가 주문 → 즉시 체결 확인
+     * 3. 미체결 주문은 비동기로 관리 (PendingOrderManager)
      */
     private suspend fun executeReal(
         signal: TradingSignal,
@@ -164,6 +170,7 @@ class OrderExecutor(
         val market = signal.market
         val apiMarket = convertToApiMarket(market)
         val midPrice = marketCondition.midPrice
+        val side = if (signal.action == SignalAction.BUY) OrderSide.BUY else OrderSide.SELL
 
         return try {
             // 1. 주문 유형 결정 (퀀트 지식 기반)
@@ -177,7 +184,7 @@ class OrderExecutor(
                 return OrderResult(
                     success = false,
                     market = market,
-                    side = if (signal.action == SignalAction.BUY) OrderSide.BUY else OrderSide.SELL,
+                    side = side,
                     message = "주문 응답 없음 - API 장애 의심",
                     rejectionReason = OrderRejectionReason.API_ERROR
                 )
@@ -187,7 +194,35 @@ class OrderExecutor(
             val actualOrderType = submitResult.orderType
             log.info("[$market] 주문 제출됨: orderId=$orderId, type=$actualOrderType")
 
-            // 3. 주문 상태 확인 (재시도 포함)
+            // 3. 미체결 상태로 PendingOrderManager에 위임된 경우
+            if (submitResult.isPending) {
+                log.info("[$market] 미체결 주문 PendingOrderManager에 위임됨: orderId=$orderId")
+
+                // 현재까지의 부분 체결 정보 반환
+                val response = submitResult.orderResponse
+                val executedVolume = response.executedVolume ?: BigDecimal.ZERO
+                val fillRate = calculateFillRate(response)
+
+                return OrderResult(
+                    success = true,
+                    orderId = orderId,
+                    market = market,
+                    side = side,
+                    price = submitResult.limitPrice,
+                    quantity = submitResult.quantity,
+                    executedQuantity = executedVolume,
+                    fee = response.paidFee,
+                    slippagePercent = 0.0,
+                    isPartialFill = fillRate > 0 && fillRate < 1.0,
+                    fillRatePercent = fillRate * 100,
+                    message = "주문 제출됨 (PendingOrderManager에서 체결 관리 중)",
+                    isPending = true,
+                    pendingOrderId = submitResult.pendingOrderId,
+                    orderType = actualOrderType
+                )
+            }
+
+            // 4. 시장가 또는 즉시 체결된 지정가 → 상태 확인
             val verifiedOrder = verifyOrderExecution(orderId, market)
 
             if (verifiedOrder == null) {
@@ -196,17 +231,17 @@ class OrderExecutor(
                     success = false,
                     orderId = orderId,
                     market = market,
-                    side = if (signal.action == SignalAction.BUY) OrderSide.BUY else OrderSide.SELL,
+                    side = side,
                     message = "주문 상태 확인 실패 - 수동 확인 필요",
                     rejectionReason = OrderRejectionReason.VERIFICATION_FAILED,
                     orderType = actualOrderType
                 )
             }
 
-            // 4. 체결 결과 분석
+            // 5. 체결 결과 분석
             val executionResult = analyzeExecution(signal, verifiedOrder, positionSize, midPrice, actualOrderType)
 
-            // 5. CircuitBreaker에 결과 기록
+            // 6. CircuitBreaker에 결과 기록
             if (executionResult.success) {
                 circuitBreaker.recordExecutionSuccess(market)
                 if (executionResult.slippagePercent > 0) {
@@ -216,7 +251,7 @@ class OrderExecutor(
                 circuitBreaker.recordExecutionFailure(market, executionResult.message)
             }
 
-            // 6. 거래 기록 저장
+            // 7. 거래 기록 저장
             saveTradeRecord(
                 signal = signal,
                 positionSize = positionSize,
@@ -239,7 +274,7 @@ class OrderExecutor(
             OrderResult(
                 success = false,
                 market = market,
-                side = if (signal.action == SignalAction.BUY) OrderSide.BUY else OrderSide.SELL,
+                side = side,
                 message = "주문 실행 예외: ${e.message}",
                 rejectionReason = OrderRejectionReason.EXCEPTION
             )
@@ -316,8 +351,11 @@ class OrderExecutor(
     /**
      * 지정가 주문 제출 (최유리 호가)
      *
-     * 매수: 최우선 매도호가(ask)로 지정가 → 즉시 체결 기대
-     * 매도: 최우선 매수호가(bid)로 지정가 → 즉시 체결 기대
+     * 20년차 퀀트의 지정가 주문 전략:
+     * 1. 매수: 최우선 매도호가(ask)로 지정가 → 즉시 체결 기대
+     * 2. 매도: 최우선 매수호가(bid)로 지정가 → 즉시 체결 기대
+     * 3. 빠른 체결 확인 (500ms x 2회)
+     * 4. 미체결 시 PendingOrderManager에 등록 → 비동기 처리
      */
     private suspend fun submitLimitOrder(
         signal: TradingSignal,
@@ -333,105 +371,111 @@ class OrderExecutor(
             return submitMarketOrder(signal, apiMarket, positionSize)
         }
 
-        val response = when (signal.action) {
+        // 1. 지정가 주문 제출
+        val (orderResponse, limitPrice, quantity) = when (signal.action) {
             SignalAction.BUY -> {
-                // 매수: 최우선 매도호가로 지정가 주문
                 val limitPrice = bestAsk
                 val quantity = positionSize.divide(limitPrice, 8, RoundingMode.DOWN)
                 log.info("[${signal.market}] 지정가 매수: 가격=$limitPrice, 수량=$quantity")
-                val orderResponse = bithumbPrivateApi.buyLimitOrder(apiMarket, limitPrice, quantity)
-                OrderSubmitResult(orderResponse, OrderType.LIMIT, limitPrice, quantity)
+                Triple(bithumbPrivateApi.buyLimitOrder(apiMarket, limitPrice, quantity), limitPrice, quantity)
             }
             SignalAction.SELL -> {
-                // 매도: 최우선 매수호가로 지정가 주문
                 val limitPrice = bestBid
                 val quantity = calculateQuantity(signal.price, positionSize)
                 log.info("[${signal.market}] 지정가 매도: 가격=$limitPrice, 수량=$quantity")
-                val orderResponse = bithumbPrivateApi.sellLimitOrder(apiMarket, limitPrice, quantity)
-                OrderSubmitResult(orderResponse, OrderType.LIMIT, limitPrice, quantity)
+                Triple(bithumbPrivateApi.sellLimitOrder(apiMarket, limitPrice, quantity), limitPrice, quantity)
             }
-            SignalAction.HOLD -> OrderSubmitResult(null, OrderType.LIMIT, null, null)
+            SignalAction.HOLD -> return OrderSubmitResult(null, OrderType.LIMIT, null, null)
         }
 
-        // 지정가 주문 후 체결 대기
-        if (response.orderResponse != null) {
-            return waitForLimitOrderFill(signal, apiMarket, response, positionSize)
+        if (orderResponse == null) {
+            return OrderSubmitResult(null, OrderType.LIMIT, limitPrice, quantity)
         }
 
-        return response
+        // 2. 빠른 체결 확인 (500ms x 2회)
+        val quickFillResult = checkQuickFill(signal.market, orderResponse.uuid)
+
+        if (quickFillResult != null && quickFillResult.state == ORDER_STATE_DONE) {
+            log.info("[${signal.market}] 지정가 주문 즉시 체결됨")
+            return OrderSubmitResult(quickFillResult, OrderType.LIMIT, limitPrice, quantity)
+        }
+
+        // 3. 미체결 → PendingOrderManager에 등록 (비동기 처리)
+        log.info("[${signal.market}] 지정가 주문 미체결, PendingOrderManager에 등록")
+
+        val pendingOrder = pendingOrderManager.registerPendingOrder(
+            orderId = orderResponse.uuid,
+            signal = signal,
+            orderPrice = limitPrice,
+            orderQuantity = quantity,
+            orderAmountKrw = positionSize,
+            marketCondition = marketCondition
+        )
+
+        // 현재까지의 체결 상태를 반영한 결과 반환
+        val executedVolume = quickFillResult?.executedVolume ?: BigDecimal.ZERO
+        return OrderSubmitResult(
+            orderResponse = quickFillResult ?: orderResponse,
+            orderType = OrderType.LIMIT,
+            limitPrice = limitPrice,
+            quantity = quantity,
+            isPending = true,
+            pendingOrderId = pendingOrder.id
+        )
     }
 
     /**
-     * 지정가 주문 체결 대기 및 미체결 처리
+     * 빠른 체결 확인 (지정가 주문 직후)
+     *
+     * 최유리 호가로 주문했으므로 대부분 즉시 체결됨.
+     * 체결되지 않았다면 시장이 움직인 것이므로 PendingOrderManager에 위임.
      */
-    private suspend fun waitForLimitOrderFill(
-        signal: TradingSignal,
-        apiMarket: String,
-        submitResult: OrderSubmitResult,
-        positionSize: BigDecimal
-    ): OrderSubmitResult {
-        val orderId = submitResult.orderResponse?.uuid ?: return submitResult
-        val market = signal.market
+    private suspend fun checkQuickFill(market: String, orderId: String): OrderResponse? {
+        repeat(QUICK_FILL_CHECK_RETRIES) { attempt ->
+            delay(QUICK_FILL_CHECK_MS)
 
-        delay(LIMIT_ORDER_WAIT_MS)
+            try {
+                val response = bithumbPrivateApi.getOrder(orderId)
 
-        // 주문 상태 확인
-        val orderStatus = bithumbPrivateApi.getOrder(orderId)
+                if (response == null) {
+                    log.warn("[$market] 빠른 체결 확인 실패 (시도 ${attempt + 1})")
+                    return@repeat
+                }
 
-        if (orderStatus == null) {
-            log.warn("[$market] 지정가 주문 상태 확인 실패")
-            return submitResult
+                val fillRate = calculateFillRate(response)
+
+                when {
+                    response.state == ORDER_STATE_DONE -> {
+                        log.info("[$market] 빠른 체결 확인: 완전 체결")
+                        return response
+                    }
+                    fillRate >= PARTIAL_FILL_SUCCESS_THRESHOLD -> {
+                        log.info("[$market] 빠른 체결 확인: ${String.format("%.1f", fillRate * 100)}% 체결 (충분)")
+                        return response
+                    }
+                    fillRate > 0 -> {
+                        log.info("[$market] 빠른 체결 확인: ${String.format("%.1f", fillRate * 100)}% 부분 체결 중")
+                    }
+                }
+            } catch (e: Exception) {
+                log.warn("[$market] 빠른 체결 확인 예외 (시도 ${attempt + 1}): ${e.message}")
+            }
         }
 
-        val executedVolume = orderStatus.executedVolume ?: BigDecimal.ZERO
-        val totalVolume = orderStatus.volume ?: BigDecimal.ONE
-        val fillRate = if (totalVolume > BigDecimal.ZERO) {
+        return null
+    }
+
+    /**
+     * 체결률 계산
+     */
+    private fun calculateFillRate(response: OrderResponse): Double {
+        val executedVolume = response.executedVolume ?: BigDecimal.ZERO
+        val totalVolume = response.volume ?: BigDecimal.ONE
+        return if (totalVolume > BigDecimal.ZERO) {
             executedVolume.divide(totalVolume, 4, RoundingMode.HALF_UP).toDouble()
         } else 0.0
-
-        // 완전 체결
-        if (orderStatus.state == ORDER_STATE_DONE || fillRate >= PARTIAL_FILL_SUCCESS_THRESHOLD) {
-            log.info("[$market] 지정가 주문 체결 완료: ${String.format("%.1f", fillRate * 100)}%")
-            return OrderSubmitResult(orderStatus, OrderType.LIMIT, submitResult.limitPrice, submitResult.quantity)
-        }
-
-        // 미체결 - 취소 후 시장가 전환
-        if (LIMIT_ORDER_FALLBACK_TO_MARKET) {
-            log.info("[$market] 지정가 미체결(${String.format("%.1f", fillRate * 100)}%), 취소 후 시장가 전환")
-
-            // 기존 주문 취소
-            val cancelResult = bithumbPrivateApi.cancelOrder(orderId)
-            if (cancelResult == null) {
-                log.warn("[$market] 지정가 주문 취소 실패, 원래 주문 결과 반환")
-                return submitResult
-            }
-
-            // 미체결 금액만큼 시장가 주문
-            val remainingAmount = if (executedVolume > BigDecimal.ZERO) {
-                val executedAmount = executedVolume.multiply(submitResult.limitPrice ?: signal.price)
-                positionSize.subtract(executedAmount).max(BigDecimal.ZERO)
-            } else {
-                positionSize
-            }
-
-            if (remainingAmount > BigDecimal("1000")) {  // 최소 주문금액 이상
-                log.info("[$market] 미체결분 시장가 주문: $remainingAmount KRW")
-                val marketResult = submitMarketOrder(signal, apiMarket, remainingAmount)
-
-                // 부분 체결 정보 병합
-                return OrderSubmitResult(
-                    orderResponse = marketResult.orderResponse,
-                    orderType = OrderType.MARKET,
-                    limitPrice = null,
-                    quantity = marketResult.quantity,
-                    partialFillFromLimit = executedVolume > BigDecimal.ZERO,
-                    limitFilledQuantity = executedVolume
-                )
-            }
-        }
-
-        return submitResult
     }
+
 
     /**
      * 시장가 주문 제출
@@ -717,8 +761,8 @@ data class OrderSubmitResult(
     val orderType: OrderType,
     val limitPrice: BigDecimal?,
     val quantity: BigDecimal?,
-    val partialFillFromLimit: Boolean = false,
-    val limitFilledQuantity: BigDecimal? = null
+    val isPending: Boolean = false,
+    val pendingOrderId: Long? = null
 )
 
 /**
@@ -738,6 +782,8 @@ data class OrderResult(
     val fillRatePercent: Double = 100.0,
     val message: String,
     val isSimulated: Boolean = false,
+    val isPending: Boolean = false,
+    val pendingOrderId: Long? = null,
     val rejectionReason: OrderRejectionReason? = null,
     val orderType: OrderType = OrderType.MARKET,
     val timestamp: Instant = Instant.now()
