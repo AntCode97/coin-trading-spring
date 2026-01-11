@@ -78,7 +78,9 @@ coin-trading-spring/
 │       │   ├── LlmProperties.kt
 │       │   └── LlmConfig.kt            # ChatClient 빈 등록
 │       ├── controller/
-│       │   └── SettingsController.kt
+│       │   ├── SettingsController.kt
+│       │   ├── TradingController.kt
+│       │   └── OptimizerController.kt  # LLM 수동 최적화 API
 │       ├── service/
 │       │   ├── KeyValueService.kt
 │       │   └── ModelSelector.kt        # @Qualifier 기반 모델 선택
@@ -177,6 +179,44 @@ data class PerformanceSummary(
     val winRate: String,
     val strategyBreakdown: Map<String, StrategyStats>
 )
+```
+
+### 5. LLM Optimizer 수동 실행 API
+
+스케줄러 외에 수동으로 최적화 실행 가능:
+
+```bash
+# 수동 최적화 실행
+curl -X POST http://localhost:8080/api/optimizer/run
+
+# 마지막 최적화 결과 조회
+curl http://localhost:8080/api/optimizer/status
+
+# 감사 로그 조회
+curl http://localhost:8080/api/optimizer/audit-logs?limit=50
+```
+
+### 6. 지정가 기본 주문 (퀀트 지식 기반)
+
+**기본: 지정가 주문 (최유리 호가)**
+- 매수: 최우선 매도호가(ask)로 지정가 → 슬리피지 최소화
+- 매도: 최우선 매수호가(bid)로 지정가
+- 3초 대기 후 미체결 시 → 취소 후 시장가 전환
+
+**시장가 사용 조건 (2개 이상 충족 시):**
+- 고변동성: 1분 변동성 > 1.5%
+- 강한 신호: 신뢰도 > 85%
+- 얇은 호가창: 유동성 배율 < 5x
+
+**무조건 시장가:**
+- 초단기 전략: `ORDER_BOOK_IMBALANCE`, `MOMENTUM`, `BREAKOUT`
+
+```kotlin
+// OrderExecutor.kt 상수
+LIMIT_ORDER_WAIT_MS = 3000L              // 지정가 대기 시간
+HIGH_VOLATILITY_THRESHOLD = 1.5          // 고변동성 임계값
+HIGH_CONFIDENCE_THRESHOLD = 85.0         // 고신뢰도 임계값
+THIN_LIQUIDITY_THRESHOLD = 5.0           // 얇은호가 임계값
 ```
 
 ---
@@ -279,39 +319,45 @@ Claude Code에서 MCP 연결 후 사용 가능한 도구:
    - DCA/Grid 상태 DB 저장
    - 재시작 시 @PostConstruct 복원
 5. ~~**빗썸 수수료 반영**~~ ✅ 완료 (0.04%)
+6. ~~**LLM Optimizer 수동 실행 API**~~ ✅ 완료
+   - POST /api/optimizer/run
+   - GET /api/optimizer/status
+7. ~~**지정가 기본 주문**~~ ✅ 완료
+   - 최유리 호가 지정가 주문 (슬리피지 최소화)
+   - 퀀트 지식 기반 시장가 전환 조건
 
-6. **김치 프리미엄 모니터링**
+8. **김치 프리미엄 모니터링**
    - 해외 거래소 가격 연동 (Binance API)
    - 프리미엄 계산 및 알림
 
-7. **MCP 도구 응답 개선**
+9. **MCP 도구 응답 개선**
    - TechnicalAnalysisTools data class 변환
    - TradingTools data class 변환
    - StrategyTools data class 변환
 
 ### Phase 3: 확장
 
-8. **Funding Rate Arbitrage**
-   - 현물 Long + 무기한 선물 Short
-   - Binance/Bybit 선물 API 연동
+10. **Funding Rate Arbitrage**
+    - 현물 Long + 무기한 선물 Short
+    - Binance/Bybit 선물 API 연동
 
-9. **백테스팅 프레임워크**
-   - 과거 데이터로 전략 검증
-   - Walk-forward 최적화
+11. **백테스팅 프레임워크**
+    - 과거 데이터로 전략 검증
+    - Walk-forward 최적화
 
-10. **다중 거래소 차익거래**
+12. **다중 거래소 차익거래**
     - Upbit, Coinone 연동
 
 ### Phase 4: 운영 고도화
 
-11. **Prometheus/Grafana 모니터링**
+13. **Prometheus/Grafana 모니터링**
     - Actuator 메트릭 수집
     - 실시간 대시보드
 
-12. **분산 락 (다중 인스턴스)**
+14. **분산 락 (다중 인스턴스)**
     - MySQL 기반 분산 락
 
-13. **자동 복구 시스템**
+15. **자동 복구 시스템**
     - 미체결 주문 자동 처리
     - CircuitBreaker 상태 영속화
 

@@ -1,0 +1,17 @@
+// LLM Optimizer 관리
+
+### 수동 최적화 실행
+POST {{host}}/api/optimizer/run
+Accept: application/json
+
+### 마지막 최적화 결과 조회
+GET {{host}}/api/optimizer/status
+Accept: application/json
+
+### 감사 로그 조회 (기본 100개)
+GET {{host}}/api/optimizer/audit-logs
+Accept: application/json
+
+### 감사 로그 조회 (개수 지정)
+GET {{host}}/api/optimizer/audit-logs?limit=50
+Accept: application/json

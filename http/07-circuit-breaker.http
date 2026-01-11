@@ -1,13 +1,9 @@
-### ============================================
-### 서킷 브레이커 관련 설정
-### ============================================
+// 서킷 브레이커 관련 설정
 
-### ============================================
-### 서킷 브레이커 임계값 설정
-### ============================================
+// 서킷 브레이커 임계값 설정
 
+// 연속 3회 PnL 손실 시 4시간 쿨다운
 ### 연속 손실 허용 횟수 (기본값: 3)
-# 연속 3회 PnL 손실 시 4시간 쿨다운
 POST {{host}}/api/settings
 Content-Type: application/json
 
@@ -18,8 +14,8 @@ Content-Type: application/json
   "description": "서킷 브레이커 트리거 연속 손실 횟수"
 }
 
+// 연속 5회 주문 실행 실패 시 1시간 쿨다운
 ### 연속 실패 허용 횟수 (기본값: 5)
-# 연속 5회 주문 실행 실패 시 1시간 쿨다운
 POST {{host}}/api/settings
 Content-Type: application/json
 
@@ -30,8 +26,8 @@ Content-Type: application/json
   "description": "서킷 브레이커 트리거 연속 실패 횟수"
 }
 
+// 연속 3회 2%+ 슬리피지 시 4시간 쿨다운
 ### 고슬리피지 허용 횟수 (기본값: 3)
-# 연속 3회 2%+ 슬리피지 시 4시간 쿨다운
 POST {{host}}/api/settings
 Content-Type: application/json
 
@@ -53,9 +49,7 @@ Content-Type: application/json
   "description": "고슬리피지 판단 기준 (%)"
 }
 
-### ============================================
-### 쿨다운 시간 설정 (밀리초)
-### ============================================
+// 쿨다운 시간 설정 (밀리초)
 
 ### 손실 쿨다운 (기본값: 14400000 = 4시간)
 POST {{host}}/api/settings
@@ -90,8 +84,8 @@ Content-Type: application/json
   "description": "고슬리피지 시 쿨다운 (밀리초)"
 }
 
+// API 에러 폭주 또는 총 자산 10% 감소 시
 ### 글로벌 쿨다운 (기본값: 86400000 = 24시간)
-# API 에러 폭주 또는 총 자산 10% 감소 시
 POST {{host}}/api/settings
 Content-Type: application/json
 
@@ -102,9 +96,7 @@ Content-Type: application/json
   "description": "글로벌 서킷 브레이커 쿨다운 (밀리초)"
 }
 
-### ============================================
-### 시장 조건 체크 설정
-### ============================================
+// 시장 조건 체크 설정
 
 ### 최대 허용 스프레드 (기본값: 0.5%)
 POST {{host}}/api/settings
@@ -117,8 +109,8 @@ Content-Type: application/json
   "description": "거래 허용 최대 스프레드 (%)"
 }
 
+// 주문량의 N배 이상 호가 물량 필요
 ### 유동성 배수 (기본값: 3.0)
-# 주문량의 N배 이상 호가 물량 필요
 POST {{host}}/api/settings
 Content-Type: application/json
 
@@ -129,8 +121,8 @@ Content-Type: application/json
   "description": "최소 유동성 배수"
 }
 
+// 1분 변동성이 이 값 초과 시 경고
 ### 변동성 경고 임계값 (기본값: 2.0%)
-# 1분 변동성이 이 값 초과 시 경고
 POST {{host}}/api/settings
 Content-Type: application/json
 

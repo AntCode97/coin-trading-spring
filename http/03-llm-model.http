@@ -38,9 +38,7 @@ Content-Type: application/json
 #   "provider": "google"
 # }
 
-### ============================================
-### LLM 모델명 변경
-### ============================================
+// LLM 모델명 변경
 
 ### Anthropic - Claude Sonnet 4
 POST {{host}}/api/settings/model

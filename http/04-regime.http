@@ -1,18 +1,13 @@
-### ============================================
-### 레짐 감지기 (Regime Detector) 관리
-### ============================================
+// 레짐 감지기 (Regime Detector) 관리
 
 ### 현재 레짐 감지기 상태 조회
 GET {{host}}/api/settings/regime
 Accept: application/json
 
-### ============================================
-### 레짐 감지기 변경
-### ============================================
+// 레짐 감지기 변경
 
-### Simple (ADX/ATR 기반) 감지기로 변경
-# - 빠른 응답, 낮은 리소스
-# - ADX로 추세 강도, ATR로 변동성 측정
+// Simple (ADX/ATR 기반) - 빠른 응답, 낮은 리소스, ADX로 추세 강도, ATR로 변동성 측정
+### Simple 감지기로 변경
 POST {{host}}/api/settings/regime
 Content-Type: application/json
 
@@ -20,10 +15,8 @@ Content-Type: application/json
   "type": "simple"
 }
 
-### HMM (Hidden Markov Model) 감지기로 변경
-# - 정교한 시장 상태 분류
-# - 4가지 은닉 상태: SIDEWAYS, BULL_TREND, BEAR_TREND, HIGH_VOLATILITY
-# - 45개 이산 관측값 (수익률 x 변동성 x 거래량)
+// HMM (Hidden Markov Model) - 정교한 시장 상태 분류, 4가지 은닉 상태 (SIDEWAYS, BULL_TREND, BEAR_TREND, HIGH_VOLATILITY)
+### HMM 감지기로 변경
 POST {{host}}/api/settings/regime
 Content-Type: application/json
 
@@ -31,11 +24,9 @@ Content-Type: application/json
   "type": "hmm"
 }
 
-### ============================================
-### HMM 상세 정보
-### ============================================
+// HMM 상세 정보
 
+// 각 레짐에서 다른 레짐으로 전이할 확률
 ### HMM 전이 확률 행렬 조회
-# 각 레짐에서 다른 레짐으로 전이할 확률
 GET {{host}}/api/settings/regime/hmm/transitions
 Accept: application/json

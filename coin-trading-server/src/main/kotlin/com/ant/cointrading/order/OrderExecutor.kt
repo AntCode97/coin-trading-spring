@@ -9,6 +9,7 @@ import com.ant.cointrading.repository.TradeEntity
 import com.ant.cointrading.repository.TradeRepository
 import com.ant.cointrading.risk.CircuitBreaker
 import com.ant.cointrading.risk.MarketConditionChecker
+import com.ant.cointrading.risk.MarketConditionResult
 import kotlinx.coroutines.delay
 import org.slf4j.LoggerFactory
 import org.springframework.stereotype.Component
@@ -51,6 +52,10 @@ class OrderExecutor(
         const val STATUS_CHECK_INITIAL_DELAY_MS = 500L
         const val STATUS_CHECK_MAX_DELAY_MS = 2000L
 
+        // 지정가 주문 설정
+        const val LIMIT_ORDER_WAIT_MS = 3000L           // 지정가 주문 대기 시간
+        const val LIMIT_ORDER_FALLBACK_TO_MARKET = true // 미체결 시 시장가 전환
+
         // 슬리피지 경고 임계값
         const val SLIPPAGE_WARNING_PERCENT = 0.5
         const val SLIPPAGE_CRITICAL_PERCENT = 2.0
@@ -62,6 +67,18 @@ class OrderExecutor(
         const val ORDER_STATE_DONE = "done"
         const val ORDER_STATE_WAIT = "wait"
         const val ORDER_STATE_CANCEL = "cancel"
+
+        // 시장가 주문 사용 조건 (퀀트 지식 기반)
+        const val HIGH_VOLATILITY_THRESHOLD = 1.5      // 1분 변동성 1.5% 초과 시 시장가
+        const val HIGH_CONFIDENCE_THRESHOLD = 85.0     // 신뢰도 85% 초과 시 시장가
+        const val THIN_LIQUIDITY_THRESHOLD = 5.0       // 유동성 배율 5 미만 시 시장가
+
+        // 시장가를 선호하는 전략들 (빠른 체결이 중요)
+        val MARKET_ORDER_STRATEGIES = setOf(
+            "ORDER_BOOK_IMBALANCE",  // 초단기 전략
+            "MOMENTUM",              // 모멘텀 전략
+            "BREAKOUT"               // 돌파 전략
+        )
     }
 
     /**
@@ -74,20 +91,20 @@ class OrderExecutor(
         }
 
         // 2. 시장 상태 검사 (실거래 전 필수)
-        val marketCheck = marketConditionChecker.checkMarketCondition(signal.market, positionSize)
-        if (!marketCheck.canTrade) {
-            log.warn("[${signal.market}] 시장 상태 불량으로 주문 거부: ${marketCheck.issues}")
+        val marketCondition = marketConditionChecker.checkMarketCondition(signal.market, positionSize)
+        if (!marketCondition.canTrade) {
+            log.warn("[${signal.market}] 시장 상태 불량으로 주문 거부: ${marketCondition.issues}")
             return OrderResult(
                 success = false,
                 market = signal.market,
                 side = if (signal.action == SignalAction.BUY) OrderSide.BUY else OrderSide.SELL,
-                message = "시장 상태 불량: ${marketCheck.issues.joinToString(", ")}",
+                message = "시장 상태 불량: ${marketCondition.issues.joinToString(", ")}",
                 rejectionReason = OrderRejectionReason.MARKET_CONDITION
             )
         }
 
-        // 3. 실제 주문 실행
-        return executeReal(signal, positionSize, marketCheck.midPrice)
+        // 3. 실제 주문 실행 (시장 상태 기반 주문 유형 결정)
+        return executeReal(signal, positionSize, marketCondition)
     }
 
     /**
@@ -142,16 +159,20 @@ class OrderExecutor(
     private suspend fun executeReal(
         signal: TradingSignal,
         positionSize: BigDecimal,
-        midPrice: BigDecimal?
+        marketCondition: MarketConditionResult
     ): OrderResult {
         val market = signal.market
         val apiMarket = convertToApiMarket(market)
+        val midPrice = marketCondition.midPrice
 
         return try {
-            // 1. 주문 제출
-            val orderResponse = submitOrder(signal, apiMarket, positionSize)
+            // 1. 주문 유형 결정 (퀀트 지식 기반)
+            val orderType = determineOrderType(signal, marketCondition)
 
-            if (orderResponse == null) {
+            // 2. 주문 제출
+            val submitResult = submitOrder(signal, apiMarket, positionSize, orderType, marketCondition)
+
+            if (submitResult.orderResponse == null) {
                 circuitBreaker.recordExecutionFailure(market, "주문 응답 null")
                 return OrderResult(
                     success = false,
@@ -162,10 +183,11 @@ class OrderExecutor(
                 )
             }
 
-            val orderId = orderResponse.uuid
-            log.info("[$market] 주문 제출됨: orderId=$orderId")
+            val orderId = submitResult.orderResponse.uuid
+            val actualOrderType = submitResult.orderType
+            log.info("[$market] 주문 제출됨: orderId=$orderId, type=$actualOrderType")
 
-            // 2. 주문 상태 확인 (재시도 포함)
+            // 3. 주문 상태 확인 (재시도 포함)
             val verifiedOrder = verifyOrderExecution(orderId, market)
 
             if (verifiedOrder == null) {
@@ -176,14 +198,15 @@ class OrderExecutor(
                     market = market,
                     side = if (signal.action == SignalAction.BUY) OrderSide.BUY else OrderSide.SELL,
                     message = "주문 상태 확인 실패 - 수동 확인 필요",
-                    rejectionReason = OrderRejectionReason.VERIFICATION_FAILED
+                    rejectionReason = OrderRejectionReason.VERIFICATION_FAILED,
+                    orderType = actualOrderType
                 )
             }
 
-            // 3. 체결 결과 분석
-            val executionResult = analyzeExecution(signal, verifiedOrder, positionSize, midPrice)
+            // 4. 체결 결과 분석
+            val executionResult = analyzeExecution(signal, verifiedOrder, positionSize, midPrice, actualOrderType)
 
-            // 4. CircuitBreaker에 결과 기록
+            // 5. CircuitBreaker에 결과 기록
             if (executionResult.success) {
                 circuitBreaker.recordExecutionSuccess(market)
                 if (executionResult.slippagePercent > 0) {
@@ -193,7 +216,7 @@ class OrderExecutor(
                 circuitBreaker.recordExecutionFailure(market, executionResult.message)
             }
 
-            // 5. 거래 기록 저장
+            // 6. 거래 기록 저장
             saveTradeRecord(
                 signal = signal,
                 positionSize = positionSize,
@@ -203,7 +226,8 @@ class OrderExecutor(
                 fee = executionResult.fee ?: BigDecimal.ZERO,
                 slippagePercent = executionResult.slippagePercent,
                 isSimulated = false,
-                isPartialFill = executionResult.isPartialFill
+                isPartialFill = executionResult.isPartialFill,
+                orderType = actualOrderType
             )
 
             executionResult
@@ -223,25 +247,214 @@ class OrderExecutor(
     }
 
     /**
-     * 주문 제출
+     * 주문 유형 결정 (퀀트 지식 기반)
+     *
+     * 기본: 지정가 (최유리 호가) - 슬리피지 최소화
+     * 시장가 사용 조건:
+     * 1. 고변동성: 1분 변동성 > 1.5% (빠른 체결 필요)
+     * 2. 강한 신호: 신뢰도 > 85% (확실한 기회)
+     * 3. 얇은 호가창: 유동성 배율 < 5 (어차피 슬리피지 발생)
+     * 4. 초단기 전략: ORDER_BOOK_IMBALANCE, MOMENTUM 등 (속도가 생명)
      */
-    private fun submitOrder(
+    private fun determineOrderType(
+        signal: TradingSignal,
+        marketCondition: MarketConditionResult
+    ): OrderType {
+        val reasons = mutableListOf<String>()
+
+        // 1. 초단기/모멘텀 전략은 시장가 사용
+        if (signal.strategy.uppercase() in MARKET_ORDER_STRATEGIES) {
+            reasons.add("전략(${signal.strategy})")
+            log.info("[${signal.market}] 시장가 선택: ${reasons.joinToString(", ")}")
+            return OrderType.MARKET
+        }
+
+        // 2. 고변동성 시장 - 빠른 체결 필요
+        val volatility = marketCondition.volatility1Min ?: 0.0
+        if (volatility > HIGH_VOLATILITY_THRESHOLD) {
+            reasons.add("고변동성(${String.format("%.2f", volatility)}%)")
+        }
+
+        // 3. 강한 신뢰도 신호 - 기회를 놓치면 안 됨
+        if (signal.confidence > HIGH_CONFIDENCE_THRESHOLD) {
+            reasons.add("고신뢰도(${String.format("%.1f", signal.confidence)}%)")
+        }
+
+        // 4. 얇은 호가창 - 지정가로 해도 슬리피지 발생
+        val liquidity = marketCondition.liquidityRatio ?: Double.MAX_VALUE
+        if (liquidity < THIN_LIQUIDITY_THRESHOLD) {
+            reasons.add("얇은호가(${String.format("%.1f", liquidity)}x)")
+        }
+
+        // 2개 이상 조건 충족 시 시장가
+        if (reasons.size >= 2) {
+            log.info("[${signal.market}] 시장가 선택: ${reasons.joinToString(", ")}")
+            return OrderType.MARKET
+        }
+
+        // 기본: 지정가 (최유리 호가)
+        log.info("[${signal.market}] 지정가 선택: 기본 전략 (슬리피지 최소화)")
+        return OrderType.LIMIT
+    }
+
+    /**
+     * 주문 제출 (시장가/지정가 분기)
+     */
+    private suspend fun submitOrder(
+        signal: TradingSignal,
+        apiMarket: String,
+        positionSize: BigDecimal,
+        orderType: OrderType,
+        marketCondition: MarketConditionResult
+    ): OrderSubmitResult {
+        return when (orderType) {
+            OrderType.LIMIT -> submitLimitOrder(signal, apiMarket, positionSize, marketCondition)
+            OrderType.MARKET -> submitMarketOrder(signal, apiMarket, positionSize)
+        }
+    }
+
+    /**
+     * 지정가 주문 제출 (최유리 호가)
+     *
+     * 매수: 최우선 매도호가(ask)로 지정가 → 즉시 체결 기대
+     * 매도: 최우선 매수호가(bid)로 지정가 → 즉시 체결 기대
+     */
+    private suspend fun submitLimitOrder(
+        signal: TradingSignal,
+        apiMarket: String,
+        positionSize: BigDecimal,
+        marketCondition: MarketConditionResult
+    ): OrderSubmitResult {
+        val bestAsk = marketCondition.bestAsk
+        val bestBid = marketCondition.bestBid
+
+        if (bestAsk == null || bestBid == null) {
+            log.warn("[${signal.market}] 호가 정보 없음, 시장가로 전환")
+            return submitMarketOrder(signal, apiMarket, positionSize)
+        }
+
+        val response = when (signal.action) {
+            SignalAction.BUY -> {
+                // 매수: 최우선 매도호가로 지정가 주문
+                val limitPrice = bestAsk
+                val quantity = positionSize.divide(limitPrice, 8, RoundingMode.DOWN)
+                log.info("[${signal.market}] 지정가 매수: 가격=$limitPrice, 수량=$quantity")
+                val orderResponse = bithumbPrivateApi.buyLimitOrder(apiMarket, limitPrice, quantity)
+                OrderSubmitResult(orderResponse, OrderType.LIMIT, limitPrice, quantity)
+            }
+            SignalAction.SELL -> {
+                // 매도: 최우선 매수호가로 지정가 주문
+                val limitPrice = bestBid
+                val quantity = calculateQuantity(signal.price, positionSize)
+                log.info("[${signal.market}] 지정가 매도: 가격=$limitPrice, 수량=$quantity")
+                val orderResponse = bithumbPrivateApi.sellLimitOrder(apiMarket, limitPrice, quantity)
+                OrderSubmitResult(orderResponse, OrderType.LIMIT, limitPrice, quantity)
+            }
+            SignalAction.HOLD -> OrderSubmitResult(null, OrderType.LIMIT, null, null)
+        }
+
+        // 지정가 주문 후 체결 대기
+        if (response.orderResponse != null) {
+            return waitForLimitOrderFill(signal, apiMarket, response, positionSize)
+        }
+
+        return response
+    }
+
+    /**
+     * 지정가 주문 체결 대기 및 미체결 처리
+     */
+    private suspend fun waitForLimitOrderFill(
+        signal: TradingSignal,
+        apiMarket: String,
+        submitResult: OrderSubmitResult,
+        positionSize: BigDecimal
+    ): OrderSubmitResult {
+        val orderId = submitResult.orderResponse?.uuid ?: return submitResult
+        val market = signal.market
+
+        delay(LIMIT_ORDER_WAIT_MS)
+
+        // 주문 상태 확인
+        val orderStatus = bithumbPrivateApi.getOrder(orderId)
+
+        if (orderStatus == null) {
+            log.warn("[$market] 지정가 주문 상태 확인 실패")
+            return submitResult
+        }
+
+        val executedVolume = orderStatus.executedVolume ?: BigDecimal.ZERO
+        val totalVolume = orderStatus.volume ?: BigDecimal.ONE
+        val fillRate = if (totalVolume > BigDecimal.ZERO) {
+            executedVolume.divide(totalVolume, 4, RoundingMode.HALF_UP).toDouble()
+        } else 0.0
+
+        // 완전 체결
+        if (orderStatus.state == ORDER_STATE_DONE || fillRate >= PARTIAL_FILL_SUCCESS_THRESHOLD) {
+            log.info("[$market] 지정가 주문 체결 완료: ${String.format("%.1f", fillRate * 100)}%")
+            return OrderSubmitResult(orderStatus, OrderType.LIMIT, submitResult.limitPrice, submitResult.quantity)
+        }
+
+        // 미체결 - 취소 후 시장가 전환
+        if (LIMIT_ORDER_FALLBACK_TO_MARKET) {
+            log.info("[$market] 지정가 미체결(${String.format("%.1f", fillRate * 100)}%), 취소 후 시장가 전환")
+
+            // 기존 주문 취소
+            val cancelResult = bithumbPrivateApi.cancelOrder(orderId)
+            if (cancelResult == null) {
+                log.warn("[$market] 지정가 주문 취소 실패, 원래 주문 결과 반환")
+                return submitResult
+            }
+
+            // 미체결 금액만큼 시장가 주문
+            val remainingAmount = if (executedVolume > BigDecimal.ZERO) {
+                val executedAmount = executedVolume.multiply(submitResult.limitPrice ?: signal.price)
+                positionSize.subtract(executedAmount).max(BigDecimal.ZERO)
+            } else {
+                positionSize
+            }
+
+            if (remainingAmount > BigDecimal("1000")) {  // 최소 주문금액 이상
+                log.info("[$market] 미체결분 시장가 주문: $remainingAmount KRW")
+                val marketResult = submitMarketOrder(signal, apiMarket, remainingAmount)
+
+                // 부분 체결 정보 병합
+                return OrderSubmitResult(
+                    orderResponse = marketResult.orderResponse,
+                    orderType = OrderType.MARKET,
+                    limitPrice = null,
+                    quantity = marketResult.quantity,
+                    partialFillFromLimit = executedVolume > BigDecimal.ZERO,
+                    limitFilledQuantity = executedVolume
+                )
+            }
+        }
+
+        return submitResult
+    }
+
+    /**
+     * 시장가 주문 제출
+     */
+    private fun submitMarketOrder(
         signal: TradingSignal,
         apiMarket: String,
         positionSize: BigDecimal
-    ): OrderResponse? {
-        return when (signal.action) {
+    ): OrderSubmitResult {
+        val response = when (signal.action) {
             SignalAction.BUY -> {
-                // 시장가 매수 (KRW 금액 지정)
+                log.info("[${signal.market}] 시장가 매수: $positionSize KRW")
                 bithumbPrivateApi.buyMarketOrder(apiMarket, positionSize)
             }
             SignalAction.SELL -> {
-                // 시장가 매도 (수량 지정)
                 val quantity = calculateQuantity(signal.price, positionSize)
+                log.info("[${signal.market}] 시장가 매도: 수량=$quantity")
                 bithumbPrivateApi.sellMarketOrder(apiMarket, quantity)
             }
             SignalAction.HOLD -> null
         }
+
+        return OrderSubmitResult(response, OrderType.MARKET, null, null)
     }
 
     /**
@@ -318,7 +531,8 @@ class OrderExecutor(
         signal: TradingSignal,
         order: OrderResponse,
         positionSize: BigDecimal,
-        midPrice: BigDecimal?
+        midPrice: BigDecimal?,
+        orderType: OrderType = OrderType.MARKET
     ): OrderResult {
         val market = signal.market
         val side = if (signal.action == SignalAction.BUY) OrderSide.BUY else OrderSide.SELL
@@ -424,7 +638,8 @@ class OrderExecutor(
             isPartialFill = isPartialFill,
             fillRatePercent = fillRatePercent,
             message = message,
-            isSimulated = false
+            isSimulated = false,
+            orderType = orderType
         )
     }
 
@@ -440,14 +655,15 @@ class OrderExecutor(
         fee: BigDecimal,
         slippagePercent: Double,
         isSimulated: Boolean,
-        isPartialFill: Boolean
+        isPartialFill: Boolean,
+        orderType: OrderType = OrderType.MARKET
     ) {
         try {
             val entity = TradeEntity(
                 orderId = orderId,
                 market = signal.market,
                 side = if (signal.action == SignalAction.BUY) "BUY" else "SELL",
-                type = "MARKET",
+                type = orderType.name,
                 price = (executedPrice ?: signal.price).toDouble(),
                 quantity = (executedQuantity ?: calculateQuantity(signal.price, positionSize)).toDouble(),
                 totalAmount = positionSize.toDouble(),
@@ -464,7 +680,7 @@ class OrderExecutor(
             )
 
             tradeRepository.save(entity)
-            log.debug("[${signal.market}] 거래 기록 저장: orderId=$orderId")
+            log.debug("[${signal.market}] 거래 기록 저장: orderId=$orderId, type=$orderType")
 
         } catch (e: Exception) {
             log.error("[${signal.market}] 거래 기록 저장 실패: ${e.message}", e)
@@ -494,6 +710,18 @@ class OrderExecutor(
 }
 
 /**
+ * 주문 제출 결과 (내부용)
+ */
+data class OrderSubmitResult(
+    val orderResponse: OrderResponse?,
+    val orderType: OrderType,
+    val limitPrice: BigDecimal?,
+    val quantity: BigDecimal?,
+    val partialFillFromLimit: Boolean = false,
+    val limitFilledQuantity: BigDecimal? = null
+)
+
+/**
  * 주문 결과
  */
 data class OrderResult(
@@ -511,6 +739,7 @@ data class OrderResult(
     val message: String,
     val isSimulated: Boolean = false,
     val rejectionReason: OrderRejectionReason? = null,
+    val orderType: OrderType = OrderType.MARKET,
     val timestamp: Instant = Instant.now()
 ) {
     /**

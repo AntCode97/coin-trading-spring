@@ -1,6 +1,4 @@
-### ============================================
-### KeyValue 설정 관리
-### ============================================
+// KeyValue 설정 관리
 
 ### 전체 설정 조회
 GET {{host}}/api/settings
@@ -22,9 +20,7 @@ Accept: application/json
 GET {{host}}/api/settings/category/regime
 Accept: application/json
 
-### ============================================
-### 설정 변경
-### ============================================
+// 설정 변경
 
 ### 거래 활성화
 POST {{host}}/api/settings
@@ -92,17 +88,13 @@ Content-Type: application/json
   "description": "LLM 최적화 활성화"
 }
 
-### ============================================
-### 설정 삭제 (주의!)
-### ============================================
+// 설정 삭제 (주의!)
 
 ### 특정 설정 삭제
 DELETE {{host}}/api/settings/custom.setting.key
 Accept: application/json
 
-### ============================================
-### 캐시 관리
-### ============================================
+// 캐시 관리
 
 ### 캐시 통계 조회
 GET {{host}}/api/settings/cache/stats
