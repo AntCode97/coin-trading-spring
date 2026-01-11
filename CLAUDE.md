@@ -16,31 +16,33 @@ Bithumb 암호화폐 거래소를 위한 **Spring Boot** 기반 자동화 트레
 │   ├── DCA (Dollar Cost Averaging)
 │   ├── Grid Trading
 │   ├── Mean Reversion
-│   └── Order Book Imbalance (NEW - 초단기 전략)
+│   └── Order Book Imbalance (초단기 전략)
 │
-├── 리스크 관리 (QUANT_RESEARCH.md 기반)
+├── 리스크 관리
 │   ├── CircuitBreaker       - 연속 손실/실행 실패/슬리피지 감시
 │   ├── MarketConditionChecker - 스프레드/유동성/변동성 검사
 │   ├── OrderExecutor        - 부분체결/슬리피지 검증
 │   └── RegimeDelayLogic     - 잦은 전략 변경 방지
 │
-├── 동적 설정 (KeyValue Store - Redis 대체)
+├── 동적 설정 (KeyValue Store)
 │   ├── MySQL 기반 키-값 저장소
 │   ├── 메모리 캐시 (읽기 성능)
 │   └── REST API로 런타임 변경
 │
-├── MCP Tools (LLM 연동)
+├── MCP Server (Claude Code 연동)
 │   ├── MarketDataTools       - 시장 데이터 조회
 │   ├── TechnicalAnalysisTools - RSI, MACD, 볼린저밴드
 │   ├── TradingTools          - 주문/잔고
 │   ├── StrategyTools         - 전략 파라미터 조정
 │   └── PerformanceTools      - 성과 분석
 │
-└── LLM Optimizer (Spring AI Tool Calling)
-    ├── 동적 모델 선택 (Anthropic/OpenAI/Google)
-    ├── ModelSelector로 런타임 모델 변경
-    ├── Tool Calling으로 LLM이 직접 함수 호출
-    └── 주 1회 변경 제한 (과적합 방지)
+├── LLM Optimizer (Spring AI)
+│   ├── LlmConfig            - ChatClient 빈 등록
+│   ├── ModelSelector        - 동적 모델 선택 (@Qualifier)
+│   └── Tool Calling         - LLM이 직접 함수 호출
+│
+└── 알림 시스템
+    └── SlackNotifier        - Bot API (chat.postMessage)
 ```
 
 ---
@@ -52,7 +54,7 @@ Bithumb 암호화폐 거래소를 위한 **Spring Boot** 기반 자동화 트레
 | JDK | 25 |
 | Kotlin | 2.3.0 |
 | Spring Boot | 4.0.1 |
-| Spring AI | 1.1.1 (Anthropic + OpenAI + Gemini) |
+| Spring AI | 1.1.1 (Anthropic + OpenAI) |
 | Gradle | 9.2.1 (Kotlin DSL) |
 | MySQL | 8.x |
 
@@ -62,211 +64,133 @@ Bithumb 암호화폐 거래소를 위한 **Spring Boot** 기반 자동화 트레
 
 ```
 coin-trading-spring/
-├── coin-trading-server/           # 통합 서버 (Kotlin)
+├── coin-trading-server/
 │   └── src/main/kotlin/com/ant/cointrading/
 │       ├── CoinTradingApplication.kt
 │       ├── api/bithumb/
-│       │   ├── BithumbModels.kt       # API 모델
-│       │   ├── BithumbPublicApi.kt    # 공개 API
-│       │   └── BithumbPrivateApi.kt   # 비공개 API (JWT)
+│       │   ├── BithumbModels.kt
+│       │   ├── BithumbPublicApi.kt
+│       │   └── BithumbPrivateApi.kt
 │       ├── config/
 │       │   ├── BithumbProperties.kt
 │       │   ├── TradingProperties.kt
-│       │   └── LlmProperties.kt
+│       │   ├── LlmProperties.kt
+│       │   └── LlmConfig.kt            # ChatClient 빈 등록
 │       ├── controller/
-│       │   └── SettingsController.kt  # 설정 관리 API (NEW)
+│       │   └── SettingsController.kt
 │       ├── service/
-│       │   ├── KeyValueService.kt     # Redis 대체 (NEW)
-│       │   └── ModelSelector.kt       # 동적 모델 선택 (NEW)
-│       ├── engine/
-│       │   └── TradingEngine.kt       # 메인 트레이딩 엔진
-│       ├── order/
-│       │   └── OrderExecutor.kt       # 주문 실행기 (완전 재작성)
-│       ├── strategy/
-│       │   ├── DcaStrategy.kt
-│       │   ├── GridStrategy.kt
-│       │   ├── MeanReversionStrategy.kt
-│       │   ├── OrderBookImbalanceStrategy.kt  # (NEW)
-│       │   └── StrategySelector.kt
-│       ├── regime/
-│       │   ├── RegimeDetector.kt      # ADX/ATR 기반
-│       │   └── HmmRegimeDetector.kt   # (NEW) HMM 기반
-│       ├── risk/
-│       │   ├── RiskManager.kt
-│       │   ├── CircuitBreaker.kt      # (확장됨)
-│       │   └── MarketConditionChecker.kt  # (NEW)
-│       ├── optimizer/
-│       │   ├── LlmOptimizer.kt        # ModelSelector 연동
-│       │   └── OptimizerTools.kt
-│       └── repository/
-│           ├── TradeEntity.kt         # slippage, isPartialFill 추가
-│           ├── KeyValueEntity.kt      # (NEW)
-│           └── KeyValueRepository.kt  # (NEW)
+│       │   ├── KeyValueService.kt
+│       │   └── ModelSelector.kt        # @Qualifier 기반 모델 선택
+│       ├── mcp/tool/                   # MCP Server Tools
+│       │   ├── MarketDataTools.kt      # @McpTool 어노테이션
+│       │   ├── TechnicalAnalysisTools.kt
+│       │   ├── TradingTools.kt
+│       │   ├── StrategyTools.kt
+│       │   └── PerformanceTools.kt
+│       ├── notification/
+│       │   └── SlackNotifier.kt        # Bot API 방식
+│       └── ...
 │
-├── docs/
-│   └── QUANT_RESEARCH.md             # 퀀트 연구 노트
+├── http/                               # HTTP Client 테스트 파일
+├── docker-compose.yml                  # 로컬 개발용
+├── docker-compose.nas.yml              # NAS 배포용
+├── docker-build-push.sh                # Docker Hub 빌드/푸시
+├── .mcp.json                           # Claude Code MCP 연결 설정
 └── CLAUDE.md
 ```
 
 ---
 
-## 새로 추가된 기능 (Phase 1 완료)
+## 최근 변경사항 (2026-01-11)
 
-### 1. MarketConditionChecker
+### 1. MCP Server 설정 완료
 
-주문 전 시장 상태 검사:
+Spring AI MCP Server 어노테이션 적용:
 
-| 항목 | 한도 | 초과 시 |
-|------|------|---------|
-| 스프레드 | 0.5% | 거래 금지 |
-| 유동성 | 주문량 3x | 거래 금지 |
-| 변동성 (1분) | 2% | 경고 |
-| API 에러 | 5회 연속 | 거래 금지 |
-
-### 2. OrderExecutor (완전 재작성)
-
-| 기능 | 설명 |
-|------|------|
-| 주문 상태 확인 | 3회 재시도 (exponential backoff) |
-| 부분 체결 감지 | 90% 이상 체결 시 성공 처리 |
-| 슬리피지 계산 | 기준가 대비 체결가 차이 |
-| 실제 수수료 | API 응답에서 paidFee 사용 |
-| CircuitBreaker 연동 | 실패/슬리피지 자동 기록 |
-
-### 3. CircuitBreaker (확장)
-
-| 트리거 | 쿨다운 |
-|--------|--------|
-| 연속 3회 PnL 손실 | 4시간 |
-| 연속 5회 주문 실행 실패 | 1시간 |
-| 연속 3회 고슬리피지 (2%+) | 4시간 |
-| 1분 내 API 에러 10회 | 24시간 (글로벌) |
-| 총 자산 10% 감소 | 24시간 (글로벌) |
-
-### 4. Order Book Imbalance 전략
-
-호가창 불균형 기반 초단기 전략:
-
-```
-Imbalance = (Bid - Ask) / (Bid + Ask)
-- +0.3 이상: 매수 압력 → BUY
-- -0.3 이하: 매도 압력 → SELL
-- 연속 3회 확인 시 신호 강화
+```kotlin
+// org.springaicommunity.mcp.annotation 패키지 사용
+@McpTool(description = "RSI를 계산합니다")
+fun calculateRsi(
+    @McpToolParam(description = "마켓 ID") market: String
+): Map<String, Any>
 ```
 
-### 5. HMM 레짐 감지기
+Claude Code 연결 설정 (`.mcp.json`):
+```json
+{
+  "mcpServers": {
+    "coin-trading": {
+      "type": "sse",
+      "url": "http://localhost:8080/mcp"
+    }
+  }
+}
+```
 
-Hidden Markov Model 기반 정교한 시장 레짐 감지:
+### 2. LLM 모델 선택 개선
 
-| 항목 | 설명 |
-|------|------|
-| 은닉 상태 | SIDEWAYS, BULL_TREND, BEAR_TREND, HIGH_VOLATILITY |
-| 관측값 | 수익률(5레벨) × 변동성(3레벨) × 거래량(3레벨) = 45개 |
-| 알고리즘 | Viterbi (가장 가능성 높은 상태 시퀀스 추정) |
-| 폴백 | 데이터 부족 시 기존 ADX/ATR 기반 감지기 사용 |
+생성자 주입 + @Qualifier 방식:
+
+```kotlin
+// LlmConfig.kt - ChatClient 빈 등록
+@Bean("anthropicChatClient")
+@ConditionalOnBean(AnthropicChatModel::class)
+fun anthropicChatClient(chatModel: AnthropicChatModel): ChatClient {
+    return ChatClient.create(chatModel)
+}
+
+// ModelSelector.kt - @Qualifier로 주입
+@Service
+class ModelSelector(
+    private val keyValueService: KeyValueService,
+    @param:Qualifier("anthropicChatClient") private val anthropicClient: ChatClient? = null,
+    @param:Qualifier("openAiChatClient") private val openAiClient: ChatClient? = null
+)
+```
+
+### 3. Slack Bot API 전환
+
+Webhook → Bot Token 방식:
+
+```kotlin
+// chat.postMessage API 사용
+webClient.post()
+    .uri("https://slack.com/api/chat.postMessage")
+    .header("Authorization", "Bearer $token")
+    .bodyValue(mapOf("channel" to channel, "text" to text))
+```
+
+### 4. Docker 멀티플랫폼 빌드
+
+NAS (Intel N100) 배포를 위한 amd64 빌드:
 
 ```bash
-# 레짐 감지기 상태 확인
-curl http://localhost:8080/api/settings/regime
-
-# HMM 레짐 감지기로 변경
-curl -X POST http://localhost:8080/api/settings/regime \
-  -H "Content-Type: application/json" \
-  -d '{"type": "hmm"}'
-
-# Simple(ADX/ATR) 감지기로 복귀
-curl -X POST http://localhost:8080/api/settings/regime \
-  -H "Content-Type: application/json" \
-  -d '{"type": "simple"}'
-
-# HMM 전이 확률 조회
-curl http://localhost:8080/api/settings/regime/hmm/transitions
-```
-
-### 6. 동적 LLM 모델 선택
-
-KeyValue 저장소를 통한 런타임 모델 변경:
-
-```bash
-# 현재 모델 상태 확인
-curl http://localhost:8080/api/settings/model
-
-# Google Gemini로 변경
-curl -X POST http://localhost:8080/api/settings/model \
-  -H "Content-Type: application/json" \
-  -d '{"provider": "google"}'
-
-# Anthropic Claude로 변경
-curl -X POST http://localhost:8080/api/settings/model \
-  -H "Content-Type: application/json" \
-  -d '{"provider": "anthropic"}'
+docker build --platform linux/amd64 \
+    -t dbswns97/coin-trading-server:latest \
+    -f coin-trading-server/Dockerfile .
 ```
 
 ---
 
-## 설정 관리 API
+## 배포
 
-### KeyValue 설정
-
-```bash
-# 전체 설정 조회
-curl http://localhost:8080/api/settings
-
-# 특정 키 조회
-curl http://localhost:8080/api/settings/llm.model.provider
-
-# 설정 변경
-curl -X POST http://localhost:8080/api/settings \
-  -H "Content-Type: application/json" \
-  -d '{"key": "trading.enabled", "value": "true"}'
-
-# 카테고리별 조회
-curl http://localhost:8080/api/settings/category/llm
-```
-
-### 기본 키 목록
-
-| 키 | 기본값 | 설명 |
-|----|--------|------|
-| `llm.model.provider` | anthropic | LLM 제공자 |
-| `llm.model.name` | claude-sonnet-4-20250514 | 모델명 |
-| `llm.enabled` | false | LLM 최적화 활성화 |
-| `trading.enabled` | false | 실거래 활성화 |
-| `system.maintenance` | false | 점검 모드 |
-| `regime.detector.type` | simple | 레짐 감지기 (simple/hmm) |
-
----
-
-## 빌드 및 실행
-
-### 빌드
+### Docker Hub 빌드 & 푸시
 
 ```bash
-./gradlew :coin-trading-server:build -x test
+./docker-build-push.sh              # latest 태그
+./docker-build-push.sh v1.0.0       # 버전 태그
+./docker-build-push.sh --no-cache   # 캐시 없이 빌드
 ```
 
-### 로컬 실행
+### NAS 배포
 
 ```bash
-./gradlew :coin-trading-server:bootRun
+# NAS에서 실행
+docker pull dbswns97/coin-trading-server:latest
+docker-compose -f docker-compose.nas.yml up -d
 ```
 
-### 상태 확인
-
-```bash
-# 헬스 체크
-curl http://localhost:8080/actuator/health
-
-# 설정 상태
-curl http://localhost:8080/api/settings
-
-# 모델 상태
-curl http://localhost:8080/api/settings/model
-```
-
----
-
-## 환경 변수
+### 환경 변수
 
 | 변수 | 설명 | 기본값 |
 |------|------|--------|
@@ -275,20 +199,35 @@ curl http://localhost:8080/api/settings/model
 | `MYSQL_URL` | MySQL 접속 URL | localhost:3306 |
 | `MYSQL_USER` | MySQL 사용자 | root |
 | `MYSQL_PASSWORD` | MySQL 비밀번호 | (필수) |
-| `SLACK_WEBHOOK_URL` | Slack Webhook URL | (선택) |
+| `SLACK_TOKEN` | Slack Bot Token (xoxb-...) | (선택) |
+| `SLACK_CHANNEL` | Slack 채널명 | coin-bot-alert |
 | `TRADING_ENABLED` | 실거래 활성화 | false |
 | `ORDER_AMOUNT_KRW` | 1회 주문 금액 | 10000 |
 | `STRATEGY_TYPE` | 기본 전략 | MEAN_REVERSION |
 | `LLM_OPTIMIZER_ENABLED` | LLM 최적화 활성화 | false |
 | `SPRING_AI_ANTHROPIC_API_KEY` | Anthropic API 키 | (LLM 사용 시) |
 | `SPRING_AI_OPENAI_API_KEY` | OpenAI API 키 | (LLM 사용 시) |
-| `SPRING_AI_GOOGLE_API_KEY` | Google Gemini API 키 | (LLM 사용 시) |
 
 ---
 
-## 참고 문서
+## MCP Tools 사용법
 
-- `docs/QUANT_RESEARCH.md` - 퀀트 연구 노트 (전략, 엣지케이스, 실패 원인)
+Claude Code에서 MCP 연결 후 사용 가능한 도구:
+
+| 도구 | 설명 |
+|------|------|
+| `getOhlcv` | OHLCV 캔들 데이터 조회 |
+| `getCurrentPrice` | 현재가 조회 |
+| `calculateRsi` | RSI 지표 계산 |
+| `calculateMacd` | MACD 지표 계산 |
+| `calculateBollingerBands` | 볼린저밴드 계산 |
+| `getBalances` | 전체 잔고 조회 |
+| `buyLimitOrder` | 지정가 매수 |
+| `sellLimitOrder` | 지정가 매도 |
+| `getStrategyConfig` | 전략 설정 조회 |
+| `setStrategy` | 전략 변경 |
+| `getPerformanceSummary` | 성과 요약 |
+| `getOptimizationReport` | 최적화 리포트 |
 
 ---
 
@@ -296,54 +235,50 @@ curl http://localhost:8080/api/settings/model
 
 ### Phase 2: 엣지 확보
 
-1. ~~**HMM 레짐 감지 구현**~~ ✅ 완료
-   - Viterbi 알고리즘 직접 구현
-   - 45개 이산 관측값 (수익률 × 변동성 × 거래량)
-   - API로 simple/hmm 선택 가능
+1. ~~**MCP Server 연동**~~ ✅ 완료
+   - Spring AI MCP Stateless Server
+   - Claude Code 연결 설정
 
-2. **김치 프리미엄 모니터링**
+2. ~~**LLM 모델 선택 개선**~~ ✅ 완료
+   - @Qualifier 기반 생성자 주입
+   - LlmConfig.kt 빈 등록
+
+3. ~~**Slack Bot API 전환**~~ ✅ 완료
+   - Webhook → Bot Token 방식
+
+4. **김치 프리미엄 모니터링**
    - 해외 거래소 가격 연동 (Binance API)
    - 프리미엄 계산 및 알림
-   - 프리미엄 급등/급락 시 전략 조정
 
-3. **실시간 수수료 조회**
+5. **실시간 수수료 조회**
    - 현재 0.25% 하드코딩
    - Bithumb API에서 실제 수수료율 조회
-   - VIP 등급별 수수료 반영
 
 ### Phase 3: 확장
 
-4. **Funding Rate Arbitrage (선물 거래소 연동)**
+6. **Funding Rate Arbitrage**
    - 현물 Long + 무기한 선물 Short
    - Binance/Bybit 선물 API 연동
-   - 펀딩비 자동 수취
 
-5. **백테스팅 프레임워크**
+7. **백테스팅 프레임워크**
    - 과거 데이터로 전략 검증
    - Walk-forward 최적화
-   - Monte Carlo 시뮬레이션
 
-6. **다중 거래소 차익거래**
+8. **다중 거래소 차익거래**
    - Upbit, Coinone 연동
-   - 거래소 간 가격 차이 감지
-   - 자동 차익거래 (원화 통제로 제한적)
 
 ### Phase 4: 운영 고도화
 
-7. **Prometheus/Grafana 모니터링**
+9. **Prometheus/Grafana 모니터링**
    - Actuator 메트릭 수집
    - 실시간 대시보드
-   - 알림 규칙 설정
 
-8. **분산 락 (다중 인스턴스 대비)**
-   - 현재 단일 인스턴스 가정
-   - MySQL 기반 분산 락 구현
-   - 같은 마켓 중복 주문 방지
+10. **분산 락 (다중 인스턴스)**
+    - MySQL 기반 분산 락
 
-9. **자동 복구 시스템**
-   - 서버 재시작 시 상태 복원
-   - 미체결 주문 자동 처리
-   - CircuitBreaker 상태 영속화
+11. **자동 복구 시스템**
+    - 미체결 주문 자동 처리
+    - CircuitBreaker 상태 영속화
 
 ---
 
