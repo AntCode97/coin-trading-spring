@@ -4,12 +4,8 @@ import jakarta.persistence.*
 import java.time.Instant
 
 /**
- * LLM 결정 감사 로그
- *
- * 모든 LLM 최적화 결정을 추적하여:
- * 1. 결정 이력 조회
- * 2. 문제 발생 시 원인 분석
- * 3. LLM 권장사항 품질 평가
+ * LLM 결정 감사 로그 엔티티
+ * AI 의사결정 기록 및 추적
  */
 @Entity
 @Table(
@@ -20,39 +16,50 @@ import java.time.Instant
         Index(name = "idx_audit_market", columnList = "market")
     ]
 )
-data class AuditLogEntity(
+class AuditLogEntity(
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)
-    val id: Long? = null,
+    var id: Long? = null,
 
+    /** 이벤트 유형 (STRATEGY_CHANGE/PARAM_UPDATE/TRADE_DECISION) */
     @Column(nullable = false, length = 50)
-    val eventType: String,  // LLM_OPTIMIZATION, STRATEGY_CHANGE, CIRCUIT_BREAKER, PARAMETER_CHANGE
+    var eventType: String = "",
 
+    /** 대상 마켓 */
     @Column(length = 20)
-    val market: String? = null,
+    var market: String? = null,
 
+    /** 수행 액션 */
     @Column(nullable = false, length = 100)
-    val action: String,  // 수행된 동작
+    var action: String = "",
 
+    /** 입력 데이터 (JSON) */
     @Column(columnDefinition = "TEXT")
-    val inputData: String? = null,  // LLM에 입력된 데이터 (JSON)
+    var inputData: String? = null,
 
+    /** 출력 데이터 (JSON) */
     @Column(columnDefinition = "TEXT")
-    val outputData: String? = null,  // LLM 응답 또는 결과 (JSON)
+    var outputData: String? = null,
 
+    /** LLM 판단 사유 */
     @Column(length = 500)
-    val reason: String? = null,  // 결정 이유
+    var reason: String? = null,
 
-    val confidence: Double? = null,  // 신뢰도
+    /** 신뢰도 (0.0~1.0) */
+    var confidence: Double? = null,
 
-    val applied: Boolean = false,  // 실제 적용 여부
+    /** 적용 여부 */
+    var applied: Boolean = false,
 
+    /** 거부 사유 (미적용 시) */
     @Column(length = 500)
-    val rejectionReason: String? = null,  // 거부된 경우 사유
+    var rejectionReason: String? = null,
 
+    /** 로그 생성 시각 */
     @Column(nullable = false)
-    val createdAt: Instant = Instant.now(),
+    var createdAt: Instant = Instant.now(),
 
+    /** 트리거 주체 (SYSTEM/SCHEDULER/MANUAL) */
     @Column(length = 50)
-    val triggeredBy: String = "SYSTEM"  // SCHEDULED, MANUAL, API
+    var triggeredBy: String = "SYSTEM"
 )

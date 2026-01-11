@@ -2,6 +2,11 @@ package com.ant.cointrading.strategy
 
 import com.ant.cointrading.config.TradingProperties
 import com.ant.cointrading.model.*
+import com.ant.cointrading.service.KeyValueService
+import com.fasterxml.jackson.module.kotlin.jacksonObjectMapper
+import com.fasterxml.jackson.module.kotlin.readValue
+import jakarta.annotation.PostConstruct
+import org.slf4j.LoggerFactory
 import org.springframework.stereotype.Component
 import java.math.BigDecimal
 import java.math.RoundingMode
@@ -22,12 +27,20 @@ import java.util.concurrent.ConcurrentHashMap
  */
 @Component
 class GridStrategy(
-    private val tradingProperties: TradingProperties
+    private val tradingProperties: TradingProperties,
+    private val keyValueService: KeyValueService
 ) : TradingStrategy {
+
+    private val log = LoggerFactory.getLogger(GridStrategy::class.java)
+    private val objectMapper = jacksonObjectMapper()
 
     override val name = "GRID"
 
-    // 마켓별 그리드 상태
+    companion object {
+        private const val KEY_PREFIX = "grid.state."
+    }
+
+    // 마켓별 그리드 상태 (메모리 캐시)
     private val gridStates = ConcurrentHashMap<String, GridState>()
 
     data class GridState(
@@ -42,6 +55,73 @@ class GridStrategy(
         var filled: Boolean = false
     )
 
+    /** DB 저장용 직렬화 클래스 */
+    data class GridStateDto(
+        val basePrice: String,
+        val levels: List<GridLevelDto>,
+        val lastAction: String?
+    )
+
+    data class GridLevelDto(
+        val price: String,
+        val type: String,
+        val filled: Boolean
+    )
+
+    /**
+     * 애플리케이션 시작 시 DB에서 상태 복원
+     */
+    @PostConstruct
+    fun restoreState() {
+        log.info("Grid 전략 상태 복원 시작")
+        tradingProperties.markets.forEach { market ->
+            val key = KEY_PREFIX + market
+            val savedJson = keyValueService.get(key)
+            if (savedJson != null) {
+                try {
+                    val dto = objectMapper.readValue<GridStateDto>(savedJson)
+                    val state = GridState(
+                        basePrice = BigDecimal(dto.basePrice),
+                        levels = dto.levels.map { level ->
+                            GridLevel(
+                                price = BigDecimal(level.price),
+                                type = SignalAction.valueOf(level.type),
+                                filled = level.filled
+                            )
+                        },
+                        lastAction = dto.lastAction?.let { SignalAction.valueOf(it) }
+                    )
+                    gridStates[market] = state
+                    log.info("[$market] Grid 상태 복원: 기준가=${state.basePrice}, 레벨=${state.levels.size}개")
+                } catch (e: Exception) {
+                    log.warn("[$market] Grid 상태 복원 실패: ${e.message}")
+                }
+            }
+        }
+        log.info("Grid 전략 상태 복원 완료: ${gridStates.size}개 마켓")
+    }
+
+    /**
+     * 상태를 DB에 저장
+     */
+    private fun saveState(market: String, state: GridState) {
+        val dto = GridStateDto(
+            basePrice = state.basePrice.toPlainString(),
+            levels = state.levels.map { level ->
+                GridLevelDto(
+                    price = level.price.toPlainString(),
+                    type = level.type.name,
+                    filled = level.filled
+                )
+            },
+            lastAction = state.lastAction?.name
+        )
+        val json = objectMapper.writeValueAsString(dto)
+        val key = KEY_PREFIX + market
+        keyValueService.set(key, json, "grid", "Grid 전략 상태 ($market)")
+        log.debug("[$market] Grid 상태 저장 완료")
+    }
+
     override fun analyze(
         market: String,
         candles: List<Candle>,
@@ -50,7 +130,9 @@ class GridStrategy(
     ): TradingSignal {
         // 그리드 초기화 또는 갱신
         val state = gridStates.getOrPut(market) {
-            createGridState(currentPrice)
+            val newState = createGridState(currentPrice)
+            saveState(market, newState)
+            newState
         }
 
         // 가격이 그리드 범위를 벗어나면 재설정
@@ -59,7 +141,9 @@ class GridStrategy(
 
         if (lowestLevel != null && highestLevel != null) {
             if (currentPrice < lowestLevel || currentPrice > highestLevel) {
-                gridStates[market] = createGridState(currentPrice)
+                val newState = createGridState(currentPrice)
+                gridStates[market] = newState
+                saveState(market, newState)
                 return TradingSignal(
                     market = market,
                     action = SignalAction.HOLD,
@@ -77,6 +161,9 @@ class GridStrategy(
         return if (triggeredLevel != null && !triggeredLevel.filled) {
             triggeredLevel.filled = true
             state.lastAction = triggeredLevel.type
+
+            // 상태 변경 시 DB에 저장
+            saveState(market, state)
 
             val confidence = when (regime.regime) {
                 MarketRegime.SIDEWAYS -> 80.0
@@ -144,10 +231,27 @@ class GridStrategy(
     }
 
     /**
-     * 그리드 상태 리셋
+     * 그리드 상태 리셋 (DB도 함께)
      */
     fun resetGrid(market: String) {
         gridStates.remove(market)
+        val key = KEY_PREFIX + market
+        keyValueService.delete(key)
+        log.info("[$market] Grid 상태 리셋 완료")
+    }
+
+    /**
+     * 현재 상태 조회
+     */
+    fun getState(): Map<String, Any?> {
+        return gridStates.mapValues { (_, state) ->
+            mapOf(
+                "basePrice" to state.basePrice.toPlainString(),
+                "levelCount" to state.levels.size,
+                "filledCount" to state.levels.count { it.filled },
+                "lastAction" to state.lastAction?.name
+            )
+        }
     }
 
     override fun isSuitableFor(regime: RegimeAnalysis): Boolean {

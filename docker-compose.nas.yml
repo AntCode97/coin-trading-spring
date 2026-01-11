@@ -9,6 +9,8 @@ services:
       - "8080:8080"
     env_file:
       - .env
+    environment:
+      - TZ=Asia/Seoul
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "wget", "-q", "--spider", "http://localhost:8080/actuator/health"]

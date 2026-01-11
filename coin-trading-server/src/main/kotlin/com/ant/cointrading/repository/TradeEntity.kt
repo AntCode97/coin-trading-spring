@@ -31,7 +31,7 @@ data class TradeRecord(
             price = price.toDouble(),
             quantity = quantity.toDouble(),
             totalAmount = amount.toDouble(),
-            fee = amount.multiply(BigDecimal("0.0025")).toDouble(), // 0.25% 수수료 가정
+            fee = amount.multiply(BigDecimal("0.0004")).toDouble(),  // 빗썸 수수료 0.04%
             pnl = realizedPnl?.toDouble(),
             pnlPercent = null,
             strategy = strategy,
@@ -45,10 +45,7 @@ data class TradeRecord(
 
 /**
  * 거래 기록 엔티티
- *
- * 20년차 퀀트의 교훈:
- * - 슬리피지 기록은 필수 (수익의 상당 부분이 여기서 사라진다)
- * - 부분 체결 여부 추적 (유동성 문제 조기 감지)
+ * 모든 매수/매도 거래 내역을 저장
  */
 @Entity
 @Table(name = "trades", indexes = [
@@ -56,108 +53,138 @@ data class TradeRecord(
     Index(name = "idx_trades_created_at", columnList = "createdAt"),
     Index(name = "idx_trades_strategy", columnList = "strategy")
 ])
-data class TradeEntity(
+class TradeEntity(
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)
-    val id: Long? = null,
+    var id: Long? = null,
 
+    /** Bithumb 주문 ID */
     @Column(nullable = false, length = 64)
-    val orderId: String,
+    var orderId: String = "",
 
+    /** 거래 마켓 (예: KRW-BTC) */
     @Column(nullable = false, length = 20)
-    val market: String,
+    var market: String = "",
 
+    /** 거래 방향 (BUY/SELL) */
     @Column(nullable = false, length = 10)
-    val side: String,        // BUY, SELL
+    var side: String = "",
 
+    /** 주문 유형 (LIMIT/MARKET) */
     @Column(nullable = false, length = 10)
-    val type: String,        // MARKET, LIMIT
+    var type: String = "",
 
+    /** 체결 가격 (KRW) */
     @Column(nullable = false)
-    val price: Double,
+    var price: Double = 0.0,
 
+    /** 체결 수량 */
     @Column(nullable = false)
-    val quantity: Double,
+    var quantity: Double = 0.0,
 
+    /** 총 거래 금액 (KRW) */
     @Column(nullable = false)
-    val totalAmount: Double,
+    var totalAmount: Double = 0.0,
 
+    /** 거래 수수료 (KRW) */
     @Column(nullable = false)
-    val fee: Double,
+    var fee: Double = 0.0,
 
+    /** 슬리피지 (%, 기준가 대비 체결가 차이) */
     @Column
-    val slippage: Double? = null,      // 슬리피지 % (NEW)
+    var slippage: Double? = null,
 
+    /** 부분 체결 여부 */
     @Column
-    val isPartialFill: Boolean? = null, // 부분 체결 여부 (NEW)
+    var isPartialFill: Boolean? = null,
 
+    /** 실현 손익 (KRW) */
     @Column
-    val pnl: Double?,        // 손익 (매도 시)
+    var pnl: Double? = null,
 
+    /** 실현 손익률 (%) */
     @Column
-    val pnlPercent: Double?, // 손익률
+    var pnlPercent: Double? = null,
 
+    /** 사용 전략 (DCA/GRID/MEAN_REVERSION/ORDER_BOOK) */
     @Column(nullable = false, length = 30)
-    val strategy: String,    // 사용된 전략
+    var strategy: String = "",
 
+    /** 시장 레짐 (SIDEWAYS/BULL_TREND/BEAR_TREND/HIGH_VOLATILITY) */
     @Column(length = 30)
-    val regime: String?,     // 시장 레짐
+    var regime: String? = null,
 
+    /** 신호 신뢰도 (0.0~1.0) */
     @Column(nullable = false)
-    val confidence: Double,  // 신뢰도
+    var confidence: Double = 0.0,
 
+    /** 거래 사유 */
     @Column(nullable = false, length = 500)
-    val reason: String,      // 거래 이유
+    var reason: String = "",
 
+    /** 시뮬레이션 여부 (true=모의거래) */
     @Column(nullable = false)
-    val simulated: Boolean,  // 시뮬레이션 여부
+    var simulated: Boolean = false,
 
+    /** 거래 시각 */
     @Column(nullable = false)
-    val createdAt: Instant = Instant.now()
+    var createdAt: Instant = Instant.now()
 )
 
 /**
- * 일일 통계 엔티티
+ * 일일 거래 통계 엔티티
+ * 날짜/마켓별 거래 실적 집계
  */
 @Entity
 @Table(name = "daily_stats", indexes = [
     Index(name = "idx_daily_stats_date_market", columnList = "date, market", unique = true)
 ])
-data class DailyStatsEntity(
+class DailyStatsEntity(
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)
-    val id: Long? = null,
+    var id: Long? = null,
 
+    /** 날짜 (YYYY-MM-DD) */
     @Column(nullable = false, length = 10)
-    val date: String,        // YYYY-MM-DD
+    var date: String = "",
 
+    /** 거래 마켓 */
     @Column(nullable = false, length = 20)
-    val market: String,
+    var market: String = "",
 
+    /** 총 거래 횟수 */
     @Column(nullable = false)
-    val totalTrades: Int,
+    var totalTrades: Int = 0,
 
+    /** 수익 거래 횟수 */
     @Column(nullable = false)
-    val winTrades: Int,
+    var winTrades: Int = 0,
 
+    /** 손실 거래 횟수 */
     @Column(nullable = false)
-    val lossTrades: Int,
+    var lossTrades: Int = 0,
 
+    /** 총 손익 (KRW) */
     @Column(nullable = false)
-    val totalPnl: Double,
+    var totalPnl: Double = 0.0,
 
+    /** 승률 (0.0~1.0) */
     @Column(nullable = false)
-    val winRate: Double,
+    var winRate: Double = 0.0,
 
+    /** 평균 손익률 (%) */
     @Column(nullable = false)
-    val avgPnlPercent: Double,
+    var avgPnlPercent: Double = 0.0,
 
+    /** 최대 낙폭 (%) */
     @Column(nullable = false)
-    val maxDrawdown: Double,
+    var maxDrawdown: Double = 0.0,
 
+    /** 전략별 통계 (JSON) */
     @Column(length = 1000)
-    val strategiesJson: String? = null,
+    var strategiesJson: String? = null,
 
+    /** 마지막 갱신 시각 */
     @Column(nullable = false)
-    val updatedAt: Instant = Instant.now()
+    var updatedAt: Instant = Instant.now()
 )

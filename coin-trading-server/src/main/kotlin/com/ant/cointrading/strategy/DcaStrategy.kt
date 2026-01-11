@@ -2,6 +2,9 @@ package com.ant.cointrading.strategy
 
 import com.ant.cointrading.config.TradingProperties
 import com.ant.cointrading.model.*
+import com.ant.cointrading.service.KeyValueService
+import jakarta.annotation.PostConstruct
+import org.slf4j.LoggerFactory
 import org.springframework.stereotype.Component
 import java.math.BigDecimal
 import java.time.Instant
@@ -17,13 +20,42 @@ import java.util.concurrent.ConcurrentHashMap
  */
 @Component
 class DcaStrategy(
-    private val tradingProperties: TradingProperties
+    private val tradingProperties: TradingProperties,
+    private val keyValueService: KeyValueService
 ) : TradingStrategy {
+
+    private val log = LoggerFactory.getLogger(DcaStrategy::class.java)
 
     override val name = "DCA"
 
-    // 마켓별 마지막 매수 시간
+    companion object {
+        private const val KEY_PREFIX = "dca.last_buy_time."
+    }
+
+    // 마켓별 마지막 매수 시간 (메모리 캐시)
     private val lastBuyTime = ConcurrentHashMap<String, Instant>()
+
+    /**
+     * 애플리케이션 시작 시 DB에서 상태 복원
+     */
+    @PostConstruct
+    fun restoreState() {
+        log.info("DCA 전략 상태 복원 시작")
+        tradingProperties.markets.forEach { market ->
+            val key = KEY_PREFIX + market
+            val savedTime = keyValueService.get(key)
+            if (savedTime != null) {
+                try {
+                    val instant = Instant.parse(savedTime)
+                    lastBuyTime[market] = instant
+                    log.info("[$market] DCA 마지막 매수 시간 복원: $instant")
+                } catch (e: Exception) {
+                    log.warn("[$market] DCA 상태 복원 실패: ${e.message}")
+                }
+            }
+        }
+        log.info("DCA 전략 상태 복원 완료: ${lastBuyTime.size}개 마켓")
+    }
 
     override fun analyze(
         market: String,
@@ -72,10 +104,28 @@ class DcaStrategy(
     }
 
     /**
-     * 매수 완료 기록
+     * 매수 완료 기록 (메모리 + DB)
      */
     fun recordBuy(market: String) {
-        lastBuyTime[market] = Instant.now()
+        val now = Instant.now()
+        lastBuyTime[market] = now
+
+        // DB에도 저장 (재시작 시 복원용)
+        val key = KEY_PREFIX + market
+        keyValueService.set(key, now.toString(), "dca", "DCA 마지막 매수 시간 ($market)")
+        log.debug("[$market] DCA 매수 시간 기록: $now")
+    }
+
+    /**
+     * 현재 상태 조회
+     */
+    fun getState(): Map<String, Any?> {
+        return lastBuyTime.mapValues { (_, instant) ->
+            mapOf(
+                "lastBuyTime" to instant.toString(),
+                "nextBuyTime" to instant.plusMillis(tradingProperties.strategy.dcaInterval).toString()
+            )
+        }
     }
 
     override fun isSuitableFor(regime: RegimeAnalysis): Boolean {

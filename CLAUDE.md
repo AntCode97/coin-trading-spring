@@ -13,8 +13,8 @@ Bithumb 암호화폐 거래소를 위한 **Spring Boot** 기반 자동화 트레
 [coin-trading-server - 단일 서비스]
 │
 ├── 실시간 트레이딩 (룰 기반)
-│   ├── DCA (Dollar Cost Averaging)
-│   ├── Grid Trading
+│   ├── DCA (Dollar Cost Averaging)  - 상태 DB 저장
+│   ├── Grid Trading                 - 상태 DB 저장
 │   ├── Mean Reversion
 │   └── Order Book Imbalance (초단기 전략)
 │
@@ -27,6 +27,7 @@ Bithumb 암호화폐 거래소를 위한 **Spring Boot** 기반 자동화 트레
 ├── 동적 설정 (KeyValue Store)
 │   ├── MySQL 기반 키-값 저장소
 │   ├── 메모리 캐시 (읽기 성능)
+│   ├── 전략 상태 저장 (DCA, Grid)
 │   └── REST API로 런타임 변경
 │
 ├── MCP Server (Claude Code 연동)
@@ -34,7 +35,7 @@ Bithumb 암호화폐 거래소를 위한 **Spring Boot** 기반 자동화 트레
 │   ├── TechnicalAnalysisTools - RSI, MACD, 볼린저밴드
 │   ├── TradingTools          - 주문/잔고
 │   ├── StrategyTools         - 전략 파라미터 조정
-│   └── PerformanceTools      - 성과 분석
+│   └── PerformanceTools      - 성과 분석 (data class 응답)
 │
 ├── LLM Optimizer (Spring AI)
 │   ├── LlmConfig            - ChatClient 빈 등록
@@ -81,19 +82,27 @@ coin-trading-spring/
 │       ├── service/
 │       │   ├── KeyValueService.kt
 │       │   └── ModelSelector.kt        # @Qualifier 기반 모델 선택
+│       ├── strategy/
+│       │   ├── DcaStrategy.kt          # 상태 DB 저장 (@PostConstruct 복원)
+│       │   ├── GridStrategy.kt         # 상태 DB 저장 (JSON 직렬화)
+│       │   ├── MeanReversionStrategy.kt
+│       │   └── OrderBookImbalanceStrategy.kt
 │       ├── mcp/tool/                   # MCP Server Tools
 │       │   ├── MarketDataTools.kt      # @McpTool 어노테이션
 │       │   ├── TechnicalAnalysisTools.kt
 │       │   ├── TradingTools.kt
 │       │   ├── StrategyTools.kt
-│       │   └── PerformanceTools.kt
+│       │   └── PerformanceTools.kt     # data class 응답
 │       ├── notification/
 │       │   └── SlackNotifier.kt        # Bot API 방식
 │       └── ...
 │
 ├── http/                               # HTTP Client 테스트 파일
+├── docs/
+│   ├── QUANT_RESEARCH.md              # 퀀트 연구 노트
+│   └── add-table-comments.sql         # 테이블 주석 SQL
 ├── docker-compose.yml                  # 로컬 개발용
-├── docker-compose.nas.yml              # NAS 배포용
+├── docker-compose.nas.yml              # NAS 배포용 (TZ=Asia/Seoul)
 ├── docker-build-push.sh                # Docker Hub 빌드/푸시
 ├── .mcp.json                           # Claude Code MCP 연결 설정
 └── CLAUDE.md
@@ -101,73 +110,73 @@ coin-trading-spring/
 
 ---
 
-## 최근 변경사항 (2026-01-11)
+## 최근 변경사항 (2026-01-12)
 
-### 1. MCP Server 설정 완료
+### 1. 전략 상태 지속성 (재시작 시 복원)
 
-Spring AI MCP Server 어노테이션 적용:
+서버 재시작 후에도 이전 포지션/상태를 이어서 트레이딩:
 
+**DcaStrategy**:
 ```kotlin
-// org.springaicommunity.mcp.annotation 패키지 사용
-@McpTool(description = "RSI를 계산합니다")
-fun calculateRsi(
-    @McpToolParam(description = "마켓 ID") market: String
-): Map<String, Any>
-```
+// KeyValueService를 통해 마지막 매수 시간 저장
+// 키: dca.last_buy_time.{market}
+// 값: ISO-8601 timestamp
 
-Claude Code 연결 설정 (`.mcp.json`):
-```json
-{
-  "mcpServers": {
-    "coin-trading": {
-      "type": "sse",
-      "url": "http://localhost:8080/mcp"
+@PostConstruct
+fun restoreState() {
+    tradingProperties.markets.forEach { market ->
+        val savedTime = keyValueService.get("dca.last_buy_time.$market", null)
+        if (savedTime != null) {
+            lastBuyTime[market] = Instant.parse(savedTime)
+        }
     }
-  }
 }
 ```
 
-### 2. LLM 모델 선택 개선
+**GridStrategy**:
+```kotlin
+// 그리드 상태 JSON 직렬화 저장
+// 키: grid.state.{market}
+// 값: {"basePrice": "...", "levels": [...], "lastAction": "..."}
 
-생성자 주입 + @Qualifier 방식:
+@PostConstruct
+fun restoreState() {
+    // DB에서 그리드 상태 복원
+    val savedJson = keyValueService.get("grid.state.$market", null)
+    // JSON → GridState 역직렬화
+}
+```
+
+### 2. 빗썸 수수료 반영
+
+수수료: **0.04%** (하드코딩)
 
 ```kotlin
-// LlmConfig.kt - ChatClient 빈 등록
-@Bean("anthropicChatClient")
-@ConditionalOnBean(AnthropicChatModel::class)
-fun anthropicChatClient(chatModel: AnthropicChatModel): ChatClient {
-    return ChatClient.create(chatModel)
-}
+// TradeEntity.kt, OrderExecutor.kt
+fee = amount.multiply(BigDecimal("0.0004"))  // 빗썸 수수료 0.04%
+```
 
-// ModelSelector.kt - @Qualifier로 주입
-@Service
-class ModelSelector(
-    private val keyValueService: KeyValueService,
-    @param:Qualifier("anthropicChatClient") private val anthropicClient: ChatClient? = null,
-    @param:Qualifier("openAiChatClient") private val openAiClient: ChatClient? = null
+### 3. 시간대 설정
+
+NAS 배포 시 한국 시간대 적용:
+
+```yaml
+# docker-compose.nas.yml
+environment:
+  - TZ=Asia/Seoul
+```
+
+### 4. MCP 응답 data class 변환
+
+PerformanceTools 응답을 `Map<String, Any>` → `data class`로 변경:
+
+```kotlin
+data class PerformanceSummary(
+    val period: String,
+    val totalTrades: Int,
+    val winRate: String,
+    val strategyBreakdown: Map<String, StrategyStats>
 )
-```
-
-### 3. Slack Bot API 전환
-
-Webhook → Bot Token 방식:
-
-```kotlin
-// chat.postMessage API 사용
-webClient.post()
-    .uri("https://slack.com/api/chat.postMessage")
-    .header("Authorization", "Bearer $token")
-    .bodyValue(mapOf("channel" to channel, "text" to text))
-```
-
-### 4. Docker 멀티플랫폼 빌드
-
-NAS (Intel N100) 배포를 위한 amd64 빌드:
-
-```bash
-docker build --platform linux/amd64 \
-    -t dbswns97/coin-trading-server:latest \
-    -f coin-trading-server/Dockerfile .
 ```
 
 ---
@@ -210,6 +219,34 @@ docker-compose -f docker-compose.nas.yml up -d
 
 ---
 
+## 전략 상태 관리
+
+### 저장되는 상태
+
+| 전략 | 키 패턴 | 저장 내용 |
+|------|---------|----------|
+| DCA | `dca.last_buy_time.{market}` | 마지막 매수 시간 (ISO-8601) |
+| Grid | `grid.state.{market}` | 기준가, 그리드 레벨, 체결 상태 (JSON) |
+
+### 조회 API
+
+```bash
+# DCA 상태 조회
+curl http://localhost:8080/api/settings/category/dca
+
+# Grid 상태 조회
+curl http://localhost:8080/api/settings/category/grid
+```
+
+### 상태 초기화
+
+```bash
+# Grid 상태 리셋 (API 또는 DB에서 직접 삭제)
+curl -X DELETE http://localhost:8080/api/settings/grid.state.BTC_KRW
+```
+
+---
+
 ## MCP Tools 사용법
 
 Claude Code에서 MCP 연결 후 사용 가능한 도구:
@@ -236,47 +273,45 @@ Claude Code에서 MCP 연결 후 사용 가능한 도구:
 ### Phase 2: 엣지 확보
 
 1. ~~**MCP Server 연동**~~ ✅ 완료
-   - Spring AI MCP Stateless Server
-   - Claude Code 연결 설정
-
 2. ~~**LLM 모델 선택 개선**~~ ✅ 완료
-   - @Qualifier 기반 생성자 주입
-   - LlmConfig.kt 빈 등록
-
 3. ~~**Slack Bot API 전환**~~ ✅ 완료
-   - Webhook → Bot Token 방식
+4. ~~**전략 상태 지속성**~~ ✅ 완료
+   - DCA/Grid 상태 DB 저장
+   - 재시작 시 @PostConstruct 복원
+5. ~~**빗썸 수수료 반영**~~ ✅ 완료 (0.04%)
 
-4. **김치 프리미엄 모니터링**
+6. **김치 프리미엄 모니터링**
    - 해외 거래소 가격 연동 (Binance API)
    - 프리미엄 계산 및 알림
 
-5. **실시간 수수료 조회**
-   - 현재 0.25% 하드코딩
-   - Bithumb API에서 실제 수수료율 조회
+7. **MCP 도구 응답 개선**
+   - TechnicalAnalysisTools data class 변환
+   - TradingTools data class 변환
+   - StrategyTools data class 변환
 
 ### Phase 3: 확장
 
-6. **Funding Rate Arbitrage**
+8. **Funding Rate Arbitrage**
    - 현물 Long + 무기한 선물 Short
    - Binance/Bybit 선물 API 연동
 
-7. **백테스팅 프레임워크**
+9. **백테스팅 프레임워크**
    - 과거 데이터로 전략 검증
    - Walk-forward 최적화
 
-8. **다중 거래소 차익거래**
-   - Upbit, Coinone 연동
+10. **다중 거래소 차익거래**
+    - Upbit, Coinone 연동
 
 ### Phase 4: 운영 고도화
 
-9. **Prometheus/Grafana 모니터링**
-   - Actuator 메트릭 수집
-   - 실시간 대시보드
+11. **Prometheus/Grafana 모니터링**
+    - Actuator 메트릭 수집
+    - 실시간 대시보드
 
-10. **분산 락 (다중 인스턴스)**
+12. **분산 락 (다중 인스턴스)**
     - MySQL 기반 분산 락
 
-11. **자동 복구 시스템**
+13. **자동 복구 시스템**
     - 미체결 주문 자동 처리
     - CircuitBreaker 상태 영속화
 
@@ -289,7 +324,8 @@ Claude Code에서 MCP 연결 후 사용 가능한 도구:
 3. **소액 시작**: 처음엔 최소 금액(1만원)으로 시작
 4. **정기 점검**: 주 1회 수익률/손실 확인
 5. **서킷 브레이커 모니터링**: Slack 알림 확인
+6. **재시작 시**: DCA/Grid 상태가 자동 복원되는지 로그 확인
 
 ---
 
-*마지막 업데이트: 2026-01-11*
+*마지막 업데이트: 2026-01-12*
