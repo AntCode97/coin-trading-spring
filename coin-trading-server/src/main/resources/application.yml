@@ -45,12 +45,13 @@ spring:
           temperature: 0.3
 
     # OpenAI GPT (환경변수 SPRING_AI_OPENAI_API_KEY 필요)
+    # GPT-5 시리즈는 max-tokens 대신 max-completion-tokens 사용
     openai:
       api-key: ${SPRING_AI_OPENAI_API_KEY:}
       chat:
         options:
           model: gpt-5-mini
-          max-tokens: 4096
+          max-completion-tokens: 4096
           temperature: 0.3
 
     # Google Gemini (현재 비활성화 - project-id 필수 문제)
