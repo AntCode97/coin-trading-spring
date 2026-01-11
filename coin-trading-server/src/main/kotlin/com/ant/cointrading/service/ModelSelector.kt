@@ -74,8 +74,8 @@ class ModelSelector(
             "models" to "claude-sonnet-4-20250514, claude-opus-4-20250514, claude-3-5-haiku-latest"
         ),
         "openai" to mapOf(
-            "default" to "gpt-4o",
-            "models" to "gpt-4o, gpt-4o-mini, gpt-4-turbo"
+            "default" to "gpt-5",
+            "models" to "gpt-5, gpt-5-mini"
         )
     )
 }
