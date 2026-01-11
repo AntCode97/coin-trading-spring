@@ -1,8 +1,25 @@
 # HTTP API 호출 가이드
 
-IntelliJ IDEA HTTP Client를 사용한 API 호출 예시 모음.
+API 호출 예시 모음. Postman 또는 IntelliJ HTTP Client 사용 가능.
 
-## 사용 방법
+---
+
+## Postman 사용법 (권장)
+
+1. Postman 실행
+2. **Import** 버튼 클릭
+3. `postman-collection.json` 파일 선택
+4. Collection 목록에서 "Coin Trading API" 확인
+5. 변수 설정: Collection 선택 → Variables 탭 → `baseUrl` 수정
+
+```
+baseUrl: http://localhost:8080  (로컬)
+baseUrl: http://your-server:8080  (운영)
+```
+
+---
+
+## IntelliJ HTTP Client 사용법 (Ultimate 필요)
 
 1. IntelliJ IDEA에서 `.http` 파일 열기
 2. 환경 선택 (우측 상단): `local`, `docker`, `prod`
