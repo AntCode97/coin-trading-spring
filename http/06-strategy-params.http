@@ -1,0 +1,177 @@
+### ============================================
+### 전략 파라미터 변경 (KeyValue 설정 활용)
+### ============================================
+
+### ============================================
+### RSI 전략 파라미터
+### ============================================
+
+### RSI 과매도 기준 변경 (기본값: 30)
+POST {{host}}/api/settings
+Content-Type: application/json
+
+{
+  "key": "strategy.rsi.oversold",
+  "value": "25",
+  "category": "strategy",
+  "description": "RSI 과매도 기준값"
+}
+
+### RSI 과매수 기준 변경 (기본값: 70)
+POST {{host}}/api/settings
+Content-Type: application/json
+
+{
+  "key": "strategy.rsi.overbought",
+  "value": "75",
+  "category": "strategy",
+  "description": "RSI 과매수 기준값"
+}
+
+### ============================================
+### 볼린저밴드 전략 파라미터
+### ============================================
+
+### 볼린저밴드 기간 변경 (기본값: 20)
+POST {{host}}/api/settings
+Content-Type: application/json
+
+{
+  "key": "strategy.bollinger.period",
+  "value": "20",
+  "category": "strategy",
+  "description": "볼린저밴드 계산 기간"
+}
+
+### 볼린저밴드 표준편차 배수 변경 (기본값: 2.0)
+POST {{host}}/api/settings
+Content-Type: application/json
+
+{
+  "key": "strategy.bollinger.stdDev",
+  "value": "2.5",
+  "category": "strategy",
+  "description": "볼린저밴드 표준편차 배수"
+}
+
+### ============================================
+### Mean Reversion 전략 파라미터
+### ============================================
+
+### 평균 회귀 임계값 변경 (기본값: 2.0)
+# 이동평균 대비 이탈 %
+POST {{host}}/api/settings
+Content-Type: application/json
+
+{
+  "key": "strategy.meanReversion.threshold",
+  "value": "2.5",
+  "category": "strategy",
+  "description": "평균 회귀 트리거 임계값 (%)"
+}
+
+### ============================================
+### Grid 전략 파라미터
+### ============================================
+
+### 그리드 레벨 수 변경 (기본값: 5)
+POST {{host}}/api/settings
+Content-Type: application/json
+
+{
+  "key": "strategy.grid.levels",
+  "value": "7",
+  "category": "strategy",
+  "description": "그리드 레벨 수"
+}
+
+### 그리드 간격 변경 (기본값: 1.0%)
+POST {{host}}/api/settings
+Content-Type: application/json
+
+{
+  "key": "strategy.grid.spacingPercent",
+  "value": "1.5",
+  "category": "strategy",
+  "description": "그리드 간격 (%)"
+}
+
+### ============================================
+### DCA 전략 파라미터
+### ============================================
+
+### DCA 주기 변경 (밀리초, 기본값: 86400000 = 24시간)
+POST {{host}}/api/settings
+Content-Type: application/json
+
+{
+  "key": "strategy.dca.interval",
+  "value": "43200000",
+  "category": "strategy",
+  "description": "DCA 매수 주기 (밀리초) - 12시간"
+}
+
+### ============================================
+### Order Book Imbalance 전략 파라미터
+### ============================================
+
+### 호가 불균형 임계값 변경 (기본값: 0.3)
+# Imbalance = (Bid - Ask) / (Bid + Ask)
+# +0.3 이상: 매수 신호, -0.3 이하: 매도 신호
+POST {{host}}/api/settings
+Content-Type: application/json
+
+{
+  "key": "strategy.orderbook.imbalanceThreshold",
+  "value": "0.35",
+  "category": "strategy",
+  "description": "호가 불균형 임계값"
+}
+
+### 연속 확인 횟수 변경 (기본값: 3)
+POST {{host}}/api/settings
+Content-Type: application/json
+
+{
+  "key": "strategy.orderbook.confirmationCount",
+  "value": "5",
+  "category": "strategy",
+  "description": "신호 확인 필요 횟수"
+}
+
+### ============================================
+### 주문 금액 설정
+### ============================================
+
+### 1회 주문 금액 변경 (기본값: 10000 KRW)
+POST {{host}}/api/settings
+Content-Type: application/json
+
+{
+  "key": "trading.orderAmountKrw",
+  "value": "50000",
+  "category": "trading",
+  "description": "1회 주문 금액 (KRW)"
+}
+
+### 최대 손실률 변경 (기본값: 10.0%)
+POST {{host}}/api/settings
+Content-Type: application/json
+
+{
+  "key": "trading.maxDrawdownPercent",
+  "value": "15.0",
+  "category": "trading",
+  "description": "최대 허용 손실률 (%)"
+}
+
+### 거래당 리스크 변경 (기본값: 1.0%)
+POST {{host}}/api/settings
+Content-Type: application/json
+
+{
+  "key": "trading.riskPerTradePercent",
+  "value": "2.0",
+  "category": "trading",
+  "description": "거래당 리스크 비율 (%)"
+}

@@ -1,0 +1,142 @@
+### ============================================
+### 서킷 브레이커 관련 설정
+### ============================================
+
+### ============================================
+### 서킷 브레이커 임계값 설정
+### ============================================
+
+### 연속 손실 허용 횟수 (기본값: 3)
+# 연속 3회 PnL 손실 시 4시간 쿨다운
+POST {{host}}/api/settings
+Content-Type: application/json
+
+{
+  "key": "circuitBreaker.consecutiveLossLimit",
+  "value": "3",
+  "category": "risk",
+  "description": "서킷 브레이커 트리거 연속 손실 횟수"
+}
+
+### 연속 실패 허용 횟수 (기본값: 5)
+# 연속 5회 주문 실행 실패 시 1시간 쿨다운
+POST {{host}}/api/settings
+Content-Type: application/json
+
+{
+  "key": "circuitBreaker.consecutiveFailureLimit",
+  "value": "5",
+  "category": "risk",
+  "description": "서킷 브레이커 트리거 연속 실패 횟수"
+}
+
+### 고슬리피지 허용 횟수 (기본값: 3)
+# 연속 3회 2%+ 슬리피지 시 4시간 쿨다운
+POST {{host}}/api/settings
+Content-Type: application/json
+
+{
+  "key": "circuitBreaker.highSlippageLimit",
+  "value": "3",
+  "category": "risk",
+  "description": "서킷 브레이커 트리거 고슬리피지 횟수"
+}
+
+### 슬리피지 임계값 (기본값: 2.0%)
+POST {{host}}/api/settings
+Content-Type: application/json
+
+{
+  "key": "circuitBreaker.slippageThreshold",
+  "value": "2.0",
+  "category": "risk",
+  "description": "고슬리피지 판단 기준 (%)"
+}
+
+### ============================================
+### 쿨다운 시간 설정 (밀리초)
+### ============================================
+
+### 손실 쿨다운 (기본값: 14400000 = 4시간)
+POST {{host}}/api/settings
+Content-Type: application/json
+
+{
+  "key": "circuitBreaker.lossCooldownMs",
+  "value": "14400000",
+  "category": "risk",
+  "description": "연속 손실 시 쿨다운 (밀리초)"
+}
+
+### 실패 쿨다운 (기본값: 3600000 = 1시간)
+POST {{host}}/api/settings
+Content-Type: application/json
+
+{
+  "key": "circuitBreaker.failureCooldownMs",
+  "value": "3600000",
+  "category": "risk",
+  "description": "연속 실패 시 쿨다운 (밀리초)"
+}
+
+### 슬리피지 쿨다운 (기본값: 14400000 = 4시간)
+POST {{host}}/api/settings
+Content-Type: application/json
+
+{
+  "key": "circuitBreaker.slippageCooldownMs",
+  "value": "14400000",
+  "category": "risk",
+  "description": "고슬리피지 시 쿨다운 (밀리초)"
+}
+
+### 글로벌 쿨다운 (기본값: 86400000 = 24시간)
+# API 에러 폭주 또는 총 자산 10% 감소 시
+POST {{host}}/api/settings
+Content-Type: application/json
+
+{
+  "key": "circuitBreaker.globalCooldownMs",
+  "value": "86400000",
+  "category": "risk",
+  "description": "글로벌 서킷 브레이커 쿨다운 (밀리초)"
+}
+
+### ============================================
+### 시장 조건 체크 설정
+### ============================================
+
+### 최대 허용 스프레드 (기본값: 0.5%)
+POST {{host}}/api/settings
+Content-Type: application/json
+
+{
+  "key": "market.maxSpreadPercent",
+  "value": "0.5",
+  "category": "market",
+  "description": "거래 허용 최대 스프레드 (%)"
+}
+
+### 유동성 배수 (기본값: 3.0)
+# 주문량의 N배 이상 호가 물량 필요
+POST {{host}}/api/settings
+Content-Type: application/json
+
+{
+  "key": "market.liquidityMultiplier",
+  "value": "3.0",
+  "category": "market",
+  "description": "최소 유동성 배수"
+}
+
+### 변동성 경고 임계값 (기본값: 2.0%)
+# 1분 변동성이 이 값 초과 시 경고
+POST {{host}}/api/settings
+Content-Type: application/json
+
+{
+  "key": "market.volatilityWarningPercent",
+  "value": "2.0",
+  "category": "market",
+  "description": "변동성 경고 임계값 (%)"
+}

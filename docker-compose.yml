@@ -1,0 +1,42 @@
+version: '3.8'
+
+services:
+  coin-trading:
+    build:
+      context: .
+      dockerfile: coin-trading-server/Dockerfile
+    image: dbswns97/coin-trading-server:latest
+    container_name: coin-trading-server
+    ports:
+      - "8080:8080"
+    environment:
+      # Bithumb API
+      - BITHUMB_ACCESS_KEY=${BITHUMB_ACCESS_KEY}
+      - BITHUMB_SECRET_KEY=${BITHUMB_SECRET_KEY}
+      - BITHUMB_ACCESS_KEY2=${BITHUMB_ACCESS_KEY2}
+      - BITHUMB_SECRET_KEY2=${BITHUMB_SECRET_KEY2}
+      # MySQL
+      - MYSQL_URL=${MYSQL_URL:-jdbc:mysql://host.docker.internal:3306/coin_trading}
+      - MYSQL_USER=${MYSQL_USER:-root}
+      - MYSQL_PASSWORD=${MYSQL_PASSWORD}
+      # Slack
+      - SLACK_WEBHOOK_URL=${SLACK_WEBHOOK_URL:-}
+      # Trading
+      - TRADING_ENABLED=${TRADING_ENABLED:-false}
+      - ORDER_AMOUNT_KRW=${ORDER_AMOUNT_KRW:-10000}
+      - MAX_DRAWDOWN_PERCENT=${MAX_DRAWDOWN_PERCENT:-10.0}
+      - STRATEGY_TYPE=${STRATEGY_TYPE:-MEAN_REVERSION}
+      # LLM Optimizer
+      - LLM_OPTIMIZER_ENABLED=${LLM_OPTIMIZER_ENABLED:-false}
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:8080/actuator/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+networks:
+  default:
+    name: coin-trading-network

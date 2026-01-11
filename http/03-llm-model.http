@@ -1,0 +1,96 @@
+### ============================================
+### LLM 모델 관리
+### ============================================
+
+### 현재 LLM 모델 상태 조회
+GET {{host}}/api/settings/model
+Accept: application/json
+
+### 사용 가능한 Provider 목록
+GET {{host}}/api/settings/model/providers
+Accept: application/json
+
+### ============================================
+### LLM Provider 변경
+### ============================================
+
+### Anthropic Claude로 변경
+POST {{host}}/api/settings/model
+Content-Type: application/json
+
+{
+  "provider": "anthropic"
+}
+
+### OpenAI GPT로 변경
+POST {{host}}/api/settings/model
+Content-Type: application/json
+
+{
+  "provider": "openai"
+}
+
+### Google Gemini로 변경 (현재 비활성화됨)
+# POST {{host}}/api/settings/model
+# Content-Type: application/json
+#
+# {
+#   "provider": "google"
+# }
+
+### ============================================
+### LLM 모델명 변경
+### ============================================
+
+### Anthropic - Claude Sonnet 4
+POST {{host}}/api/settings/model
+Content-Type: application/json
+
+{
+  "provider": "anthropic",
+  "modelName": "claude-sonnet-4-20250514"
+}
+
+### Anthropic - Claude Opus 4
+POST {{host}}/api/settings/model
+Content-Type: application/json
+
+{
+  "provider": "anthropic",
+  "modelName": "claude-opus-4-20250514"
+}
+
+### Anthropic - Claude Haiku 3.5
+POST {{host}}/api/settings/model
+Content-Type: application/json
+
+{
+  "provider": "anthropic",
+  "modelName": "claude-3-5-haiku-latest"
+}
+
+### OpenAI - GPT-5 Mini
+POST {{host}}/api/settings/model
+Content-Type: application/json
+
+{
+  "provider": "openai",
+  "modelName": "gpt-5-mini"
+}
+
+### OpenAI - GPT-4o
+POST {{host}}/api/settings/model
+Content-Type: application/json
+
+{
+  "provider": "openai",
+  "modelName": "gpt-4o"
+}
+
+### 모델명만 변경 (Provider 유지)
+POST {{host}}/api/settings/model
+Content-Type: application/json
+
+{
+  "modelName": "claude-3-5-haiku-latest"
+}

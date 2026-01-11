@@ -1,0 +1,23 @@
+### ============================================
+### 시스템 상태 및 헬스체크
+### ============================================
+
+### Actuator 헬스체크
+GET {{host}}/actuator/health
+Accept: application/json
+
+### Actuator 메트릭
+GET {{host}}/actuator/metrics
+Accept: application/json
+
+### Actuator 정보
+GET {{host}}/actuator/info
+Accept: application/json
+
+### 트레이딩 헬스체크
+GET {{host}}/api/trading/health
+Accept: application/json
+
+### 거래 활성화 상태 확인
+GET {{host}}/api/trading/enabled
+Accept: application/json

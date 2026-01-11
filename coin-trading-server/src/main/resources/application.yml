@@ -1,0 +1,149 @@
+server:
+  port: 8080
+
+spring:
+  application:
+    name: coin-trading-server
+  main:
+    banner-mode: off
+
+  # Google GenAI AutoConfiguration 비활성화 (project-id 필수 요구 문제)
+  autoconfigure:
+    exclude:
+      - org.springframework.ai.model.google.genai.autoconfigure.chat.GoogleGenAiChatAutoConfiguration
+
+  # MySQL 설정
+  datasource:
+    url: ${MYSQL_URL:jdbc:mysql://localhost:3306/coin_trading}
+    username: ${MYSQL_USER:root}
+    password: ${MYSQL_PASSWORD:}
+    driver-class-name: com.mysql.cj.jdbc.Driver
+    hikari:
+      maximum-pool-size: 10
+      minimum-idle: 2
+      connection-timeout: 30000
+
+  jpa:
+    hibernate:
+      ddl-auto: update
+    show-sql: false
+    properties:
+      hibernate:
+        dialect: org.hibernate.dialect.MySQLDialect
+        format_sql: true
+    open-in-view: false
+
+  # Spring AI 설정
+  ai:
+    # Anthropic Claude
+    anthropic:
+      api-key: ${SPRING_AI_ANTHROPIC_API_KEY:}
+      chat:
+        options:
+          model: claude-sonnet-4-20250514
+          max-tokens: 4096
+          temperature: 0.3
+
+    # OpenAI GPT
+    openai:
+      api-key: ${SPRING_AI_OPENAI_API_KEY:}
+      chat:
+        options:
+          model: gpt-5-mini
+          max-tokens: 4096
+          temperature: 0.3
+
+    # Google Gemini (현재 비활성화 - project-id 필수 문제)
+    # google:
+    #   genai:
+    #     api-key: ${SPRING_AI_GOOGLE_API_KEY:}
+    #     chat:
+    #       options:
+    #         model: gemini-3-flash-preview
+    #         temperature: 0.3
+    #         max-output-tokens: 4096
+
+    # MCP Server 설정
+    mcp:
+      server:
+        enabled: true
+        name: coin-trading-server
+        version: 1.0.0
+        type: SYNC
+        protocol: STATELESS
+        instructions: |
+          암호화폐 자동 매매 서버입니다.
+          - 시장 데이터 조회 및 기술적 분석
+          - 거래 실행 및 잔고 조회
+          - 전략 파라미터 조회 및 수정
+          - 거래 성과 분석
+
+        stateless:
+          mcp-endpoint: /mcp
+
+        capabilities:
+          tool: true
+          resource: true
+          prompt: true
+
+        request-timeout: 30s
+
+        annotation-scanner:
+          enabled: true
+
+# Bithumb API 설정
+bithumb:
+  base-url: https://api.bithumb.com
+  access-key: ${BITHUMB_ACCESS_KEY:}
+  secret-key: ${BITHUMB_SECRET_KEY:}
+
+# Slack 알림 설정
+slack:
+  webhook:
+    url: ${SLACK_WEBHOOK_URL:}
+
+# 자동 거래 설정
+trading:
+  enabled: ${TRADING_ENABLED:false}
+  markets:
+    - BTC_KRW
+    - ETH_KRW
+  order-amount-krw: ${ORDER_AMOUNT_KRW:10000}
+  max-drawdown-percent: ${MAX_DRAWDOWN_PERCENT:10.0}
+  risk-per-trade-percent: ${RISK_PER_TRADE_PERCENT:1.0}
+  strategy:
+    type: ${STRATEGY_TYPE:MEAN_REVERSION}
+    dca-interval: ${DCA_INTERVAL:86400000}
+    grid-levels: ${GRID_LEVELS:5}
+    grid-spacing-percent: ${GRID_SPACING_PERCENT:1.0}
+    mean-reversion-threshold: ${MEAN_REVERSION_THRESHOLD:2.0}
+    rsi-oversold: ${RSI_OVERSOLD:30}
+    rsi-overbought: ${RSI_OVERBOUGHT:70}
+    bollinger-period: ${BOLLINGER_PERIOD:20}
+    bollinger-std-dev: ${BOLLINGER_STD_DEV:2.0}
+
+# LLM 최적화 설정
+llm:
+  optimizer:
+    enabled: ${LLM_OPTIMIZER_ENABLED:false}
+    cron: ${LLM_OPTIMIZER_CRON:0 0 0 * * *}  # 매일 자정
+
+# Logging 설정
+logging:
+  level:
+    root: INFO
+    com.ant.cointrading: DEBUG
+    org.springframework.ai: INFO
+    org.springframework.data.jpa: WARN
+  pattern:
+    console: "%d{HH:mm:ss} [%thread] %-5level %logger{20} - %msg%n"
+
+# Actuator
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics
+  endpoint:
+    health:
+      show-details: always

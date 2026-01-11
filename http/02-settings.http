@@ -1,0 +1,113 @@
+### ============================================
+### KeyValue 설정 관리
+### ============================================
+
+### 전체 설정 조회
+GET {{host}}/api/settings
+Accept: application/json
+
+### 특정 키 조회
+GET {{host}}/api/settings/trading.enabled
+Accept: application/json
+
+### 카테고리별 설정 조회 - LLM 관련
+GET {{host}}/api/settings/category/llm
+Accept: application/json
+
+### 카테고리별 설정 조회 - 시스템 관련
+GET {{host}}/api/settings/category/system
+Accept: application/json
+
+### 카테고리별 설정 조회 - 레짐 관련
+GET {{host}}/api/settings/category/regime
+Accept: application/json
+
+### ============================================
+### 설정 변경
+### ============================================
+
+### 거래 활성화
+POST {{host}}/api/settings
+Content-Type: application/json
+
+{
+  "key": "trading.enabled",
+  "value": "true",
+  "category": "trading",
+  "description": "실거래 활성화 여부"
+}
+
+### 거래 비활성화
+POST {{host}}/api/settings
+Content-Type: application/json
+
+{
+  "key": "trading.enabled",
+  "value": "false",
+  "category": "trading",
+  "description": "실거래 활성화 여부"
+}
+
+### 점검 모드 ON
+POST {{host}}/api/settings
+Content-Type: application/json
+
+{
+  "key": "system.maintenance",
+  "value": "true",
+  "category": "system",
+  "description": "시스템 점검 모드"
+}
+
+### 점검 모드 OFF
+POST {{host}}/api/settings
+Content-Type: application/json
+
+{
+  "key": "system.maintenance",
+  "value": "false",
+  "category": "system",
+  "description": "시스템 점검 모드"
+}
+
+### LLM 최적화 활성화
+POST {{host}}/api/settings
+Content-Type: application/json
+
+{
+  "key": "llm.enabled",
+  "value": "true",
+  "category": "llm",
+  "description": "LLM 최적화 활성화"
+}
+
+### LLM 최적화 비활성화
+POST {{host}}/api/settings
+Content-Type: application/json
+
+{
+  "key": "llm.enabled",
+  "value": "false",
+  "category": "llm",
+  "description": "LLM 최적화 활성화"
+}
+
+### ============================================
+### 설정 삭제 (주의!)
+### ============================================
+
+### 특정 설정 삭제
+DELETE {{host}}/api/settings/custom.setting.key
+Accept: application/json
+
+### ============================================
+### 캐시 관리
+### ============================================
+
+### 캐시 통계 조회
+GET {{host}}/api/settings/cache/stats
+Accept: application/json
+
+### 캐시 강제 갱신
+POST {{host}}/api/settings/cache/refresh
+Accept: application/json
