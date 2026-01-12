@@ -429,6 +429,71 @@ Claude Code에서 MCP 연결 후 사용 가능한 도구:
 
 ---
 
+## AI 에이전트 코드 작성 지침
+
+### 필수 스킬 사용
+
+이 프로젝트에서 코드를 작성할 때 다음 스킬을 **반드시** 참조해야 한다:
+
+#### 1. Spring AI 스킬 (`/spring-ai`)
+
+Spring AI 관련 코드 작성 시 **반드시** 이 스킬을 먼저 호출한다:
+- ChatClient API 사용
+- Tool Calling (@Tool, @ToolParam)
+- Advisors 구현
+- MCP Server (@McpTool, @McpResource)
+- Anthropic/OpenAI 모델 설정
+
+```
+/spring-ai
+```
+
+**적용 대상 파일:**
+- `config/LlmConfig.kt`
+- `service/ModelSelector.kt`
+- `mcp/tool/*.kt`
+- LLM 관련 모든 코드
+
+#### 2. 퀀트 분석 스킬
+
+기술적 분석 및 트레이딩 전략 코드 작성 시 해당 스킬을 호출한다:
+
+| 스킬 | 용도 | 호출 |
+|------|------|------|
+| RSI 분석 | RSI 계산, 과매수/과매도, 다이버전스 | `/quant-rsi` |
+| MACD 분석 | MACD 크로스오버, 다이버전스 | `/quant-macd` |
+| 볼린저밴드 | 밴드 스퀴즈, %B, 밴드폭 | `/quant-bollinger` |
+| 컨플루언스 | 다중 지표 통합 (85% 승률) | `/quant-confluence` |
+| 뉴스 감성 | 뉴스 수집, 감성 점수 | `/news-sentiment` |
+| 트레이딩 결정 | 종합 매매 결정, 자동 주문 | `/trading-decision` |
+
+**적용 대상 파일:**
+- `strategy/*.kt`
+- `indicator/*.kt`
+- `mcp/tool/TechnicalAnalysisTools.kt`
+
+### 스킬 사용 예시
+
+**Spring AI 코드 작성 전:**
+```
+사용자: ChatClient를 수정해줘
+AI: /spring-ai 스킬을 먼저 참조한 후 코드를 작성합니다.
+```
+
+**기술적 분석 코드 작성 전:**
+```
+사용자: RSI 전략을 개선해줘
+AI: /quant-rsi 스킬을 먼저 참조한 후 코드를 작성합니다.
+```
+
+### 주의사항
+
+1. **스킬 미참조 금지**: Spring AI나 퀀트 관련 코드를 스킬 참조 없이 작성하면 안 된다
+2. **최신 API 사용**: Spring AI 1.1.x API를 사용해야 하며, 스킬에 정의된 패턴을 따른다
+3. **검증된 전략**: 퀀트 스킬의 검증된 승률 전략을 우선 적용한다
+
+---
+
 ## 주의사항
 
 1. **API 키 보안**: `.env` 파일은 절대 Git에 커밋하지 말 것
