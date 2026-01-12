@@ -328,19 +328,15 @@ class TradingEngine(
                 return emptyList()
             }
 
-            response.mapNotNull { item ->
-                try {
-                    Candle(
-                        timestamp = Instant.ofEpochMilli((item["timestamp"] as? Number)?.toLong() ?: 0),
-                        open = BigDecimal(item["opening_price"]?.toString() ?: "0"),
-                        high = BigDecimal(item["high_price"]?.toString() ?: "0"),
-                        low = BigDecimal(item["low_price"]?.toString() ?: "0"),
-                        close = BigDecimal(item["trade_price"]?.toString() ?: "0"),
-                        volume = BigDecimal(item["candle_acc_trade_volume"]?.toString() ?: "0")
-                    )
-                } catch (e: Exception) {
-                    null
-                }
+            response.map { candle ->
+                Candle(
+                    timestamp = Instant.ofEpochMilli(candle.timestamp),
+                    open = candle.openingPrice,
+                    high = candle.highPrice,
+                    low = candle.lowPrice,
+                    close = candle.tradePrice,
+                    volume = candle.candleAccTradeVolume
+                )
             }.reversed()  // 최신 데이터가 앞에 오므로 역순 정렬
         } catch (e: Exception) {
             log.error("[$market] 캔들 조회 실패: ${e.message}")

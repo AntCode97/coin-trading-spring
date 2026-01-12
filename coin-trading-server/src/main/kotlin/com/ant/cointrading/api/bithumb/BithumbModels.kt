@@ -28,7 +28,8 @@ data class TickerInfo(
 data class MarketInfo(
     @JsonProperty("market") val market: String,
     @JsonProperty("korean_name") val koreanName: String?,
-    @JsonProperty("english_name") val englishName: String?
+    @JsonProperty("english_name") val englishName: String?,
+    @JsonProperty("market_warning") val marketWarning: String? = null
 )
 
 /**
@@ -83,3 +84,74 @@ data class OrderResponse(
     @JsonProperty("locked") val locked: BigDecimal?,
     @JsonProperty("executed_volume") val executedVolume: BigDecimal?
 )
+
+/**
+ * 캔들 (OHLCV) API 응답
+ */
+data class CandleResponse(
+    @JsonProperty("market") val market: String,
+    @JsonProperty("candle_date_time_utc") val candleDateTimeUtc: String,
+    @JsonProperty("candle_date_time_kst") val candleDateTimeKst: String,
+    @JsonProperty("opening_price") val openingPrice: BigDecimal,
+    @JsonProperty("high_price") val highPrice: BigDecimal,
+    @JsonProperty("low_price") val lowPrice: BigDecimal,
+    @JsonProperty("trade_price") val tradePrice: BigDecimal,
+    @JsonProperty("timestamp") val timestamp: Long,
+    @JsonProperty("candle_acc_trade_price") val candleAccTradePrice: BigDecimal,
+    @JsonProperty("candle_acc_trade_volume") val candleAccTradeVolume: BigDecimal,
+    @JsonProperty("unit") val unit: Int? = null
+)
+
+/**
+ * 체결 내역 API 응답
+ */
+data class TradeResponse(
+    @JsonProperty("market") val market: String,
+    @JsonProperty("trade_date_utc") val tradeDateUtc: String,
+    @JsonProperty("trade_time_utc") val tradeTimeUtc: String,
+    @JsonProperty("timestamp") val timestamp: Long,
+    @JsonProperty("trade_price") val tradePrice: BigDecimal,
+    @JsonProperty("trade_volume") val tradeVolume: BigDecimal,
+    @JsonProperty("prev_closing_price") val prevClosingPrice: BigDecimal?,
+    @JsonProperty("change_price") val changePrice: BigDecimal?,
+    @JsonProperty("ask_bid") val askBid: String,
+    @JsonProperty("sequential_id") val sequentialId: Long
+)
+
+/**
+ * API 에러 응답
+ */
+data class BithumbError(
+    @JsonProperty("error") val error: ErrorDetail?
+) {
+    data class ErrorDetail(
+        @JsonProperty("name") val name: String?,
+        @JsonProperty("message") val message: String?
+    )
+}
+
+/**
+ * Bithumb API 예외
+ *
+ * 주요 에러 코드:
+ * - invalid_access_key: 잘못된 API 키
+ * - jwt_verification: JWT 인증 실패
+ * - expired_access_key: 만료된 API 키
+ * - no_authorization_ip: IP 인가 실패
+ * - insufficient_funds: 잔고 부족
+ * - under_min_total: 최소 주문 금액 미달
+ * - invalid_volume: 잘못된 수량
+ * - invalid_price: 잘못된 가격
+ * - order_not_found: 주문을 찾을 수 없음
+ */
+class BithumbApiException(
+    val errorName: String?,
+    val errorMessage: String?,
+    cause: Throwable? = null
+) : RuntimeException("Bithumb API Error: [$errorName] $errorMessage", cause) {
+
+    fun isInsufficientFunds() = errorName == "insufficient_funds"
+    fun isInvalidOrder() = errorName in listOf("invalid_volume", "invalid_price", "under_min_total")
+    fun isAuthError() = errorName in listOf("invalid_access_key", "jwt_verification", "expired_access_key", "no_authorization_ip")
+    fun isOrderNotFound() = errorName == "order_not_found"
+}

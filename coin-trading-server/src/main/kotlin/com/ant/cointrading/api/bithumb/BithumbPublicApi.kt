@@ -17,13 +17,18 @@ class BithumbPublicApi(
 
     /**
      * OHLCV(캔들) 데이터 조회
+     *
+     * @param market 마켓 코드 (예: KRW-BTC)
+     * @param interval 캔들 단위 (minute1, minute3, minute5, minute10, minute15, minute30, minute60, minute240, day, week, month)
+     * @param count 조회 개수 (최대 200)
+     * @param to 마지막 캔들 시간 (yyyy-MM-dd HH:mm:ss)
      */
     fun getOhlcv(
         market: String,
         interval: String,
         count: Int,
         to: String? = null
-    ): List<Map<String, Any>>? {
+    ): List<CandleResponse>? {
         val endpoint = when {
             interval == "day" -> "/v1/candles/days"
             interval == "week" -> "/v1/candles/weeks"
@@ -47,7 +52,7 @@ class BithumbPublicApi(
                     b.build()
                 }
                 .retrieve()
-                .bodyToMono(object : ParameterizedTypeReference<List<Map<String, Any>>>() {})
+                .bodyToMono(object : ParameterizedTypeReference<List<CandleResponse>>() {})
                 .block()
         } catch (e: Exception) {
             log.error("Failed to get OHLCV: {}", e.message)
@@ -105,17 +110,20 @@ class BithumbPublicApi(
 
     /**
      * 최근 체결 내역 조회
+     *
+     * @param market 마켓 코드 (예: KRW-BTC)
+     * @param count 조회 개수 (1-500)
      */
-    fun getTradesTicks(market: String, count: Int): List<Map<String, Any>>? {
+    fun getTradesTicks(market: String, count: Int): List<TradeResponse>? {
         return try {
             bithumbWebClient.get()
                 .uri { it.path("/v1/trades/ticks")
                     .queryParam("market", market)
-                    .queryParam("count", count)
+                    .queryParam("count", count.coerceAtMost(500))
                     .build()
                 }
                 .retrieve()
-                .bodyToMono(object : ParameterizedTypeReference<List<Map<String, Any>>>() {})
+                .bodyToMono(object : ParameterizedTypeReference<List<TradeResponse>>() {})
                 .block()
         } catch (e: Exception) {
             log.error("Failed to get trades ticks: {}", e.message)

@@ -1,9 +1,11 @@
 package com.ant.cointrading.mcp.tool
 
 import com.ant.cointrading.api.bithumb.BithumbPublicApi
+import com.ant.cointrading.api.bithumb.CandleResponse
 import com.ant.cointrading.api.bithumb.MarketInfo
 import com.ant.cointrading.api.bithumb.OrderbookInfo
 import com.ant.cointrading.api.bithumb.TickerInfo
+import com.ant.cointrading.api.bithumb.TradeResponse
 import org.springaicommunity.mcp.annotation.McpTool
 import org.springaicommunity.mcp.annotation.McpToolParam
 import org.springframework.stereotype.Component
@@ -21,7 +23,7 @@ class MarketDataTools(
         @McpToolParam(description = "마켓 ID (예: KRW-BTC)") market: String,
         @McpToolParam(description = "시간 간격: day, week, month, minute1, minute3, minute5, minute10, minute15, minute30, minute60, minute240") interval: String,
         @McpToolParam(description = "조회할 캔들 개수 (최대 200)") count: Int
-    ): List<Map<String, Any>>? {
+    ): List<CandleResponse>? {
         return publicApi.getOhlcv(market, interval, count, null)
     }
 
@@ -48,7 +50,7 @@ class MarketDataTools(
     fun getTradesTicks(
         @McpToolParam(description = "마켓 ID (예: KRW-BTC)") market: String,
         @McpToolParam(description = "조회할 체결 내역 개수") count: Int
-    ): List<Map<String, Any>>? {
+    ): List<TradeResponse>? {
         return publicApi.getTradesTicks(market, count)
     }
 }

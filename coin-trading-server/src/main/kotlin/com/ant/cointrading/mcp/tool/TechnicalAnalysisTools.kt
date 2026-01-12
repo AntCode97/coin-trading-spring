@@ -29,8 +29,8 @@ class TechnicalAnalysisTools(
 
         // 종가 추출 (시간순 정렬)
         val closes = ohlcv
-            .sortedBy { it["candle_date_time_kst"].toString() }
-            .map { BigDecimal(it["trade_price"].toString()) }
+            .sortedBy { it.candleDateTimeKst }
+            .map { it.tradePrice }
 
         // RSI 계산
         val gains = mutableListOf<BigDecimal>()
@@ -94,8 +94,8 @@ class TechnicalAnalysisTools(
         }
 
         val closes = ohlcv
-            .sortedBy { it["candle_date_time_kst"].toString() }
-            .map { BigDecimal(it["trade_price"].toString()) }
+            .sortedBy { it.candleDateTimeKst }
+            .map { it.tradePrice }
 
         val emaFast = calculateEma(closes, fastPeriod)
         val emaSlow = calculateEma(closes, slowPeriod)
@@ -142,8 +142,8 @@ class TechnicalAnalysisTools(
         }
 
         val closes = ohlcv
-            .sortedBy { it["candle_date_time_kst"].toString() }
-            .map { BigDecimal(it["trade_price"].toString()) }
+            .sortedBy { it.candleDateTimeKst }
+            .map { it.tradePrice }
 
         val recentCloses = closes.takeLast(period)
 
@@ -195,8 +195,8 @@ class TechnicalAnalysisTools(
         }
 
         val closes = ohlcv
-            .sortedBy { it["candle_date_time_kst"].toString() }
-            .map { BigDecimal(it["trade_price"].toString()) }
+            .sortedBy { it.candleDateTimeKst }
+            .map { it.tradePrice }
 
         val smaValues = mutableMapOf<String, BigDecimal>()
         val emaValues = mutableMapOf<String, BigDecimal>()
