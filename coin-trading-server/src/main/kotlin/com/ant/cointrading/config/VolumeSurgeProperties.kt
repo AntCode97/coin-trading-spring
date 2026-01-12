@@ -69,6 +69,9 @@ class VolumeSurgeProperties {
     /** 같은 종목 재진입 쿨다운 (분) */
     var cooldownMin: Int = 60
 
+    /** LLM 필터 쿨다운 (분) - LLM 검증 후 이 시간 동안 재호출 안 함 */
+    var llmCooldownMin: Int = 240
+
     // === 서킷 브레이커 ===
 
     /** 연속 손실 횟수 제한 */

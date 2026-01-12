@@ -27,6 +27,12 @@ interface VolumeSurgeAlertRepository : JpaRepository<VolumeSurgeAlertEntity, Lon
     /** 특정 마켓의 특정 기간 내 경보 존재 여부 */
     fun existsByMarketAndDetectedAtAfter(market: String, after: Instant): Boolean
 
+    /** 특정 마켓의 특정 기간 내 LLM 필터링된 경보 존재 여부 (결과 상관없이) */
+    fun existsByMarketAndLlmFilterResultIsNotNullAndDetectedAtAfter(
+        market: String,
+        after: Instant
+    ): Boolean
+
     /** 승인된 경보 수 (기간별) */
     @Query("SELECT COUNT(a) FROM VolumeSurgeAlertEntity a WHERE a.llmFilterResult = 'APPROVED' AND a.detectedAt BETWEEN :start AND :end")
     fun countApprovedBetween(start: Instant, end: Instant): Long

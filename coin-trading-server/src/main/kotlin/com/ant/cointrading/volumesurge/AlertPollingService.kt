@@ -108,6 +108,13 @@ class AlertPollingService(
             return
         }
 
+        // LLM 쿨다운 체크 (LLM 필터링된 코인은 4시간 동안 LLM 재호출 안 함)
+        val llmCooldownThreshold = now.minusSeconds(volumeSurgeProperties.llmCooldownMin * 60L)
+        if (alertRepository.existsByMarketAndLlmFilterResultIsNotNullAndDetectedAtAfter(market, llmCooldownThreshold)) {
+            log.info("[$market] LLM 쿨다운 중 (${volumeSurgeProperties.llmCooldownMin}분), LLM 호출 스킵")
+            return
+        }
+
         // 경보 저장 (현재 시각을 감지 시각으로 사용)
         val alertEntity = VolumeSurgeAlertEntity(
             market = market,
