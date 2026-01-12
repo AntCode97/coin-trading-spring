@@ -8,6 +8,52 @@ import java.math.BigDecimal
 import java.math.RoundingMode
 import kotlin.math.sqrt
 
+// ========================================
+// 응답 Data Classes
+// ========================================
+
+/** RSI 분석 결과 */
+data class RsiResult(
+    val market: String,
+    val period: Int,
+    val rsi: BigDecimal,
+    val signal: String,  // OVERBOUGHT, OVERSOLD, NEUTRAL
+    val error: String? = null
+)
+
+/** MACD 분석 결과 */
+data class MacdResult(
+    val market: String,
+    val macdLine: BigDecimal,
+    val signalLine: BigDecimal,
+    val histogram: BigDecimal,
+    val signal: String,  // BULLISH, BEARISH, NEUTRAL
+    val error: String? = null
+)
+
+/** 볼린저밴드 분석 결과 */
+data class BollingerBandsResult(
+    val market: String,
+    val currentPrice: BigDecimal,
+    val upperBand: BigDecimal,
+    val middleBand: BigDecimal,
+    val lowerBand: BigDecimal,
+    val position: String,  // UPPER, LOWER, MIDDLE
+    val bandWidth: BigDecimal? = null,  // 밴드폭 (%)
+    val percentB: BigDecimal? = null,   // %B 지표
+    val error: String? = null
+)
+
+/** 이동평균선 분석 결과 */
+data class MovingAveragesResult(
+    val market: String,
+    val currentPrice: BigDecimal,
+    val sma: Map<String, BigDecimal>,
+    val ema: Map<String, BigDecimal>,
+    val trend: String? = null,  // BULLISH, BEARISH, NEUTRAL
+    val error: String? = null
+)
+
 /**
  * 기술적 분석 지표 계산 MCP 도구
  */
@@ -21,10 +67,16 @@ class TechnicalAnalysisTools(
         @McpToolParam(description = "마켓 ID (예: KRW-BTC)") market: String,
         @McpToolParam(description = "RSI 계산 기간 (기본값: 14)") period: Int,
         @McpToolParam(description = "시간 간격: day, minute60 등") interval: String
-    ): Map<String, Any> {
+    ): RsiResult {
         val ohlcv = publicApi.getOhlcv(market, interval, period + 50, null)
         if (ohlcv == null || ohlcv.size < period + 1) {
-            return mapOf("error" to "Not enough data to calculate RSI")
+            return RsiResult(
+                market = market,
+                period = period,
+                rsi = BigDecimal.ZERO,
+                signal = "UNKNOWN",
+                error = "Not enough data to calculate RSI"
+            )
         }
 
         // 종가 추출 (시간순 정렬)
@@ -71,11 +123,11 @@ class TechnicalAnalysisTools(
             else -> "NEUTRAL"
         }
 
-        return mapOf(
-            "market" to market,
-            "period" to period,
-            "rsi" to rsi.setScale(2, RoundingMode.HALF_UP),
-            "signal" to signal
+        return RsiResult(
+            market = market,
+            period = period,
+            rsi = rsi.setScale(2, RoundingMode.HALF_UP),
+            signal = signal
         )
     }
 
@@ -86,11 +138,18 @@ class TechnicalAnalysisTools(
         @McpToolParam(description = "느린 이동평균 기간 (기본값: 26)") slowPeriod: Int,
         @McpToolParam(description = "시그널 라인 기간 (기본값: 9)") signalPeriod: Int,
         @McpToolParam(description = "시간 간격: day, minute60 등") interval: String
-    ): Map<String, Any> {
+    ): MacdResult {
         val requiredData = slowPeriod + signalPeriod + 50
         val ohlcv = publicApi.getOhlcv(market, interval, requiredData, null)
         if (ohlcv == null || ohlcv.size < slowPeriod) {
-            return mapOf("error" to "Not enough data to calculate MACD")
+            return MacdResult(
+                market = market,
+                macdLine = BigDecimal.ZERO,
+                signalLine = BigDecimal.ZERO,
+                histogram = BigDecimal.ZERO,
+                signal = "UNKNOWN",
+                error = "Not enough data to calculate MACD"
+            )
         }
 
         val closes = ohlcv
@@ -120,12 +179,12 @@ class TechnicalAnalysisTools(
             else -> "NEUTRAL"
         }
 
-        return mapOf(
-            "market" to market,
-            "macdLine" to currentMacd.setScale(2, RoundingMode.HALF_UP),
-            "signalLine" to currentSignal.setScale(2, RoundingMode.HALF_UP),
-            "histogram" to histogram.setScale(2, RoundingMode.HALF_UP),
-            "signal" to signal
+        return MacdResult(
+            market = market,
+            macdLine = currentMacd.setScale(2, RoundingMode.HALF_UP),
+            signalLine = currentSignal.setScale(2, RoundingMode.HALF_UP),
+            histogram = histogram.setScale(2, RoundingMode.HALF_UP),
+            signal = signal
         )
     }
 
@@ -135,10 +194,18 @@ class TechnicalAnalysisTools(
         @McpToolParam(description = "이동평균 기간 (기본값: 20)") period: Int,
         @McpToolParam(description = "표준편차 배수 (기본값: 2)") stdDev: Double,
         @McpToolParam(description = "시간 간격: day, minute60 등") interval: String
-    ): Map<String, Any> {
+    ): BollingerBandsResult {
         val ohlcv = publicApi.getOhlcv(market, interval, period + 10, null)
         if (ohlcv == null || ohlcv.size < period) {
-            return mapOf("error" to "Not enough data to calculate Bollinger Bands")
+            return BollingerBandsResult(
+                market = market,
+                currentPrice = BigDecimal.ZERO,
+                upperBand = BigDecimal.ZERO,
+                middleBand = BigDecimal.ZERO,
+                lowerBand = BigDecimal.ZERO,
+                position = "UNKNOWN",
+                error = "Not enough data to calculate Bollinger Bands"
+            )
         }
 
         val closes = ohlcv
@@ -170,13 +237,29 @@ class TechnicalAnalysisTools(
             else -> "MIDDLE"
         }
 
-        return mapOf(
-            "market" to market,
-            "currentPrice" to currentPrice.setScale(0, RoundingMode.HALF_UP),
-            "upperBand" to upperBand.setScale(0, RoundingMode.HALF_UP),
-            "middleBand" to middleBand.setScale(0, RoundingMode.HALF_UP),
-            "lowerBand" to lowerBand.setScale(0, RoundingMode.HALF_UP),
-            "position" to position
+        // 밴드폭 (%) = (상단밴드 - 하단밴드) / 중심선 * 100
+        val bandWidth = upperBand.subtract(lowerBand)
+            .divide(middleBand, 10, RoundingMode.HALF_UP)
+            .multiply(BigDecimal.valueOf(100))
+            .setScale(2, RoundingMode.HALF_UP)
+
+        // %B = (현재가 - 하단밴드) / (상단밴드 - 하단밴드)
+        val bandRange = upperBand.subtract(lowerBand)
+        val percentB = if (bandRange > BigDecimal.ZERO) {
+            currentPrice.subtract(lowerBand)
+                .divide(bandRange, 10, RoundingMode.HALF_UP)
+                .setScale(2, RoundingMode.HALF_UP)
+        } else BigDecimal.ZERO
+
+        return BollingerBandsResult(
+            market = market,
+            currentPrice = currentPrice.setScale(0, RoundingMode.HALF_UP),
+            upperBand = upperBand.setScale(0, RoundingMode.HALF_UP),
+            middleBand = middleBand.setScale(0, RoundingMode.HALF_UP),
+            lowerBand = lowerBand.setScale(0, RoundingMode.HALF_UP),
+            position = position,
+            bandWidth = bandWidth,
+            percentB = percentB
         )
     }
 
@@ -185,13 +268,19 @@ class TechnicalAnalysisTools(
         @McpToolParam(description = "마켓 ID (예: KRW-BTC)") market: String,
         @McpToolParam(description = "이동평균 기간들 (쉼표로 구분, 예: 5,10,20,50,200)") periods: String,
         @McpToolParam(description = "시간 간격: day, minute60 등") interval: String
-    ): Map<String, Any> {
+    ): MovingAveragesResult {
         val periodList = periods.split(",").map { it.trim().toInt() }
         val maxPeriod = periodList.maxOrNull() ?: 200
 
         val ohlcv = publicApi.getOhlcv(market, interval, maxPeriod + 10, null)
         if (ohlcv.isNullOrEmpty()) {
-            return mapOf("error" to "Failed to get OHLCV data")
+            return MovingAveragesResult(
+                market = market,
+                currentPrice = BigDecimal.ZERO,
+                sma = emptyMap(),
+                ema = emptyMap(),
+                error = "Failed to get OHLCV data"
+            )
         }
 
         val closes = ohlcv
@@ -218,11 +307,23 @@ class TechnicalAnalysisTools(
             }
         }
 
-        return mapOf(
-            "market" to market,
-            "currentPrice" to closes.last().setScale(0, RoundingMode.HALF_UP),
-            "sma" to smaValues,
-            "ema" to emaValues
+        val currentPrice = closes.last()
+
+        // 추세 판단: 단기 EMA > 장기 EMA → BULLISH
+        val shortEma = emaValues["ema${periodList.minOrNull()}"]
+        val longEma = emaValues["ema${periodList.maxOrNull()}"]
+        val trend = when {
+            shortEma != null && longEma != null && shortEma > longEma -> "BULLISH"
+            shortEma != null && longEma != null && shortEma < longEma -> "BEARISH"
+            else -> "NEUTRAL"
+        }
+
+        return MovingAveragesResult(
+            market = market,
+            currentPrice = currentPrice.setScale(0, RoundingMode.HALF_UP),
+            sma = smaValues,
+            ema = emaValues,
+            trend = trend
         )
     }
 

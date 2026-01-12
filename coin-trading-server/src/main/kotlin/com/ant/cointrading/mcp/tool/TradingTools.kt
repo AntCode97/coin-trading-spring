@@ -11,6 +11,30 @@ import org.springframework.stereotype.Component
 import java.math.BigDecimal
 import java.math.RoundingMode
 
+// ========================================
+// 응답 Data Classes
+// ========================================
+
+/** 단일 화폐 잔고 조회 결과 */
+data class CurrencyBalance(
+    val currency: String,
+    val balance: BigDecimal
+)
+
+/** 주문 결과 (성공/실패) */
+data class OrderResult(
+    val success: Boolean,
+    val order: OrderResponse? = null,
+    val error: String? = null
+)
+
+/** 가격 검증 결과 */
+data class PriceValidation(
+    val valid: Boolean,
+    val message: String? = null,
+    val currentPrice: BigDecimal? = null
+)
+
 /**
  * 거래 관련 MCP 도구
  */
@@ -29,9 +53,9 @@ class TradingTools(
     @McpTool(description = "특정 화폐의 잔고를 조회합니다.")
     fun getBalance(
         @McpToolParam(description = "화폐 코드 (예: KRW, BTC, ETH)") currency: String
-    ): Map<String, Any> {
+    ): CurrencyBalance {
         val balance = privateApi.getBalance(currency)
-        return mapOf("currency" to currency, "balance" to balance)
+        return CurrencyBalance(currency = currency, balance = balance)
     }
 
     @McpTool(description = "지정가 매수 주문을 생성합니다. 주문 전 잔고와 가격 검증을 수행합니다.")
@@ -39,28 +63,28 @@ class TradingTools(
         @McpToolParam(description = "마켓 ID (예: KRW-BTC)") market: String,
         @McpToolParam(description = "주문 가격 (KRW)") price: BigDecimal,
         @McpToolParam(description = "주문 수량") volume: BigDecimal
-    ): Map<String, Any> {
+    ): OrderResult {
         val krwBalance = privateApi.getBalance("KRW")
         val totalCost = price.multiply(volume)
 
         if (totalCost > krwBalance) {
-            return mapOf(
-                "success" to false,
-                "error" to "잔고 부족. 필요: $totalCost KRW, 보유: $krwBalance KRW"
+            return OrderResult(
+                success = false,
+                error = "잔고 부족. 필요: $totalCost KRW, 보유: $krwBalance KRW"
             )
         }
 
         val validation = validateOrderPrice(market, price)
-        if (validation["valid"] != true) {
-            return mapOf("success" to false, "error" to validation["message"]!!)
+        if (!validation.valid) {
+            return OrderResult(success = false, error = validation.message)
         }
 
         return try {
             val order = privateApi.buyLimitOrder(market, price, volume)
-            mapOf("success" to true, "order" to (order as Any))
+            OrderResult(success = true, order = order)
         } catch (e: Exception) {
             log.error("Buy limit order failed: {}", e.message)
-            mapOf("success" to false, "error" to (e.message ?: "Unknown error"))
+            OrderResult(success = false, error = e.message ?: "Unknown error")
         }
     }
 
@@ -69,28 +93,28 @@ class TradingTools(
         @McpToolParam(description = "마켓 ID (예: KRW-BTC)") market: String,
         @McpToolParam(description = "주문 가격 (KRW)") price: BigDecimal,
         @McpToolParam(description = "주문 수량") volume: BigDecimal
-    ): Map<String, Any> {
+    ): OrderResult {
         val currency = if (market.contains("-")) market.split("-")[1] else market
         val coinBalance = privateApi.getBalance(currency)
 
         if (volume > coinBalance) {
-            return mapOf(
-                "success" to false,
-                "error" to "잔고 부족. 필요: $volume $currency, 보유: $coinBalance $currency"
+            return OrderResult(
+                success = false,
+                error = "잔고 부족. 필요: $volume $currency, 보유: $coinBalance $currency"
             )
         }
 
         val validation = validateOrderPrice(market, price)
-        if (validation["valid"] != true) {
-            return mapOf("success" to false, "error" to validation["message"]!!)
+        if (!validation.valid) {
+            return OrderResult(success = false, error = validation.message)
         }
 
         return try {
             val order = privateApi.sellLimitOrder(market, price, volume)
-            mapOf("success" to true, "order" to (order as Any))
+            OrderResult(success = true, order = order)
         } catch (e: Exception) {
             log.error("Sell limit order failed: {}", e.message)
-            mapOf("success" to false, "error" to (e.message ?: "Unknown error"))
+            OrderResult(success = false, error = e.message ?: "Unknown error")
         }
     }
 
@@ -98,22 +122,22 @@ class TradingTools(
     fun buyMarketOrder(
         @McpToolParam(description = "마켓 ID (예: KRW-BTC)") market: String,
         @McpToolParam(description = "매수에 사용할 KRW 금액") krwAmount: BigDecimal
-    ): Map<String, Any> {
+    ): OrderResult {
         val krwBalance = privateApi.getBalance("KRW")
 
         if (krwAmount > krwBalance) {
-            return mapOf(
-                "success" to false,
-                "error" to "잔고 부족. 필요: $krwAmount KRW, 보유: $krwBalance KRW"
+            return OrderResult(
+                success = false,
+                error = "잔고 부족. 필요: $krwAmount KRW, 보유: $krwBalance KRW"
             )
         }
 
         return try {
             val order = privateApi.buyMarketOrder(market, krwAmount)
-            mapOf("success" to true, "order" to (order as Any))
+            OrderResult(success = true, order = order)
         } catch (e: Exception) {
             log.error("Buy market order failed: {}", e.message)
-            mapOf("success" to false, "error" to (e.message ?: "Unknown error"))
+            OrderResult(success = false, error = e.message ?: "Unknown error")
         }
     }
 
@@ -121,23 +145,23 @@ class TradingTools(
     fun sellMarketOrder(
         @McpToolParam(description = "마켓 ID (예: KRW-BTC)") market: String,
         @McpToolParam(description = "매도 수량") volume: BigDecimal
-    ): Map<String, Any> {
+    ): OrderResult {
         val currency = if (market.contains("-")) market.split("-")[1] else market
         val coinBalance = privateApi.getBalance(currency)
 
         if (volume > coinBalance) {
-            return mapOf(
-                "success" to false,
-                "error" to "잔고 부족. 필요: $volume $currency, 보유: $coinBalance $currency"
+            return OrderResult(
+                success = false,
+                error = "잔고 부족. 필요: $volume $currency, 보유: $coinBalance $currency"
             )
         }
 
         return try {
             val order = privateApi.sellMarketOrder(market, volume)
-            mapOf("success" to true, "order" to (order as Any))
+            OrderResult(success = true, order = order)
         } catch (e: Exception) {
             log.error("Sell market order failed: {}", e.message)
-            mapOf("success" to false, "error" to (e.message ?: "Unknown error"))
+            OrderResult(success = false, error = e.message ?: "Unknown error")
         }
     }
 
@@ -161,24 +185,24 @@ class TradingTools(
     @McpTool(description = "주문을 취소합니다.")
     fun cancelOrder(
         @McpToolParam(description = "취소할 주문의 UUID") uuid: String
-    ): Map<String, Any> {
+    ): OrderResult {
         return try {
             val order = privateApi.cancelOrder(uuid)
-            mapOf("success" to true, "order" to (order as Any))
+            OrderResult(success = true, order = order)
         } catch (e: Exception) {
             log.error("Cancel order failed: {}", e.message)
-            mapOf("success" to false, "error" to (e.message ?: "Unknown error"))
+            OrderResult(success = false, error = e.message ?: "Unknown error")
         }
     }
 
     /**
      * 주문 가격이 현재 시장가의 5% 이내인지 검증
      */
-    private fun validateOrderPrice(market: String, orderPrice: BigDecimal): Map<String, Any> {
+    private fun validateOrderPrice(market: String, orderPrice: BigDecimal): PriceValidation {
         return try {
             val tickers = publicApi.getCurrentPrice(market)
             if (tickers.isNullOrEmpty()) {
-                return mapOf("valid" to false, "message" to "현재가 조회 실패")
+                return PriceValidation(valid = false, message = "현재가 조회 실패")
             }
 
             val currentPrice = tickers.first().tradePrice
@@ -186,17 +210,18 @@ class TradingTools(
             val upperBound = currentPrice.multiply(BigDecimal.valueOf(1.05))
 
             if (orderPrice < lowerBound || orderPrice > upperBound) {
-                return mapOf(
-                    "valid" to false,
-                    "message" to "주문가격 ${orderPrice}이(가) 현재가 ${currentPrice}의 5% 범위(${
+                return PriceValidation(
+                    valid = false,
+                    message = "주문가격 ${orderPrice}이(가) 현재가 ${currentPrice}의 5% 범위(${
                         lowerBound.setScale(0, RoundingMode.HALF_UP)
-                    } ~ ${upperBound.setScale(0, RoundingMode.HALF_UP)})를 벗어남"
+                    } ~ ${upperBound.setScale(0, RoundingMode.HALF_UP)})를 벗어남",
+                    currentPrice = currentPrice
                 )
             }
 
-            mapOf("valid" to true, "currentPrice" to currentPrice)
+            PriceValidation(valid = true, currentPrice = currentPrice)
         } catch (e: Exception) {
-            mapOf("valid" to false, "message" to "가격 검증 실패: ${e.message}")
+            PriceValidation(valid = false, message = "가격 검증 실패: ${e.message}")
         }
     }
 }
