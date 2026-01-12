@@ -454,7 +454,26 @@ Spring AI 관련 코드 작성 시 **반드시** 이 스킬을 먼저 호출한�
 - `mcp/tool/*.kt`
 - LLM 관련 모든 코드
 
-#### 2. 퀀트 분석 스킬
+#### 2. Bithumb API 스킬 (`/bithumb-api`)
+
+Bithumb 거래소 API 연동 코드 작성 시 **반드시** 이 스킬을 먼저 호출한다:
+- Public API (Ticker, Orderbook, Trades, Candles)
+- Private API (JWT 인증, 잔고 조회)
+- 주문 API (지정가/시장가 매수/매도, 취소)
+- WebClient 기반 REST API 호출
+
+```
+/bithumb-api
+```
+
+**적용 대상 파일:**
+- `api/bithumb/BithumbPublicApi.kt`
+- `api/bithumb/BithumbPrivateApi.kt`
+- `api/bithumb/BithumbModels.kt`
+- `service/BithumbTradingService.kt`
+- Bithumb API 연동 모든 코드
+
+#### 3. 퀀트 분석 스킬
 
 기술적 분석 및 트레이딩 전략 코드 작성 시 해당 스킬을 호출한다:
 
@@ -488,9 +507,10 @@ AI: /quant-rsi 스킬을 먼저 참조한 후 코드를 작성합니다.
 
 ### 주의사항
 
-1. **스킬 미참조 금지**: Spring AI나 퀀트 관련 코드를 스킬 참조 없이 작성하면 안 된다
-2. **최신 API 사용**: Spring AI 1.1.x API를 사용해야 하며, 스킬에 정의된 패턴을 따른다
+1. **스킬 미참조 금지**: Spring AI, Bithumb API, 퀀트 관련 코드를 스킬 참조 없이 작성하면 안 된다
+2. **최신 API 사용**: Spring AI 1.1.x API, Bithumb API를 사용해야 하며, 스킬에 정의된 패턴을 따른다
 3. **검증된 전략**: 퀀트 스킬의 검증된 승률 전략을 우선 적용한다
+4. **JWT 인증**: Bithumb Private API 사용 시 JWT 토큰 생성 패턴을 반드시 따른다
 
 ---
 
@@ -505,4 +525,4 @@ AI: /quant-rsi 스킬을 먼저 참조한 후 코드를 작성합니다.
 
 ---
 
-*마지막 업데이트: 2026-01-12*
+*마지막 업데이트: 2026-01-13*
