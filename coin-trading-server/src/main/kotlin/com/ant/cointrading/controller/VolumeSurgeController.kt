@@ -1,5 +1,6 @@
 package com.ant.cointrading.controller
 
+import com.ant.cointrading.api.cryptocompare.CryptoCompareApi
 import com.ant.cointrading.config.VolumeSurgeProperties
 import com.ant.cointrading.repository.VolumeSurgeAlertRepository
 import com.ant.cointrading.repository.VolumeSurgeDailySummaryRepository
@@ -23,7 +24,8 @@ class VolumeSurgeController(
     private val volumeSurgeReflector: VolumeSurgeReflector,
     private val alertRepository: VolumeSurgeAlertRepository,
     private val tradeRepository: VolumeSurgeTradeRepository,
-    private val summaryRepository: VolumeSurgeDailySummaryRepository
+    private val summaryRepository: VolumeSurgeDailySummaryRepository,
+    private val cryptoCompareApi: CryptoCompareApi
 ) {
 
     /**
@@ -200,5 +202,37 @@ class VolumeSurgeController(
     @GetMapping("/config")
     fun getConfig(): VolumeSurgeProperties {
         return properties
+    }
+
+    /**
+     * CryptoCompare 뉴스 검색 테스트 (디버깅용)
+     */
+    @GetMapping("/news/{symbol}")
+    fun testNewsSearch(
+        @PathVariable symbol: String,
+        @RequestParam(defaultValue = "24") hours: Int
+    ): Map<String, Any?> {
+        return try {
+            val news = cryptoCompareApi.getRecentNews(symbol.uppercase(), hours)
+            mapOf(
+                "success" to true,
+                "symbol" to symbol.uppercase(),
+                "hours" to hours,
+                "count" to news.size,
+                "news" to news.take(5).map { n ->
+                    mapOf(
+                        "title" to n.title,
+                        "source" to n.source,
+                        "publishedAgo" to n.getPublishedTimeAgo(),
+                        "summary" to n.getSummary()
+                    )
+                }
+            )
+        } catch (e: Exception) {
+            mapOf(
+                "success" to false,
+                "error" to (e.message ?: "Unknown error")
+            )
+        }
     }
 }

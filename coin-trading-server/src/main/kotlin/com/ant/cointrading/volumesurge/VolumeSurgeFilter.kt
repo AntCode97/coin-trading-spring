@@ -1,6 +1,7 @@
 package com.ant.cointrading.volumesurge
 
 import com.ant.cointrading.api.bithumb.BithumbPublicApi
+import com.ant.cointrading.api.cryptocompare.CryptoCompareApi
 import com.ant.cointrading.config.VolumeSurgeProperties
 import com.ant.cointrading.repository.VolumeSurgeAlertEntity
 import com.ant.cointrading.service.ModelSelector
@@ -125,13 +126,13 @@ class VolumeSurgeFilter(
 /**
  * Volume Surge 필터용 LLM 도구
  *
- * CoinGecko API 대신 Bithumb의 24시간 거래량을 사용한다.
- * - 무료
- * - 실제 한국 시장 유동성 반영
+ * - CryptoCompare API: 뉴스 검색 (무료)
+ * - Bithumb API: 24시간 거래량 조회 (무료)
  */
 @Component
 class VolumeSurgeFilterTools(
-    private val bithumbPublicApi: BithumbPublicApi
+    private val bithumbPublicApi: BithumbPublicApi,
+    private val cryptoCompareApi: CryptoCompareApi
 ) {
     private val log = LoggerFactory.getLogger(javaClass)
 
@@ -140,23 +141,64 @@ class VolumeSurgeFilterTools(
 
     fun getLastDecision(): FilterResult? = lastDecision
 
-    @Tool(description = "특정 암호화폐의 최근 뉴스를 웹검색합니다. 뉴스를 확인하여 급등 원인을 파악하세요.")
+    @Tool(description = """
+        특정 암호화폐의 최근 뉴스를 검색합니다 (CryptoCompare API).
+
+        뉴스가 있으면 급등 원인을 파악할 수 있습니다.
+        뉴스가 없는 급등은 펌프앤덤프 가능성이 높습니다.
+
+        반드시 이 도구로 뉴스를 확인한 후 투자 결정을 내리세요.
+    """)
     fun searchCryptoNews(
-        @ToolParam(description = "코인 이름 (예: BTC, ETH, XRP)") coinSymbol: String,
+        @ToolParam(description = "코인 심볼 (예: BTC, ETH, XRP)") coinSymbol: String,
         @ToolParam(description = "검색할 기간 (시간 단위, 기본 24)") hours: Int = 24
     ): String {
         log.info("[Tool] searchCryptoNews: $coinSymbol, ${hours}시간")
 
-        // 실제 구현에서는 WebSearch 또는 뉴스 API 호출
-        // 여기서는 시뮬레이션 응답 반환
-        return """
-            검색 결과 (${coinSymbol}, 최근 ${hours}시간):
+        return try {
+            val news = cryptoCompareApi.getRecentNews(coinSymbol.uppercase(), hours)
 
-            뉴스 검색 기능은 추후 구현 예정입니다.
-            현재는 보수적으로 판단하여 뉴스 없는 급등으로 처리합니다.
+            if (news.isEmpty()) {
+                """
+                    검색 결과 (${coinSymbol}, 최근 ${hours}시간):
 
-            참고: 실제 뉴스 검색 API 연동 시 이 메시지가 교체됩니다.
-        """.trimIndent()
+                    관련 뉴스 없음.
+
+                    주의: 뉴스 없이 거래량이 급등한 경우 펌프앤덤프 가능성이 높습니다.
+                    소셜미디어 조작이나 내부자 매집일 수 있으니 투자에 주의하세요.
+                """.trimIndent()
+            } else {
+                val newsText = news.take(5).mapIndexed { idx, n ->
+                    """
+                    ${idx + 1}. ${n.title}
+                       출처: ${n.source ?: "알 수 없음"}
+                       시간: ${n.getPublishedTimeAgo()}
+                       요약: ${n.getSummary()}
+                    """.trimIndent()
+                }.joinToString("\n\n")
+
+                """
+                    검색 결과 (${coinSymbol}, 최근 ${hours}시간):
+
+                    총 ${news.size}건의 뉴스 발견.
+
+                    $newsText
+
+                    분석: 위 뉴스들이 실제 호재(상장, 파트너십, 업데이트 등)인지,
+                    단순 루머나 SNS 홍보성 기사인지 판단하세요.
+                """.trimIndent()
+            }
+
+        } catch (e: Exception) {
+            log.error("[Tool] searchCryptoNews 오류: ${e.message}", e)
+            """
+                검색 결과 (${coinSymbol}, 최근 ${hours}시간):
+
+                뉴스 검색 중 오류 발생: ${e.message}
+
+                주의: 뉴스를 확인할 수 없으니 보수적으로 판단하세요.
+            """.trimIndent()
+        }
     }
 
     @Tool(description = """
