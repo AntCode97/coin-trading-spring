@@ -126,6 +126,26 @@ logging:
   pattern:
     console: "%d{HH:mm:ss} [%thread] %-5level %logger{20} - %msg%n"
 
+# Volume Surge 전략 설정 (거래량 급등 단타)
+volumesurge:
+  enabled: ${VOLUME_SURGE_ENABLED:false}
+  polling-interval-ms: ${VOLUME_SURGE_POLLING_MS:30000}
+  position-size-krw: ${VOLUME_SURGE_POSITION_SIZE:10000}
+  max-positions: ${VOLUME_SURGE_MAX_POSITIONS:3}
+  stop-loss-percent: ${VOLUME_SURGE_STOP_LOSS:-2.0}
+  take-profit-percent: ${VOLUME_SURGE_TAKE_PROFIT:5.0}
+  trailing-stop-trigger: ${VOLUME_SURGE_TRAILING_TRIGGER:2.0}
+  trailing-stop-offset: ${VOLUME_SURGE_TRAILING_OFFSET:1.0}
+  position-timeout-min: ${VOLUME_SURGE_TIMEOUT_MIN:30}
+  llm-filter-enabled: ${VOLUME_SURGE_LLM_FILTER:true}
+  reflection-cron: ${VOLUME_SURGE_REFLECTION_CRON:0 0 1 * * *}
+  cooldown-min: ${VOLUME_SURGE_COOLDOWN_MIN:5}
+  max-consecutive-losses: ${VOLUME_SURGE_MAX_LOSSES:3}
+  daily-max-loss-krw: ${VOLUME_SURGE_DAILY_MAX_LOSS:30000}
+  min-confluence-score: ${VOLUME_SURGE_MIN_CONFLUENCE:60}
+  max-rsi: ${VOLUME_SURGE_MAX_RSI:70}
+  min-volume-ratio: ${VOLUME_SURGE_MIN_VOLUME_RATIO:2.0}
+
 # Actuator
 management:
   endpoints:

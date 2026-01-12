@@ -187,10 +187,10 @@ class VolumeSurgeFilterTools(
                 """.trimIndent()
             }
 
-            val tradingVolume = ticker.accTradePrice
+            val tradingVolume = ticker.accTradePrice ?: BigDecimal.ZERO
             val tradingVolumeFormatted = formatKrw(tradingVolume)
             val currentPrice = ticker.tradePrice
-            val changeRate = ticker.signedChangeRate?.multiply(BigDecimal(100))
+            val changeRate = ticker.changeRate?.multiply(BigDecimal(100))
                 ?.setScale(2, RoundingMode.HALF_UP) ?: BigDecimal.ZERO
 
             // 거래량 등급 판정
@@ -200,6 +200,8 @@ class VolumeSurgeFilterTools(
                 else -> "부족 (10억원 미만, 거부 권장)"
             }
 
+            val isSmallCap = tradingVolume < BigDecimal("1000000000")
+
             """
                 $market 정보 (Bithumb):
                 - 24시간 거래량: ${tradingVolumeFormatted}원
@@ -207,7 +209,7 @@ class VolumeSurgeFilterTools(
                 - 현재가: ${formatKrw(currentPrice)}원
                 - 24시간 변동률: ${changeRate}%
 
-                판단: ${if (tradingVolume < BigDecimal("1000000000")) "10억원 미만 소형 토큰, 투자 거부 권장" else "거래량 기준 통과"}
+                판단: ${if (isSmallCap) "10억원 미만 소형 토큰, 투자 거부 권장" else "거래량 기준 통과"}
             """.trimIndent()
 
         } catch (e: Exception) {
