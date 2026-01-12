@@ -1521,6 +1521,334 @@ class BithumbTradingService(
 
 ---
 
+## 12. WebSocket API (실시간 데이터)
+
+### 12.1 기본 정보
+
+**연결 URL:**
+| 유형 | URL |
+|------|-----|
+| Public | `wss://ws-api.bithumb.com/websocket/v1` |
+| Private | `wss://ws-api.bithumb.com/websocket/v1/private` |
+
+**Rate Limit:** IP 기준 초당 10회 연결 제한 (연결 후 수신 데이터는 무제한)
+
+**지원 채널:**
+| 채널 | 타입 | 인증 | 설명 |
+|------|------|------|------|
+| `ticker` | Public | 불필요 | 현재가 정보 |
+| `trade` | Public | 불필요 | 체결 데이터 |
+| `orderbook` | Public | 불필요 | 호가 정보 |
+| `myOrder` | Private | JWT 필요 | 내 주문/체결 |
+| `myAsset` | Private | JWT 필요 | 내 자산 정보 |
+
+**데이터 타입:**
+- `SNAPSHOT`: 요청 시점의 상태
+- `REALTIME`: 실시간 스트림 업데이트
+
+---
+
+### 12.2 요청 포맷
+
+WebSocket 요청은 JSON 배열 형식:
+
+```json
+[
+  { "ticket": "unique-ticket-id" },
+  { "type": "ticker", "codes": ["KRW-BTC", "KRW-ETH"] },
+  { "format": "DEFAULT" }
+]
+```
+
+**Ticket Field (필수):**
+| 필드 | 타입 | 설명 |
+|------|------|------|
+| `ticket` | String | 요청자 식별값 (UUID 권장) |
+
+**Type Field (필수):**
+| 필드 | 타입 | 필수 | 설명 |
+|------|------|------|------|
+| `type` | String | O | 채널명 (ticker, trade, orderbook, myOrder, myAsset) |
+| `codes` | List | O* | 마켓 코드 (대문자), *myAsset은 선택 |
+| `level` | Double | X | 호가 모아보기 단위 (orderbook 전용, 기본: 1) |
+| `isOnlySnapshot` | Boolean | X | 스냅샷만 수신 (기본: false) |
+| `isOnlyRealtime` | Boolean | X | 실시간만 수신 (기본: false) |
+
+**Format Field (선택):**
+| 필드 | 타입 | 설명 |
+|------|------|------|
+| `format` | String | `DEFAULT` (기본) 또는 `SIMPLE` (축약 필드명) |
+
+---
+
+### 12.3 Ticker 채널 (현재가)
+
+**요청:**
+```json
+[
+  { "ticket": "test-ticker" },
+  { "type": "ticker", "codes": ["KRW-BTC", "KRW-ETH"] },
+  { "format": "DEFAULT" }
+]
+```
+
+**응답:**
+```json
+{
+  "type": "ticker",
+  "code": "KRW-BTC",
+  "opening_price": 484500,
+  "high_price": 493100,
+  "low_price": 472500,
+  "trade_price": 493100,
+  "prev_closing_price": 484500,
+  "change": "RISE",
+  "change_price": 8600,
+  "signed_change_rate": 0.01775026,
+  "trade_volume": 1.2567,
+  "acc_trade_volume_24h": 13386.15417512,
+  "acc_trade_price_24h": 8230696760.346009,
+  "trade_timestamp": 1725927377820,
+  "ask_bid": "BID",
+  "market_state": "ACTIVE",
+  "timestamp": 1725927377931,
+  "stream_type": "REALTIME"
+}
+```
+
+**주요 필드:**
+| 필드 | 축약 | 설명 |
+|------|------|------|
+| `trade_price` | tp | 현재가 |
+| `change` | c | RISE/EVEN/FALL |
+| `signed_change_rate` | scr | 등락률 |
+| `acc_trade_volume_24h` | atv24h | 24시간 거래량 |
+| `stream_type` | st | SNAPSHOT/REALTIME |
+
+---
+
+### 12.4 Trade 채널 (체결)
+
+**요청:**
+```json
+[
+  { "ticket": "test-trade" },
+  { "type": "trade", "codes": ["KRW-BTC"] },
+  { "format": "DEFAULT" }
+]
+```
+
+**응답:**
+```json
+{
+  "type": "trade",
+  "code": "KRW-BTC",
+  "trade_price": 489700,
+  "trade_volume": 1.4825,
+  "ask_bid": "BID",
+  "prev_closing_price": 484500,
+  "change": "RISE",
+  "change_price": 5200,
+  "trade_date": "2024-09-10",
+  "trade_time": "09:58:54",
+  "trade_timestamp": 1725929934373,
+  "sequential_id": 17259299343730000,
+  "timestamp": 1725929934483,
+  "stream_type": "REALTIME"
+}
+```
+
+**주요 필드:**
+| 필드 | 축약 | 설명 |
+|------|------|------|
+| `trade_price` | tp | 체결 가격 |
+| `trade_volume` | tv | 체결량 |
+| `ask_bid` | ab | ASK(매도)/BID(매수) |
+| `sequential_id` | sid | 체결 번호 (유일성 판단) |
+
+---
+
+### 12.5 Orderbook 채널 (호가)
+
+**요청:**
+```json
+[
+  { "ticket": "test-orderbook" },
+  { "type": "orderbook", "codes": ["KRW-BTC"], "level": 1 },
+  { "format": "DEFAULT" }
+]
+```
+
+**응답:**
+```json
+{
+  "type": "orderbook",
+  "code": "KRW-BTC",
+  "total_ask_size": 450.3526,
+  "total_bid_size": 63.3006,
+  "orderbook_units": [
+    {
+      "ask_price": 478800,
+      "bid_price": 478300,
+      "ask_size": 4.3478,
+      "bid_size": 5.6370
+    }
+  ],
+  "level": 1,
+  "timestamp": 1725930007672,
+  "stream_type": "REALTIME"
+}
+```
+
+**주요 필드:**
+| 필드 | 축약 | 설명 |
+|------|------|------|
+| `total_ask_size` | tas | 매도 총 잔량 |
+| `total_bid_size` | tbs | 매수 총 잔량 |
+| `orderbook_units` | obu | 호가 목록 |
+| `level` | lv | 모아보기 단위 |
+
+---
+
+### 12.6 MyOrder 채널 (내 주문) - Private
+
+**연결:** `wss://ws-api.bithumb.com/websocket/v1/private` + JWT 인증
+
+**요청:**
+```json
+[
+  { "ticket": "test-myorder" },
+  { "type": "myOrder", "codes": ["KRW-BTC"] }
+]
+```
+
+**응답:**
+```json
+{
+  "type": "myOrder",
+  "code": "KRW-BTC",
+  "uuid": "C0101000000001818113",
+  "ask_bid": "BID",
+  "order_type": "limit",
+  "state": "trade",
+  "price": 1927000,
+  "volume": 0.5,
+  "executed_funds": 963500,
+  "paid_fee": 385.4,
+  "timestamp": 1725930007672
+}
+```
+
+**주요 필드:**
+| 필드 | 축약 | 설명 |
+|------|------|------|
+| `uuid` | uid | 주문 고유 ID |
+| `ask_bid` | ab | ASK(매도)/BID(매수) |
+| `order_type` | ot | limit/price/market |
+| `state` | s | wait/trade/done/cancel |
+
+---
+
+### 12.7 MyAsset 채널 (내 자산) - Private
+
+**연결:** `wss://ws-api.bithumb.com/websocket/v1/private` + JWT 인증
+
+**요청:**
+```json
+[
+  { "ticket": "test-myasset" },
+  { "type": "myAsset" }
+]
+```
+
+**응답:**
+```json
+{
+  "type": "myAsset",
+  "assets": [
+    {
+      "currency": "KRW",
+      "balance": "2061832.35",
+      "locked": "3824127.3"
+    },
+    {
+      "currency": "BTC",
+      "balance": "0.5",
+      "locked": "0.1"
+    }
+  ],
+  "asset_timestamp": 1727052537592,
+  "timestamp": 1727052537687,
+  "stream_type": "REALTIME"
+}
+```
+
+---
+
+### 12.8 연결 관리 (PING/PONG)
+
+**타임아웃:** 약 120초 비활성 시 연결 종료
+
+**Heartbeat:**
+- 클라이언트가 PING 프레임 전송
+- 서버가 PONG 프레임 응답
+- 10초 간격으로 `{"status":"UP"}` 수신 가능
+
+**Kotlin 구현 예시:**
+```kotlin
+val client = OkHttpClient.Builder()
+    .pingInterval(30, TimeUnit.SECONDS)
+    .build()
+
+val request = Request.Builder()
+    .url("wss://ws-api.bithumb.com/websocket/v1")
+    .build()
+
+val listener = object : WebSocketListener() {
+    override fun onOpen(webSocket: WebSocket, response: Response) {
+        val subscribeMessage = """
+            [
+                {"ticket":"${UUID.randomUUID()}"},
+                {"type":"ticker","codes":["KRW-BTC","KRW-ETH"]},
+                {"format":"DEFAULT"}
+            ]
+        """.trimIndent()
+        webSocket.send(subscribeMessage)
+    }
+
+    override fun onMessage(webSocket: WebSocket, text: String) {
+        val data = objectMapper.readTree(text)
+        when (data["type"]?.asText()) {
+            "ticker" -> handleTicker(data)
+            "trade" -> handleTrade(data)
+            "orderbook" -> handleOrderbook(data)
+        }
+    }
+
+    override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
+        // 재연결 로직
+        reconnect()
+    }
+}
+
+client.newWebSocket(request, listener)
+```
+
+---
+
+### 12.9 WebSocket 에러 코드
+
+| 에러 코드 | 메시지 |
+|----------|--------|
+| `WRONG_FORMAT` | Format이 맞지 않습니다 |
+| `NO_TICKET` | 티켓이 존재하지 않거나 유효하지 않습니다 |
+| `NO_TYPE` | type 필드가 존재하지 않습니다 |
+| `NO_CODES` | codes 필드가 존재하지 않습니다 |
+| `INVALID_PARAM` | codes 필드가 비어 있습니다 |
+| `INVALID_PARAM_FORMAT` | {}은 지원하지 않는 포맷입니다 |
+
+---
+
 ## 참고 문서
 
 - [Bithumb API 공식 문서](https://apidocs.bithumb.com/)
@@ -1528,3 +1856,4 @@ class BithumbTradingService(
 - [시세 API](https://apidocs.bithumb.com/reference/현재가-정보)
 - [주문 API](https://apidocs.bithumb.com/reference/주문하기)
 - [자산 API](https://apidocs.bithumb.com/reference/자산)
+- [WebSocket API](https://apidocs.bithumb.com/v2.1.5/reference/기본-정보)
