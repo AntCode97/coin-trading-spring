@@ -45,4 +45,7 @@ bin/
 ### Environment Variables ###
 .env
 .env.local
-.env.*.local.idea/httpClient/
+.env.*.local
+
+### IntelliJ HTTP Client ###
+.idea/httpClient/
