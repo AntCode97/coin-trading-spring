@@ -4,6 +4,8 @@ import com.ant.cointrading.api.binance.BinancePublicApi
 import com.ant.cointrading.api.binance.KimchiPremiumInfo
 import com.ant.cointrading.api.binance.PremiumStatus
 import com.ant.cointrading.api.bithumb.BithumbPublicApi
+import com.ant.cointrading.api.exchangerate.ExchangeRateApi
+import com.ant.cointrading.api.exchangerate.ExchangeRateCacheStatus
 import com.ant.cointrading.notification.SlackNotifier
 import jakarta.annotation.PostConstruct
 import org.slf4j.LoggerFactory
@@ -26,13 +28,10 @@ import java.util.concurrent.ConcurrentHashMap
 class KimchiPremiumService(
     private val bithumbPublicApi: BithumbPublicApi,
     private val binancePublicApi: BinancePublicApi,
-    private val slackNotifier: SlackNotifier
+    private val slackNotifier: SlackNotifier,
+    private val exchangeRateApi: ExchangeRateApi
 ) {
     private val log = LoggerFactory.getLogger(javaClass)
-
-    // 환율 (USD/KRW) - 실시간 환율 API 연동 전까지 수동 설정
-    @Volatile
-    private var exchangeRate = BigDecimal("1450")  // 2024년 기준 평균 환율
 
     // 최근 프리미엄 캐시
     private val premiumCache = ConcurrentHashMap<String, KimchiPremiumInfo>()
@@ -46,23 +45,32 @@ class KimchiPremiumService(
     @PostConstruct
     fun init() {
         log.info("=== 김치 프리미엄 모니터링 시작 ===")
-        log.info("기준 환율: ${exchangeRate}원/USD")
+        // 초기 환율 조회
+        val rate = exchangeRateApi.getUsdKrwRate()
+        log.info("기준 환율: ${rate}원/USD (실시간 조회)")
         log.info("모니터링 대상: $mainCoins")
     }
 
     /**
-     * 환율 업데이트 (외부에서 호출 가능)
+     * 현재 환율 조회
+     *
+     * ExchangeRateApi를 통해 실시간 환율 조회.
+     * 1시간 캐싱 적용되어 있어 자주 호출해도 성능 문제 없음.
      */
-    fun updateExchangeRate(rate: BigDecimal) {
-        val oldRate = exchangeRate
-        exchangeRate = rate
-        log.info("환율 업데이트: $oldRate → $rate")
-    }
+    fun getExchangeRate(): BigDecimal = exchangeRateApi.getUsdKrwRate()
 
     /**
-     * 현재 환율 조회
+     * 환율 캐시 상태 조회
      */
-    fun getExchangeRate(): BigDecimal = exchangeRate
+    fun getExchangeRateCacheStatus(): ExchangeRateCacheStatus = exchangeRateApi.getCacheStatus()
+
+    /**
+     * 환율 캐시 강제 갱신
+     */
+    fun refreshExchangeRate(): BigDecimal {
+        exchangeRateApi.invalidateCache()
+        return exchangeRateApi.getUsdKrwRate()
+    }
 
     /**
      * 단일 코인 김치 프리미엄 계산
@@ -79,8 +87,11 @@ class KimchiPremiumService(
             // 바이낸스 현재가 (USDT)
             val foreignPrice = binancePublicApi.getPrice(binanceSymbol) ?: return null
 
+            // 현재 환율 조회 (캐싱됨)
+            val currentExchangeRate = getExchangeRate()
+
             // 바이낸스 가격 KRW 환산
-            val foreignPriceKrw = foreignPrice.multiply(exchangeRate)
+            val foreignPriceKrw = foreignPrice.multiply(currentExchangeRate)
                 .setScale(0, RoundingMode.HALF_UP)
 
             // 프리미엄 계산
@@ -93,7 +104,7 @@ class KimchiPremiumService(
                 symbol = symbol,
                 domesticPrice = domesticPrice,
                 foreignPrice = foreignPrice,
-                exchangeRate = exchangeRate,
+                exchangeRate = currentExchangeRate,
                 foreignPriceKrw = foreignPriceKrw,
                 premiumAmount = premiumAmount,
                 premiumPercent = premiumPercent
@@ -181,7 +192,7 @@ class KimchiPremiumService(
             해외가(바이낸스): ${premium.foreignPrice} USDT
             해외가(환산): ${formatKrw(premium.foreignPriceKrw)}원
 
-            환율: ${exchangeRate}원/USD
+            환율: ${getExchangeRate()}원/USD
         """.trimIndent()
 
         slackNotifier.sendSystemNotification("김치 프리미엄", text)

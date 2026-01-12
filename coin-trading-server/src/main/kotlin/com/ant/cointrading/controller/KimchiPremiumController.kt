@@ -67,17 +67,18 @@ class KimchiPremiumController(
     }
 
     /**
-     * 환율 업데이트
+     * 환율 캐시 강제 갱신
      */
-    @PostMapping("/exchange-rate")
-    fun updateExchangeRate(@RequestParam rate: BigDecimal): Map<String, Any> {
+    @PostMapping("/exchange-rate/refresh")
+    fun refreshExchangeRate(): Map<String, Any> {
         val oldRate = kimchiPremiumService.getExchangeRate()
-        kimchiPremiumService.updateExchangeRate(rate)
+        val newRate = kimchiPremiumService.refreshExchangeRate()
 
         return mapOf(
             "success" to true,
             "oldRate" to oldRate,
-            "newRate" to rate
+            "newRate" to newRate,
+            "message" to "환율 캐시가 갱신되었습니다"
         )
     }
 
@@ -86,9 +87,14 @@ class KimchiPremiumController(
      */
     @GetMapping("/exchange-rate")
     fun getExchangeRate(): Map<String, Any> {
+        val cacheStatus = kimchiPremiumService.getExchangeRateCacheStatus()
+
         return mapOf(
             "exchangeRate" to kimchiPremiumService.getExchangeRate(),
-            "currency" to "USD/KRW"
+            "currency" to "USD/KRW",
+            "cacheValid" to cacheStatus.cacheValid,
+            "lastFetchTime" to (cacheStatus.lastFetchTime?.toString() ?: "N/A"),
+            "remainingMinutes" to cacheStatus.remainingMinutes
         )
     }
 
