@@ -130,4 +130,26 @@ class BithumbPublicApi(
             null
         }
     }
+
+    /**
+     * 가상자산 경보 정보 조회 (경보제 API)
+     *
+     * 경보 유형:
+     * - TRADING_VOLUME_SUDDEN_FLUCTUATION: 거래량 급등
+     * - PRICE_SUDDEN_FLUCTUATION: 가격 급변
+     * - GLOBAL_PRICE_DIFFERENCE: 해외 가격 괴리
+     * - CONCENTRATION_OF_SMALL_ACCOUNTS: 소액 계좌 집중
+     */
+    fun getVirtualAssetWarning(): List<VirtualAssetWarning>? {
+        return try {
+            bithumbWebClient.get()
+                .uri("/v1/market/virtual_asset_warning")
+                .retrieve()
+                .bodyToMono(object : ParameterizedTypeReference<List<VirtualAssetWarning>>() {})
+                .block()
+        } catch (e: Exception) {
+            log.error("Failed to get virtual asset warning: {}", e.message)
+            null
+        }
+    }
 }

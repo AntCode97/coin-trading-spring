@@ -119,6 +119,23 @@ data class TradeResponse(
 )
 
 /**
+ * 가상자산 경보 정보 (경보제 API)
+ *
+ * 실제 응답 예시:
+ * {"market":"KRW-XPR","warning_type":"TRADING_VOLUME_SUDDEN_FLUCTUATION","end_date":"2026-01-13 06:59:59"}
+ *
+ * warning_type 종류:
+ * - TRADING_VOLUME_SUDDEN_FLUCTUATION: 거래량 급등
+ * - DEPOSIT_AMOUNT_SUDDEN_FLUCTUATION: 입금량 급등
+ * - PRICE_DIFFERENCE_HIGH: 해외 가격 괴리
+ */
+data class VirtualAssetWarning(
+    @JsonProperty("market") val market: String,
+    @JsonProperty("warning_type") val warningType: String?,
+    @JsonProperty("end_date") val endDate: String?
+)
+
+/**
  * API 에러 응답
  */
 data class BithumbError(

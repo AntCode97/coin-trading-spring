@@ -368,6 +368,291 @@ Claude Code에서 MCP 연결 후 사용 가능한 도구:
 
 ---
 
+## 진행 중인 작업: Volume Surge Trading Strategy (2026-01-13~)
+
+### 개요
+
+**거래량 급등 종목 단타 전략**: Bithumb 경보제 API를 활용하여 거래량이 급등한 종목을 감지하고, LLM이 웹검색을 통해 펌프앤덤프 여부를 필터링한 후 기술적 분석을 통해 단타 트레이딩을 수행.
+
+**핵심 아이디어:**
+- 거래량 급등 = 시장 관심 집중 → 빠른 가격 변동 기회
+- LLM 웹검색 필터 = 펌프앤덤프/세력주 배제
+- 타이트한 리스크 관리 = 손실 최소화 (-2% 손절)
+- 학습/회고 시스템 = 케이스 축적 및 지속적 개선
+
+### 아키텍처
+
+```
+[Volume Surge Trading Module]
+│
+├── Alert Polling Service
+│   ├── Bithumb 경보제 API 주기적 조회 (30초)
+│   │   └── GET /v1/market/virtual_asset_warning
+│   └── TRADING_VOLUME_SUDDEN_FLUCTUATION 필터링
+│
+├── LLM Filter (Spring AI)
+│   ├── 웹검색으로 종목 뉴스 수집
+│   ├── 펌프앤덤프 판단 (시가총액, 거래량 패턴, 뉴스 진위)
+│   └── 진입 가능 여부 결정
+│
+├── Technical Analysis
+│   ├── Confluence Analysis (RSI + MACD + 볼린저 + 거래량)
+│   ├── Volume Spike Ratio 계산 (20일 평균 대비)
+│   └── Entry/Exit 신호 생성
+│
+├── Position Manager
+│   ├── 포지션 진입 (소액: 10,000 KRW)
+│   ├── Stop Loss: -2%
+│   ├── Take Profit: +5%
+│   ├── Trailing Stop: +2% 이후 -1%
+│   └── Timeout: 30분 후 강제 청산
+│
+├── Learning System (DB 저장)
+│   ├── TradeCaseEntity: 모든 트레이드 케이스 저장
+│   ├── 성공/실패 분류 및 원인 분석
+│   └── LLM 일일 회고 (LlmOptimizer 패턴)
+│
+└── Reflection Engine
+    ├── 일일 케이스 리뷰
+    ├── 패턴 학습 (어떤 거래량 급등이 성공했나?)
+    └── 필터 임계값 자동 조정
+```
+
+### 퀀트 연구 결과 (2025~2026)
+
+#### 펌프앤덤프 특징
+- **시가총액**: 대부분 $50M 미만 소형주
+- **덤프 타이밍**: 펌프 시작 후 수 분 이내 덤프 시작
+- **워시 트레이딩**: 2024년 $2.57B 규모 발생
+- **탐지 방법**: EWMA 기반 이상 거래량 탐지 (학술 연구 검증)
+
+#### 적용 파라미터
+```kotlin
+object VolumeSurgeConfig {
+    const val MIN_VOLUME_RATIO = 3.0        // 20일 평균 대비 300% 이상
+    const val MAX_RSI = 70.0                // 과매수 영역 진입 제한
+    const val MIN_CONFLUENCE_SCORE = 60     // 컨플루언스 점수 60점 이상
+    const val POSITION_SIZE_KRW = 10000     // 1회 10,000원
+    const val STOP_LOSS_PERCENT = -2.0      // 손절 -2%
+    const val TAKE_PROFIT_PERCENT = 5.0     // 익절 +5%
+    const val TRAILING_STOP_TRIGGER = 2.0   // +2% 도달 시 트레일링 시작
+    const val TRAILING_STOP_OFFSET = 1.0    // 고점 대비 -1%에서 청산
+    const val POSITION_TIMEOUT_MIN = 30     // 30분 타임아웃
+    const val ALERT_FRESHNESS_MIN = 5       // 5분 이내 신선한 경보만 처리
+    const val MIN_MARKET_CAP_KRW = 50_000_000_000  // 최소 시가총액 500억원
+}
+```
+
+### DB 스키마
+
+#### 1. volume_surge_alerts (경보 기록)
+```sql
+CREATE TABLE volume_surge_alerts (
+    id BIGINT AUTO_INCREMENT PRIMARY KEY,
+    market VARCHAR(20) NOT NULL,
+    alert_type VARCHAR(50) NOT NULL,
+    volume_ratio DOUBLE,                    -- 20일 평균 대비 비율
+    detected_at TIMESTAMP NOT NULL,
+    llm_filter_result VARCHAR(20),          -- APPROVED/REJECTED/SKIPPED
+    llm_filter_reason TEXT,
+    processed BOOLEAN DEFAULT FALSE,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    INDEX idx_alerts_market (market),
+    INDEX idx_alerts_detected (detected_at)
+);
+```
+
+#### 2. volume_surge_trades (트레이드 케이스)
+```sql
+CREATE TABLE volume_surge_trades (
+    id BIGINT AUTO_INCREMENT PRIMARY KEY,
+    alert_id BIGINT,                        -- FK to volume_surge_alerts
+    market VARCHAR(20) NOT NULL,
+    entry_price DOUBLE NOT NULL,
+    exit_price DOUBLE,
+    quantity DOUBLE NOT NULL,
+    entry_time TIMESTAMP NOT NULL,
+    exit_time TIMESTAMP,
+    exit_reason VARCHAR(30),                -- STOP_LOSS/TAKE_PROFIT/TRAILING/TIMEOUT/MANUAL
+    pnl_amount DOUBLE,
+    pnl_percent DOUBLE,
+
+    -- 분석 데이터 (회고용)
+    entry_rsi DOUBLE,
+    entry_macd_signal VARCHAR(10),          -- BULLISH/BEARISH/NEUTRAL
+    entry_bollinger_position VARCHAR(10),   -- LOWER/MIDDLE/UPPER
+    entry_volume_ratio DOUBLE,
+    confluence_score INT,
+
+    -- LLM 판단 기록
+    llm_entry_reason TEXT,
+    llm_confidence DOUBLE,
+
+    -- 회고 결과
+    reflection_notes TEXT,
+    lesson_learned TEXT,
+
+    status VARCHAR(20) DEFAULT 'OPEN',      -- OPEN/CLOSED
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+
+    INDEX idx_trades_market (market),
+    INDEX idx_trades_status (status),
+    INDEX idx_trades_created (created_at),
+    FOREIGN KEY (alert_id) REFERENCES volume_surge_alerts(id)
+);
+```
+
+#### 3. volume_surge_daily_summary (일일 요약)
+```sql
+CREATE TABLE volume_surge_daily_summary (
+    id BIGINT AUTO_INCREMENT PRIMARY KEY,
+    date DATE NOT NULL UNIQUE,
+    total_alerts INT DEFAULT 0,
+    approved_alerts INT DEFAULT 0,
+    total_trades INT DEFAULT 0,
+    winning_trades INT DEFAULT 0,
+    losing_trades INT DEFAULT 0,
+    total_pnl DOUBLE DEFAULT 0,
+    win_rate DOUBLE DEFAULT 0,
+    avg_holding_minutes DOUBLE,
+
+    -- LLM 회고 결과
+    reflection_summary TEXT,
+    parameter_changes TEXT,                  -- JSON: 변경된 파라미터들
+
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+```
+
+### 구현 Phase
+
+#### Phase 1: 기반 구축 ✅ 완료
+- [x] CLAUDE.md에 계획 문서화
+- [x] DB Entity 클래스 생성 (`VolumeSurgeEntity.kt`, `VolumeSurgeRepository.kt`)
+- [x] Bithumb Alert API 연동 (`VirtualAssetWarning`, `getVirtualAssetWarning()`)
+- [x] VolumeSurgeProperties 설정 클래스
+
+#### Phase 2: 핵심 로직 ✅ 완료
+- [x] AlertPollingService: 경보 주기적 조회 (30초)
+- [x] VolumeSurgeFilter: LLM 웹검색 필터 (Tool Calling)
+- [x] VolumeSurgeAnalyzer: 기술적 분석 (RSI, MACD, 볼린저, 컨플루언스)
+- [x] VolumeSurgeEngine: 포지션 관리 (손절/익절/트레일링/타임아웃)
+
+#### Phase 3: 학습 시스템 ✅ 완료
+- [x] VolumeSurgeTradeEntity: 트레이드 케이스 DB 저장
+- [x] VolumeSurgeReflector: LLM 일일 회고 (매일 새벽 1시)
+- [x] VolumeSurgeReflectorTools: 회고용 LLM Tool Calling
+
+#### Phase 4: 통합 및 테스트
+- [x] VolumeSurgeEngine: 메인 엔진 구현 완료
+- [x] Slack 알림 연동 완료
+- [x] VolumeSurgeController: 수동 트리거 API 완료
+- [ ] 모의 거래 테스트 (volumesurge.enabled=true 후 동작 확인)
+
+### API 엔드포인트
+
+| 엔드포인트 | 메소드 | 설명 |
+|-----------|--------|------|
+| `/api/volume-surge/status` | GET | 전략 상태 및 열린 포지션 조회 |
+| `/api/volume-surge/stats/today` | GET | 오늘 통계 조회 |
+| `/api/volume-surge/alerts` | GET | 최근 경보 목록 |
+| `/api/volume-surge/trades` | GET | 최근 트레이드 목록 |
+| `/api/volume-surge/summaries` | GET | 일일 요약 목록 |
+| `/api/volume-surge/reflect` | POST | 수동 회고 실행 |
+| `/api/volume-surge/config` | GET | 설정 조회 |
+
+### 핵심 컴포넌트
+
+#### 1. AlertPollingService
+```kotlin
+@Component
+class AlertPollingService(
+    private val bithumbPublicApi: BithumbPublicApi,
+    private val alertRepository: VolumeSurgeAlertRepository
+) {
+    @Scheduled(fixedDelay = 30000)  // 30초마다
+    suspend fun pollAlerts() {
+        val alerts = bithumbPublicApi.getVirtualAssetWarning()
+        alerts?.filter { it.warningType == "TRADING_VOLUME_SUDDEN_FLUCTUATION" }
+            ?.forEach { processAlert(it) }
+    }
+}
+```
+
+#### 2. VolumeSurgeFilter (LLM Tool Calling)
+```kotlin
+@Component
+class VolumeSurgeFilter(
+    private val modelSelector: ModelSelector,
+    private val filterTools: VolumeSurgeFilterTools
+) {
+    suspend fun shouldEnter(market: String, alert: VolumeSurgeAlert): FilterResult {
+        val chatClient = modelSelector.getChatClient()
+            .mutate()
+            .defaultTools(filterTools)
+            .build()
+
+        val response = chatClient.prompt()
+            .system(filterSystemPrompt)
+            .user("마켓 $market 의 거래량이 급등했습니다. 웹검색을 통해 이 종목이 투자하기 적합한지 판단해주세요.")
+            .call()
+            .content()
+
+        return parseFilterResult(response)
+    }
+}
+```
+
+#### 3. VolumeSurgePositionManager
+```kotlin
+@Component
+class VolumeSurgePositionManager(
+    private val orderExecutor: OrderExecutor,
+    private val tradeRepository: VolumeSurgeTradeRepository
+) {
+    // 실시간 포지션 모니터링 (1초마다)
+    @Scheduled(fixedDelay = 1000)
+    suspend fun monitorPositions() {
+        val openPositions = tradeRepository.findByStatus("OPEN")
+        openPositions.forEach { position ->
+            val currentPrice = getCurrentPrice(position.market)
+            val pnlPercent = calculatePnlPercent(position, currentPrice)
+
+            when {
+                pnlPercent <= STOP_LOSS_PERCENT -> closePosition(position, "STOP_LOSS")
+                pnlPercent >= TAKE_PROFIT_PERCENT -> closePosition(position, "TAKE_PROFIT")
+                isTrailingStopTriggered(position, currentPrice) -> closePosition(position, "TRAILING")
+                isTimeout(position) -> closePosition(position, "TIMEOUT")
+            }
+        }
+    }
+}
+```
+
+### 관련 스킬
+
+이 전략 구현 시 다음 스킬들을 참조한다:
+
+| 스킬 | 용도 |
+|------|------|
+| `/bithumb-api` | Alert API 연동, 주문 실행 |
+| `/spring-ai` | LLM Tool Calling, ChatClient |
+| `/quant-confluence` | 컨플루언스 분석 (85% 승률) |
+| `/trading-decision` | 최종 매매 결정 |
+| `/news-sentiment` | 뉴스 감성 분석 (선택적) |
+
+### 새로 생성할 스킬
+
+#### `/volume-surge` 스킬
+거래량 급등 단타 전략의 퀀트 지식과 구현 가이드를 담은 스킬.
+- 펌프앤덤프 탐지 방법
+- 최적 진입/청산 타이밍
+- 리스크 관리 파라미터
+- 학습/회고 시스템 패턴
+
+---
+
 ## 다음 단계 (TODO)
 
 ### Phase 2: 엣지 확보
@@ -522,6 +807,27 @@ AI: /quant-rsi 스킬을 먼저 참조한 후 코드를 작성합니다.
 4. **정기 점검**: 주 1회 수익률/손실 확인
 5. **서킷 브레이커 모니터링**: Slack 알림 확인
 6. **재시작 시**: DCA/Grid 상태가 자동 복원되는지 로그 확인
+
+---
+
+### 새로 추가된 파일
+
+```
+coin-trading-server/src/main/kotlin/com/ant/cointrading/
+├── config/
+│   └── VolumeSurgeProperties.kt        # 전략 설정
+├── controller/
+│   └── VolumeSurgeController.kt        # REST API
+├── repository/
+│   ├── VolumeSurgeEntity.kt            # DB Entity 3개
+│   └── VolumeSurgeRepository.kt        # Repository 3개
+└── volumesurge/
+    ├── AlertPollingService.kt          # 경보 폴링 (30초)
+    ├── VolumeSurgeAnalyzer.kt          # 기술적 분석
+    ├── VolumeSurgeEngine.kt            # 메인 엔진
+    ├── VolumeSurgeFilter.kt            # LLM 필터
+    └── VolumeSurgeReflector.kt         # 학습/회고
+```
 
 ---
 
