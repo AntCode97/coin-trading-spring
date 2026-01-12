@@ -544,11 +544,11 @@ CREATE TABLE volume_surge_daily_summary (
 - [x] VolumeSurgeReflector: LLM 일일 회고 (매일 새벽 1시)
 - [x] VolumeSurgeReflectorTools: 회고용 LLM Tool Calling
 
-#### Phase 4: 통합 및 테스트
+#### Phase 4: 통합 및 테스트 ✅ 완료
 - [x] VolumeSurgeEngine: 메인 엔진 구현 완료
 - [x] Slack 알림 연동 완료
 - [x] VolumeSurgeController: 수동 트리거 API 완료
-- [ ] 모의 거래 테스트 (volumesurge.enabled=true 후 동작 확인)
+- [x] 모의 거래 테스트 완료 (12건 경보 감지, LLM 필터 정상 작동)
 
 ### API 엔드포인트
 
@@ -677,9 +677,11 @@ class VolumeSurgePositionManager(
    - PendingOrderManager 비동기 처리
    - DB 저장 및 재시작 시 복원
 
-10. **김치 프리미엄 모니터링**
-    - 해외 거래소 가격 연동 (Binance API)
-    - 프리미엄 계산 및 알림
+10. ~~**김치 프리미엄 모니터링**~~ ✅ 완료
+    - BinancePublicApi: 바이낸스 현재가 조회
+    - KimchiPremiumService: 프리미엄 계산 및 1분 주기 모니터링
+    - KimchiPremiumController: REST API
+    - 주요 코인: BTC, ETH, XRP, SOL, ADA, DOGE
 
 11. **MCP 도구 응답 개선**
    - TechnicalAnalysisTools data class 변환
