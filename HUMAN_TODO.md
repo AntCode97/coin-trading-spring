@@ -263,6 +263,132 @@ Error: MCP endpoint not responding
 
 ---
 
+---
+
+## 11. Volume Surge 전략 설정 (2026-01-13 추가)
+
+### 11.1 application.yml에 설정 추가 (필수)
+
+```yaml
+# application.yml 또는 application-local.yml
+volumesurge:
+  enabled: false                    # true로 변경 시 전략 활성화
+  polling-interval-ms: 30000        # 경보 폴링 간격 (30초)
+  position-size-krw: 10000          # 1회 주문 금액 (1만원)
+  max-positions: 3                  # 최대 동시 포지션
+  stop-loss-percent: -2.0           # 손절 -2%
+  take-profit-percent: 5.0          # 익절 +5%
+  trailing-stop-trigger: 2.0        # +2%에서 트레일링 시작
+  trailing-stop-offset: 1.0         # 고점 대비 -1%에서 청산
+  position-timeout-min: 30          # 30분 타임아웃
+  llm-filter-enabled: true          # LLM 필터 활성화 (AI API 키 필요)
+  reflection-cron: "0 0 1 * * *"    # 매일 새벽 1시 회고
+```
+
+### 11.2 DB 테이블 (JPA 자동 생성)
+
+`ddl-auto: update` 설정이면 **자동 생성됨**. 수동 필요 시:
+
+```sql
+-- 경보 테이블
+CREATE TABLE IF NOT EXISTS volume_surge_alerts (
+    id BIGINT AUTO_INCREMENT PRIMARY KEY,
+    market VARCHAR(20) NOT NULL,
+    alert_type VARCHAR(50) NOT NULL,
+    volume_ratio DOUBLE,
+    detected_at TIMESTAMP NOT NULL,
+    llm_filter_result VARCHAR(20),
+    llm_filter_reason TEXT,
+    llm_confidence DOUBLE,
+    processed BOOLEAN DEFAULT FALSE,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    INDEX idx_vs_alerts_market (market),
+    INDEX idx_vs_alerts_detected (detected_at)
+);
+
+-- 트레이드 테이블
+CREATE TABLE IF NOT EXISTS volume_surge_trades (
+    id BIGINT AUTO_INCREMENT PRIMARY KEY,
+    alert_id BIGINT,
+    market VARCHAR(20) NOT NULL,
+    entry_price DOUBLE NOT NULL,
+    exit_price DOUBLE,
+    quantity DOUBLE NOT NULL,
+    entry_time TIMESTAMP NOT NULL,
+    exit_time TIMESTAMP,
+    exit_reason VARCHAR(30),
+    pnl_amount DOUBLE,
+    pnl_percent DOUBLE,
+    entry_rsi DOUBLE,
+    entry_macd_signal VARCHAR(10),
+    entry_bollinger_position VARCHAR(10),
+    entry_volume_ratio DOUBLE,
+    confluence_score INT,
+    llm_entry_reason TEXT,
+    llm_confidence DOUBLE,
+    reflection_notes TEXT,
+    lesson_learned TEXT,
+    trailing_active BOOLEAN DEFAULT FALSE,
+    highest_price DOUBLE,
+    status VARCHAR(20) DEFAULT 'OPEN',
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    INDEX idx_vs_trades_status (status)
+);
+
+-- 일일 요약 테이블
+CREATE TABLE IF NOT EXISTS volume_surge_daily_summary (
+    id BIGINT AUTO_INCREMENT PRIMARY KEY,
+    date DATE NOT NULL UNIQUE,
+    total_alerts INT DEFAULT 0,
+    approved_alerts INT DEFAULT 0,
+    total_trades INT DEFAULT 0,
+    winning_trades INT DEFAULT 0,
+    losing_trades INT DEFAULT 0,
+    total_pnl DOUBLE DEFAULT 0,
+    win_rate DOUBLE DEFAULT 0,
+    avg_holding_minutes DOUBLE,
+    reflection_summary TEXT,
+    parameter_changes TEXT,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+```
+
+### 11.3 테스트 순서
+
+```bash
+# 1. 먼저 비활성화 상태로 실행
+volumesurge.enabled=false 상태로 bootRun
+
+# 2. API 동작 확인
+curl http://localhost:8080/api/volume-surge/status
+curl http://localhost:8080/api/volume-surge/config
+
+# 3. 활성화 후 테스트
+volumesurge.enabled=true 로 변경 후 재시작
+
+# 4. 로그 확인 (30초마다 경보 폴링)
+grep "거래량 급등" logs/application.log
+```
+
+### 11.4 API 엔드포인트
+
+| 엔드포인트 | 메소드 | 설명 |
+|-----------|--------|------|
+| `/api/volume-surge/status` | GET | 전략 상태 및 열린 포지션 |
+| `/api/volume-surge/stats/today` | GET | 오늘 통계 |
+| `/api/volume-surge/alerts` | GET | 최근 경보 목록 |
+| `/api/volume-surge/trades` | GET | 최근 트레이드 목록 |
+| `/api/volume-surge/reflect` | POST | 수동 회고 실행 |
+
+### 11.5 주의사항
+
+- **소액 시작**: 처음엔 1만원(`position-size-krw: 10000`)
+- **LLM 비용**: `llm-filter-enabled: true` 시 AI API 호출 발생
+- **서킷 브레이커**: 연속 3회 손실 또는 일일 -30,000원 도달 시 자동 중지
+
+---
+
 ## 완료 체크
 
 모든 설정을 완료했다면:

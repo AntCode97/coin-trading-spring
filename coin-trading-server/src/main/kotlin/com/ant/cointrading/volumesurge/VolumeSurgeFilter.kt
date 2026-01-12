@@ -1,5 +1,6 @@
 package com.ant.cointrading.volumesurge
 
+import com.ant.cointrading.api.bithumb.BithumbPublicApi
 import com.ant.cointrading.config.VolumeSurgeProperties
 import com.ant.cointrading.repository.VolumeSurgeAlertEntity
 import com.ant.cointrading.service.ModelSelector
@@ -8,6 +9,8 @@ import org.slf4j.LoggerFactory
 import org.springframework.ai.tool.annotation.Tool
 import org.springframework.ai.tool.annotation.ToolParam
 import org.springframework.stereotype.Component
+import java.math.BigDecimal
+import java.math.RoundingMode
 
 /**
  * LLM 필터 결과
@@ -41,15 +44,17 @@ class VolumeSurgeFilter(
         판단 기준:
         1. 펌프앤덤프 의심 여부 (소형 토큰, 가짜뉴스, 소셜미디어 조작)
         2. 실제 호재 존재 여부 (프로젝트 업데이트, 파트너십, 상장 등)
-        3. 시가총액 및 유동성 (500억원 이상 선호)
+        3. 24시간 거래량 (50억원 이상 선호, 10억원 미만 거부)
         4. 과거 가격 조작 이력
 
-        반드시 도구를 사용해 웹검색으로 최근 뉴스를 확인하세요.
-        분석 후 makeDecision 도구를 호출하여 최종 판단을 내려주세요.
+        반드시 도구를 사용하여:
+        1. getCoinTradingVolume 도구로 24시간 거래량 확인
+        2. searchCryptoNews 도구로 최근 뉴스 검색
+        3. makeDecision 도구로 최종 판단
 
         주의:
         - 뉴스 없이 급등하는 경우 대부분 펌프앤덤프입니다
-        - 소형 토큰(시가총액 500억 미만)은 조작 가능성이 높습니다
+        - 24시간 거래량 10억원 미만 소형 토큰은 거부하세요
         - SNS 언급 급증과 함께 급등하는 경우 주의가 필요합니다
     """.trimIndent()
 
@@ -119,9 +124,15 @@ class VolumeSurgeFilter(
 
 /**
  * Volume Surge 필터용 LLM 도구
+ *
+ * CoinGecko API 대신 Bithumb의 24시간 거래량을 사용한다.
+ * - 무료
+ * - 실제 한국 시장 유동성 반영
  */
 @Component
-class VolumeSurgeFilterTools {
+class VolumeSurgeFilterTools(
+    private val bithumbPublicApi: BithumbPublicApi
+) {
     private val log = LoggerFactory.getLogger(javaClass)
 
     @Volatile
@@ -129,7 +140,7 @@ class VolumeSurgeFilterTools {
 
     fun getLastDecision(): FilterResult? = lastDecision
 
-    @Tool(description = "특정 암호화폐의 최근 뉴스를 웹검색합니다. 반드시 이 도구를 먼저 호출하여 뉴스를 확인하세요.")
+    @Tool(description = "특정 암호화폐의 최근 뉴스를 웹검색합니다. 뉴스를 확인하여 급등 원인을 파악하세요.")
     fun searchCryptoNews(
         @ToolParam(description = "코인 이름 (예: BTC, ETH, XRP)") coinSymbol: String,
         @ToolParam(description = "검색할 기간 (시간 단위, 기본 24)") hours: Int = 24
@@ -148,20 +159,85 @@ class VolumeSurgeFilterTools {
         """.trimIndent()
     }
 
-    @Tool(description = "암호화폐의 시가총액과 기본 정보를 조회합니다")
-    fun getCoinMarketCap(
-        @ToolParam(description = "코인 심볼 (예: BTC)") coinSymbol: String
+    @Tool(description = """
+        암호화폐의 24시간 거래량을 조회합니다 (Bithumb 기준).
+
+        거래량 판단 기준:
+        - 50억원 이상: 유동성 충분, 투자 적합
+        - 10억~50억원: 중간 규모, 주의 필요
+        - 10억원 미만: 소형 토큰, 조작 가능성 높음
+
+        반드시 이 도구로 거래량을 확인한 후 투자 결정을 내리세요.
+    """)
+    fun getCoinTradingVolume(
+        @ToolParam(description = "마켓 코드 (예: KRW-BTC)") market: String
     ): String {
-        log.info("[Tool] getCoinMarketCap: $coinSymbol")
+        log.info("[Tool] getCoinTradingVolume: $market")
 
-        // 실제 구현에서는 CoinGecko API 호출
-        return """
-            $coinSymbol 정보:
-            - 시가총액: 조회 기능 구현 예정
-            - 24시간 거래량: 조회 기능 구현 예정
+        return try {
+            val ticker = bithumbPublicApi.getCurrentPrice(market)?.firstOrNull()
 
-            참고: CoinGecko API 연동 시 실제 데이터로 교체됩니다.
-        """.trimIndent()
+            if (ticker == null) {
+                return """
+                    $market 정보:
+                    - 상태: 조회 실패
+                    - 이유: Bithumb API 응답 없음
+
+                    주의: 거래량 확인 불가 시 투자 거부 권장
+                """.trimIndent()
+            }
+
+            val tradingVolume = ticker.accTradePrice
+            val tradingVolumeFormatted = formatKrw(tradingVolume)
+            val currentPrice = ticker.tradePrice
+            val changeRate = ticker.signedChangeRate?.multiply(BigDecimal(100))
+                ?.setScale(2, RoundingMode.HALF_UP) ?: BigDecimal.ZERO
+
+            // 거래량 등급 판정
+            val volumeGrade = when {
+                tradingVolume >= BigDecimal("5000000000") -> "충분 (50억원 이상)"
+                tradingVolume >= BigDecimal("1000000000") -> "보통 (10억~50억원)"
+                else -> "부족 (10억원 미만, 거부 권장)"
+            }
+
+            """
+                $market 정보 (Bithumb):
+                - 24시간 거래량: ${tradingVolumeFormatted}원
+                - 거래량 등급: $volumeGrade
+                - 현재가: ${formatKrw(currentPrice)}원
+                - 24시간 변동률: ${changeRate}%
+
+                판단: ${if (tradingVolume < BigDecimal("1000000000")) "10억원 미만 소형 토큰, 투자 거부 권장" else "거래량 기준 통과"}
+            """.trimIndent()
+
+        } catch (e: Exception) {
+            log.error("[Tool] getCoinTradingVolume 오류: ${e.message}", e)
+            """
+                $market 정보:
+                - 상태: 조회 오류
+                - 이유: ${e.message}
+
+                주의: 거래량 확인 불가 시 투자 거부 권장
+            """.trimIndent()
+        }
+    }
+
+    private fun formatKrw(amount: BigDecimal): String {
+        return when {
+            amount >= BigDecimal("1000000000000") -> {
+                val trillion = amount.divide(BigDecimal("1000000000000"), 2, RoundingMode.HALF_UP)
+                "${trillion}조"
+            }
+            amount >= BigDecimal("100000000") -> {
+                val billion = amount.divide(BigDecimal("100000000"), 2, RoundingMode.HALF_UP)
+                "${billion}억"
+            }
+            amount >= BigDecimal("10000") -> {
+                val tenThousand = amount.divide(BigDecimal("10000"), 0, RoundingMode.HALF_UP)
+                "${tenThousand}만"
+            }
+            else -> amount.setScale(0, RoundingMode.HALF_UP).toString()
+        }
     }
 
     @Tool(description = """

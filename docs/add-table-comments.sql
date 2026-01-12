@@ -83,16 +83,95 @@ ALTER TABLE audit_logs
     MODIFY COLUMN triggered_by VARCHAR(50) NOT NULL DEFAULT 'SYSTEM' COMMENT '트리거 주체 (SYSTEM/SCHEDULER/MANUAL)';
 
 -- ============================================
+-- 5. volume_surge_alerts 테이블 (거래량 급등 경보)
+-- 추가일: 2026-01-13
+-- ============================================
+ALTER TABLE volume_surge_alerts COMMENT '거래량 급등 경보 테이블 - Bithumb 경보제 API에서 감지된 급등 종목';
+
+ALTER TABLE volume_surge_alerts
+    MODIFY COLUMN id BIGINT AUTO_INCREMENT COMMENT '경보 고유 ID',
+    MODIFY COLUMN market VARCHAR(20) NOT NULL COMMENT '마켓 코드 (예: KRW-BTC)',
+    MODIFY COLUMN alert_type VARCHAR(50) NOT NULL COMMENT '경보 유형 (TRADING_VOLUME_SUDDEN_FLUCTUATION)',
+    MODIFY COLUMN volume_ratio DOUBLE COMMENT '거래량 비율 (평균 대비 배수)',
+    MODIFY COLUMN detected_at TIMESTAMP NOT NULL COMMENT '경보 감지 시각',
+    MODIFY COLUMN llm_filter_result VARCHAR(20) COMMENT 'LLM 필터 결과 (APPROVED/REJECTED/SKIPPED)',
+    MODIFY COLUMN llm_filter_reason TEXT COMMENT 'LLM 필터 판단 근거',
+    MODIFY COLUMN llm_confidence DOUBLE COMMENT 'LLM 판단 신뢰도 (0.0~1.0)',
+    MODIFY COLUMN processed TINYINT(1) NOT NULL DEFAULT 0 COMMENT '처리 완료 여부',
+    MODIFY COLUMN created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '레코드 생성 시각';
+
+-- ============================================
+-- 6. volume_surge_trades 테이블 (거래량 급등 매매)
+-- 추가일: 2026-01-13
+-- ============================================
+ALTER TABLE volume_surge_trades COMMENT '거래량 급등 매매 테이블 - Volume Surge 전략 포지션 기록';
+
+ALTER TABLE volume_surge_trades
+    MODIFY COLUMN id BIGINT AUTO_INCREMENT COMMENT '트레이드 고유 ID',
+    MODIFY COLUMN alert_id BIGINT COMMENT '연관 경보 ID (FK)',
+    MODIFY COLUMN market VARCHAR(20) NOT NULL COMMENT '마켓 코드',
+    MODIFY COLUMN entry_price DOUBLE NOT NULL COMMENT '진입 가격 (KRW)',
+    MODIFY COLUMN exit_price DOUBLE COMMENT '청산 가격 (KRW)',
+    MODIFY COLUMN quantity DOUBLE NOT NULL COMMENT '거래 수량',
+    MODIFY COLUMN entry_time TIMESTAMP NOT NULL COMMENT '진입 시각',
+    MODIFY COLUMN exit_time TIMESTAMP COMMENT '청산 시각',
+    MODIFY COLUMN exit_reason VARCHAR(30) COMMENT '청산 사유 (STOP_LOSS/TAKE_PROFIT/TRAILING/TIMEOUT)',
+    MODIFY COLUMN pnl_amount DOUBLE COMMENT '실현 손익 (KRW)',
+    MODIFY COLUMN pnl_percent DOUBLE COMMENT '실현 손익률 (%)',
+    MODIFY COLUMN entry_rsi DOUBLE COMMENT '진입 시 RSI 값',
+    MODIFY COLUMN entry_macd_signal VARCHAR(10) COMMENT '진입 시 MACD 신호 (BULLISH/BEARISH/NEUTRAL)',
+    MODIFY COLUMN entry_bollinger_position VARCHAR(10) COMMENT '진입 시 볼린저밴드 위치 (LOWER/MIDDLE/UPPER)',
+    MODIFY COLUMN entry_volume_ratio DOUBLE COMMENT '진입 시 거래량 비율',
+    MODIFY COLUMN confluence_score INT COMMENT '컨플루언스 점수 (0~100)',
+    MODIFY COLUMN llm_entry_reason TEXT COMMENT 'LLM 진입 판단 근거',
+    MODIFY COLUMN llm_confidence DOUBLE COMMENT 'LLM 진입 신뢰도',
+    MODIFY COLUMN reflection_notes TEXT COMMENT '회고 시 기록된 메모',
+    MODIFY COLUMN lesson_learned TEXT COMMENT '학습된 교훈',
+    MODIFY COLUMN trailing_active TINYINT(1) NOT NULL DEFAULT 0 COMMENT '트레일링 스탑 활성화 여부',
+    MODIFY COLUMN highest_price DOUBLE COMMENT '보유 중 최고가 (트레일링용)',
+    MODIFY COLUMN status VARCHAR(20) NOT NULL DEFAULT 'OPEN' COMMENT '포지션 상태 (OPEN/CLOSED)',
+    MODIFY COLUMN created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '레코드 생성 시각',
+    MODIFY COLUMN updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '마지막 갱신 시각';
+
+-- ============================================
+-- 7. volume_surge_daily_summary 테이블 (일일 요약)
+-- 추가일: 2026-01-13
+-- ============================================
+ALTER TABLE volume_surge_daily_summary COMMENT '거래량 급등 전략 일일 요약 테이블 - LLM 회고 결과 저장';
+
+ALTER TABLE volume_surge_daily_summary
+    MODIFY COLUMN id BIGINT AUTO_INCREMENT COMMENT '요약 고유 ID',
+    MODIFY COLUMN date DATE NOT NULL COMMENT '날짜 (YYYY-MM-DD, UNIQUE)',
+    MODIFY COLUMN total_alerts INT NOT NULL DEFAULT 0 COMMENT '총 경보 수',
+    MODIFY COLUMN approved_alerts INT NOT NULL DEFAULT 0 COMMENT 'LLM 승인 경보 수',
+    MODIFY COLUMN total_trades INT NOT NULL DEFAULT 0 COMMENT '총 거래 횟수',
+    MODIFY COLUMN winning_trades INT NOT NULL DEFAULT 0 COMMENT '수익 거래 횟수',
+    MODIFY COLUMN losing_trades INT NOT NULL DEFAULT 0 COMMENT '손실 거래 횟수',
+    MODIFY COLUMN total_pnl DOUBLE NOT NULL DEFAULT 0 COMMENT '총 손익 (KRW)',
+    MODIFY COLUMN win_rate DOUBLE NOT NULL DEFAULT 0 COMMENT '승률 (0.0~1.0)',
+    MODIFY COLUMN avg_holding_minutes DOUBLE COMMENT '평균 보유 시간 (분)',
+    MODIFY COLUMN reflection_summary TEXT COMMENT 'LLM 회고 요약',
+    MODIFY COLUMN parameter_changes TEXT COMMENT '파라미터 변경 이력 (JSON)',
+    MODIFY COLUMN created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '레코드 생성 시각';
+
+-- ============================================
 -- 확인 쿼리
 -- ============================================
 -- 테이블 주석 확인
 SELECT TABLE_NAME, TABLE_COMMENT
 FROM INFORMATION_SCHEMA.TABLES
 WHERE TABLE_SCHEMA = DATABASE()
-  AND TABLE_NAME IN ('trades', 'daily_stats', 'key_value_store', 'audit_logs');
+  AND TABLE_NAME IN ('trades', 'daily_stats', 'key_value_store', 'audit_logs',
+                     'volume_surge_alerts', 'volume_surge_trades', 'volume_surge_daily_summary');
 
 -- 컬럼 주석 확인 (trades 테이블 예시)
 SELECT COLUMN_NAME, COLUMN_COMMENT
 FROM INFORMATION_SCHEMA.COLUMNS
 WHERE TABLE_SCHEMA = DATABASE()
   AND TABLE_NAME = 'trades';
+
+-- Volume Surge 테이블 컬럼 주석 확인
+SELECT COLUMN_NAME, COLUMN_COMMENT
+FROM INFORMATION_SCHEMA.COLUMNS
+WHERE TABLE_SCHEMA = DATABASE()
+  AND TABLE_NAME = 'volume_surge_trades';
