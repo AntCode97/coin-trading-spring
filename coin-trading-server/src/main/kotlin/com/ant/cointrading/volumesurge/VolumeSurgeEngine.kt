@@ -240,6 +240,13 @@ class VolumeSurgeEngine(
             val executedPrice = orderResult.price ?: currentPrice
             val executedQuantity = orderResult.executedQuantity ?: orderResult.quantity ?: BigDecimal.ZERO
 
+            // 체결가 또는 수량이 0이면 진입 실패 처리 (0으로 나누기 방지)
+            if (executedPrice <= BigDecimal.ZERO || executedQuantity <= BigDecimal.ZERO) {
+                log.error("[$market] 유효하지 않은 체결 데이터: 가격=${executedPrice}, 수량=${executedQuantity}")
+                markAlertProcessed(alert, "ERROR", "유효하지 않은 체결 데이터")
+                return
+            }
+
             log.info("[$market] 매수 체결: 가격=${executedPrice}, 수량=${executedQuantity}")
 
             // 트레이드 엔티티 생성
@@ -309,6 +316,30 @@ class VolumeSurgeEngine(
      */
     private fun monitorSinglePosition(position: VolumeSurgeTradeEntity) {
         val market = position.market
+
+        // 잘못된 데이터 방어: entryPrice가 0 이하면 ABANDONED 처리
+        if (position.entryPrice <= 0) {
+            log.error("[$market] 유효하지 않은 진입가격 (${position.entryPrice}) - ABANDONED 처리")
+            position.status = "ABANDONED"
+            position.exitReason = "INVALID_ENTRY_PRICE"
+            position.exitTime = Instant.now()
+            position.pnlAmount = 0.0
+            position.pnlPercent = 0.0
+            tradeRepository.save(position)
+            highestPrices.remove(position.id)
+
+            slackNotifier.sendWarning(
+                market,
+                """
+                유효하지 않은 포지션 데이터 감지
+                진입가격: ${position.entryPrice}원
+                포지션 ID: ${position.id}
+
+                ABANDONED 처리됨. DB 데이터 확인 필요.
+                """.trimIndent()
+            )
+            return
+        }
 
         // 현재가 조회
         val ticker = bithumbPublicApi.getCurrentPrice(market)?.firstOrNull() ?: return
