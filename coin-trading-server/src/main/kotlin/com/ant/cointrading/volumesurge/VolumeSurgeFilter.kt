@@ -4,6 +4,7 @@ import com.ant.cointrading.api.bithumb.BithumbPublicApi
 import com.ant.cointrading.api.cryptocompare.CryptoCompareApi
 import com.ant.cointrading.config.VolumeSurgeProperties
 import com.ant.cointrading.repository.VolumeSurgeAlertEntity
+import com.ant.cointrading.repository.VolumeSurgeAlertRepository
 import com.ant.cointrading.service.ModelSelector
 import com.fasterxml.jackson.databind.ObjectMapper
 import org.slf4j.LoggerFactory
@@ -12,6 +13,8 @@ import org.springframework.ai.tool.annotation.ToolParam
 import org.springframework.stereotype.Component
 import java.math.BigDecimal
 import java.math.RoundingMode
+import java.time.Instant
+import java.time.temporal.ChronoUnit
 
 /**
  * LLM 필터 결과
@@ -35,6 +38,7 @@ class VolumeSurgeFilter(
     private val properties: VolumeSurgeProperties,
     private val modelSelector: ModelSelector,
     private val filterTools: VolumeSurgeFilterTools,
+    private val alertRepository: VolumeSurgeAlertRepository,
     private val objectMapper: ObjectMapper
 ) {
     private val log = LoggerFactory.getLogger(javaClass)
@@ -51,16 +55,21 @@ class VolumeSurgeFilter(
         반드시 도구를 사용하여:
         1. getCoinTradingVolume 도구로 24시간 거래량 확인
         2. searchCryptoNews 도구로 최근 뉴스 검색
-        3. makeDecision 도구로 최종 판단
+        3. makeDecision 도구로 최종 판단 (반드시 market 파라미터에 분석 중인 마켓 코드를 전달)
 
         주의:
         - 뉴스 없이 급등하는 경우 대부분 펌프앤덤프입니다
         - 24시간 거래량 10억원 미만 소형 토큰은 거부하세요
         - SNS 언급 급증과 함께 급등하는 경우 주의가 필요합니다
+        - makeDecision 호출 시 반드시 분석 중인 마켓 코드(예: KRW-BTC)를 market 파라미터로 전달하세요
     """.trimIndent()
 
     /**
      * 종목 필터링
+     *
+     * 1. LLM 필터 비활성화 시 자동 승인
+     * 2. 쿨다운 기간 내 기존 LLM 결과가 있으면 재사용 (DB 캐시)
+     * 3. 없으면 LLM 호출
      */
     suspend fun filter(market: String, alert: VolumeSurgeAlertEntity): FilterResult {
         if (!properties.llmFilterEnabled) {
@@ -70,6 +79,13 @@ class VolumeSurgeFilter(
                 confidence = 0.5,
                 reason = "LLM 필터 비활성화"
             )
+        }
+
+        // 쿨다운 기간 내 기존 LLM 결과가 있는지 확인 (DB 캐시)
+        val cachedResult = getCachedFilterResult(market)
+        if (cachedResult != null) {
+            log.info("[$market] LLM 필터 캐시 사용 (${properties.llmCooldownMin}분 이내 결과)")
+            return cachedResult
         }
 
         val coinName = extractCoinName(market)
@@ -100,11 +116,11 @@ class VolumeSurgeFilter(
 
             log.debug("[$market] LLM 응답: $response")
 
-            // 결과 파싱 (filterTools.lastDecision에서 가져옴)
-            filterTools.getLastDecision() ?: FilterResult(
+            // 결과 파싱 (market별로 저장된 결과에서 가져옴)
+            filterTools.getLastDecision(market) ?: FilterResult(
                 decision = "REJECTED",
                 confidence = 0.3,
-                reason = "LLM 응답 파싱 실패"
+                reason = "LLM 응답 파싱 실패 (makeDecision 도구가 호출되지 않음)"
             )
 
         } catch (e: Exception) {
@@ -114,6 +130,35 @@ class VolumeSurgeFilter(
                 confidence = 0.0,
                 reason = "LLM 필터 오류: ${e.message}"
             )
+        }
+    }
+
+    /**
+     * DB에서 캐시된 LLM 필터 결과 조회
+     *
+     * 쿨다운 기간 (기본 4시간) 내에 동일 마켓에 대한 LLM 필터 결과가 있으면 재사용
+     */
+    private fun getCachedFilterResult(market: String): FilterResult? {
+        val cooldownMinutes = properties.llmCooldownMin.toLong()
+        val cutoffTime = Instant.now().minus(cooldownMinutes, ChronoUnit.MINUTES)
+
+        val cachedAlert = alertRepository
+            .findTopByMarketAndLlmFilterResultIsNotNullAndCreatedAtAfterOrderByCreatedAtDesc(market, cutoffTime)
+
+        return if (cachedAlert != null && cachedAlert.llmFilterResult != null) {
+            val cachedDecision = cachedAlert.llmFilterResult!!
+            val cachedConfidence = cachedAlert.llmConfidence ?: 0.5
+            val cachedReason = cachedAlert.llmFilterReason ?: "캐시된 결과"
+
+            log.debug("[$market] 캐시 적중: $cachedDecision (${cachedAlert.createdAt})")
+
+            FilterResult(
+                decision = cachedDecision,
+                confidence = cachedConfidence,
+                reason = "[캐시] $cachedReason"
+            )
+        } else {
+            null
         }
     }
 
@@ -136,10 +181,12 @@ class VolumeSurgeFilterTools(
 ) {
     private val log = LoggerFactory.getLogger(javaClass)
 
-    @Volatile
-    private var lastDecision: FilterResult? = null
+    // market별로 결과 저장 (동시성 문제 해결)
+    private val decisionsByMarket = java.util.concurrent.ConcurrentHashMap<String, FilterResult>()
 
-    fun getLastDecision(): FilterResult? = lastDecision
+    fun getLastDecision(market: String): FilterResult? = decisionsByMarket.remove(market)
+
+    fun clearDecision(market: String) = decisionsByMarket.remove(market)
 
     @Tool(description = """
         특정 암호화폐의 최근 뉴스를 검색합니다 (CryptoCompare API).
@@ -287,18 +334,20 @@ class VolumeSurgeFilterTools(
     @Tool(description = """
         최종 투자 결정을 내립니다. 반드시 뉴스 검색 후 호출하세요.
 
+        market: 분석 중인 마켓 코드 (예: KRW-BTC) - 반드시 입력
         decision: APPROVED (투자 적합) 또는 REJECTED (투자 부적합)
         confidence: 판단 신뢰도 (0.0 ~ 1.0)
         reason: 판단 근거 (구체적으로 작성)
     """)
     fun makeDecision(
+        @ToolParam(description = "마켓 코드 (예: KRW-BTC)") market: String,
         @ToolParam(description = "APPROVED 또는 REJECTED") decision: String,
         @ToolParam(description = "신뢰도 0.0-1.0") confidence: Double,
         @ToolParam(description = "판단 근거") reason: String,
         @ToolParam(description = "뉴스 요약 (있는 경우)") newsSummary: String? = null,
         @ToolParam(description = "위험 요소 (쉼표로 구분)") riskFactors: String? = null
     ): String {
-        log.info("[Tool] makeDecision: $decision, confidence=$confidence")
+        log.info("[Tool] makeDecision: $market -> $decision, confidence=$confidence")
 
         val normalizedDecision = decision.uppercase()
         if (normalizedDecision !in listOf("APPROVED", "REJECTED")) {
@@ -307,7 +356,7 @@ class VolumeSurgeFilterTools(
 
         val normalizedConfidence = confidence.coerceIn(0.0, 1.0)
 
-        lastDecision = FilterResult(
+        val result = FilterResult(
             decision = normalizedDecision,
             confidence = normalizedConfidence,
             reason = reason,
@@ -315,6 +364,9 @@ class VolumeSurgeFilterTools(
             riskFactors = riskFactors?.split(",")?.map { it.trim() } ?: emptyList()
         )
 
-        return "결정이 기록되었습니다: $normalizedDecision (신뢰도: $normalizedConfidence)"
+        // market별로 결과 저장
+        decisionsByMarket[market] = result
+
+        return "결정이 기록되었습니다: $market -> $normalizedDecision (신뢰도: $normalizedConfidence)"
     }
 }

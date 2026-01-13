@@ -112,9 +112,64 @@ coin-trading-spring/
 
 ---
 
-## 최근 변경사항 (2026-01-12)
+## 최근 변경사항 (2026-01-13)
 
-### 1. 전략 상태 지속성 (재시작 시 복원)
+### 1. LLM 필터 4시간 쿨다운 추가
+
+동일 마켓에 대해 4시간 내에 LLM 필터 결과가 있으면 DB에서 재사용하여 API 비용 절감:
+
+```kotlin
+// VolumeSurgeFilter.kt
+private fun getCachedFilterResult(market: String): FilterResult? {
+    val cooldownMinutes = properties.llmCooldownMin.toLong()  // 기본 240분 (4시간)
+    val cutoffTime = Instant.now().minus(cooldownMinutes, ChronoUnit.MINUTES)
+
+    val cachedAlert = alertRepository
+        .findTopByMarketAndLlmFilterResultIsNotNullAndCreatedAtAfterOrderByCreatedAtDesc(market, cutoffTime)
+
+    // 캐시된 결과가 있으면 재사용
+    return cachedAlert?.let {
+        FilterResult(
+            decision = it.llmFilterResult!!,
+            confidence = it.llmConfidence ?: 0.5,
+            reason = "[캐시] ${it.llmFilterReason}"
+        )
+    }
+}
+```
+
+**효과:**
+- 15건 경보 × LLM 호출 → 신규 마켓만 LLM 호출
+- 비용 대폭 절감 (동일 마켓 반복 경보 시)
+
+### 2. LLM 필터 동시성 버그 수정
+
+여러 워커가 동시에 LLM 필터를 호출할 때 결과가 뒤섞이는 버그 수정:
+
+```kotlin
+// 수정 전 (버그)
+@Volatile
+private var lastDecision: FilterResult? = null
+
+// 수정 후
+private val decisionsByMarket = ConcurrentHashMap<String, FilterResult>()
+fun getLastDecision(market: String): FilterResult? = decisionsByMarket.remove(market)
+```
+
+**makeDecision 도구에 market 파라미터 추가:**
+```kotlin
+fun makeDecision(
+    @ToolParam(description = "마켓 코드") market: String,  // 추가됨
+    @ToolParam(description = "APPROVED 또는 REJECTED") decision: String,
+    ...
+)
+```
+
+---
+
+## 변경사항 (2026-01-12)
+
+### 3. 전략 상태 지속성 (재시작 시 복원)
 
 서버 재시작 후에도 이전 포지션/상태를 이어서 트레이딩:
 
