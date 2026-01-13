@@ -668,6 +668,16 @@ class VolumeSurgeEngine(
         )
         val savedAlert = alertRepository.save(manualAlert)
 
+        // 시작 알림
+        slackNotifier.sendSystemNotification(
+            "Volume Surge 수동 트리거",
+            """
+            마켓: $market
+            LLM 필터: ${if (skipLlmFilter) "스킵" else "사용"}
+            경보ID: ${savedAlert.id}
+            """.trimIndent()
+        )
+
         // 비동기로 처리
         scope.launch {
             try {
@@ -691,6 +701,15 @@ class VolumeSurgeEngine(
                 if (filterResult.decision != "APPROVED") {
                     log.info("[$market] LLM 필터 거부: ${filterResult.reason}")
                     markAlertProcessed(savedAlert, filterResult.decision, filterResult.reason)
+
+                    slackNotifier.sendWarning(
+                        market,
+                        """
+                        수동 트리거 거부됨
+                        사유: ${filterResult.reason}
+                        신뢰도: ${filterResult.confidence}
+                        """.trimIndent()
+                    )
                     return@launch
                 }
 
@@ -701,6 +720,8 @@ class VolumeSurgeEngine(
                 if (analysis == null) {
                     log.warn("[$market] 기술적 분석 실패")
                     markAlertProcessed(savedAlert, "REJECTED", "기술적 분석 실패")
+
+                    slackNotifier.sendWarning(market, "수동 트리거 실패: 기술적 분석 실패")
                     return@launch
                 }
 
@@ -713,6 +734,8 @@ class VolumeSurgeEngine(
             } catch (e: Exception) {
                 log.error("[$market] 수동 트리거 처리 중 오류: ${e.message}", e)
                 markAlertProcessed(savedAlert, "ERROR", e.message ?: "Unknown error")
+
+                slackNotifier.sendWarning(market, "수동 트리거 오류: ${e.message}")
             }
         }
 
@@ -743,6 +766,15 @@ class VolumeSurgeEngine(
             )
         }
 
+        // 수동 청산 시작 알림
+        slackNotifier.sendSystemNotification(
+            "Volume Surge 수동 청산 요청",
+            """
+            마켓: $market
+            포지션 수: ${openPositions.size}
+            """.trimIndent()
+        )
+
         val results = openPositions.map { position ->
             try {
                 // 현재가 조회
@@ -759,6 +791,7 @@ class VolumeSurgeEngine(
                     "success" to true
                 )
             } catch (e: Exception) {
+                slackNotifier.sendWarning(market, "수동 청산 실패: ${e.message}")
                 mapOf(
                     "positionId" to position.id,
                     "success" to false,
