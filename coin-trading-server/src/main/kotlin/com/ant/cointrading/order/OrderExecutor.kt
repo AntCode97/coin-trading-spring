@@ -10,7 +10,6 @@ import com.ant.cointrading.repository.TradeRepository
 import com.ant.cointrading.risk.CircuitBreaker
 import com.ant.cointrading.risk.MarketConditionChecker
 import com.ant.cointrading.risk.MarketConditionResult
-import kotlinx.coroutines.delay
 import org.slf4j.LoggerFactory
 import org.springframework.stereotype.Component
 import java.math.BigDecimal
@@ -88,7 +87,7 @@ class OrderExecutor(
     /**
      * 주문 실행 (메인 진입점)
      */
-    suspend fun execute(signal: TradingSignal, positionSize: BigDecimal): OrderResult {
+    fun execute(signal: TradingSignal, positionSize: BigDecimal): OrderResult {
         val side = if (signal.action == SignalAction.BUY) OrderSide.BUY else OrderSide.SELL
 
         // 0. 최소 주문 금액 검증 (빗썸 5000원)
@@ -179,7 +178,7 @@ class OrderExecutor(
      * 2. 시장가 주문 → 즉시 체결 확인
      * 3. 미체결 주문은 비동기로 관리 (PendingOrderManager)
      */
-    private suspend fun executeReal(
+    private fun executeReal(
         signal: TradingSignal,
         positionSize: BigDecimal,
         marketCondition: MarketConditionResult
@@ -366,7 +365,7 @@ class OrderExecutor(
     /**
      * 주문 제출 (시장가/지정가 분기)
      */
-    private suspend fun submitOrder(
+    private fun submitOrder(
         signal: TradingSignal,
         apiMarket: String,
         positionSize: BigDecimal,
@@ -388,7 +387,7 @@ class OrderExecutor(
      * 3. 빠른 체결 확인 (500ms x 2회)
      * 4. 미체결 시 PendingOrderManager에 등록 → 비동기 처리
      */
-    private suspend fun submitLimitOrder(
+    private fun submitLimitOrder(
         signal: TradingSignal,
         apiMarket: String,
         positionSize: BigDecimal,
@@ -461,9 +460,9 @@ class OrderExecutor(
      * 최유리 호가로 주문했으므로 대부분 즉시 체결됨.
      * 체결되지 않았다면 시장이 움직인 것이므로 PendingOrderManager에 위임.
      */
-    private suspend fun checkQuickFill(market: String, orderId: String): OrderResponse? {
+    private fun checkQuickFill(market: String, orderId: String): OrderResponse? {
         repeat(QUICK_FILL_CHECK_RETRIES) { attempt ->
-            delay(QUICK_FILL_CHECK_MS)
+            Thread.sleep(QUICK_FILL_CHECK_MS)
 
             try {
                 val response = bithumbPrivateApi.getOrder(orderId)
@@ -535,12 +534,12 @@ class OrderExecutor(
     /**
      * 주문 상태 확인 (재시도 포함)
      */
-    private suspend fun verifyOrderExecution(orderId: String, market: String): OrderResponse? {
+    private fun verifyOrderExecution(orderId: String, market: String): OrderResponse? {
         var lastResponse: OrderResponse? = null
         var delayMs = STATUS_CHECK_INITIAL_DELAY_MS
 
         for (attempt in 1..MAX_STATUS_CHECK_RETRIES) {
-            delay(delayMs)
+            Thread.sleep(delayMs)
 
             try {
                 val response = bithumbPrivateApi.getOrder(orderId)

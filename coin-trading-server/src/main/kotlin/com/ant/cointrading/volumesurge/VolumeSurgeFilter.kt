@@ -109,7 +109,7 @@ class VolumeSurgeFilter(
      * 2. 쿨다운 기간 내 기존 LLM 결과가 있으면 재사용 (DB 캐시)
      * 3. 없으면 LLM 호출
      */
-    suspend fun filter(market: String, alert: VolumeSurgeAlertEntity): FilterResult {
+    fun filter(market: String, alert: VolumeSurgeAlertEntity): FilterResult {
         if (!properties.llmFilterEnabled) {
             log.info("[$market] LLM 필터 비활성화 - 자동 승인")
             return FilterResult(

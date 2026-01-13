@@ -8,8 +8,6 @@ import com.ant.cointrading.notification.SlackNotifier
 import com.ant.cointrading.order.OrderExecutor
 import com.ant.cointrading.repository.*
 import jakarta.annotation.PostConstruct
-import jakarta.annotation.PreDestroy
-import kotlinx.coroutines.*
 import org.slf4j.LoggerFactory
 import org.springframework.scheduling.annotation.Scheduled
 import org.springframework.stereotype.Component
@@ -44,8 +42,6 @@ class VolumeSurgeEngine(
 ) {
     private val log = LoggerFactory.getLogger(javaClass)
 
-    private val scope = CoroutineScope(Dispatchers.Default + SupervisorJob())
-
     // 서킷 브레이커 상태
     private var consecutiveLosses = 0
     private var dailyPnl = 0.0
@@ -57,7 +53,7 @@ class VolumeSurgeEngine(
     @PostConstruct
     fun init() {
         if (properties.enabled) {
-            log.info("=== Volume Surge Engine 시작 ===")
+            log.info("=== Volume Surge Engine 시작 (Virtual Thread 모드) ===")
             log.info("설정: $properties")
 
             // 열린 포지션 복원 (트레일링 스탑 고점 등)
@@ -91,12 +87,6 @@ class VolumeSurgeEngine(
         }
 
         log.info("=== ${openPositions.size}건 포지션 복원 완료, 모니터링 재개 ===")
-    }
-
-    @PreDestroy
-    fun shutdown() {
-        scope.cancel()
-        log.info("Volume Surge Engine 종료")
     }
 
     /**
@@ -133,8 +123,8 @@ class VolumeSurgeEngine(
             }
         }
 
-        // LLM 필터 (비동기로 처리)
-        scope.launch {
+        // LLM 필터 (Virtual Thread로 비동기 처리)
+        Thread.startVirtualThread {
             try {
                 val filterResult = volumeSurgeFilter.filter(market, alert)
 
@@ -146,7 +136,7 @@ class VolumeSurgeEngine(
                 if (filterResult.decision != "APPROVED") {
                     log.info("[$market] LLM 필터 거부: ${filterResult.reason}")
                     markAlertProcessed(alert, filterResult.decision, filterResult.reason)
-                    return@launch
+                    return@startVirtualThread
                 }
 
                 log.info("[$market] LLM 필터 승인 (신뢰도: ${filterResult.confidence})")
@@ -156,14 +146,14 @@ class VolumeSurgeEngine(
                 if (analysis == null) {
                     log.warn("[$market] 기술적 분석 실패")
                     markAlertProcessed(alert, "REJECTED", "기술적 분석 실패")
-                    return@launch
+                    return@startVirtualThread
                 }
 
                 // 진입 조건 체크
                 if (!shouldEnter(analysis)) {
                     log.info("[$market] 진입 조건 미충족: ${analysis.rejectReason}")
                     markAlertProcessed(alert, "REJECTED", analysis.rejectReason ?: "진입 조건 미충족")
-                    return@launch
+                    return@startVirtualThread
                 }
 
                 // 포지션 진입
@@ -198,7 +188,7 @@ class VolumeSurgeEngine(
     /**
      * 포지션 진입
      */
-    private suspend fun enterPosition(
+    private fun enterPosition(
         alert: VolumeSurgeAlertEntity,
         analysis: VolumeSurgeAnalysis,
         filterResult: FilterResult
@@ -459,9 +449,7 @@ class VolumeSurgeEngine(
             strategy = "VOLUME_SURGE"
         )
 
-        val orderResult = runBlocking {
-            orderExecutor.execute(sellSignal, positionAmount)
-        }
+        val orderResult = orderExecutor.execute(sellSignal, positionAmount)
 
         // 주문 실패 처리
         if (!orderResult.success) {
@@ -702,8 +690,8 @@ class VolumeSurgeEngine(
             """.trimIndent()
         )
 
-        // 비동기로 처리
-        scope.launch {
+        // Virtual Thread로 비동기 처리
+        Thread.startVirtualThread {
             try {
                 // LLM 필터 (옵션)
                 val filterResult = if (skipLlmFilter) {
@@ -734,7 +722,7 @@ class VolumeSurgeEngine(
                         신뢰도: ${filterResult.confidence}
                         """.trimIndent()
                     )
-                    return@launch
+                    return@startVirtualThread
                 }
 
                 log.info("[$market] 필터 통과, 기술적 분석 시작")
@@ -746,7 +734,7 @@ class VolumeSurgeEngine(
                     markAlertProcessed(savedAlert, "REJECTED", "기술적 분석 실패")
 
                     slackNotifier.sendWarning(market, "수동 트리거 실패: 기술적 분석 실패")
-                    return@launch
+                    return@startVirtualThread
                 }
 
                 // 진입 조건 체크 (수동 트리거는 조건 완화)

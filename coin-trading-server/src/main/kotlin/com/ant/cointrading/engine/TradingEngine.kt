@@ -17,9 +17,8 @@ import com.ant.cointrading.strategy.DcaStrategy
 import com.ant.cointrading.strategy.StrategySelector
 import com.ant.cointrading.strategy.TradingStrategy
 import jakarta.annotation.PostConstruct
-import jakarta.annotation.PreDestroy
-import kotlinx.coroutines.*
 import org.slf4j.LoggerFactory
+import org.springframework.scheduling.annotation.Scheduled
 import org.springframework.stereotype.Component
 import java.math.BigDecimal
 import java.time.Instant
@@ -67,9 +66,6 @@ class TradingEngine(
 
     private val log = LoggerFactory.getLogger(TradingEngine::class.java)
 
-    private val scope = CoroutineScope(Dispatchers.Default + SupervisorJob())
-    private var analysisJob: Job? = null
-
     // 마켓별 상태
     private val marketStates = ConcurrentHashMap<String, MarketState>()
 
@@ -84,35 +80,28 @@ class TradingEngine(
 
     @PostConstruct
     fun start() {
-        log.info("트레이딩 엔진 시작")
+        log.info("트레이딩 엔진 시작 (Virtual Thread 모드)")
         log.info("거래 활성화: ${tradingProperties.enabled}")
         log.info("대상 마켓: ${tradingProperties.markets}")
         log.info("기본 전략: ${tradingProperties.strategy.type}")
-
-        // 분석 루프 시작 (1분마다)
-        analysisJob = scope.launch {
-            while (isActive) {
-                try {
-                    analyzeAllMarkets()
-                } catch (e: Exception) {
-                    log.error("분석 중 오류 발생: ${e.message}", e)
-                }
-                delay(60_000)  // 1분
-            }
-        }
     }
 
-    @PreDestroy
-    fun stop() {
-        log.info("트레이딩 엔진 종료")
-        analysisJob?.cancel()
-        scope.cancel()
+    /**
+     * 모든 마켓 분석 (1분마다 실행, Virtual Thread에서 실행)
+     */
+    @Scheduled(fixedDelay = 60_000)
+    fun scheduledAnalysis() {
+        try {
+            analyzeAllMarkets()
+        } catch (e: Exception) {
+            log.error("분석 중 오류 발생: ${e.message}", e)
+        }
     }
 
     /**
      * 모든 마켓 분석
      */
-    private suspend fun analyzeAllMarkets() {
+    private fun analyzeAllMarkets() {
         tradingProperties.markets.forEach { market ->
             try {
                 analyzeMarket(market)
@@ -125,7 +114,7 @@ class TradingEngine(
     /**
      * 단일 마켓 분석
      */
-    suspend fun analyzeMarket(market: String): TradingSignal? {
+    fun analyzeMarket(market: String): TradingSignal? {
         val state = marketStates.getOrPut(market) { MarketState() }
 
         // 1. 캔들 데이터 수집
@@ -163,7 +152,7 @@ class TradingEngine(
     /**
      * 신호 처리
      */
-    private suspend fun processSignal(market: String, signal: TradingSignal, state: MarketState) {
+    private fun processSignal(market: String, signal: TradingSignal, state: MarketState) {
         log.info("""
             [$market] 신호 발생
             행동: ${signal.action}
@@ -311,7 +300,7 @@ class TradingEngine(
     /**
      * 캔들 데이터 조회
      */
-    private suspend fun fetchCandles(market: String): List<Candle> {
+    private fun fetchCandles(market: String): List<Candle> {
         return try {
             // Bithumb API는 "KRW-BTC" 형식 사용
             val apiMarket = market.replace("_", "-").let {
@@ -426,7 +415,7 @@ class TradingEngine(
     /**
      * 수동 분석 트리거
      */
-    suspend fun triggerAnalysis(market: String): TradingSignal? {
+    fun triggerAnalysis(market: String): TradingSignal? {
         return analyzeMarket(market)
     }
 }

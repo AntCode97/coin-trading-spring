@@ -5,7 +5,6 @@ import com.ant.cointrading.engine.TradingEngine
 import com.ant.cointrading.model.*
 import com.ant.cointrading.risk.RiskManager
 import com.ant.cointrading.strategy.StrategySelector
-import kotlinx.coroutines.runBlocking
 import org.springframework.web.bind.annotation.*
 import java.math.BigDecimal
 
@@ -86,9 +85,7 @@ class TradingController(
      */
     @PostMapping("/analyze/{market}")
     fun triggerAnalysis(@PathVariable market: String): TradingSignal? {
-        return runBlocking {
-            tradingEngine.triggerAnalysis(market)
-        }
+        return tradingEngine.triggerAnalysis(market)
     }
 
     /**

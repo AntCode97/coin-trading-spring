@@ -6,6 +6,12 @@ spring:
     name: coin-trading-server
   main:
     banner-mode: off
+    keep-alive: true  # Virtual Thread 사용 시 JVM 유지
+
+  # Virtual Thread 활성화 (Java 21+)
+  threads:
+    virtual:
+      enabled: true
 
   # Google GenAI만 비활성화 (project-id 필수 문제)
   autoconfigure:
