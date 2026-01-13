@@ -2,6 +2,8 @@ package com.ant.cointrading.volumesurge
 
 import com.ant.cointrading.api.bithumb.BithumbPublicApi
 import com.ant.cointrading.config.VolumeSurgeProperties
+import com.ant.cointrading.model.SignalAction
+import com.ant.cointrading.model.TradingSignal
 import com.ant.cointrading.notification.SlackNotifier
 import com.ant.cointrading.order.OrderExecutor
 import com.ant.cointrading.repository.*
@@ -214,17 +216,38 @@ class VolumeSurgeEngine(
 
             val currentPrice = ticker.tradePrice
             val positionSize = BigDecimal(properties.positionSizeKrw)
-            val quantity = positionSize.divide(currentPrice, 8, java.math.RoundingMode.DOWN)
 
-            // 시장가 매수 (단타는 빠른 체결 우선)
-            log.info("[$market] 시장가 매수 시도: 금액=${positionSize}원, 수량=$quantity")
+            // 실제 매수 주문 실행
+            log.info("[$market] 시장가 매수 시도: 금액=${positionSize}원")
+
+            val buySignal = TradingSignal(
+                market = market,
+                action = SignalAction.BUY,
+                confidence = filterResult.confidence * 100,
+                price = currentPrice,
+                reason = "Volume Surge 진입: ${filterResult.reason}",
+                strategy = "VOLUME_SURGE"
+            )
+
+            val orderResult = orderExecutor.execute(buySignal, positionSize)
+
+            if (!orderResult.success) {
+                log.error("[$market] 매수 주문 실패: ${orderResult.message}")
+                markAlertProcessed(alert, "ERROR", "매수 주문 실패: ${orderResult.message}")
+                return
+            }
+
+            val executedPrice = orderResult.price ?: currentPrice
+            val executedQuantity = orderResult.executedQuantity ?: orderResult.quantity ?: BigDecimal.ZERO
+
+            log.info("[$market] 매수 체결: 가격=${executedPrice}, 수량=${executedQuantity}")
 
             // 트레이드 엔티티 생성
             val trade = VolumeSurgeTradeEntity(
                 alertId = alert.id,
                 market = market,
-                entryPrice = currentPrice.toDouble(),
-                quantity = quantity.toDouble(),
+                entryPrice = executedPrice.toDouble(),
+                quantity = executedQuantity.toDouble(),
                 entryTime = Instant.now(),
                 entryRsi = analysis.rsi,
                 entryMacdSignal = analysis.macdSignal,
@@ -245,15 +268,16 @@ class VolumeSurgeEngine(
                 "Volume Surge 진입",
                 """
                 마켓: $market
-                가격: ${currentPrice.toPlainString()}원
-                수량: $quantity
+                체결가: ${executedPrice.toPlainString()}원
+                수량: $executedQuantity
                 RSI: ${analysis.rsi}
                 컨플루언스: ${analysis.confluenceScore}
                 LLM 사유: ${filterResult.reason}
+                주문ID: ${orderResult.orderId ?: "N/A"}
                 """.trimIndent()
             )
 
-            log.info("[$market] 포지션 진입 완료: id=${savedTrade.id}")
+            log.info("[$market] 포지션 진입 완료: id=${savedTrade.id}, orderId=${orderResult.orderId}")
 
         } catch (e: Exception) {
             log.error("[$market] 포지션 진입 실패: ${e.message}", e)
@@ -344,10 +368,32 @@ class VolumeSurgeEngine(
 
         log.info("[$market] 포지션 청산: $reason, 가격=$exitPrice")
 
-        val pnlAmount = (exitPrice - position.entryPrice) * position.quantity
-        val pnlPercent = ((exitPrice - position.entryPrice) / position.entryPrice) * 100
+        // 실제 매도 주문 실행
+        val sellSignal = TradingSignal(
+            market = market,
+            action = SignalAction.SELL,
+            confidence = 100.0,
+            price = BigDecimal(exitPrice),
+            reason = "Volume Surge 청산: $reason",
+            strategy = "VOLUME_SURGE"
+        )
 
-        position.exitPrice = exitPrice
+        val quantity = BigDecimal(position.quantity)
+        val orderResult = runBlocking {
+            orderExecutor.execute(sellSignal, quantity)
+        }
+
+        val actualExitPrice = if (orderResult.success) {
+            orderResult.price?.toDouble() ?: exitPrice
+        } else {
+            log.error("[$market] 매도 주문 실패: ${orderResult.message}")
+            exitPrice  // 실패해도 DB에는 예상 가격으로 기록
+        }
+
+        val pnlAmount = (actualExitPrice - position.entryPrice) * position.quantity
+        val pnlPercent = ((actualExitPrice - position.entryPrice) / position.entryPrice) * 100
+
+        position.exitPrice = actualExitPrice
         position.exitTime = Instant.now()
         position.exitReason = reason
         position.pnlAmount = pnlAmount
@@ -364,19 +410,22 @@ class VolumeSurgeEngine(
 
         // Slack 알림
         val emoji = if (pnlAmount >= 0) "+" else ""
+        val orderStatus = if (orderResult.success) "체결완료" else "주문실패"
         slackNotifier.sendSystemNotification(
             "Volume Surge 청산",
             """
             마켓: $market
             사유: $reason
             진입가: ${position.entryPrice}원
-            청산가: ${exitPrice}원
+            청산가: ${actualExitPrice}원
             손익: $emoji${String.format("%.0f", pnlAmount)}원 (${String.format("%.2f", pnlPercent)}%)
             보유시간: ${ChronoUnit.MINUTES.between(position.entryTime, Instant.now())}분
+            주문상태: $orderStatus
+            주문ID: ${orderResult.orderId ?: "N/A"}
             """.trimIndent()
         )
 
-        log.info("[$market] 청산 완료: 손익=${pnlAmount}원 (${pnlPercent}%)")
+        log.info("[$market] 청산 완료: 손익=${pnlAmount}원 (${pnlPercent}%), orderId=${orderResult.orderId}")
     }
 
     /**
