@@ -101,6 +101,17 @@ class AlertPollingService(
             return
         }
 
+        // REJECTED된 코인은 llmCooldownMin 동안 새 경보 insert 자체를 스킵
+        // (DB 오염 방지 - 동일 코인이 5분마다 반복 insert되는 문제 해결)
+        val llmCooldownThreshold = now.minusSeconds(volumeSurgeProperties.llmCooldownMin * 60L)
+        val recentRejected = alertRepository.findTopByMarketAndLlmFilterResultAndDetectedAtAfterOrderByDetectedAtDesc(
+            market, "REJECTED", llmCooldownThreshold
+        )
+        if (recentRejected != null) {
+            log.debug("[$market] REJECTED 쿨다운 중 (${volumeSurgeProperties.llmCooldownMin}분), 경보 무시")
+            return
+        }
+
         // 중복 체크 (같은 마켓에서 최근 경보가 있는지)
         val freshnessThreshold = now.minusSeconds(volumeSurgeProperties.alertFreshnessMin * 60L)
         if (alertRepository.existsByMarketAndDetectedAtAfter(market, freshnessThreshold)) {
@@ -108,8 +119,7 @@ class AlertPollingService(
             return
         }
 
-        // LLM 쿨다운 체크 (LLM 필터링된 코인은 4시간 동안 LLM 재호출 안 함)
-        val llmCooldownThreshold = now.minusSeconds(volumeSurgeProperties.llmCooldownMin * 60L)
+        // APPROVED된 코인도 llmCooldownMin 동안 LLM 재호출 안 함 (비용 절감)
         if (alertRepository.existsByMarketAndLlmFilterResultIsNotNullAndDetectedAtAfter(market, llmCooldownThreshold)) {
             log.info("[$market] LLM 쿨다운 중 (${volumeSurgeProperties.llmCooldownMin}분), LLM 호출 스킵")
             return

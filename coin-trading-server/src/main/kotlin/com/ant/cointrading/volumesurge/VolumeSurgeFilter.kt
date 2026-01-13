@@ -44,24 +44,38 @@ class VolumeSurgeFilter(
     private val log = LoggerFactory.getLogger(javaClass)
 
     private val systemPrompt = """
-        당신은 암호화폐 투자 분석가입니다. 거래량이 급등한 종목이 투자하기 적합한지 판단합니다.
+        당신은 암호화폐 단기 트레이딩 분석가입니다. 거래량이 급등한 종목의 투자 적합성을 판단합니다.
 
-        판단 기준:
-        1. 펌프앤덤프 의심 여부 (소형 토큰, 가짜뉴스, 소셜미디어 조작)
-        2. 실제 호재 존재 여부 (프로젝트 업데이트, 파트너십, 상장 등)
-        3. 24시간 거래량 (50억원 이상 선호, 10억원 미만 거부)
-        4. 과거 가격 조작 이력
+        ## 판단 기준 (우선순위 순)
 
-        반드시 도구를 사용하여:
-        1. getCoinTradingVolume 도구로 24시간 거래량 확인
-        2. searchCryptoNews 도구로 최근 뉴스 검색
-        3. makeDecision 도구로 최종 판단 (반드시 market 파라미터에 분석 중인 마켓 코드를 전달)
+        ### 1. 거래량 기준 (가장 중요)
+        - 100억원 이상: 대형 유동성, 매우 적합
+        - 50억~100억원: 충분한 유동성, 적합
+        - 10억~50억원: 중간 유동성, 뉴스 확인 필요
+        - 10억원 미만: 소형 토큰, 거부 (펌프앤덤프 위험)
 
-        주의:
-        - 뉴스 없이 급등하는 경우 대부분 펌프앤덤프입니다
-        - 24시간 거래량 10억원 미만 소형 토큰은 거부하세요
-        - SNS 언급 급증과 함께 급등하는 경우 주의가 필요합니다
-        - makeDecision 호출 시 반드시 분석 중인 마켓 코드(예: KRW-BTC)를 market 파라미터로 전달하세요
+        ### 2. 변동률 기준
+        - 15% 이하: 정상 범위, 통과
+        - 15~30%: 높은 변동, 뉴스 근거 필요
+        - 30% 이상: 과도한 급등, 펌프앤덤프 의심
+
+        ### 3. 뉴스 기준 (거래량에 따라 유연하게 적용)
+        - 거래량 100억원 이상 + 변동률 15% 이하: 뉴스 없어도 APPROVED
+        - 거래량 50억원 이상 + 변동률 10% 이하: 뉴스 없어도 APPROVED
+        - 그 외: 뉴스가 있으면 적합성 판단, 없으면 주의
+
+        ## 판단 흐름
+
+        1. getCoinTradingVolume 도구로 거래량/변동률 확인
+        2. searchCryptoNews 도구로 뉴스 검색
+        3. makeDecision 도구로 최종 판단
+
+        ## 중요 원칙
+
+        - 유동성이 충분하면(50억원 이상) 뉴스가 없어도 단기 트레이딩 가능
+        - 10억원 미만 소형 토큰은 무조건 REJECTED
+        - 변동률 30% 이상은 이미 급등 후일 가능성, 주의 필요
+        - makeDecision 호출 시 반드시 market 파라미터 전달
     """.trimIndent()
 
     /**
@@ -192,9 +206,7 @@ class VolumeSurgeFilterTools(
         특정 암호화폐의 최근 뉴스를 검색합니다 (CryptoCompare API).
 
         뉴스가 있으면 급등 원인을 파악할 수 있습니다.
-        뉴스가 없는 급등은 펌프앤덤프 가능성이 높습니다.
-
-        반드시 이 도구로 뉴스를 확인한 후 투자 결정을 내리세요.
+        단, 거래량이 충분하면(50억원 이상) 뉴스가 없어도 단기 트레이딩 적합할 수 있습니다.
     """)
     fun searchCryptoNews(
         @ToolParam(description = "코인 심볼 (예: BTC, ETH, XRP)") coinSymbol: String,
@@ -211,8 +223,8 @@ class VolumeSurgeFilterTools(
 
                     관련 뉴스 없음.
 
-                    주의: 뉴스 없이 거래량이 급등한 경우 펌프앤덤프 가능성이 높습니다.
-                    소셜미디어 조작이나 내부자 매집일 수 있으니 투자에 주의하세요.
+                    참고: 거래량이 50억원 이상이고 변동률이 15% 이하라면 뉴스 없이도 단기 트레이딩 적합.
+                    거래량이 10억원 미만이면 펌프앤덤프 위험 있으니 거부 권장.
                 """.trimIndent()
             } else {
                 val newsText = news.take(5).mapIndexed { idx, n ->
@@ -284,12 +296,22 @@ class VolumeSurgeFilterTools(
 
             // 거래량 등급 판정
             val volumeGrade = when {
-                tradingVolume >= BigDecimal("5000000000") -> "충분 (50억원 이상)"
-                tradingVolume >= BigDecimal("1000000000") -> "보통 (10억~50억원)"
+                tradingVolume >= BigDecimal("10000000000") -> "대형 유동성 (100억원 이상)"
+                tradingVolume >= BigDecimal("5000000000") -> "충분한 유동성 (50억~100억원)"
+                tradingVolume >= BigDecimal("1000000000") -> "중간 유동성 (10억~50억원)"
                 else -> "부족 (10억원 미만, 거부 권장)"
             }
 
             val isSmallCap = tradingVolume < BigDecimal("1000000000")
+            val isLargeCap = tradingVolume >= BigDecimal("5000000000")
+            val isLowVolatility = changeRate.abs() <= BigDecimal("15")
+
+            val recommendation = when {
+                isSmallCap -> "10억원 미만 소형 토큰, 투자 거부"
+                isLargeCap && isLowVolatility -> "유동성 충분 + 변동률 적정, 뉴스 없어도 투자 적합"
+                isLargeCap -> "유동성 충분, 뉴스 확인 후 판단"
+                else -> "중간 유동성, 뉴스 확인 필요"
+            }
 
             """
                 $market 정보 (Bithumb):
@@ -298,7 +320,7 @@ class VolumeSurgeFilterTools(
                 - 현재가: ${formatKrw(currentPrice)}원
                 - 24시간 변동률: ${changeRate}%
 
-                판단: ${if (isSmallCap) "10억원 미만 소형 토큰, 투자 거부 권장" else "거래량 기준 통과"}
+                판단: $recommendation
             """.trimIndent()
 
         } catch (e: Exception) {
