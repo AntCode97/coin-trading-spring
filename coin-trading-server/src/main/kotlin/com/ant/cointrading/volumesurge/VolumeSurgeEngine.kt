@@ -237,13 +237,30 @@ class VolumeSurgeEngine(
                 return
             }
 
-            val executedPrice = orderResult.price ?: currentPrice
-            val executedQuantity = orderResult.executedQuantity ?: orderResult.quantity ?: BigDecimal.ZERO
+            // 체결가 처리: null 또는 0이면 currentPrice 사용
+            val executedPrice = orderResult.price?.takeIf { it > BigDecimal.ZERO } ?: currentPrice
+            val executedQuantity = orderResult.executedQuantity?.takeIf { it > BigDecimal.ZERO }
+                ?: orderResult.quantity?.takeIf { it > BigDecimal.ZERO }
+                ?: BigDecimal.ZERO
 
             // 체결가 또는 수량이 0이면 진입 실패 처리 (0으로 나누기 방지)
             if (executedPrice <= BigDecimal.ZERO || executedQuantity <= BigDecimal.ZERO) {
                 log.error("[$market] 유효하지 않은 체결 데이터: 가격=${executedPrice}, 수량=${executedQuantity}")
+                log.error("[$market] orderResult: price=${orderResult.price}, executedQty=${orderResult.executedQuantity}, qty=${orderResult.quantity}")
                 markAlertProcessed(alert, "ERROR", "유효하지 않은 체결 데이터")
+
+                slackNotifier.sendWarning(
+                    market,
+                    """
+                    체결 데이터 오류로 진입 실패
+                    orderResult.price: ${orderResult.price}
+                    orderResult.executedQuantity: ${orderResult.executedQuantity}
+                    orderResult.quantity: ${orderResult.quantity}
+                    currentPrice: $currentPrice
+
+                    주문은 실행되었을 수 있음. 빗썸에서 확인 필요.
+                    """.trimIndent()
+                )
                 return
             }
 
