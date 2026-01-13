@@ -56,14 +56,21 @@ class VolumeSurgeReflector(
            - 진입 조건 (RSI, 컨플루언스 점수 등)
            - 청산 조건 (손절, 익절, 타임아웃)
         4. 내일 주의해야 할 점
+        5. 시스템 개선 제안 (중요!)
+           - 현재 시스템에 없지만 있으면 좋을 기능
+           - 더 나은 분석을 위해 필요한 데이터
+           - 자동화할 수 있는 수동 작업
+           - 추가 API 연동 제안 (예: 특정 거래소, 뉴스 소스)
 
         도구 사용:
         - getTodayStats: 오늘의 통계 조회
         - getTodayTrades: 오늘의 트레이드 목록 조회
         - saveReflection: 회고 결과 저장
-        - suggestParameterChange: 파라미터 변경 제안
+        - suggestParameterChange: 파라미터 변경 제안 (Slack 알림 발송됨)
+        - suggestSystemImprovement: 시스템 개선 아이디어 제안 (Slack 알림 발송됨)
 
         반드시 모든 도구를 사용하여 분석을 완료하세요.
+        특히 시스템 개선 아이디어가 있으면 suggestSystemImprovement를 호출해주세요.
     """.trimIndent()
 
     @PostConstruct
@@ -264,7 +271,8 @@ class VolumeSurgeReflectorTools(
     private val tradeRepository: VolumeSurgeTradeRepository,
     private val summaryRepository: VolumeSurgeDailySummaryRepository,
     private val keyValueService: KeyValueService,
-    private val objectMapper: ObjectMapper
+    private val objectMapper: ObjectMapper,
+    private val slackNotifier: SlackNotifier
 ) {
     private val log = LoggerFactory.getLogger(javaClass)
 
@@ -359,6 +367,7 @@ class VolumeSurgeReflectorTools(
     @Tool(description = """
         파라미터 변경을 제안합니다.
         변경이 필요한 경우에만 호출하세요.
+        Slack 알림이 발송됩니다.
     """)
     fun suggestParameterChange(
         @ToolParam(description = "파라미터 이름 (예: minVolumeRatio, maxRsi, minConfluenceScore)") paramName: String,
@@ -394,13 +403,95 @@ class VolumeSurgeReflectorTools(
 
         summaryRepository.save(existingSummary)
 
+        // Slack 알림 발송
+        slackNotifier.sendSystemNotification(
+            "파라미터 변경 제안",
+            """
+                파라미터: $paramName
+                현재값: $currentValue
+                제안값: $suggestedValue
+                이유: $reason
+
+                적용 방법: application.yml 또는 KeyValue 설정에서 변경
+            """.trimIndent()
+        )
+
         return """
             파라미터 변경 제안이 기록되었습니다:
             - $paramName: $currentValue → $suggestedValue
             - 이유: $reason
 
             참고: 실제 적용은 수동으로 진행해야 합니다.
-            application.yml 또는 KeyValue 설정에서 변경하세요.
+            Slack 알림이 발송되었습니다.
+        """.trimIndent()
+    }
+
+    @Tool(description = """
+        시스템 개선 아이디어를 제안합니다.
+        현재 시스템에 없지만 있으면 좋을 기능이나 개선점이 있으면 호출하세요.
+        Slack 알림이 발송되어 개발자가 검토할 수 있습니다.
+    """)
+    fun suggestSystemImprovement(
+        @ToolParam(description = "제안 제목 (간결하게)") title: String,
+        @ToolParam(description = "상세 설명 (왜 필요한지, 어떤 효과가 있을지)") description: String,
+        @ToolParam(description = "우선순위 (HIGH/MEDIUM/LOW)") priority: String,
+        @ToolParam(description = "카테고리 (FEATURE/DATA/AUTOMATION/INTEGRATION)") category: String
+    ): String {
+        log.info("[Tool] suggestSystemImprovement: $title ($priority)")
+
+        val today = LocalDate.now(ZoneId.of("Asia/Seoul"))
+
+        // DB에 제안 기록 저장
+        val existingSummary = summaryRepository.findByDate(today)
+            ?: VolumeSurgeDailySummaryEntity(date = today)
+
+        val improvementRecord = mapOf(
+            "title" to title,
+            "description" to description,
+            "priority" to priority.uppercase(),
+            "category" to category.uppercase(),
+            "timestamp" to Instant.now().toString()
+        )
+
+        // 기존 반영 노트에 추가
+        val existingNotes = existingSummary.reflectionSummary ?: ""
+        existingSummary.reflectionSummary = """
+            $existingNotes
+
+            === 시스템 개선 제안 ===
+            [$priority] $title
+            카테고리: $category
+            $description
+        """.trimIndent()
+
+        summaryRepository.save(existingSummary)
+
+        // Slack 알림 발송 (개발자가 바로 확인)
+        val priorityEmoji = when (priority.uppercase()) {
+            "HIGH" -> "[긴급]"
+            "MEDIUM" -> "[보통]"
+            else -> "[참고]"
+        }
+
+        slackNotifier.sendSystemNotification(
+            "$priorityEmoji 시스템 개선 제안",
+            """
+                제목: $title
+                카테고리: $category
+                우선순위: $priority
+
+                $description
+
+                ---
+                LLM 회고 시스템이 자동 생성한 제안입니다.
+            """.trimIndent()
+        )
+
+        return """
+            시스템 개선 제안이 기록되고 Slack 알림이 발송되었습니다:
+            - 제목: $title
+            - 카테고리: $category
+            - 우선순위: $priority
         """.trimIndent()
     }
 }
