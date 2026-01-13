@@ -250,6 +250,7 @@ class TradingEngine(
                 OrderRejectionReason.NO_FILL -> "체결 없음 - 유동성 부족 의심"
                 OrderRejectionReason.EXCEPTION -> "시스템 예외"
                 OrderRejectionReason.CIRCUIT_BREAKER -> "서킷 브레이커 발동"
+                OrderRejectionReason.BELOW_MIN_ORDER_AMOUNT -> "최소 주문 금액(5000원) 미달"
                 null -> result.message
             }
             log.error("[$market] 주문 실패: $errorDetail")

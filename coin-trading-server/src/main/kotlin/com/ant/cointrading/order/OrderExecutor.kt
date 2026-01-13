@@ -80,12 +80,29 @@ class OrderExecutor(
             "MOMENTUM",              // 모멘텀 전략
             "BREAKOUT"               // 돌파 전략
         )
+
+        // 빗썸 최소 주문 금액 (KRW)
+        val MIN_ORDER_AMOUNT_KRW = BigDecimal("5000")
     }
 
     /**
      * 주문 실행 (메인 진입점)
      */
     suspend fun execute(signal: TradingSignal, positionSize: BigDecimal): OrderResult {
+        val side = if (signal.action == SignalAction.BUY) OrderSide.BUY else OrderSide.SELL
+
+        // 0. 최소 주문 금액 검증 (빗썸 5000원)
+        if (positionSize < MIN_ORDER_AMOUNT_KRW) {
+            log.warn("[${signal.market}] 최소 주문 금액 미달: ${positionSize}원 < ${MIN_ORDER_AMOUNT_KRW}원")
+            return OrderResult(
+                success = false,
+                market = signal.market,
+                side = side,
+                message = "최소 주문 금액(${MIN_ORDER_AMOUNT_KRW}원) 미달: ${positionSize}원",
+                rejectionReason = OrderRejectionReason.BELOW_MIN_ORDER_AMOUNT
+            )
+        }
+
         // 1. 시뮬레이션 모드 체크
         if (!tradingProperties.enabled) {
             return executeSimulated(signal, positionSize)
@@ -98,7 +115,7 @@ class OrderExecutor(
             return OrderResult(
                 success = false,
                 market = signal.market,
-                side = if (signal.action == SignalAction.BUY) OrderSide.BUY else OrderSide.SELL,
+                side = side,
                 message = "시장 상태 불량: ${marketCondition.issues.joinToString(", ")}",
                 rejectionReason = OrderRejectionReason.MARKET_CONDITION
             )
@@ -814,5 +831,6 @@ enum class OrderRejectionReason {
     VERIFICATION_FAILED,    // 주문 상태 확인 실패
     NO_FILL,                // 체결 없음
     EXCEPTION,              // 예외 발생
-    CIRCUIT_BREAKER         // 서킷 브레이커 발동
+    CIRCUIT_BREAKER,        // 서킷 브레이커 발동
+    BELOW_MIN_ORDER_AMOUNT  // 최소 주문 금액 미달 (빗썸 5000원)
 }

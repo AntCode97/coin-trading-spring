@@ -360,6 +360,11 @@ class VolumeSurgeEngine(
         }
     }
 
+    companion object {
+        // 빗썸 최소 주문 금액 (KRW)
+        private val MIN_ORDER_AMOUNT_KRW = BigDecimal("5000")
+    }
+
     /**
      * 포지션 청산
      */
@@ -367,6 +372,45 @@ class VolumeSurgeEngine(
         val market = position.market
 
         log.info("[$market] 포지션 청산: $reason, 가격=$exitPrice")
+
+        // 금액 = 수량 * 현재가 (OrderExecutor는 금액 기준으로 동작)
+        val positionAmount = BigDecimal(position.quantity * exitPrice)
+
+        // 최소 주문 금액 미달 체크 (무한루프 방지)
+        if (positionAmount < MIN_ORDER_AMOUNT_KRW) {
+            log.warn("[$market] 최소 주문 금액 미달로 청산 불가: ${positionAmount.toPlainString()}원 < ${MIN_ORDER_AMOUNT_KRW}원")
+
+            // 포지션을 ABANDONED 상태로 변경 (더 이상 청산 시도 안 함)
+            position.exitPrice = exitPrice
+            position.exitTime = Instant.now()
+            position.exitReason = "ABANDONED_MIN_AMOUNT"
+            position.pnlAmount = 0.0  // 실제 청산 안 됨
+            position.pnlPercent = 0.0
+            position.status = "ABANDONED"
+
+            tradeRepository.save(position)
+            highestPrices.remove(position.id)
+
+            // Slack 경고 알림
+            slackNotifier.sendWarning(
+                market,
+                """
+                포지션 청산 불가 (최소 금액 미달)
+                금액: ${positionAmount.toPlainString()}원 (최소 5000원)
+                수량: ${position.quantity}
+                진입가: ${position.entryPrice}원
+                현재가: ${exitPrice}원
+
+                해당 포지션은 ABANDONED 상태로 변경됨.
+                수동으로 빗썸에서 확인/처리 필요.
+                """.trimIndent()
+            )
+
+            log.info("[$market] 포지션 ABANDONED 처리 완료 (최소 금액 미달)")
+            return
+        }
+
+        log.info("[$market] 매도 금액: ${positionAmount.toPlainString()}원 (수량: ${position.quantity})")
 
         // 실제 매도 주문 실행
         val sellSignal = TradingSignal(
@@ -378,9 +422,8 @@ class VolumeSurgeEngine(
             strategy = "VOLUME_SURGE"
         )
 
-        val quantity = BigDecimal(position.quantity)
         val orderResult = runBlocking {
-            orderExecutor.execute(sellSignal, quantity)
+            orderExecutor.execute(sellSignal, positionAmount)
         }
 
         val actualExitPrice = if (orderResult.success) {
