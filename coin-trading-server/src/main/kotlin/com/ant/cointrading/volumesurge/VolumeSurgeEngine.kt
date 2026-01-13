@@ -426,21 +426,72 @@ class VolumeSurgeEngine(
             orderExecutor.execute(sellSignal, positionAmount)
         }
 
-        val actualExitPrice = if (orderResult.success) {
-            orderResult.price?.toDouble() ?: exitPrice
-        } else {
-            log.error("[$market] 매도 주문 실패: ${orderResult.message}")
-            exitPrice  // 실패해도 DB에는 예상 가격으로 기록
+        // 주문 실패 처리
+        if (!orderResult.success) {
+            val errorMessage = orderResult.message ?: ""
+
+            // 잔고 부족 에러: 코인이 없으므로 ABANDONED 처리 (무한루프 방지)
+            if (errorMessage.contains("insufficient_funds") ||
+                errorMessage.contains("주문가능한 금액") ||
+                errorMessage.contains("부족")
+            ) {
+                log.error("[$market] 잔고 부족으로 청산 불가 - ABANDONED 처리")
+
+                position.exitPrice = exitPrice
+                position.exitTime = Instant.now()
+                position.exitReason = "ABANDONED_NO_BALANCE"
+                position.pnlAmount = 0.0
+                position.pnlPercent = 0.0
+                position.status = "ABANDONED"
+
+                tradeRepository.save(position)
+                highestPrices.remove(position.id)
+
+                slackNotifier.sendWarning(
+                    market,
+                    """
+                    포지션 청산 불가 (잔고 부족)
+                    에러: $errorMessage
+                    수량: ${position.quantity}
+                    진입가: ${position.entryPrice}원
+                    현재가: ${exitPrice}원
+
+                    해당 포지션은 ABANDONED 상태로 변경됨.
+                    빗썸에서 잔고를 확인하세요.
+                    """.trimIndent()
+                )
+
+                return
+            }
+
+            // 다른 에러: 로그만 남기고 다음 사이클에서 재시도
+            log.error("[$market] 매도 주문 실패: ${orderResult.message}, 다음 사이클에서 재시도")
+            return
         }
 
-        val pnlAmount = (actualExitPrice - position.entryPrice) * position.quantity
-        val pnlPercent = ((actualExitPrice - position.entryPrice) / position.entryPrice) * 100
+        val actualExitPrice = orderResult.price?.toDouble() ?: exitPrice
+
+        // Infinity/NaN 방지
+        val pnlAmount = if (position.entryPrice > 0 && position.quantity > 0) {
+            (actualExitPrice - position.entryPrice) * position.quantity
+        } else {
+            0.0
+        }
+        val pnlPercent = if (position.entryPrice > 0) {
+            ((actualExitPrice - position.entryPrice) / position.entryPrice) * 100
+        } else {
+            0.0
+        }
+
+        // NaN/Infinity 최종 검사
+        val safePnlAmount = if (pnlAmount.isNaN() || pnlAmount.isInfinite()) 0.0 else pnlAmount
+        val safePnlPercent = if (pnlPercent.isNaN() || pnlPercent.isInfinite()) 0.0 else pnlPercent
 
         position.exitPrice = actualExitPrice
         position.exitTime = Instant.now()
         position.exitReason = reason
-        position.pnlAmount = pnlAmount
-        position.pnlPercent = pnlPercent
+        position.pnlAmount = safePnlAmount
+        position.pnlPercent = safePnlPercent
         position.status = "CLOSED"
 
         tradeRepository.save(position)
