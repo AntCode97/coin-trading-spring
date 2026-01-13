@@ -57,7 +57,38 @@ class VolumeSurgeEngine(
         if (properties.enabled) {
             log.info("=== Volume Surge Engine 시작 ===")
             log.info("설정: $properties")
+
+            // 열린 포지션 복원 (트레일링 스탑 고점 등)
+            restoreOpenPositions()
         }
+    }
+
+    /**
+     * 서버 재시작 시 열린 포지션 상태 복원
+     *
+     * - 트레일링 스탑 고점을 메모리 맵에 로드
+     * - 서킷 브레이커는 보수적으로 리셋 (재시작 후 거래 가능)
+     */
+    private fun restoreOpenPositions() {
+        val openPositions = tradeRepository.findByStatus("OPEN")
+        if (openPositions.isEmpty()) {
+            log.info("복원할 열린 포지션 없음")
+            return
+        }
+
+        log.info("열린 포지션 ${openPositions.size}건 복원 중...")
+
+        openPositions.forEach { position ->
+            // 트레일링 스탑 고점 복원
+            if (position.trailingActive && position.highestPrice != null) {
+                highestPrices[position.id!!] = position.highestPrice!!
+                log.info("[${position.market}] 트레일링 고점 복원: ${position.highestPrice}")
+            }
+
+            log.info("[${position.market}] 포지션 복원 완료 - 진입가: ${position.entryPrice}, 트레일링: ${position.trailingActive}")
+        }
+
+        log.info("=== ${openPositions.size}건 포지션 복원 완료, 모니터링 재개 ===")
     }
 
     @PreDestroy
