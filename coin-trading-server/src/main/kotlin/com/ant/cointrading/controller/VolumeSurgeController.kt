@@ -235,4 +235,36 @@ class VolumeSurgeController(
             )
         }
     }
+
+    /**
+     * 수동 트리거 - 특정 코인 트레이딩 시작
+     *
+     * @param market 마켓 코드 (예: KRW-BTC)
+     * @param skipLlm LLM 필터 스킵 여부 (기본 false)
+     */
+    @PostMapping("/trigger/{market}")
+    fun manualTrigger(
+        @PathVariable market: String,
+        @RequestParam(defaultValue = "false") skipLlm: Boolean
+    ): Map<String, Any?> {
+        return volumeSurgeEngine.manualTrigger(market, skipLlm)
+    }
+
+    /**
+     * 수동 청산 - 특정 코인의 열린 포지션 청산
+     *
+     * @param market 마켓 코드 (예: KRW-BTC)
+     */
+    @PostMapping("/close/{market}")
+    fun manualClose(@PathVariable market: String): Map<String, Any?> {
+        return volumeSurgeEngine.manualClose(market)
+    }
+
+    /**
+     * 서킷 브레이커 리셋 (테스트용)
+     */
+    @PostMapping("/reset-circuit-breaker")
+    fun resetCircuitBreaker(): Map<String, Any> {
+        return volumeSurgeEngine.resetCircuitBreaker()
+    }
 }

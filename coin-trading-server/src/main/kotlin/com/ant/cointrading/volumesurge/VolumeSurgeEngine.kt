@@ -411,4 +411,176 @@ class VolumeSurgeEngine(
             "canTrade" to canTrade()
         )
     }
+
+    /**
+     * 수동 트리거 (테스트용)
+     *
+     * LLM 필터를 스킵하고 바로 기술적 분석 → 진입 진행.
+     * 또는 LLM 필터를 포함해서 전체 흐름 실행.
+     *
+     * @param market 마켓 코드 (예: KRW-BTC)
+     * @param skipLlmFilter true면 LLM 필터 스킵
+     * @return 실행 결과
+     */
+    fun manualTrigger(market: String, skipLlmFilter: Boolean = false): Map<String, Any?> {
+        log.info("[$market] 수동 트리거 시작 (skipLlmFilter=$skipLlmFilter)")
+
+        // 서킷 브레이커 체크
+        if (!canTrade()) {
+            return mapOf(
+                "success" to false,
+                "market" to market,
+                "error" to "서킷 브레이커 발동 (연속손실: $consecutiveLosses, 일일손익: $dailyPnl)"
+            )
+        }
+
+        // 동시 포지션 수 체크
+        val openPositions = tradeRepository.countByStatus("OPEN")
+        if (openPositions >= properties.maxPositions) {
+            return mapOf(
+                "success" to false,
+                "market" to market,
+                "error" to "최대 포지션 도달 ($openPositions/${properties.maxPositions})"
+            )
+        }
+
+        // 이미 해당 마켓에 열린 포지션이 있는지 확인
+        val existingPosition = tradeRepository.findByMarketAndStatus(market, "OPEN")
+        if (existingPosition.isNotEmpty()) {
+            return mapOf(
+                "success" to false,
+                "market" to market,
+                "error" to "이미 열린 포지션 존재 (id=${existingPosition.first().id})"
+            )
+        }
+
+        // 가짜 경보 생성 (수동 트리거용)
+        val manualAlert = VolumeSurgeAlertEntity(
+            market = market,
+            alertType = "MANUAL_TRIGGER",
+            detectedAt = Instant.now(),
+            processed = false
+        )
+        val savedAlert = alertRepository.save(manualAlert)
+
+        // 비동기로 처리
+        scope.launch {
+            try {
+                // LLM 필터 (옵션)
+                val filterResult = if (skipLlmFilter) {
+                    log.info("[$market] LLM 필터 스킵 (수동 트리거)")
+                    FilterResult(
+                        decision = "APPROVED",
+                        confidence = 1.0,
+                        reason = "수동 트리거 (LLM 스킵)"
+                    )
+                } else {
+                    volumeSurgeFilter.filter(market, savedAlert)
+                }
+
+                savedAlert.llmFilterResult = filterResult.decision
+                savedAlert.llmFilterReason = filterResult.reason
+                savedAlert.llmConfidence = filterResult.confidence
+                alertRepository.save(savedAlert)
+
+                if (filterResult.decision != "APPROVED") {
+                    log.info("[$market] LLM 필터 거부: ${filterResult.reason}")
+                    markAlertProcessed(savedAlert, filterResult.decision, filterResult.reason)
+                    return@launch
+                }
+
+                log.info("[$market] 필터 통과, 기술적 분석 시작")
+
+                // 기술적 분석
+                val analysis = volumeSurgeAnalyzer.analyze(market)
+                if (analysis == null) {
+                    log.warn("[$market] 기술적 분석 실패")
+                    markAlertProcessed(savedAlert, "REJECTED", "기술적 분석 실패")
+                    return@launch
+                }
+
+                // 진입 조건 체크 (수동 트리거는 조건 완화)
+                log.info("[$market] 기술적 분석 결과: RSI=${analysis.rsi}, 컨플루언스=${analysis.confluenceScore}")
+
+                // 포지션 진입
+                enterPosition(savedAlert, analysis, filterResult)
+
+            } catch (e: Exception) {
+                log.error("[$market] 수동 트리거 처리 중 오류: ${e.message}", e)
+                markAlertProcessed(savedAlert, "ERROR", e.message ?: "Unknown error")
+            }
+        }
+
+        return mapOf(
+            "success" to true,
+            "market" to market,
+            "alertId" to savedAlert.id,
+            "skipLlmFilter" to skipLlmFilter,
+            "message" to "트리거 실행 중 (비동기 처리)"
+        )
+    }
+
+    /**
+     * 포지션 수동 청산
+     *
+     * @param market 마켓 코드 (예: KRW-BTC)
+     * @return 청산 결과
+     */
+    fun manualClose(market: String): Map<String, Any?> {
+        log.info("[$market] 수동 청산 요청")
+
+        val openPositions = tradeRepository.findByMarketAndStatus(market, "OPEN")
+        if (openPositions.isEmpty()) {
+            return mapOf(
+                "success" to false,
+                "market" to market,
+                "error" to "열린 포지션 없음"
+            )
+        }
+
+        val results = openPositions.map { position ->
+            try {
+                // 현재가 조회
+                val ticker = bithumbPublicApi.getCurrentPrice(market)?.firstOrNull()
+                val exitPrice = ticker?.tradePrice?.toDouble() ?: position.entryPrice
+
+                closePosition(position, exitPrice, "MANUAL")
+
+                mapOf(
+                    "positionId" to position.id,
+                    "exitPrice" to exitPrice,
+                    "pnlAmount" to position.pnlAmount,
+                    "pnlPercent" to position.pnlPercent,
+                    "success" to true
+                )
+            } catch (e: Exception) {
+                mapOf(
+                    "positionId" to position.id,
+                    "success" to false,
+                    "error" to e.message
+                )
+            }
+        }
+
+        return mapOf(
+            "success" to true,
+            "market" to market,
+            "closedPositions" to results
+        )
+    }
+
+    /**
+     * 서킷 브레이커 리셋 (테스트용)
+     */
+    fun resetCircuitBreaker(): Map<String, Any> {
+        consecutiveLosses = 0
+        dailyPnl = 0.0
+        lastResetDate = Instant.now()
+        log.info("서킷 브레이커 리셋")
+        return mapOf(
+            "success" to true,
+            "consecutiveLosses" to consecutiveLosses,
+            "dailyPnl" to dailyPnl
+        )
+    }
 }
