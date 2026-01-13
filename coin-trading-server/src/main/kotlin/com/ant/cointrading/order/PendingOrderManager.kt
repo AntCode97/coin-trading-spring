@@ -56,9 +56,12 @@ class PendingOrderManager(
         const val MIN_TIMEOUT_SECONDS = 10L           // 최소 타임아웃
         const val MAX_TIMEOUT_SECONDS = 120L          // 최대 타임아웃
 
-        // === 가격 이탈 임계값 ===
-        const val PRICE_DEVIATION_CANCEL_PERCENT = 0.5  // 0.5% 이탈 시 취소 검토
-        const val PRICE_DEVIATION_URGENT_PERCENT = 1.0  // 1% 이탈 시 즉시 취소
+        // === 가격 이탈 임계값 (퀀트 최적화) ===
+        // 기존 1.0%는 너무 보수적 - 암호화폐 시장에서 1% 이탈은 상당한 손실
+        // 0.3%: 즉시 취소 (빠른 대응)
+        // 0.5%: 긴급 취소 + 시장가 전환
+        const val PRICE_DEVIATION_CANCEL_PERCENT = 0.3  // 0.3% 이탈 시 취소 검토
+        const val PRICE_DEVIATION_URGENT_PERCENT = 0.5  // 0.5% 이탈 시 즉시 취소
 
         // === 스프레드 임계값 ===
         const val SPREAD_WIDEN_RATIO = 2.0            // 스프레드 2배 이상 확대 시 재평가
@@ -67,8 +70,11 @@ class PendingOrderManager(
         const val CHECK_INTERVAL_MS = 1000L           // 1초마다 확인
         const val MAX_CHECK_RETRIES = 3               // API 에러 시 최대 재시도
 
-        // === 부분 체결 임계값 ===
-        const val PARTIAL_FILL_COMPLETE_THRESHOLD = 0.95  // 95% 이상이면 완료 처리
+        // === 부분 체결 임계값 (퀀트 최적화) ===
+        // 95%는 너무 높음 - 90% 이상이면 체결 완료로 간주
+        // 50% 미만 부분 체결 후 취소 시 별도 Slack 경고 (수동 청산 유도)
+        const val PARTIAL_FILL_COMPLETE_THRESHOLD = 0.90  // 90% 이상이면 완료 처리
+        const val PARTIAL_FILL_WARNING_THRESHOLD = 0.50   // 50% 미만 부분 체결 시 경고
     }
 
     // 마켓별 락 (동시 주문 방지)
@@ -470,8 +476,24 @@ class PendingOrderManager(
         // 부분 체결이 있었다면 기록
         val filledAmount = order.filledQuantity.multiply(order.avgFilledPrice ?: order.orderPrice)
         if (order.isPartiallyFilled()) {
-            log.info("[${market}] 부분 체결 후 취소: 체결률=${String.format("%.1f", order.fillRate() * 100)}%")
+            val fillRate = order.fillRate()
+            log.info("[${market}] 부분 체결 후 취소: 체결률=${String.format("%.1f", fillRate * 100)}%")
             savePartialFillTrade(order)
+
+            // 50% 미만 부분 체결 시 특별 경고 (포지션 수동 관리 필요)
+            if (fillRate < PARTIAL_FILL_WARNING_THRESHOLD) {
+                slackNotifier.sendWarning(market, """
+                    부분 체결 포지션 경고
+
+                    주문ID: ${order.orderId}
+                    체결률: ${String.format("%.1f", fillRate * 100)}%
+                    체결 수량: ${order.filledQuantity}
+                    체결 금액: ${String.format("%.0f", filledAmount.toDouble())}원
+
+                    낮은 체결률로 포지션이 생성됨.
+                    수동으로 손절/익절 관리 필요.
+                """.trimIndent())
+            }
         }
 
         pendingOrderRepository.save(order)

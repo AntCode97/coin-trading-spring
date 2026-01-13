@@ -415,6 +415,11 @@ class VolumeSurgeEngine(
 
     /**
      * 포지션 청산
+     *
+     * 퀀트 최적화: 최소 금액 미달 시에도 일단 API 호출 시도
+     * - 빗썸이 허용하면 청산 완료
+     * - 에러 발생 시 ABANDONED 처리
+     * - 손절은 무조건 시도 (손실 최소화)
      */
     private fun closePosition(position: VolumeSurgeTradeEntity, exitPrice: Double, reason: String) {
         val market = position.market
@@ -424,38 +429,22 @@ class VolumeSurgeEngine(
         // 금액 = 수량 * 현재가 (OrderExecutor는 금액 기준으로 동작)
         val positionAmount = BigDecimal(position.quantity * exitPrice)
 
-        // 최소 주문 금액 미달 체크 (무한루프 방지)
-        if (positionAmount < MIN_ORDER_AMOUNT_KRW) {
-            log.warn("[$market] 최소 주문 금액 미달로 청산 불가: ${positionAmount.toPlainString()}원 < ${MIN_ORDER_AMOUNT_KRW}원")
+        // 최소 금액 미달 경고 (하지만 손절은 시도)
+        val isBelowMinAmount = positionAmount < MIN_ORDER_AMOUNT_KRW
+        val isStopLoss = reason == "STOP_LOSS"
 
-            // 포지션을 ABANDONED 상태로 변경 (더 이상 청산 시도 안 함)
-            position.exitPrice = exitPrice
-            position.exitTime = Instant.now()
-            position.exitReason = "ABANDONED_MIN_AMOUNT"
-            position.pnlAmount = 0.0  // 실제 청산 안 됨
-            position.pnlPercent = 0.0
-            position.status = "ABANDONED"
+        if (isBelowMinAmount) {
+            log.warn("[$market] 최소 주문 금액 미달: ${positionAmount.toPlainString()}원 < ${MIN_ORDER_AMOUNT_KRW}원")
 
-            tradeRepository.save(position)
-            highestPrices.remove(position.id)
+            // 손절이 아닌 경우에만 ABANDONED 처리 (익절, 트레일링, 타임아웃)
+            // 손절은 무조건 시도 (손실 확대 방지)
+            if (!isStopLoss) {
+                log.warn("[$market] 손절이 아니므로 ABANDONED 처리 (무한루프 방지)")
+                handleAbandonedPosition(position, exitPrice, "ABANDONED_MIN_AMOUNT")
+                return
+            }
 
-            // Slack 경고 알림
-            slackNotifier.sendWarning(
-                market,
-                """
-                포지션 청산 불가 (최소 금액 미달)
-                금액: ${positionAmount.toPlainString()}원 (최소 5000원)
-                수량: ${position.quantity}
-                진입가: ${position.entryPrice}원
-                현재가: ${exitPrice}원
-
-                해당 포지션은 ABANDONED 상태로 변경됨.
-                수동으로 빗썸에서 확인/처리 필요.
-                """.trimIndent()
-            )
-
-            log.info("[$market] 포지션 ABANDONED 처리 완료 (최소 금액 미달)")
-            return
+            log.info("[$market] 손절 시도 - 최소 금액 미달이지만 API 호출 시도")
         }
 
         log.info("[$market] 매도 금액: ${positionAmount.toPlainString()}원 (수량: ${position.quantity})")
@@ -484,31 +473,14 @@ class VolumeSurgeEngine(
                 errorMessage.contains("부족")
             ) {
                 log.error("[$market] 잔고 부족으로 청산 불가 - ABANDONED 처리")
+                handleAbandonedPosition(position, exitPrice, "ABANDONED_NO_BALANCE")
+                return
+            }
 
-                position.exitPrice = exitPrice
-                position.exitTime = Instant.now()
-                position.exitReason = "ABANDONED_NO_BALANCE"
-                position.pnlAmount = 0.0
-                position.pnlPercent = 0.0
-                position.status = "ABANDONED"
-
-                tradeRepository.save(position)
-                highestPrices.remove(position.id)
-
-                slackNotifier.sendWarning(
-                    market,
-                    """
-                    포지션 청산 불가 (잔고 부족)
-                    에러: $errorMessage
-                    수량: ${position.quantity}
-                    진입가: ${position.entryPrice}원
-                    현재가: ${exitPrice}원
-
-                    해당 포지션은 ABANDONED 상태로 변경됨.
-                    빗썸에서 잔고를 확인하세요.
-                    """.trimIndent()
-                )
-
+            // 최소 금액 에러: ABANDONED 처리
+            if (errorMessage.contains("최소") || errorMessage.contains("minimum")) {
+                log.error("[$market] 최소 금액 미달로 청산 불가 - ABANDONED 처리")
+                handleAbandonedPosition(position, exitPrice, "ABANDONED_MIN_AMOUNT_API")
                 return
             }
 
@@ -568,6 +540,41 @@ class VolumeSurgeEngine(
         )
 
         log.info("[$market] 청산 완료: 손익=${pnlAmount}원 (${pnlPercent}%), orderId=${orderResult.orderId}")
+    }
+
+    /**
+     * ABANDONED 포지션 처리 헬퍼
+     */
+    private fun handleAbandonedPosition(position: VolumeSurgeTradeEntity, exitPrice: Double, reason: String) {
+        val market = position.market
+        val positionAmount = BigDecimal(position.quantity * exitPrice)
+
+        position.exitPrice = exitPrice
+        position.exitTime = Instant.now()
+        position.exitReason = reason
+        position.pnlAmount = 0.0  // 실제 청산 안 됨
+        position.pnlPercent = 0.0
+        position.status = "ABANDONED"
+
+        tradeRepository.save(position)
+        highestPrices.remove(position.id)
+
+        // Slack 경고 알림
+        slackNotifier.sendWarning(
+            market,
+            """
+            포지션 청산 불가 ($reason)
+            금액: ${positionAmount.toPlainString()}원 (최소 5000원)
+            수량: ${position.quantity}
+            진입가: ${position.entryPrice}원
+            현재가: ${exitPrice}원
+
+            해당 포지션은 ABANDONED 상태로 변경됨.
+            수동으로 빗썸에서 확인/처리 필요.
+            """.trimIndent()
+        )
+
+        log.info("[$market] 포지션 ABANDONED 처리 완료 ($reason)")
     }
 
     /**

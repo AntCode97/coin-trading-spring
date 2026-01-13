@@ -769,6 +769,31 @@ class VolumeSurgePositionManager(
     - ~~미체결 주문 자동 처리~~ ✅ PendingOrderManager
     - CircuitBreaker 상태 영속화
 
+### Phase 5: 퀀트 고도화 (2026-01-13 리뷰 결과)
+
+18. **포지션별 손절/익절 관리 테이블**
+    - 부분 체결 포지션 자동 추적
+    - PositionEntity 신규 생성 (TradeEntity와 별도)
+    - 포지션별 개별 손절/익절/트레일링 관리
+    - 현재는 VolumeSurgeTradeEntity만 포지션 관리, 일반 전략은 미지원
+
+19. **ATR 기반 동적 손절**
+    - 현재 고정 -2% → 변동성 기반 조정
+    - ATR 배수로 손절 거리 설정 (횡보 1.5x, 추세 3x)
+    - StopLossCalculator 서비스 신규 생성
+    - 레짐별 ATR 배수 자동 조정
+
+20. **백테스팅 프레임워크** (Phase 3 #13 확장)
+    - 과거 데이터 수집 및 저장 (Candle 히스토리 DB)
+    - Walk-forward 최적화
+    - 전략별 Sharpe Ratio, Max Drawdown 계산
+    - 슬리피지/수수료 시뮬레이션 포함
+
+21. **다중 거래소 차익거래** (Phase 3 #14 확장)
+    - Upbit, Coinone 연동
+    - 거래소 간 호가 비교
+    - 전송 시간/수수료 고려한 실시간 차익 계산
+
 ---
 
 ## AI 에이전트 코드 작성 지침

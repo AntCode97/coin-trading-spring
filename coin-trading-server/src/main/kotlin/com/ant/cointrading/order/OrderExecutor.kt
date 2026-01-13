@@ -307,6 +307,7 @@ class OrderExecutor(
      * 2. 강한 신호: 신뢰도 > 85% (확실한 기회)
      * 3. 얇은 호가창: 유동성 배율 < 5 (어차피 슬리피지 발생)
      * 4. 초단기 전략: ORDER_BOOK_IMBALANCE, MOMENTUM 등 (속도가 생명)
+     * 5. 호가창 불균형이 주문 방향과 일치 (퀀트 최적화)
      */
     private fun determineOrderType(
         signal: TradingSignal,
@@ -336,6 +337,19 @@ class OrderExecutor(
         val liquidity = marketCondition.liquidityRatio ?: Double.MAX_VALUE
         if (liquidity < THIN_LIQUIDITY_THRESHOLD) {
             reasons.add("얇은호가(${String.format("%.1f", liquidity)}x)")
+        }
+
+        // 5. 호가창 불균형이 주문 방향과 일치 (퀀트 최적화)
+        // - 매수 시 Imbalance > 0.3: 매수 압력 강함 → 시장가로 빠르게 체결
+        // - 매도 시 Imbalance < -0.3: 매도 압력 강함 → 시장가로 빠르게 체결
+        val imbalance = marketCondition.orderBookImbalance
+        val isImbalanceFavorable = when (signal.action) {
+            SignalAction.BUY -> imbalance > 0.3   // 매수 압력 강함 = 가격 상승 예상
+            SignalAction.SELL -> imbalance < -0.3 // 매도 압력 강함 = 가격 하락 예상
+            else -> false
+        }
+        if (isImbalanceFavorable) {
+            reasons.add("호가불균형(${String.format("%.2f", imbalance)})")
         }
 
         // 2개 이상 조건 충족 시 시장가
