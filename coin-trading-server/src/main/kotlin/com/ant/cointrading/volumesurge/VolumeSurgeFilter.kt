@@ -1,6 +1,7 @@
 package com.ant.cointrading.volumesurge
 
 import com.ant.cointrading.api.bithumb.BithumbPublicApi
+import com.ant.cointrading.api.brave.BraveSearchApi
 import com.ant.cointrading.api.cryptocompare.CryptoCompareApi
 import com.ant.cointrading.config.VolumeSurgeProperties
 import com.ant.cointrading.repository.VolumeSurgeAlertEntity
@@ -68,7 +69,8 @@ class VolumeSurgeFilter(
 
         1. getCoinTradingVolume 도구로 거래량/변동률 확인
         2. searchCryptoNews 도구로 뉴스 검색
-        3. makeDecision 도구로 최종 판단
+        3. searchWebForCrypto 도구로 커뮤니티 반응 확인 (선택적)
+        4. makeDecision 도구로 최종 판단
 
         ## 중요 원칙
 
@@ -187,11 +189,13 @@ class VolumeSurgeFilter(
  *
  * - CryptoCompare API: 뉴스 검색 (무료)
  * - Bithumb API: 24시간 거래량 조회 (무료)
+ * - Brave Search API: 웹/커뮤니티 검색 (무료 우선, 유료 폴백)
  */
 @Component
 class VolumeSurgeFilterTools(
     private val bithumbPublicApi: BithumbPublicApi,
-    private val cryptoCompareApi: CryptoCompareApi
+    private val cryptoCompareApi: CryptoCompareApi,
+    private val braveSearchApi: BraveSearchApi
 ) {
     private val log = LoggerFactory.getLogger(javaClass)
 
@@ -390,5 +394,78 @@ class VolumeSurgeFilterTools(
         decisionsByMarket[market] = result
 
         return "결정이 기록되었습니다: $market -> $normalizedDecision (신뢰도: $normalizedConfidence)"
+    }
+
+    @Tool(description = """
+        웹 검색을 통해 암호화폐에 대한 커뮤니티 반응과 시장 분위기를 파악합니다.
+
+        Reddit, Twitter, 디시인사이드, 코인판 등 커뮤니티의 실시간 반응을 검색합니다.
+        공식 뉴스에서 찾을 수 없는 시장 심리를 파악하는 데 유용합니다.
+
+        검색 결과로 다음을 판단할 수 있습니다:
+        - 커뮤니티에서 긍정적/부정적 반응
+        - 펌프앤덤프 의심 여부 (조작 의심 게시글)
+        - 실제 사용자들의 관심도
+    """)
+    fun searchWebForCrypto(
+        @ToolParam(description = "코인 심볼 (예: BTC, ETH, XRP)") coinSymbol: String,
+        @ToolParam(description = "검색 유형: community(커뮤니티) 또는 news(뉴스)") searchType: String = "community"
+    ): String {
+        log.info("[Tool] searchWebForCrypto: $coinSymbol, type=$searchType")
+
+        return try {
+            val results = when (searchType.lowercase()) {
+                "community" -> braveSearchApi.searchCryptoCommunity(coinSymbol.uppercase())
+                "news" -> braveSearchApi.searchCryptoNews(coinSymbol.uppercase())
+                else -> braveSearchApi.search("$coinSymbol cryptocurrency", 10)
+            }
+
+            if (results.isEmpty()) {
+                """
+                    웹 검색 결과 (${coinSymbol}, ${searchType}):
+
+                    검색 결과 없음.
+
+                    참고: 검색 결과가 없다고 해서 반드시 위험한 것은 아닙니다.
+                    거래량과 변동률을 함께 고려하여 판단하세요.
+                """.trimIndent()
+            } else {
+                val resultsText = results.take(5).mapIndexed { idx, r ->
+                    """
+                    ${idx + 1}. ${r.title}
+                       출처: ${r.getDomain()}
+                       요약: ${r.getSummary()}
+                       URL: ${r.url}
+                    """.trimIndent()
+                }.joinToString("\n\n")
+
+                val apiStatus = braveSearchApi.getApiStatus()
+
+                """
+                    웹 검색 결과 (${coinSymbol}, ${searchType}):
+
+                    총 ${results.size}건 발견.
+
+                    $resultsText
+
+                    분석 포인트:
+                    - 긍정적 반응이 많은가? (호재, 기대감)
+                    - 부정적 반응이 많은가? (펌프앤덤프 의심, 사기 경고)
+                    - 최근 언급이 급증했는가? (관심도 상승)
+
+                    [API 상태: Free ${apiStatus.freeApiCallCount}/${apiStatus.freeApiQuota} 사용]
+                """.trimIndent()
+            }
+
+        } catch (e: Exception) {
+            log.error("[Tool] searchWebForCrypto 오류: ${e.message}", e)
+            """
+                웹 검색 결과 (${coinSymbol}, ${searchType}):
+
+                검색 중 오류 발생: ${e.message}
+
+                뉴스 검색(searchCryptoNews)과 거래량 조회(getCoinTradingVolume)로 판단하세요.
+            """.trimIndent()
+        }
     }
 }
