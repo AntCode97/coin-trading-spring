@@ -1,5 +1,9 @@
 package com.ant.cointrading.config
 
+import com.ant.cointrading.service.KeyValueService
+import jakarta.annotation.PostConstruct
+import org.slf4j.LoggerFactory
+import org.springframework.beans.factory.annotation.Autowired
 import org.springframework.boot.context.properties.ConfigurationProperties
 import org.springframework.stereotype.Component
 
@@ -11,10 +15,18 @@ import org.springframework.stereotype.Component
  * - RSI 70 이하에서 진입 (과매수 회피)
  * - 컨플루언스 60점 이상 (최소 2~3개 지표 일치)
  * - 손절 -2%, 익절 +5% (리스크:리워드 = 1:2.5)
+ *
+ * LLM 회고 시스템이 파라미터를 자동 변경하면 KeyValueService에 저장되고,
+ * 재시작 시 @PostConstruct에서 복원된다.
  */
 @Component
 @ConfigurationProperties(prefix = "volumesurge")
 class VolumeSurgeProperties {
+
+    private val log = LoggerFactory.getLogger(javaClass)
+
+    @Autowired
+    private lateinit var keyValueService: KeyValueService
 
     /** 전략 활성화 여부 */
     var enabled: Boolean = false
@@ -99,5 +111,98 @@ class VolumeSurgeProperties {
                 llmFilterEnabled=$llmFilterEnabled
             )
         """.trimIndent()
+    }
+
+    /**
+     * KeyValueService에서 저장된 파라미터 복원
+     * LLM 회고 시스템이 변경한 파라미터가 재시작 후에도 유지된다.
+     */
+    @PostConstruct
+    fun restoreFromKeyValue() {
+        log.info("=== VolumeSurgeProperties KeyValue 복원 시작 ===")
+
+        var restoredCount = 0
+
+        // 각 파라미터를 KeyValueService에서 로드
+        keyValueService.getDouble("volumesurge.minVolumeRatio", -1.0).takeIf { it > 0 }?.let {
+            log.info("복원: minVolumeRatio = $minVolumeRatio -> $it")
+            minVolumeRatio = it
+            restoredCount++
+        }
+
+        keyValueService.getDouble("volumesurge.maxRsi", -1.0).takeIf { it > 0 }?.let {
+            log.info("복원: maxRsi = $maxRsi -> $it")
+            maxRsi = it
+            restoredCount++
+        }
+
+        keyValueService.getInt("volumesurge.minConfluenceScore", -1).takeIf { it > 0 }?.let {
+            log.info("복원: minConfluenceScore = $minConfluenceScore -> $it")
+            minConfluenceScore = it
+            restoredCount++
+        }
+
+        keyValueService.getDouble("volumesurge.stopLossPercent", 1.0).takeIf { it < 0 }?.let {
+            log.info("복원: stopLossPercent = $stopLossPercent -> $it")
+            stopLossPercent = it
+            restoredCount++
+        }
+
+        keyValueService.getDouble("volumesurge.takeProfitPercent", -1.0).takeIf { it > 0 }?.let {
+            log.info("복원: takeProfitPercent = $takeProfitPercent -> $it")
+            takeProfitPercent = it
+            restoredCount++
+        }
+
+        keyValueService.getDouble("volumesurge.trailingStopTrigger", -1.0).takeIf { it > 0 }?.let {
+            log.info("복원: trailingStopTrigger = $trailingStopTrigger -> $it")
+            trailingStopTrigger = it
+            restoredCount++
+        }
+
+        keyValueService.getDouble("volumesurge.trailingStopOffset", -1.0).takeIf { it > 0 }?.let {
+            log.info("복원: trailingStopOffset = $trailingStopOffset -> $it")
+            trailingStopOffset = it
+            restoredCount++
+        }
+
+        keyValueService.getInt("volumesurge.positionTimeoutMin", -1).takeIf { it > 0 }?.let {
+            log.info("복원: positionTimeoutMin = $positionTimeoutMin -> $it")
+            positionTimeoutMin = it
+            restoredCount++
+        }
+
+        keyValueService.getInt("volumesurge.cooldownMin", -1).takeIf { it > 0 }?.let {
+            log.info("복원: cooldownMin = $cooldownMin -> $it")
+            cooldownMin = it
+            restoredCount++
+        }
+
+        keyValueService.getInt("volumesurge.maxConsecutiveLosses", -1).takeIf { it > 0 }?.let {
+            log.info("복원: maxConsecutiveLosses = $maxConsecutiveLosses -> $it")
+            maxConsecutiveLosses = it
+            restoredCount++
+        }
+
+        keyValueService.getInt("volumesurge.dailyMaxLossKrw", -1).takeIf { it > 0 }?.let {
+            log.info("복원: dailyMaxLossKrw = $dailyMaxLossKrw -> $it")
+            dailyMaxLossKrw = it
+            restoredCount++
+        }
+
+        keyValueService.getInt("volumesurge.positionSizeKrw", -1).takeIf { it > 0 }?.let {
+            log.info("복원: positionSizeKrw = $positionSizeKrw -> $it")
+            positionSizeKrw = it
+            restoredCount++
+        }
+
+        keyValueService.getInt("volumesurge.alertFreshnessMin", -1).takeIf { it > 0 }?.let {
+            log.info("복원: alertFreshnessMin = $alertFreshnessMin -> $it")
+            alertFreshnessMin = it
+            restoredCount++
+        }
+
+        log.info("=== VolumeSurgeProperties KeyValue 복원 완료: ${restoredCount}개 파라미터 ===")
+        log.info("현재 설정: $this")
     }
 }

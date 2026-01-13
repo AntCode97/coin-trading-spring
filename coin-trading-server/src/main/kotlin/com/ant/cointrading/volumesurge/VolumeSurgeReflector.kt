@@ -272,9 +272,29 @@ class VolumeSurgeReflectorTools(
     private val summaryRepository: VolumeSurgeDailySummaryRepository,
     private val keyValueService: KeyValueService,
     private val objectMapper: ObjectMapper,
-    private val slackNotifier: SlackNotifier
+    private val slackNotifier: SlackNotifier,
+    private val volumeSurgeProperties: VolumeSurgeProperties
 ) {
     private val log = LoggerFactory.getLogger(javaClass)
+
+    companion object {
+        /** 변경 가능한 파라미터 목록과 KeyValue 키 매핑 */
+        val ALLOWED_PARAMS = mapOf(
+            "minVolumeRatio" to "volumesurge.minVolumeRatio",
+            "maxRsi" to "volumesurge.maxRsi",
+            "minConfluenceScore" to "volumesurge.minConfluenceScore",
+            "stopLossPercent" to "volumesurge.stopLossPercent",
+            "takeProfitPercent" to "volumesurge.takeProfitPercent",
+            "trailingStopTrigger" to "volumesurge.trailingStopTrigger",
+            "trailingStopOffset" to "volumesurge.trailingStopOffset",
+            "positionTimeoutMin" to "volumesurge.positionTimeoutMin",
+            "cooldownMin" to "volumesurge.cooldownMin",
+            "maxConsecutiveLosses" to "volumesurge.maxConsecutiveLosses",
+            "dailyMaxLossKrw" to "volumesurge.dailyMaxLossKrw",
+            "positionSizeKrw" to "volumesurge.positionSizeKrw",
+            "alertFreshnessMin" to "volumesurge.alertFreshnessMin"
+        )
+    }
 
     @Tool(description = "오늘의 Volume Surge 전략 통계를 조회합니다")
     fun getTodayStats(): String {
@@ -365,65 +385,172 @@ class VolumeSurgeReflectorTools(
     }
 
     @Tool(description = """
-        파라미터 변경을 제안합니다.
+        파라미터를 변경합니다.
         변경이 필요한 경우에만 호출하세요.
-        Slack 알림이 발송됩니다.
+        실제 파라미터가 변경되고 Slack 알림이 발송됩니다.
+
+        허용된 파라미터:
+        - minVolumeRatio: 최소 거래량 비율 (기본 3.0)
+        - maxRsi: 최대 RSI (기본 70.0)
+        - minConfluenceScore: 최소 컨플루언스 점수 (기본 60)
+        - stopLossPercent: 손절 퍼센트 (기본 -2.0)
+        - takeProfitPercent: 익절 퍼센트 (기본 5.0)
+        - trailingStopTrigger: 트레일링 스탑 시작 (기본 2.0)
+        - trailingStopOffset: 트레일링 스탑 오프셋 (기본 1.0)
+        - positionTimeoutMin: 포지션 타임아웃 분 (기본 30)
+        - cooldownMin: 재진입 쿨다운 분 (기본 60)
+        - maxConsecutiveLosses: 연속 손실 제한 (기본 3)
+        - dailyMaxLossKrw: 일일 최대 손실 원 (기본 30000)
+        - positionSizeKrw: 포지션 크기 원 (기본 10000)
+        - alertFreshnessMin: 경보 신선도 분 (기본 5)
     """)
     fun suggestParameterChange(
         @ToolParam(description = "파라미터 이름 (예: minVolumeRatio, maxRsi, minConfluenceScore)") paramName: String,
-        @ToolParam(description = "현재 값") currentValue: Double,
-        @ToolParam(description = "제안 값") suggestedValue: Double,
+        @ToolParam(description = "새로운 값") newValue: Double,
         @ToolParam(description = "변경 이유") reason: String
     ): String {
-        log.info("[Tool] suggestParameterChange: $paramName $currentValue -> $suggestedValue")
+        log.info("[Tool] suggestParameterChange: $paramName -> $newValue")
 
-        // 변경 제안은 기록만 하고, 실제 적용은 수동으로
-        val today = LocalDate.now(ZoneId.of("Asia/Seoul"))
-        val existingSummary = summaryRepository.findByDate(today)
-            ?: VolumeSurgeDailySummaryEntity(date = today)
+        // 허용된 파라미터인지 검증
+        val keyValueKey = ALLOWED_PARAMS[paramName]
+        if (keyValueKey == null) {
+            log.warn("허용되지 않은 파라미터: $paramName")
+            return """
+                오류: 허용되지 않은 파라미터입니다.
+                파라미터명: $paramName
 
-        val changeRecord = mapOf(
-            "param" to paramName,
-            "current" to currentValue,
-            "suggested" to suggestedValue,
-            "reason" to reason,
-            "timestamp" to Instant.now().toString()
-        )
-
-        val existingChanges = existingSummary.parameterChanges?.let {
-            try {
-                objectMapper.readValue(it, List::class.java) as List<Map<String, Any>>
-            } catch (e: Exception) {
-                emptyList()
-            }
-        } ?: emptyList()
-
-        val updatedChanges = existingChanges + changeRecord
-        existingSummary.parameterChanges = objectMapper.writeValueAsString(updatedChanges)
-
-        summaryRepository.save(existingSummary)
-
-        // Slack 알림 발송
-        slackNotifier.sendSystemNotification(
-            "파라미터 변경 제안",
-            """
-                파라미터: $paramName
-                현재값: $currentValue
-                제안값: $suggestedValue
-                이유: $reason
-
-                적용 방법: application.yml 또는 KeyValue 설정에서 변경
+                허용된 파라미터 목록:
+                ${ALLOWED_PARAMS.keys.joinToString(", ")}
             """.trimIndent()
-        )
+        }
 
-        return """
-            파라미터 변경 제안이 기록되었습니다:
-            - $paramName: $currentValue → $suggestedValue
-            - 이유: $reason
+        // 현재 값 조회
+        val currentValue = getCurrentParamValue(paramName)
 
-            참고: 실제 적용은 수동으로 진행해야 합니다.
-            Slack 알림이 발송되었습니다.
-        """.trimIndent()
+        // 값이 동일하면 변경 불필요
+        if (currentValue == newValue) {
+            return "파라미터 $paramName 의 현재값($currentValue)과 새 값($newValue)이 동일하여 변경하지 않았습니다."
+        }
+
+        try {
+            // 1. KeyValueService에 저장 (영속성 - 재시작 후에도 유지)
+            keyValueService.set(
+                key = keyValueKey,
+                value = newValue.toString(),
+                category = "volumesurge",
+                description = "LLM 자동 변경: $reason"
+            )
+
+            // 2. VolumeSurgeProperties 필드 직접 변경 (즉시 반영)
+            applyParamToProperties(paramName, newValue)
+
+            // 3. DB 요약에 변경 기록 저장
+            val today = LocalDate.now(ZoneId.of("Asia/Seoul"))
+            val existingSummary = summaryRepository.findByDate(today)
+                ?: VolumeSurgeDailySummaryEntity(date = today)
+
+            val changeRecord = mapOf(
+                "param" to paramName,
+                "oldValue" to currentValue,
+                "newValue" to newValue,
+                "reason" to reason,
+                "timestamp" to Instant.now().toString(),
+                "applied" to true
+            )
+
+            val existingChanges = existingSummary.parameterChanges?.let {
+                try {
+                    @Suppress("UNCHECKED_CAST")
+                    objectMapper.readValue(it, List::class.java) as List<Map<String, Any>>
+                } catch (e: Exception) {
+                    emptyList()
+                }
+            } ?: emptyList()
+
+            val updatedChanges = existingChanges + changeRecord
+            existingSummary.parameterChanges = objectMapper.writeValueAsString(updatedChanges)
+            summaryRepository.save(existingSummary)
+
+            // 4. Slack 알림 발송
+            slackNotifier.sendSystemNotification(
+                "[자동] 파라미터 변경 완료",
+                """
+                    파라미터: $paramName
+                    변경: $currentValue → $newValue
+                    이유: $reason
+
+                    KeyValue 키: $keyValueKey
+                    즉시 반영됨 (재시작 후에도 유지)
+                """.trimIndent()
+            )
+
+            log.info("파라미터 변경 완료: $paramName = $currentValue -> $newValue")
+
+            return """
+                파라미터 변경 완료:
+                - $paramName: $currentValue → $newValue
+                - 이유: $reason
+                - KeyValue 저장: $keyValueKey
+                - 즉시 반영됨
+            """.trimIndent()
+
+        } catch (e: Exception) {
+            log.error("파라미터 변경 실패: $paramName, error: ${e.message}", e)
+
+            slackNotifier.sendError(
+                "VOLUME_SURGE",
+                "파라미터 변경 실패: $paramName -> $newValue, 오류: ${e.message}"
+            )
+
+            return """
+                오류: 파라미터 변경 실패
+                - 파라미터: $paramName
+                - 오류: ${e.message}
+            """.trimIndent()
+        }
+    }
+
+    /**
+     * 현재 파라미터 값 조회
+     */
+    private fun getCurrentParamValue(paramName: String): Double {
+        return when (paramName) {
+            "minVolumeRatio" -> volumeSurgeProperties.minVolumeRatio
+            "maxRsi" -> volumeSurgeProperties.maxRsi
+            "minConfluenceScore" -> volumeSurgeProperties.minConfluenceScore.toDouble()
+            "stopLossPercent" -> volumeSurgeProperties.stopLossPercent
+            "takeProfitPercent" -> volumeSurgeProperties.takeProfitPercent
+            "trailingStopTrigger" -> volumeSurgeProperties.trailingStopTrigger
+            "trailingStopOffset" -> volumeSurgeProperties.trailingStopOffset
+            "positionTimeoutMin" -> volumeSurgeProperties.positionTimeoutMin.toDouble()
+            "cooldownMin" -> volumeSurgeProperties.cooldownMin.toDouble()
+            "maxConsecutiveLosses" -> volumeSurgeProperties.maxConsecutiveLosses.toDouble()
+            "dailyMaxLossKrw" -> volumeSurgeProperties.dailyMaxLossKrw.toDouble()
+            "positionSizeKrw" -> volumeSurgeProperties.positionSizeKrw.toDouble()
+            "alertFreshnessMin" -> volumeSurgeProperties.alertFreshnessMin.toDouble()
+            else -> 0.0
+        }
+    }
+
+    /**
+     * VolumeSurgeProperties에 파라미터 값 적용
+     */
+    private fun applyParamToProperties(paramName: String, value: Double) {
+        when (paramName) {
+            "minVolumeRatio" -> volumeSurgeProperties.minVolumeRatio = value
+            "maxRsi" -> volumeSurgeProperties.maxRsi = value
+            "minConfluenceScore" -> volumeSurgeProperties.minConfluenceScore = value.toInt()
+            "stopLossPercent" -> volumeSurgeProperties.stopLossPercent = value
+            "takeProfitPercent" -> volumeSurgeProperties.takeProfitPercent = value
+            "trailingStopTrigger" -> volumeSurgeProperties.trailingStopTrigger = value
+            "trailingStopOffset" -> volumeSurgeProperties.trailingStopOffset = value
+            "positionTimeoutMin" -> volumeSurgeProperties.positionTimeoutMin = value.toInt()
+            "cooldownMin" -> volumeSurgeProperties.cooldownMin = value.toInt()
+            "maxConsecutiveLosses" -> volumeSurgeProperties.maxConsecutiveLosses = value.toInt()
+            "dailyMaxLossKrw" -> volumeSurgeProperties.dailyMaxLossKrw = value.toInt()
+            "positionSizeKrw" -> volumeSurgeProperties.positionSizeKrw = value.toInt()
+            "alertFreshnessMin" -> volumeSurgeProperties.alertFreshnessMin = value.toInt()
+        }
     }
 
     @Tool(description = """

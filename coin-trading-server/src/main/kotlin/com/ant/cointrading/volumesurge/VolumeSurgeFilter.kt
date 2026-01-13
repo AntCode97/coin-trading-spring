@@ -47,37 +47,59 @@ class VolumeSurgeFilter(
     private val systemPrompt = """
         당신은 암호화폐 단기 트레이딩 분석가입니다. 거래량이 급등한 종목의 투자 적합성을 판단합니다.
 
-        ## 판단 기준 (우선순위 순)
+        ## 핵심 원칙: 기술적 지표 우선
+
+        **코인 시장의 특성:**
+        - 암호화폐는 뉴스/호재 없이도 수급에 의해 급등할 수 있음
+        - 거래량 급등 자체가 매수세 유입 신호
+        - 뉴스 없음 ≠ 위험, 뉴스 없음 = 중립
+        - 기술적 지표(거래량, 변동률)가 양호하면 진입 기회
+
+        ## 판단 기준 (기술적 지표 중심)
 
         ### 1. 거래량 기준 (가장 중요)
-        - 100억원 이상: 대형 유동성, 매우 적합
-        - 50억~100억원: 충분한 유동성, 적합
-        - 10억~50억원: 중간 유동성, 뉴스 확인 필요
-        - 10억원 미만: 소형 토큰, 거부 (펌프앤덤프 위험)
+        - 100억원 이상: 대형 유동성, APPROVED
+        - 50억~100억원: 충분한 유동성, APPROVED
+        - 10억~50억원: 중간 유동성, 변동률 확인 후 판단
+        - 5억~10억원: 소형이지만 거래 가능, 변동률 15% 이하면 APPROVED
+        - 5억원 미만: 유동성 부족, REJECTED
 
         ### 2. 변동률 기준
-        - 15% 이하: 정상 범위, 통과
-        - 15~30%: 높은 변동, 뉴스 근거 필요
-        - 30% 이상: 과도한 급등, 펌프앤덤프 의심
+        - 10% 이하: 안정적, APPROVED 우선
+        - 10~20%: 적정 수준, APPROVED 가능
+        - 20~30%: 다소 높음, 거래량 50억 이상이면 APPROVED
+        - 30% 이상: 이미 급등, 추격 매수 위험 → REJECTED
 
-        ### 3. 뉴스 기준 (거래량에 따라 유연하게 적용)
-        - 거래량 100억원 이상 + 변동률 15% 이하: 뉴스 없어도 APPROVED
-        - 거래량 50억원 이상 + 변동률 10% 이하: 뉴스 없어도 APPROVED
-        - 그 외: 뉴스가 있으면 적합성 판단, 없으면 주의
+        ### 3. 통과 조건 (아래 중 하나 충족 시 APPROVED)
+        - 거래량 50억원 이상 + 변동률 30% 미만
+        - 거래량 10억원 이상 + 변동률 20% 미만
+        - 거래량 5억원 이상 + 변동률 15% 미만 + 악재 뉴스 없음
+
+        ### 4. 거부 조건 (아래 중 하나 해당 시 REJECTED)
+        - 거래량 5억원 미만 (유동성 부족)
+        - 변동률 30% 이상 (이미 급등)
+        - 명확한 악재 뉴스 (해킹, 상폐, 사기 등)
+        - 펌프앤덤프 명백한 정황 (SNS 조직적 홍보)
 
         ## 판단 흐름
 
-        1. getCoinTradingVolume 도구로 거래량/변동률 확인
-        2. searchCryptoNews 도구로 뉴스 검색
-        3. searchWebForCrypto 도구로 커뮤니티 반응 확인 (선택적)
+        1. getCoinTradingVolume 도구로 거래량/변동률 확인 (필수)
+        2. 거래량 50억 이상 + 변동률 20% 미만이면 뉴스 검색 없이 APPROVED 가능
+        3. 그 외의 경우 searchCryptoNews로 악재 여부만 확인
         4. makeDecision 도구로 최종 판단
 
-        ## 중요 원칙
+        ## 중요: 뉴스에 대한 관점
 
-        - 유동성이 충분하면(50억원 이상) 뉴스가 없어도 단기 트레이딩 가능
-        - 10억원 미만 소형 토큰은 무조건 REJECTED
-        - 변동률 30% 이상은 이미 급등 후일 가능성, 주의 필요
-        - makeDecision 호출 시 반드시 market 파라미터 전달
+        - 뉴스는 "악재 확인용"으로만 사용 (호재 확인이 아님)
+        - 뉴스가 없다 = 악재도 없다 = 중립 또는 긍정
+        - 호재 뉴스가 없어도 기술적 지표가 좋으면 APPROVED
+        - 오직 명확한 악재(해킹, 상폐, 러그풀 등)만 REJECTED 사유
+
+        ## makeDecision 호출 시 주의사항
+
+        - 반드시 market 파라미터 전달
+        - 뉴스 없음을 이유로 REJECTED 하지 말 것
+        - 거래량/변동률 기술적 지표 기준으로 판단
     """.trimIndent()
 
     /**
@@ -209,8 +231,10 @@ class VolumeSurgeFilterTools(
     @Tool(description = """
         특정 암호화폐의 최근 뉴스를 검색합니다 (CryptoCompare API).
 
-        뉴스가 있으면 급등 원인을 파악할 수 있습니다.
-        단, 거래량이 충분하면(50억원 이상) 뉴스가 없어도 단기 트레이딩 적합할 수 있습니다.
+        뉴스 검색 목적: 악재 확인용 (호재 확인이 아님!)
+        - 뉴스 없음 = 악재도 없음 = 중립 또는 긍정
+        - 악재(해킹, 상폐, 사기, 러그풀)만 REJECTED 사유
+        - 호재가 없어도 기술적 지표가 좋으면 APPROVED
     """)
     fun searchCryptoNews(
         @ToolParam(description = "코인 심볼 (예: BTC, ETH, XRP)") coinSymbol: String,
@@ -227,8 +251,8 @@ class VolumeSurgeFilterTools(
 
                     관련 뉴스 없음.
 
-                    참고: 거래량이 50억원 이상이고 변동률이 15% 이하라면 뉴스 없이도 단기 트레이딩 적합.
-                    거래량이 10억원 미만이면 펌프앤덤프 위험 있으니 거부 권장.
+                    결론: 악재 뉴스 없음 = 긍정적 신호
+                    기술적 지표(거래량, 변동률)가 APPROVED 조건을 충족하면 진입 가능.
                 """.trimIndent()
             } else {
                 val newsText = news.take(5).mapIndexed { idx, n ->
@@ -247,8 +271,14 @@ class VolumeSurgeFilterTools(
 
                     $newsText
 
-                    분석: 위 뉴스들이 실제 호재(상장, 파트너십, 업데이트 등)인지,
-                    단순 루머나 SNS 홍보성 기사인지 판단하세요.
+                    분석 포인트 (악재 확인용):
+                    - 해킹, 보안 사고 언급?
+                    - 상폐, 거래 중단 언급?
+                    - 사기, 러그풀, 스캠 의심?
+                    - 펌프앤덤프 조직적 홍보?
+
+                    위 악재가 없으면 기술적 지표 기준으로 APPROVED.
+                    호재가 없어도 악재가 없으면 문제없음.
                 """.trimIndent()
             }
 
@@ -267,10 +297,12 @@ class VolumeSurgeFilterTools(
     @Tool(description = """
         암호화폐의 24시간 거래량을 조회합니다 (Bithumb 기준).
 
-        거래량 판단 기준:
-        - 50억원 이상: 유동성 충분, 투자 적합
-        - 10억~50억원: 중간 규모, 주의 필요
-        - 10억원 미만: 소형 토큰, 조작 가능성 높음
+        거래량 + 변동률 복합 판단 기준:
+        - 거래량 50억원 이상 + 변동률 30% 미만: APPROVED
+        - 거래량 10억원 이상 + 변동률 20% 미만: APPROVED
+        - 거래량 5억원 이상 + 변동률 15% 미만: APPROVED
+        - 거래량 5억원 미만: REJECTED (유동성 부족)
+        - 변동률 30% 이상: REJECTED (이미 급등)
 
         반드시 이 도구로 거래량을 확인한 후 투자 결정을 내리세요.
     """)
@@ -303,18 +335,25 @@ class VolumeSurgeFilterTools(
                 tradingVolume >= BigDecimal("10000000000") -> "대형 유동성 (100억원 이상)"
                 tradingVolume >= BigDecimal("5000000000") -> "충분한 유동성 (50억~100억원)"
                 tradingVolume >= BigDecimal("1000000000") -> "중간 유동성 (10억~50억원)"
-                else -> "부족 (10억원 미만, 거부 권장)"
+                tradingVolume >= BigDecimal("500000000") -> "소형 유동성 (5억~10억원)"
+                else -> "부족 (5억원 미만)"
             }
 
-            val isSmallCap = tradingVolume < BigDecimal("1000000000")
-            val isLargeCap = tradingVolume >= BigDecimal("5000000000")
-            val isLowVolatility = changeRate.abs() <= BigDecimal("15")
+            val absChangeRate = changeRate.abs()
+            val isTooSmall = tradingVolume < BigDecimal("500000000")  // 5억 미만
+            val isAlreadySurged = absChangeRate > BigDecimal("30")   // 30% 이상
 
+            // 복합 조건으로 판단
             val recommendation = when {
-                isSmallCap -> "10억원 미만 소형 토큰, 투자 거부"
-                isLargeCap && isLowVolatility -> "유동성 충분 + 변동률 적정, 뉴스 없어도 투자 적합"
-                isLargeCap -> "유동성 충분, 뉴스 확인 후 판단"
-                else -> "중간 유동성, 뉴스 확인 필요"
+                isTooSmall -> "거래량 5억원 미만, 유동성 부족 → REJECTED"
+                isAlreadySurged -> "변동률 30% 이상, 이미 급등 → REJECTED"
+                tradingVolume >= BigDecimal("5000000000") && absChangeRate < BigDecimal("30") ->
+                    "거래량 50억+ & 변동률 30% 미만 → APPROVED"
+                tradingVolume >= BigDecimal("1000000000") && absChangeRate < BigDecimal("20") ->
+                    "거래량 10억+ & 변동률 20% 미만 → APPROVED"
+                tradingVolume >= BigDecimal("500000000") && absChangeRate < BigDecimal("15") ->
+                    "거래량 5억+ & 변동률 15% 미만 → APPROVED"
+                else -> "조건 미충족, 악재 뉴스 확인 후 판단"
             }
 
             """
