@@ -209,6 +209,10 @@ memescalper:
     - KRW-XLM
     - KRW-HBAR
     - KRW-VET
+    - KRW-BSV
+    - KRW-XMR
+    - KRW-NEO
+    - KRW-KLAY
   min-trading-value-krw: ${MEME_SCALPER_MIN_TRADING_VALUE:100000000}
   max-trading-value-krw: ${MEME_SCALPER_MAX_TRADING_VALUE:50000000000}
 

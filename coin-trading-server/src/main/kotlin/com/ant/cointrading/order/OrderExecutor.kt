@@ -77,7 +77,8 @@ class OrderExecutor(
         val MARKET_ORDER_STRATEGIES = setOf(
             "ORDER_BOOK_IMBALANCE",  // 초단기 전략
             "MOMENTUM",              // 모멘텀 전략
-            "BREAKOUT"               // 돌파 전략
+            "BREAKOUT",              // 돌파 전략
+            "MEME_SCALPER"           // 세력 코인 초단타
         )
 
         // 빗썸 최소 주문 금액 (KRW) - 수수료(0.04%) 고려하여 여유 있게 설정

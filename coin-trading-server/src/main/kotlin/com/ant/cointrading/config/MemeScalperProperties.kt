@@ -79,7 +79,8 @@ data class MemeScalperProperties(
         "KRW-ADA", "KRW-DOGE", "KRW-DOT", "KRW-MATIC",
         "KRW-ETC", "KRW-LTC", "KRW-BCH", "KRW-LINK",
         "KRW-AVAX", "KRW-TRX", "KRW-SHIB", "KRW-ATOM",
-        "KRW-EOS", "KRW-XLM", "KRW-HBAR", "KRW-VET"
+        "KRW-EOS", "KRW-XLM", "KRW-HBAR", "KRW-VET",
+        "KRW-BSV", "KRW-XMR", "KRW-NEO", "KRW-KLAY"
     ),
 
     /** 최소 거래대금 (KRW) - 너무 작은 코인 제외 */
