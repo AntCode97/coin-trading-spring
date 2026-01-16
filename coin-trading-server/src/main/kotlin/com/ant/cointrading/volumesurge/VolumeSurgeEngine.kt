@@ -399,8 +399,8 @@ class VolumeSurgeEngine(
     }
 
     companion object {
-        // 빗썸 최소 주문 금액 (KRW)
-        private val MIN_ORDER_AMOUNT_KRW = BigDecimal("5000")
+        // 빗썸 최소 주문 금액 (KRW) - 수수료(0.04%) 고려
+        private val MIN_ORDER_AMOUNT_KRW = BigDecimal("5100")
     }
 
     /**

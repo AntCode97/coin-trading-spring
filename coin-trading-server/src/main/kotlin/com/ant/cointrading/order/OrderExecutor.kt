@@ -80,8 +80,8 @@ class OrderExecutor(
             "BREAKOUT"               // 돌파 전략
         )
 
-        // 빗썸 최소 주문 금액 (KRW)
-        val MIN_ORDER_AMOUNT_KRW = BigDecimal("5000")
+        // 빗썸 최소 주문 금액 (KRW) - 수수료(0.04%) 고려하여 여유 있게 설정
+        val MIN_ORDER_AMOUNT_KRW = BigDecimal("5100")
     }
 
     /**
@@ -509,6 +509,8 @@ class OrderExecutor(
 
     /**
      * 시장가 주문 제출
+     *
+     * 매도 시 실제 잔고를 확인하여 잔고 부족 에러 방지
      */
     private fun submitMarketOrder(
         signal: TradingSignal,
@@ -521,14 +523,51 @@ class OrderExecutor(
                 bithumbPrivateApi.buyMarketOrder(apiMarket, positionSize)
             }
             SignalAction.SELL -> {
-                val quantity = calculateQuantity(signal.price, positionSize)
-                log.info("[${signal.market}] 시장가 매도: 수량=$quantity")
-                bithumbPrivateApi.sellMarketOrder(apiMarket, quantity)
+                // 실제 잔고 확인 후 매도 수량 결정
+                val requestedQuantity = calculateQuantity(signal.price, positionSize)
+                val actualQuantity = getActualSellQuantity(signal.market, requestedQuantity)
+
+                if (actualQuantity <= BigDecimal.ZERO) {
+                    log.warn("[${signal.market}] 매도 가능 잔고 없음")
+                    return OrderSubmitResult(null, OrderType.MARKET, null, null)
+                }
+
+                log.info("[${signal.market}] 시장가 매도: 요청수량=$requestedQuantity, 실제수량=$actualQuantity")
+                bithumbPrivateApi.sellMarketOrder(apiMarket, actualQuantity)
             }
             SignalAction.HOLD -> null
         }
 
         return OrderSubmitResult(response, OrderType.MARKET, null, null)
+    }
+
+    /**
+     * 실제 매도 가능 수량 확인
+     *
+     * 잔고가 요청 수량보다 적으면 전량 매도, 잔고가 없으면 0 반환
+     */
+    private fun getActualSellQuantity(market: String, requestedQuantity: BigDecimal): BigDecimal {
+        return try {
+            val coinSymbol = market.split("_").firstOrNull() ?: return requestedQuantity
+            val balances = bithumbPrivateApi.getBalances() ?: return requestedQuantity
+
+            val coinBalance = balances.find { it.currency == coinSymbol }?.balance ?: BigDecimal.ZERO
+
+            when {
+                coinBalance <= BigDecimal.ZERO -> {
+                    log.warn("[$market] 코인 잔고 없음: $coinSymbol = 0")
+                    BigDecimal.ZERO
+                }
+                coinBalance < requestedQuantity -> {
+                    log.info("[$market] 잔고 부족, 전량 매도: 요청=${requestedQuantity}, 잔고=${coinBalance}")
+                    coinBalance
+                }
+                else -> requestedQuantity
+            }
+        } catch (e: Exception) {
+            log.warn("[$market] 잔고 조회 실패, 요청 수량 그대로 사용: ${e.message}")
+            requestedQuantity
+        }
     }
 
     /**

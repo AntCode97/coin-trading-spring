@@ -37,6 +37,7 @@ data class FilterResult(
 @Component
 class VolumeSurgeFilter(
     private val properties: VolumeSurgeProperties,
+    private val bithumbPublicApi: BithumbPublicApi,
     private val modelSelector: ModelSelector,
     private val filterTools: VolumeSurgeFilterTools,
     private val alertRepository: VolumeSurgeAlertRepository,
@@ -105,20 +106,132 @@ class VolumeSurgeFilter(
     /**
      * 종목 필터링
      *
-     * 1. LLM 필터 비활성화 시 자동 승인
-     * 2. 쿨다운 기간 내 기존 LLM 결과가 있으면 재사용 (DB 캐시)
-     * 3. 없으면 LLM 호출
+     * 현재 거래량/변동률 기반으로만 검증 (LLM 비활성화)
+     *
+     * 통과 조건:
+     * - 거래량 50억원 이상 + 변동률 30% 미만
+     * - 거래량 10억원 이상 + 변동률 20% 미만
+     * - 거래량 5억원 이상 + 변동률 15% 미만
+     *
+     * 거부 조건:
+     * - 거래량 5억원 미만 (유동성 부족)
+     * - 변동률 30% 이상 (이미 급등)
      */
     fun filter(market: String, alert: VolumeSurgeAlertEntity): FilterResult {
-        if (!properties.llmFilterEnabled) {
-            log.info("[$market] LLM 필터 비활성화 - 자동 승인")
-            return FilterResult(
-                decision = "APPROVED",
-                confidence = 0.5,
-                reason = "LLM 필터 비활성화"
+        log.info("[$market] 거래량 기반 필터링 시작 (LLM 비활성화)")
+
+        return try {
+            // 현재가 및 거래량 정보 조회
+            val ticker = bithumbPublicApi.getCurrentPrice(market)?.firstOrNull()
+
+            if (ticker == null) {
+                log.warn("[$market] Ticker 조회 실패")
+                return FilterResult(
+                    decision = "REJECTED",
+                    confidence = 0.0,
+                    reason = "Ticker 조회 실패"
+                )
+            }
+
+            val tradingVolume = ticker.accTradePrice ?: BigDecimal.ZERO
+            val changeRate = ticker.changeRate?.multiply(BigDecimal(100))?.abs() ?: BigDecimal.ZERO
+
+            log.info("[$market] 거래량=${formatKrw(tradingVolume)}, 변동률=${changeRate}%")
+
+            // 거부 조건 체크
+            val isTooSmall = tradingVolume < BigDecimal("500000000")  // 5억 미만
+            val isAlreadySurged = changeRate > BigDecimal("30")      // 30% 이상
+
+            if (isTooSmall) {
+                return FilterResult(
+                    decision = "REJECTED",
+                    confidence = 0.8,
+                    reason = "거래량 5억원 미만 (${formatKrw(tradingVolume)})"
+                )
+            }
+
+            if (isAlreadySurged) {
+                return FilterResult(
+                    decision = "REJECTED",
+                    confidence = 0.8,
+                    reason = "이미 급등 (변동률 ${changeRate}%)"
+                )
+            }
+
+            // 승인 조건 체크
+            val approvalResult = when {
+                tradingVolume >= BigDecimal("5000000000") && changeRate < BigDecimal("30") -> {
+                    FilterResult(
+                        decision = "APPROVED",
+                        confidence = 0.9,
+                        reason = "거래량 ${formatKrw(tradingVolume)} (50억+) + 변동률 ${changeRate}%"
+                    )
+                }
+                tradingVolume >= BigDecimal("1000000000") && changeRate < BigDecimal("20") -> {
+                    FilterResult(
+                        decision = "APPROVED",
+                        confidence = 0.8,
+                        reason = "거래량 ${formatKrw(tradingVolume)} (10억+) + 변동률 ${changeRate}%"
+                    )
+                }
+                tradingVolume >= BigDecimal("500000000") && changeRate < BigDecimal("15") -> {
+                    FilterResult(
+                        decision = "APPROVED",
+                        confidence = 0.7,
+                        reason = "거래량 ${formatKrw(tradingVolume)} (5억+) + 변동률 ${changeRate}%"
+                    )
+                }
+                else -> {
+                    FilterResult(
+                        decision = "REJECTED",
+                        confidence = 0.6,
+                        reason = "조건 미충족: 거래량 ${formatKrw(tradingVolume)}, 변동률 ${changeRate}%"
+                    )
+                }
+            }
+
+            log.info("[$market] 필터 결과: ${approvalResult.decision} (${approvalResult.reason})")
+            approvalResult
+
+        } catch (e: Exception) {
+            log.error("[$market] 필터 오류: ${e.message}", e)
+            FilterResult(
+                decision = "REJECTED",
+                confidence = 0.0,
+                reason = "필터 오류: ${e.message}"
             )
         }
+    }
 
+    /**
+     * 금액 포맷팅
+     */
+    private fun formatKrw(amount: BigDecimal): String {
+        return when {
+            amount >= BigDecimal("1000000000000") -> {
+                val trillion = amount.divide(BigDecimal("1000000000000"), 2, java.math.RoundingMode.HALF_UP)
+                "${trillion}조"
+            }
+            amount >= BigDecimal("100000000") -> {
+                val billion = amount.divide(BigDecimal("100000000"), 2, java.math.RoundingMode.HALF_UP)
+                "${billion}억"
+            }
+            amount >= BigDecimal("10000") -> {
+                val tenThousand = amount.divide(BigDecimal("10000"), 0, java.math.RoundingMode.HALF_UP)
+                "${tenThousand}만"
+            }
+            else -> amount.setScale(0, java.math.RoundingMode.HALF_UP).toString()
+        }
+    }
+
+    /* =====================================================================
+     * LLM 기반 필터링 (현재 비활성화)
+     *
+     * 매매 알고리즘 개선 후 다시 활성화 예정
+     * ===================================================================== */
+
+    @Suppress("unused")
+    private fun filterWithLlm(market: String, alert: VolumeSurgeAlertEntity): FilterResult {
         // 쿨다운 기간 내 기존 LLM 결과가 있는지 확인 (DB 캐시)
         val cachedResult = getCachedFilterResult(market)
         if (cachedResult != null) {

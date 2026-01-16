@@ -163,9 +163,9 @@ class RiskManager(
         val positionSize = currentBalance.multiply(BigDecimal(adjustedKelly))
             .setScale(0, RoundingMode.DOWN)
 
-        // 최소/최대 제한
+        // 최소/최대 제한 (수수료 0.04% 고려하여 5100원)
         return positionSize
-            .coerceAtLeast(BigDecimal(5000))  // 최소 5000원
+            .coerceAtLeast(BigDecimal(5100))  // 최소 5100원 (수수료 여유)
             .coerceAtMost(baseAmount.multiply(BigDecimal(2)))  // 최대 기본 금액의 2배
     }
 
