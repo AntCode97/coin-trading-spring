@@ -13,7 +13,7 @@ import org.springframework.boot.context.properties.ConfigurationProperties
 @ConfigurationProperties(prefix = "memescalper")
 data class MemeScalperProperties(
     /** 전략 활성화 여부 */
-    val enabled: Boolean = false,
+    val enabled: Boolean = true,
 
     /** 펌프 감지 폴링 간격 (밀리초) - 빠른 감지 필요 */
     val pollingIntervalMs: Long = 5000,
