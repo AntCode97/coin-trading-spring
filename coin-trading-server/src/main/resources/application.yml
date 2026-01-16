@@ -187,7 +187,7 @@ memescalper:
   max-consecutive-losses: ${MEME_SCALPER_MAX_LOSSES:3}
   daily-max-loss-krw: ${MEME_SCALPER_DAILY_MAX_LOSS:20000}
   daily-max-trades: ${MEME_SCALPER_DAILY_MAX_TRADES:50}
-  # 필터 (대형 코인 제외)
+  # 필터 (대형 코인 제외 - 시가총액 상위)
   exclude-markets:
     - KRW-BTC
     - KRW-ETH
@@ -197,6 +197,18 @@ memescalper:
     - KRW-DOGE
     - KRW-DOT
     - KRW-MATIC
+    - KRW-ETC
+    - KRW-LTC
+    - KRW-BCH
+    - KRW-LINK
+    - KRW-AVAX
+    - KRW-TRX
+    - KRW-SHIB
+    - KRW-ATOM
+    - KRW-EOS
+    - KRW-XLM
+    - KRW-HBAR
+    - KRW-VET
   min-trading-value-krw: ${MEME_SCALPER_MIN_TRADING_VALUE:100000000}
   max-trading-value-krw: ${MEME_SCALPER_MAX_TRADING_VALUE:50000000000}
 

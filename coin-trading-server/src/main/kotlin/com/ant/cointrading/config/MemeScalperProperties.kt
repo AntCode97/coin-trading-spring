@@ -73,10 +73,13 @@ data class MemeScalperProperties(
 
     // === 제외 마켓 ===
 
-    /** 거래 제외 마켓 (대형 코인) */
+    /** 거래 제외 마켓 (대형 코인 - 시가총액 상위) */
     val excludeMarkets: List<String> = listOf(
         "KRW-BTC", "KRW-ETH", "KRW-XRP", "KRW-SOL",
-        "KRW-ADA", "KRW-DOGE", "KRW-DOT", "KRW-MATIC"
+        "KRW-ADA", "KRW-DOGE", "KRW-DOT", "KRW-MATIC",
+        "KRW-ETC", "KRW-LTC", "KRW-BCH", "KRW-LINK",
+        "KRW-AVAX", "KRW-TRX", "KRW-SHIB", "KRW-ATOM",
+        "KRW-EOS", "KRW-XLM", "KRW-HBAR", "KRW-VET"
     ),
 
     /** 최소 거래대금 (KRW) - 너무 작은 코인 제외 */
