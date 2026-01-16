@@ -112,7 +112,105 @@ coin-trading-spring/
 
 ---
 
-## 최근 변경사항 (2026-01-13)
+## 최근 변경사항 (2026-01-16)
+
+### 퀀트 최적화: 매매 빈도 개선
+
+**문제 진단:**
+- 30일간 총 5건 거래 (DCA 3건, GRID 2건)
+- MEAN_REVERSION: 0건 (활성 전략인데 거래 없음)
+- VOLUME_SURGE: 0건 (경보는 감지되지만 진입 못함)
+
+**핵심 원인:**
+1. **Volume Surge 컨플루언스가 역추세 기준** - RSI 과매도/볼린저 하단에서 높은 점수
+   - 거래량 급등 = 가격 상승 = RSI 상승 = 볼린저 상단 → 점수 낮음
+2. **변동률 30% 필터가 너무 엄격** - 거래량 급등 종목은 이미 변동률 높음
+3. **진입 조건 과도** - RSI 70 이하, 컨플루언스 60점 이상
+
+**변경 내용:**
+
+#### 1. VolumeSurgeAnalyzer - 모멘텀 기반 컨플루언스로 변경
+
+```kotlin
+// 변경 전 (역추세 기준 - 잘못됨)
+rsi <= 30 -> 25점
+bollingerPosition == "LOWER" -> 25점
+
+// 변경 후 (모멘텀 기준)
+rsi in 50.0..65.0 -> 25점  // 상승 중이지만 과매수 전
+volumeRatio >= 5.0 -> 30점 // 거래량이 핵심 (가중치 상향)
+bollingerPosition == "UPPER" -> 20점  // 돌파도 긍정 신호
+```
+
+#### 2. VolumeSurgeFilter - 변동률 필터 완화
+
+```kotlin
+// 변경 전
+isTooSmall = tradingVolume < 5억원
+isAlreadySurged = changeRate > 30%
+
+// 변경 후
+isTooSmall = tradingVolume < 3억원  // 5억→3억
+isExtremelyHigh = changeRate > 50%  // 30%→50%
+```
+
+#### 3. VolumeSurgeEngine - 진입 조건 최적화
+
+```kotlin
+// RSI 허용 범위 확대: 70 → 80
+// 거래량이 충분하면 컨플루언스 기준 완화:
+volumeRatio >= 5.0 -> 컨플루언스 30점 이상
+volumeRatio >= 3.0 -> 컨플루언스 40점 이상
+volumeRatio >= 2.0 -> 컨플루언스 50점 이상
+```
+
+#### 4. MeanReversionStrategy - 기준 완화
+
+```kotlin
+// 변경 전
+RSI_OVERSOLD = 30.0
+RSI_OVERBOUGHT = 70.0
+VOLUME_MULTIPLIER = 1.5
+MIN_CONFLUENCE_SCORE = 50
+
+// 변경 후
+RSI_OVERSOLD = 25.0       // 범위 확대
+RSI_OVERBOUGHT = 75.0     // 범위 확대
+VOLUME_MULTIPLIER = 1.2   // 완화
+MIN_CONFLUENCE_SCORE = 40 // 완화
+```
+
+#### 5. application.yml - 전략 파라미터 최적화
+
+```yaml
+trading:
+  markets: [BTC_KRW, ETH_KRW, XRP_KRW, SOL_KRW]  # 4개로 확대
+  strategy:
+    mean-reversion-threshold: 1.2  # 2.0→1.2
+    rsi-oversold: 25               # 30→25
+    rsi-overbought: 75             # 70→75
+    bollinger-std-dev: 1.8         # 2.0→1.8
+
+volumesurge:
+  max-positions: 5                 # 3→5
+  stop-loss-percent: -3.0          # -2.0→-3.0
+  take-profit-percent: 6.0         # 5.0→6.0
+  position-timeout-min: 60         # 30→60
+  cooldown-min: 3                  # 5→3
+  llm-cooldown-min: 60             # 240→60
+  min-confluence-score: 40         # 60→40
+  max-rsi: 80                      # 70→80
+  min-volume-ratio: 1.5            # 2.0→1.5
+```
+
+**예상 효과:**
+- Volume Surge 진입률 대폭 상승 (0% → 예상 30-50%)
+- Mean Reversion 거래 빈도 증가 (Z-Score 1.2로 완화)
+- 거래 대상 4개 코인으로 확대 (BTC, ETH, XRP, SOL)
+
+---
+
+## 변경사항 (2026-01-13)
 
 ### 1. LLM 필터 4시간 쿨다운 추가
 

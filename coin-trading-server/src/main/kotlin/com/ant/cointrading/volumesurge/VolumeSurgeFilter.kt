@@ -138,47 +138,59 @@ class VolumeSurgeFilter(
 
             log.info("[$market] 거래량=${formatKrw(tradingVolume)}, 변동률=${changeRate}%")
 
-            // 거부 조건 체크
-            val isTooSmall = tradingVolume < BigDecimal("500000000")  // 5억 미만
-            val isAlreadySurged = changeRate > BigDecimal("30")      // 30% 이상
+            // 거부 조건 체크 (완화된 기준)
+            val isTooSmall = tradingVolume < BigDecimal("300000000")  // 3억 미만 (5억→3억)
+            val isExtremelyHigh = changeRate > BigDecimal("50")       // 50% 이상 (30%→50%)
 
             if (isTooSmall) {
                 return FilterResult(
                     decision = "REJECTED",
                     confidence = 0.8,
-                    reason = "거래량 5억원 미만 (${formatKrw(tradingVolume)})"
+                    reason = "거래량 3억원 미만 (${formatKrw(tradingVolume)})"
                 )
             }
 
-            if (isAlreadySurged) {
+            if (isExtremelyHigh) {
                 return FilterResult(
                     decision = "REJECTED",
                     confidence = 0.8,
-                    reason = "이미 급등 (변동률 ${changeRate}%)"
+                    reason = "극단적 급등 (변동률 ${changeRate}%)"
                 )
             }
 
-            // 승인 조건 체크
+            // 승인 조건 체크 (완화된 기준)
+            // 퀀트 원칙: 거래량 급등 = 매수세 유입, 변동률은 보조 지표
             val approvalResult = when {
-                tradingVolume >= BigDecimal("5000000000") && changeRate < BigDecimal("30") -> {
+                // 대형 거래량: 변동률 50% 미만이면 진입
+                tradingVolume >= BigDecimal("5000000000") && changeRate < BigDecimal("50") -> {
                     FilterResult(
                         decision = "APPROVED",
                         confidence = 0.9,
-                        reason = "거래량 ${formatKrw(tradingVolume)} (50억+) + 변동률 ${changeRate}%"
+                        reason = "대형 거래량 ${formatKrw(tradingVolume)} (50억+) + 변동률 ${changeRate}%"
                     )
                 }
-                tradingVolume >= BigDecimal("1000000000") && changeRate < BigDecimal("20") -> {
+                // 중대형 거래량: 변동률 40% 미만이면 진입
+                tradingVolume >= BigDecimal("1000000000") && changeRate < BigDecimal("40") -> {
+                    FilterResult(
+                        decision = "APPROVED",
+                        confidence = 0.85,
+                        reason = "중대형 거래량 ${formatKrw(tradingVolume)} (10억+) + 변동률 ${changeRate}%"
+                    )
+                }
+                // 중형 거래량: 변동률 30% 미만이면 진입
+                tradingVolume >= BigDecimal("500000000") && changeRate < BigDecimal("30") -> {
                     FilterResult(
                         decision = "APPROVED",
                         confidence = 0.8,
-                        reason = "거래량 ${formatKrw(tradingVolume)} (10억+) + 변동률 ${changeRate}%"
+                        reason = "중형 거래량 ${formatKrw(tradingVolume)} (5억+) + 변동률 ${changeRate}%"
                     )
                 }
-                tradingVolume >= BigDecimal("500000000") && changeRate < BigDecimal("15") -> {
+                // 소형 거래량: 변동률 20% 미만이면 진입
+                tradingVolume >= BigDecimal("300000000") && changeRate < BigDecimal("20") -> {
                     FilterResult(
                         decision = "APPROVED",
                         confidence = 0.7,
-                        reason = "거래량 ${formatKrw(tradingVolume)} (5억+) + 변동률 ${changeRate}%"
+                        reason = "소형 거래량 ${formatKrw(tradingVolume)} (3억+) + 변동률 ${changeRate}%"
                     )
                 }
                 else -> {

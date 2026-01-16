@@ -102,6 +102,8 @@ trading:
   markets:
     - BTC_KRW
     - ETH_KRW
+    - XRP_KRW
+    - SOL_KRW
   order-amount-krw: ${ORDER_AMOUNT_KRW:10000}
   max-drawdown-percent: ${MAX_DRAWDOWN_PERCENT:10.0}
   risk-per-trade-percent: ${RISK_PER_TRADE_PERCENT:1.0}
@@ -110,11 +112,14 @@ trading:
     dca-interval: ${DCA_INTERVAL:86400000}
     grid-levels: ${GRID_LEVELS:5}
     grid-spacing-percent: ${GRID_SPACING_PERCENT:1.0}
-    mean-reversion-threshold: ${MEAN_REVERSION_THRESHOLD:2.0}
-    rsi-oversold: ${RSI_OVERSOLD:30}
-    rsi-overbought: ${RSI_OVERBOUGHT:70}
+    # Mean Reversion 최적화: 1.2로 완화 (기존 2.0)
+    mean-reversion-threshold: ${MEAN_REVERSION_THRESHOLD:1.2}
+    # RSI 범위 확대: 25-75 (기존 30-70)
+    rsi-oversold: ${RSI_OVERSOLD:25}
+    rsi-overbought: ${RSI_OVERBOUGHT:75}
     bollinger-period: ${BOLLINGER_PERIOD:20}
-    bollinger-std-dev: ${BOLLINGER_STD_DEV:2.0}
+    # 볼린저 밴드 민감도 상향: 1.8 (기존 2.0)
+    bollinger-std-dev: ${BOLLINGER_STD_DEV:1.8}
 
 # LLM 최적화 설정
 llm:
@@ -132,25 +137,32 @@ logging:
   pattern:
     console: "%d{HH:mm:ss} [%thread] %-5level %logger{20} - %msg%n"
 
-# Volume Surge 전략 설정 (거래량 급등 단타)
+# Volume Surge 전략 설정 (거래량 급등 단타 - 모멘텀 기반)
 volumesurge:
   enabled: ${VOLUME_SURGE_ENABLED:false}
   polling-interval-ms: ${VOLUME_SURGE_POLLING_MS:30000}
   position-size-krw: ${VOLUME_SURGE_POSITION_SIZE:10000}
-  max-positions: ${VOLUME_SURGE_MAX_POSITIONS:3}
-  stop-loss-percent: ${VOLUME_SURGE_STOP_LOSS:-2.0}
-  take-profit-percent: ${VOLUME_SURGE_TAKE_PROFIT:5.0}
-  trailing-stop-trigger: ${VOLUME_SURGE_TRAILING_TRIGGER:2.0}
-  trailing-stop-offset: ${VOLUME_SURGE_TRAILING_OFFSET:1.0}
-  position-timeout-min: ${VOLUME_SURGE_TIMEOUT_MIN:30}
+  max-positions: ${VOLUME_SURGE_MAX_POSITIONS:5}
+  # 리스크 관리 (퀀트 최적화)
+  stop-loss-percent: ${VOLUME_SURGE_STOP_LOSS:-3.0}
+  take-profit-percent: ${VOLUME_SURGE_TAKE_PROFIT:6.0}
+  trailing-stop-trigger: ${VOLUME_SURGE_TRAILING_TRIGGER:3.0}
+  trailing-stop-offset: ${VOLUME_SURGE_TRAILING_OFFSET:1.5}
+  position-timeout-min: ${VOLUME_SURGE_TIMEOUT_MIN:60}
   llm-filter-enabled: ${VOLUME_SURGE_LLM_FILTER:true}
   reflection-cron: ${VOLUME_SURGE_REFLECTION_CRON:0 0 1 * * *}
-  cooldown-min: ${VOLUME_SURGE_COOLDOWN_MIN:5}
-  max-consecutive-losses: ${VOLUME_SURGE_MAX_LOSSES:3}
-  daily-max-loss-krw: ${VOLUME_SURGE_DAILY_MAX_LOSS:30000}
-  min-confluence-score: ${VOLUME_SURGE_MIN_CONFLUENCE:60}
-  max-rsi: ${VOLUME_SURGE_MAX_RSI:70}
-  min-volume-ratio: ${VOLUME_SURGE_MIN_VOLUME_RATIO:2.0}
+  # 쿨다운 완화: 5분 → 3분
+  cooldown-min: ${VOLUME_SURGE_COOLDOWN_MIN:3}
+  # LLM 쿨다운 완화: 240분 → 60분 (더 자주 재평가)
+  llm-cooldown-min: ${VOLUME_SURGE_LLM_COOLDOWN_MIN:60}
+  max-consecutive-losses: ${VOLUME_SURGE_MAX_LOSSES:5}
+  daily-max-loss-krw: ${VOLUME_SURGE_DAILY_MAX_LOSS:50000}
+  # 진입 조건 완화 (모멘텀 전략)
+  min-confluence-score: ${VOLUME_SURGE_MIN_CONFLUENCE:40}
+  max-rsi: ${VOLUME_SURGE_MAX_RSI:80}
+  min-volume-ratio: ${VOLUME_SURGE_MIN_VOLUME_RATIO:1.5}
+  # 경보 신선도 완화: 5분 → 10분
+  alert-freshness-min: ${VOLUME_SURGE_ALERT_FRESHNESS:10}
 
 # Actuator
 management:

@@ -167,21 +167,41 @@ class VolumeSurgeEngine(
     }
 
     /**
-     * 진입 조건 체크
+     * 진입 조건 체크 (모멘텀 전략 기준)
+     *
+     * 퀀트 원칙:
+     * - 거래량 급등이 핵심, RSI는 보조
+     * - RSI 80 이하까지 허용 (모멘텀 추종)
+     * - 컨플루언스 점수가 낮아도 거래량이 충분하면 진입
      */
     private fun shouldEnter(analysis: VolumeSurgeAnalysis): Boolean {
-        if (analysis.rsi > properties.maxRsi) {
-            analysis.rejectReason = "RSI 과매수 (${analysis.rsi})"
+        // RSI 극단적 과매수만 거부 (80 → 허용 범위 확대)
+        val effectiveMaxRsi = 80.0
+        if (analysis.rsi > effectiveMaxRsi) {
+            analysis.rejectReason = "RSI 극단적 과매수 (${String.format("%.1f", analysis.rsi)} > $effectiveMaxRsi)"
             return false
         }
-        if (analysis.confluenceScore < properties.minConfluenceScore) {
-            analysis.rejectReason = "컨플루언스 점수 부족 (${analysis.confluenceScore})"
+
+        // 거래량이 충분하면 컨플루언스 기준 완화
+        val effectiveMinConfluence = when {
+            analysis.volumeRatio >= 5.0 -> 30  // 500%+ 거래량이면 30점만
+            analysis.volumeRatio >= 3.0 -> 40  // 300%+ 거래량이면 40점
+            analysis.volumeRatio >= 2.0 -> 50  // 200%+ 거래량이면 50점
+            else -> properties.minConfluenceScore  // 기본값
+        }
+
+        if (analysis.confluenceScore < effectiveMinConfluence) {
+            analysis.rejectReason = "컨플루언스 점수 부족 (${analysis.confluenceScore} < $effectiveMinConfluence)"
             return false
         }
-        if (analysis.volumeRatio < properties.minVolumeRatio) {
-            analysis.rejectReason = "거래량 비율 부족 (${analysis.volumeRatio})"
+
+        // 최소 거래량은 유지 (필터에서 이미 검증됨)
+        val effectiveMinVolume = 1.5  // 150% 이상
+        if (analysis.volumeRatio < effectiveMinVolume) {
+            analysis.rejectReason = "거래량 비율 부족 (${String.format("%.1f", analysis.volumeRatio)} < $effectiveMinVolume)"
             return false
         }
+
         return true
     }
 

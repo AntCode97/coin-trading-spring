@@ -126,9 +126,12 @@ class RiskManager(
 
         // 충분한 거래 기록이 없으면 기본 금액 사용
         if (stats.totalTrades < 10) {
-            return baseAmount.multiply(BigDecimal(signalConfidence / 100))
+            val size = baseAmount.multiply(BigDecimal(signalConfidence / 100))
                 .setScale(0, RoundingMode.DOWN)
+                .coerceAtLeast(BigDecimal(5100))  // 최소 주문 금액 보장
                 .coerceAtMost(baseAmount)
+                .coerceAtMost(currentBalance)     // 잔고 초과 방지
+            return size
         }
 
         // 승률 계산
@@ -167,6 +170,7 @@ class RiskManager(
         return positionSize
             .coerceAtLeast(BigDecimal(5100))  // 최소 5100원 (수수료 여유)
             .coerceAtMost(baseAmount.multiply(BigDecimal(2)))  // 최대 기본 금액의 2배
+            .coerceAtMost(currentBalance)     // 잔고 초과 방지
     }
 
     /**

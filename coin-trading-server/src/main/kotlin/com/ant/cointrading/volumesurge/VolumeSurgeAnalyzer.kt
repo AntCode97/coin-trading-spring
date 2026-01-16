@@ -228,13 +228,16 @@ class VolumeSurgeAnalyzer(
     }
 
     /**
-     * 컨플루언스 점수 계산 (0~100)
+     * 컨플루언스 점수 계산 (0~100) - 모멘텀/순추세 기준
      *
-     * 각 지표별 25점씩 배점:
-     * - RSI: 과매도(30 이하) = 25점
-     * - MACD: 상승 신호 = 25점
-     * - 볼린저: 하단밴드 = 25점
-     * - 거래량: 1.5배 이상 = 25점
+     * Volume Surge는 거래량 급등 = 매수세 유입 = 순추세 전략
+     * 역추세(평균회귀)가 아닌 모멘텀 기준으로 점수 계산
+     *
+     * 배점:
+     * - 거래량: 30점 (핵심 지표)
+     * - MACD: 25점 (추세 확인)
+     * - RSI: 25점 (모멘텀 확인, 50-70 최적)
+     * - 볼린저: 20점 (돌파 확인)
      */
     private fun calculateConfluenceScore(
         rsi: Double,
@@ -244,36 +247,40 @@ class VolumeSurgeAnalyzer(
     ): Int {
         var score = 0
 
-        // RSI 점수 (과매도 영역에서 높은 점수)
+        // 1. 거래량 점수 (Volume Surge의 핵심 - 30점)
         score += when {
-            rsi <= 30 -> 25
-            rsi <= 40 -> 15
-            rsi <= 50 -> 10
-            rsi <= 60 -> 5
-            else -> 0
-        }
-
-        // MACD 점수
-        score += when (macdSignal) {
-            "BULLISH" -> 25
-            "NEUTRAL" -> 10
-            else -> 0
-        }
-
-        // 볼린저밴드 점수 (하단밴드에서 높은 점수)
-        score += when (bollingerPosition) {
-            "LOWER" -> 25
-            "MIDDLE" -> 10
-            else -> 0
-        }
-
-        // 거래량 점수
-        score += when {
-            volumeRatio >= 3.0 -> 25  // 300% 이상
-            volumeRatio >= 2.0 -> 20  // 200% 이상
-            volumeRatio >= 1.5 -> 15  // 150% 이상
+            volumeRatio >= 5.0 -> 30  // 500% 이상 = 폭발적 급등
+            volumeRatio >= 3.0 -> 25  // 300% 이상 = 강한 급등
+            volumeRatio >= 2.0 -> 20  // 200% 이상 = 급등
+            volumeRatio >= 1.5 -> 15  // 150% 이상 = 상승
             volumeRatio >= 1.2 -> 10  // 120% 이상
             else -> 0
+        }
+
+        // 2. MACD 점수 (추세 방향 확인 - 25점)
+        score += when (macdSignal) {
+            "BULLISH" -> 25           // 상승 신호 = 핵심
+            "NEUTRAL" -> 15           // 중립도 허용
+            else -> 5                 // BEARISH도 약간 허용 (초기 반등)
+        }
+
+        // 3. RSI 점수 (모멘텀 확인 - 25점)
+        // 모멘텀 전략: 50-70이 최적 (상승 중이지만 과매수 전)
+        score += when {
+            rsi in 50.0..65.0 -> 25   // 최적 모멘텀 구간
+            rsi in 40.0..70.0 -> 20   // 양호한 구간
+            rsi in 30.0..75.0 -> 15   // 허용 구간
+            rsi in 25.0..80.0 -> 10   // 넓은 허용
+            else -> 5                  // 극단값도 최소 점수
+        }
+
+        // 4. 볼린저밴드 점수 (돌파/위치 확인 - 20점)
+        // 모멘텀 전략: 상단 돌파도 긍정 신호
+        score += when (bollingerPosition) {
+            "UPPER" -> 20             // 상단 돌파 = 강한 모멘텀
+            "MIDDLE" -> 15            // 중앙 = 안정적 상승
+            "LOWER" -> 10             // 하단 = 반등 가능성
+            else -> 10
         }
 
         return score

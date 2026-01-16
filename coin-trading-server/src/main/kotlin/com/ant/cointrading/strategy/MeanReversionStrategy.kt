@@ -29,12 +29,12 @@ class MeanReversionStrategy(
     override val name = "MEAN_REVERSION"
 
     companion object {
-        // 컨플루언스 설정
+        // 컨플루언스 설정 (퀀트 최적화)
         const val RSI_PERIOD = 14
-        const val RSI_OVERSOLD = 30.0       // 과매도
-        const val RSI_OVERBOUGHT = 70.0     // 과매수
-        const val VOLUME_MULTIPLIER = 1.5   // 평균 거래량 대비 배율
-        const val MIN_CONFLUENCE_SCORE = 50 // 최소 컨플루언스 점수 (100점 만점)
+        const val RSI_OVERSOLD = 25.0       // 과매도 (30→25 완화)
+        const val RSI_OVERBOUGHT = 75.0     // 과매수 (70→75 완화)
+        const val VOLUME_MULTIPLIER = 1.2   // 평균 거래량 대비 배율 (1.5→1.2 완화)
+        const val MIN_CONFLUENCE_SCORE = 40 // 최소 컨플루언스 점수 (50→40 완화)
     }
 
     override fun analyze(
