@@ -18,8 +18,8 @@ data class MemeScalperProperties(
     /** 펌프 감지 폴링 간격 (밀리초) - 빠른 감지 필요 */
     val pollingIntervalMs: Long = 5000,
 
-    /** 1회 포지션 크기 (KRW) - 소액 */
-    val positionSizeKrw: Int = 5000,
+    /** 1회 포지션 크기 (KRW) - 최소 5100원 이상 */
+    val positionSizeKrw: Int = 6000,
 
     /** 최대 동시 포지션 수 */
     val maxPositions: Int = 3,

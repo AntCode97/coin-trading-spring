@@ -168,7 +168,7 @@ volumesurge:
 memescalper:
   enabled: ${MEME_SCALPER_ENABLED:true}
   polling-interval-ms: ${MEME_SCALPER_POLLING_MS:5000}
-  position-size-krw: ${MEME_SCALPER_POSITION_SIZE:5000}
+  position-size-krw: ${MEME_SCALPER_POSITION_SIZE:6000}
   max-positions: ${MEME_SCALPER_MAX_POSITIONS:3}
   # 타이트한 손절/익절
   stop-loss-percent: ${MEME_SCALPER_STOP_LOSS:-1.5}
