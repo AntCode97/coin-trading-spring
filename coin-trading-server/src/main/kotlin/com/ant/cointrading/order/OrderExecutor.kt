@@ -549,7 +549,7 @@ class OrderExecutor(
      */
     private fun getActualSellQuantity(market: String, requestedQuantity: BigDecimal): BigDecimal {
         return try {
-            val coinSymbol = market.split("_").firstOrNull() ?: return requestedQuantity
+            val coinSymbol = extractCoinSymbol(market)
             val balances = bithumbPrivateApi.getBalances() ?: return requestedQuantity
 
             val coinBalance = balances.find { it.currency == coinSymbol }?.balance ?: BigDecimal.ZERO
@@ -568,6 +568,21 @@ class OrderExecutor(
         } catch (e: Exception) {
             log.warn("[$market] 잔고 조회 실패, 요청 수량 그대로 사용: ${e.message}")
             requestedQuantity
+        }
+    }
+
+    /**
+     * 마켓 문자열에서 코인 심볼 추출
+     *
+     * 마켓 형식 지원:
+     * - "KRW-BTC" → "BTC"
+     * - "BTC_KRW" → "BTC"
+     */
+    private fun extractCoinSymbol(market: String): String {
+        return when {
+            market.contains("-") -> market.split("-").lastOrNull() ?: market
+            market.contains("_") -> market.split("_").firstOrNull() ?: market
+            else -> market
         }
     }
 
