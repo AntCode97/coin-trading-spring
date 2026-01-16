@@ -1,0 +1,116 @@
+### ===========================================
+### Volume Surge API - 거래량 급등 단타 전략
+### ===========================================
+
+### 전략 상태 조회
+# 엔진 상태, 열린 포지션, 설정값 등 확인
+GET {{host}}/api/volume-surge/status
+Accept: application/json
+
+###
+
+### 오늘 통계 조회
+# 경보 수, 승인율, 승률, 손익 등
+GET {{host}}/api/volume-surge/stats/today
+Accept: application/json
+
+###
+
+### 최근 경보 목록 (기본 20건)
+GET {{host}}/api/volume-surge/alerts
+Accept: application/json
+
+###
+
+### 최근 경보 목록 (50건)
+GET {{host}}/api/volume-surge/alerts?limit=50
+Accept: application/json
+
+###
+
+### 최근 트레이드 목록 (기본 20건)
+GET {{host}}/api/volume-surge/trades
+Accept: application/json
+
+###
+
+### 최근 트레이드 목록 (50건)
+GET {{host}}/api/volume-surge/trades?limit=50
+Accept: application/json
+
+###
+
+### 일일 요약 목록 (최근 30일)
+GET {{host}}/api/volume-surge/summaries
+Accept: application/json
+
+###
+
+### 일일 요약 목록 (최근 7일)
+GET {{host}}/api/volume-surge/summaries?days=7
+Accept: application/json
+
+###
+
+### 전략 설정 조회
+GET {{host}}/api/volume-surge/config
+Accept: application/json
+
+###
+
+### ===========================================
+### 수동 액션
+### ===========================================
+
+### 수동 회고 실행
+# LLM이 오늘 트레이드를 분석하고 개선점 도출
+POST {{host}}/api/volume-surge/reflect
+Accept: application/json
+
+###
+
+### 서킷 브레이커 리셋
+POST {{host}}/api/volume-surge/reset-circuit-breaker
+Accept: application/json
+
+###
+
+### 특정 마켓 수동 트리거 (LLM 필터 포함)
+POST {{host}}/api/volume-surge/trigger/KRW-BTC
+Accept: application/json
+
+###
+
+### 특정 마켓 수동 트리거 (LLM 필터 스킵)
+POST {{host}}/api/volume-surge/trigger/KRW-ETH?skipLlm=true
+Accept: application/json
+
+###
+
+### 특정 마켓 수동 청산
+POST {{host}}/api/volume-surge/close/KRW-BTC
+Accept: application/json
+
+###
+
+### ===========================================
+### 뉴스 검색 테스트 (CryptoCompare)
+### ===========================================
+
+### BTC 뉴스 검색 (최근 24시간)
+GET {{host}}/api/volume-surge/news/BTC
+Accept: application/json
+
+###
+
+### ETH 뉴스 검색 (최근 48시간)
+GET {{host}}/api/volume-surge/news/ETH?hours=48
+Accept: application/json
+
+###
+
+### XRP 뉴스 검색 (최근 12시간)
+GET {{host}}/api/volume-surge/news/XRP?hours=12
+Accept: application/json
+
+###

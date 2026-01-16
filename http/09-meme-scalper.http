@@ -1,0 +1,78 @@
+### ===========================================
+### Meme Scalper API - 세력 코인 초단타 전략
+### ===========================================
+
+### 전략 상태 조회
+# 엔진 상태, 열린 포지션, 설정값 등 확인
+GET {{host}}/api/meme-scalper/status
+Accept: application/json
+
+###
+
+### 오늘 통계 조회
+# 승률, 손익, 평균 보유시간 등
+GET {{host}}/api/meme-scalper/stats/today
+Accept: application/json
+
+###
+
+### 최근 트레이드 목록 (기본 20건)
+GET {{host}}/api/meme-scalper/trades
+Accept: application/json
+
+###
+
+### 최근 트레이드 목록 (50건)
+GET {{host}}/api/meme-scalper/trades?limit=50
+Accept: application/json
+
+###
+
+### 일일 요약 목록 (최근 30일)
+GET {{host}}/api/meme-scalper/summaries
+Accept: application/json
+
+###
+
+### 일일 요약 목록 (최근 7일)
+GET {{host}}/api/meme-scalper/summaries?days=7
+Accept: application/json
+
+###
+
+### 펌프 스캔 테스트
+# 현재 펌프 신호가 있는 마켓 조회 (점수순)
+GET {{host}}/api/meme-scalper/scan
+Accept: application/json
+
+###
+
+### 전략 설정 조회
+# 손절/익절, 펌프 감지 조건, 리스크 관리 등 상세 설정
+GET {{host}}/api/meme-scalper/config
+Accept: application/json
+
+###
+
+### ===========================================
+### 수동 액션
+### ===========================================
+
+### 서킷 브레이커 리셋
+# 연속 손실로 중단된 경우 리셋
+POST {{host}}/api/meme-scalper/reset
+Accept: application/json
+
+###
+
+### 특정 마켓 수동 청산 (예: KRW-SHIB)
+POST {{host}}/api/meme-scalper/close/KRW-SHIB
+Accept: application/json
+
+###
+
+### 특정 마켓 수동 청산 (예: KRW-DOGE)
+POST {{host}}/api/meme-scalper/close/KRW-DOGE
+Accept: application/json
+
+###
