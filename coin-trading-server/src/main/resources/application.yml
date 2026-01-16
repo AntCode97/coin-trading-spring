@@ -213,7 +213,7 @@ memescalper:
     - KRW-XMR
     - KRW-NEO
     - KRW-KLAY
-  min-trading-value-krw: ${MEME_SCALPER_MIN_TRADING_VALUE:100000000}
+  min-trading-value-krw: ${MEME_SCALPER_MIN_TRADING_VALUE:1000000000}  # 10억 (저유동성 잡코인 제외)
   max-trading-value-krw: ${MEME_SCALPER_MAX_TRADING_VALUE:50000000000}
 
 # Actuator

@@ -83,8 +83,8 @@ data class MemeScalperProperties(
         "KRW-BSV", "KRW-XMR", "KRW-NEO", "KRW-KLAY"
     ),
 
-    /** 최소 거래대금 (KRW) - 너무 작은 코인 제외 */
-    val minTradingValueKrw: Long = 100_000_000,  // 1억
+    /** 최소 거래대금 (KRW) - 유동성 확보를 위한 최소 기준 */
+    val minTradingValueKrw: Long = 1_000_000_000,  // 10억 (저유동성 잡코인 제외)
 
     /** 최대 거래대금 (KRW) - 대형 코인 제외 */
     val maxTradingValueKrw: Long = 50_000_000_000  // 500억

@@ -38,6 +38,8 @@ class MemeScalperDetector(
 
     companion object {
         const val RSI_PERIOD = 9  // 빠른 RSI
+        const val MIN_ENTRY_SCORE = 70  // 진입 최소 점수 (60 → 70)
+        const val MIN_PRICE_SPIKE_PERCENT = 1.0  // 최소 가격 스파이크 1% 필수
     }
 
     /**
@@ -59,7 +61,9 @@ class MemeScalperDetector(
         for (market in krwMarkets) {
             try {
                 val signal = detectPump(market)
-                if (signal != null && signal.score >= 60) {
+                if (signal != null &&
+                    signal.score >= MIN_ENTRY_SCORE &&
+                    signal.priceSpikePercent >= MIN_PRICE_SPIKE_PERCENT) {
                     signals.add(signal)
                     log.info("[$market] 펌프 감지! 점수=${signal.score}, 거래량=${signal.volumeSpikeRatio}x, 가격=${signal.priceSpikePercent}%")
                 }
