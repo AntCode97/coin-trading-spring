@@ -1,0 +1,685 @@
+package com.ant.cointrading.memescalper
+
+import com.ant.cointrading.api.bithumb.BithumbPrivateApi
+import com.ant.cointrading.api.bithumb.BithumbPublicApi
+import com.ant.cointrading.config.MemeScalperProperties
+import com.ant.cointrading.model.SignalAction
+import com.ant.cointrading.model.TradingSignal
+import com.ant.cointrading.notification.SlackNotifier
+import com.ant.cointrading.order.OrderExecutor
+import com.ant.cointrading.repository.MemeScalperDailyStatsEntity
+import com.ant.cointrading.repository.MemeScalperDailyStatsRepository
+import com.ant.cointrading.repository.MemeScalperTradeEntity
+import com.ant.cointrading.repository.MemeScalperTradeRepository
+import jakarta.annotation.PostConstruct
+import org.slf4j.LoggerFactory
+import org.springframework.scheduling.annotation.Scheduled
+import org.springframework.stereotype.Component
+import java.math.BigDecimal
+import java.time.Instant
+import java.time.LocalDate
+import java.time.ZoneId
+import java.time.temporal.ChronoUnit
+import java.util.concurrent.ConcurrentHashMap
+
+/**
+ * Meme Scalper 트레이딩 엔진
+ *
+ * 세력 코인 초단타 전략:
+ * - 펌프 감지 → 즉시 진입
+ * - 타이트한 손절/익절
+ * - 5분 타임아웃
+ *
+ * 리스크 관리:
+ * - 일일 손실 한도: 2만원
+ * - 일일 거래 한도: 50회
+ * - 연속 손실 3회 시 중단
+ */
+@Component
+class MemeScalperEngine(
+    private val properties: MemeScalperProperties,
+    private val bithumbPublicApi: BithumbPublicApi,
+    private val bithumbPrivateApi: BithumbPrivateApi,
+    private val detector: MemeScalperDetector,
+    private val orderExecutor: OrderExecutor,
+    private val tradeRepository: MemeScalperTradeRepository,
+    private val statsRepository: MemeScalperDailyStatsRepository,
+    private val slackNotifier: SlackNotifier
+) {
+    private val log = LoggerFactory.getLogger(javaClass)
+
+    // 마켓별 쿨다운 추적
+    private val cooldowns = ConcurrentHashMap<String, Instant>()
+
+    // 피크 데이터 추적 (청산 판단용)
+    private val peakVolumes = ConcurrentHashMap<Long, Double>()
+    private val peakPrices = ConcurrentHashMap<Long, Double>()
+
+    // 일일 통계
+    private var dailyTradeCount = 0
+    private var dailyPnl = 0.0
+    private var consecutiveLosses = 0
+    private var lastResetDate = LocalDate.now()
+
+    companion object {
+        private val MIN_ORDER_AMOUNT = BigDecimal("5100")
+        private const val CLOSE_RETRY_BACKOFF_SECONDS = 5L
+        private const val MAX_CLOSE_ATTEMPTS = 3
+    }
+
+    @PostConstruct
+    fun init() {
+        if (properties.enabled) {
+            log.info("=== Meme Scalper Engine 시작 ===")
+            log.info("설정: positionSize=${properties.positionSizeKrw}, stopLoss=${properties.stopLossPercent}%, takeProfit=${properties.takeProfitPercent}%")
+            log.info("제외 마켓: ${properties.excludeMarkets}")
+
+            // 열린 포지션 복원
+            restoreOpenPositions()
+
+            // 일일 통계 초기화
+            initializeDailyStats()
+        }
+    }
+
+    /**
+     * 서버 재시작 시 열린 포지션 복원
+     */
+    private fun restoreOpenPositions() {
+        val openPositions = tradeRepository.findByStatus("OPEN")
+        if (openPositions.isEmpty()) {
+            log.info("복원할 열린 포지션 없음")
+            return
+        }
+
+        log.info("열린 포지션 ${openPositions.size}건 복원")
+        openPositions.forEach { position ->
+            peakPrices[position.id!!] = position.peakPrice ?: position.entryPrice
+            peakVolumes[position.id!!] = position.peakVolume ?: 0.0
+            log.info("[${position.market}] 포지션 복원 완료")
+        }
+    }
+
+    /**
+     * 일일 통계 초기화
+     */
+    private fun initializeDailyStats() {
+        val today = LocalDate.now()
+        val startOfDay = today.atStartOfDay(ZoneId.systemDefault()).toInstant()
+
+        dailyTradeCount = tradeRepository.countTodayTrades(startOfDay)
+        dailyPnl = tradeRepository.sumTodayPnl(startOfDay)
+
+        log.info("일일 통계 초기화: 거래=${dailyTradeCount}회, 손익=${dailyPnl}원")
+    }
+
+    /**
+     * 펌프 스캔 (5초마다)
+     */
+    @Scheduled(fixedDelayString = "\${memescalper.polling-interval-ms:5000}")
+    fun scanAndTrade() {
+        if (!properties.enabled) return
+
+        // 일일 리셋 체크
+        checkDailyReset()
+
+        // 거래 가능 여부 체크
+        if (!canTrade()) {
+            return
+        }
+
+        // 동시 포지션 수 체크
+        val openPositions = tradeRepository.countByStatus("OPEN")
+        if (openPositions >= properties.maxPositions) {
+            log.debug("최대 포지션 도달 ($openPositions/${properties.maxPositions})")
+            return
+        }
+
+        // 펌프 스캔
+        try {
+            val signals = detector.scanForPumps()
+            if (signals.isEmpty()) {
+                log.debug("펌프 신호 없음")
+                return
+            }
+
+            // 최상위 신호로 진입 시도
+            for (signal in signals.take(3)) {  // 상위 3개만
+                if (shouldEnter(signal)) {
+                    enterPosition(signal)
+                    break  // 한 번에 하나만 진입
+                }
+            }
+        } catch (e: Exception) {
+            log.error("펌프 스캔 중 오류: ${e.message}", e)
+        }
+    }
+
+    /**
+     * 포지션 모니터링 (1초마다)
+     */
+    @Scheduled(fixedDelay = 1000)
+    fun monitorPositions() {
+        if (!properties.enabled) return
+
+        // OPEN 포지션 모니터링
+        val openPositions = tradeRepository.findByStatus("OPEN")
+        openPositions.forEach { position ->
+            try {
+                monitorSinglePosition(position)
+            } catch (e: Exception) {
+                log.error("[${position.market}] 모니터링 오류: ${e.message}")
+            }
+        }
+
+        // CLOSING 포지션 모니터링
+        val closingPositions = tradeRepository.findByStatus("CLOSING")
+        closingPositions.forEach { position ->
+            try {
+                monitorClosingPosition(position)
+            } catch (e: Exception) {
+                log.error("[${position.market}] 청산 모니터링 오류: ${e.message}")
+            }
+        }
+    }
+
+    /**
+     * 진입 조건 체크
+     */
+    private fun shouldEnter(signal: PumpSignal): Boolean {
+        val market = signal.market
+
+        // 쿨다운 체크
+        val cooldownEnd = cooldowns[market]
+        if (cooldownEnd != null && Instant.now().isBefore(cooldownEnd)) {
+            log.debug("[$market] 쿨다운 중")
+            return false
+        }
+
+        // 이미 열린 포지션 체크
+        val existing = tradeRepository.findByMarketAndStatus(market, "OPEN")
+        if (existing.isNotEmpty()) {
+            log.debug("[$market] 이미 열린 포지션 존재")
+            return false
+        }
+
+        // RSI 과매수 체크
+        if (signal.rsi > properties.maxRsi) {
+            log.debug("[$market] RSI 과매수 (${signal.rsi} > ${properties.maxRsi})")
+            return false
+        }
+
+        // 최소 점수 체크
+        if (signal.score < 60) {
+            log.debug("[$market] 점수 부족 (${signal.score} < 60)")
+            return false
+        }
+
+        return true
+    }
+
+    /**
+     * 포지션 진입
+     */
+    private fun enterPosition(signal: PumpSignal) {
+        val market = signal.market
+
+        log.info("[$market] 포지션 진입 시도 - 점수=${signal.score}, 거래량=${signal.volumeSpikeRatio}x")
+
+        val positionSize = BigDecimal(properties.positionSizeKrw)
+
+        // 매수 주문 실행
+        val buySignal = TradingSignal(
+            market = market,
+            action = SignalAction.BUY,
+            confidence = signal.score.toDouble(),
+            price = signal.currentPrice,
+            reason = "Meme Scalper 진입: 펌프 감지",
+            strategy = "MEME_SCALPER"
+        )
+
+        val orderResult = orderExecutor.execute(buySignal, positionSize)
+
+        if (!orderResult.success) {
+            log.error("[$market] 매수 주문 실패: ${orderResult.message}")
+            cooldowns[market] = Instant.now().plus(30, ChronoUnit.SECONDS)  // 30초 쿨다운
+            return
+        }
+
+        val executedPrice = orderResult.price?.toDouble() ?: signal.currentPrice.toDouble()
+        val executedQuantity = orderResult.executedQuantity?.toDouble() ?: 0.0
+
+        if (executedQuantity <= 0) {
+            log.error("[$market] 체결 수량 0")
+            return
+        }
+
+        // 트레이드 엔티티 생성
+        val trade = MemeScalperTradeEntity(
+            market = market,
+            entryPrice = executedPrice,
+            quantity = executedQuantity,
+            entryTime = Instant.now(),
+            entryVolumeSpikeRatio = signal.volumeSpikeRatio,
+            entryPriceSpikePercent = signal.priceSpikePercent,
+            entryImbalance = signal.bidImbalance,
+            entryRsi = signal.rsi,
+            peakPrice = executedPrice,
+            peakVolume = signal.volumeSpikeRatio,
+            status = "OPEN"
+        )
+
+        val savedTrade = tradeRepository.save(trade)
+        peakPrices[savedTrade.id!!] = executedPrice
+        peakVolumes[savedTrade.id!!] = signal.volumeSpikeRatio
+
+        // 쿨다운 설정
+        cooldowns[market] = Instant.now().plus(properties.cooldownSec.toLong(), ChronoUnit.SECONDS)
+
+        // 일일 카운트 증가
+        dailyTradeCount++
+
+        // Slack 알림
+        slackNotifier.sendSystemNotification(
+            "Meme Scalper 진입",
+            """
+            마켓: $market
+            체결가: ${executedPrice}원
+            수량: $executedQuantity
+            점수: ${signal.score}
+            거래량 스파이크: ${String.format("%.1f", signal.volumeSpikeRatio)}x
+            가격 스파이크: ${String.format("%.1f", signal.priceSpikePercent)}%
+            호가 Imbalance: ${String.format("%.2f", signal.bidImbalance)}
+            RSI: ${String.format("%.1f", signal.rsi)}
+            """.trimIndent()
+        )
+
+        log.info("[$market] 진입 완료: 가격=$executedPrice, 수량=$executedQuantity")
+    }
+
+    /**
+     * 단일 포지션 모니터링
+     */
+    private fun monitorSinglePosition(position: MemeScalperTradeEntity) {
+        val market = position.market
+
+        // 현재가 조회
+        val ticker = bithumbPublicApi.getCurrentPrice(market)?.firstOrNull() ?: return
+        val currentPrice = ticker.tradePrice.toDouble()
+        val pnlPercent = ((currentPrice - position.entryPrice) / position.entryPrice) * 100
+
+        // 피크 업데이트
+        val peakPrice = peakPrices.getOrDefault(position.id!!, position.entryPrice)
+        if (currentPrice > peakPrice) {
+            peakPrices[position.id!!] = currentPrice
+            position.peakPrice = currentPrice
+            tradeRepository.save(position)
+        }
+
+        // 1. 손절 체크
+        if (pnlPercent <= properties.stopLossPercent) {
+            closePosition(position, currentPrice, "STOP_LOSS")
+            return
+        }
+
+        // 2. 익절 체크
+        if (pnlPercent >= properties.takeProfitPercent) {
+            closePosition(position, currentPrice, "TAKE_PROFIT")
+            return
+        }
+
+        // 3. 타임아웃 체크 (5분)
+        val holdingSeconds = ChronoUnit.SECONDS.between(position.entryTime, Instant.now())
+        if (holdingSeconds >= properties.positionTimeoutMin * 60) {
+            closePosition(position, currentPrice, "TIMEOUT")
+            return
+        }
+
+        // 4. 청산 신호 체크 (거래량 급감, 호가창 반전)
+        val peakVol = peakVolumes.getOrDefault(position.id!!, 1.0)
+        val exitSignal = detector.detectExitSignal(market, peakVol)
+        if (exitSignal != null) {
+            closePosition(position, currentPrice, exitSignal.reason)
+            return
+        }
+    }
+
+    /**
+     * CLOSING 포지션 모니터링
+     */
+    private fun monitorClosingPosition(position: MemeScalperTradeEntity) {
+        val market = position.market
+        val closeOrderId = position.closeOrderId
+
+        if (closeOrderId.isNullOrBlank()) {
+            position.status = "OPEN"
+            position.closeAttemptCount = 0
+            tradeRepository.save(position)
+            return
+        }
+
+        try {
+            val orderStatus = bithumbPrivateApi.getOrder(closeOrderId)
+
+            when (orderStatus?.state) {
+                "done" -> {
+                    val actualPrice = orderStatus.price?.toDouble() ?: position.exitPrice ?: 0.0
+                    finalizeClose(position, actualPrice, position.exitReason ?: "UNKNOWN")
+                }
+                "cancel" -> {
+                    position.status = "OPEN"
+                    position.closeOrderId = null
+                    position.closeAttemptCount = 0
+                    tradeRepository.save(position)
+                }
+                "wait" -> {
+                    val elapsed = java.time.Duration.between(
+                        position.lastCloseAttempt ?: Instant.now(),
+                        Instant.now()
+                    ).seconds
+
+                    if (elapsed > 15) {  // 15초 대기 후 취소
+                        try {
+                            bithumbPrivateApi.cancelOrder(closeOrderId)
+                        } catch (e: Exception) {
+                            log.warn("[$market] 주문 취소 실패: ${e.message}")
+                        }
+                        position.status = "OPEN"
+                        position.closeOrderId = null
+                        tradeRepository.save(position)
+                    }
+                }
+            }
+        } catch (e: Exception) {
+            log.error("[$market] 청산 상태 조회 실패: ${e.message}")
+            val elapsed = java.time.Duration.between(
+                position.lastCloseAttempt ?: Instant.now(),
+                Instant.now()
+            ).toMinutes()
+
+            if (elapsed >= 2) {
+                position.status = "OPEN"
+                position.closeOrderId = null
+                position.closeAttemptCount = 0
+                tradeRepository.save(position)
+            }
+        }
+    }
+
+    /**
+     * 포지션 청산
+     */
+    private fun closePosition(position: MemeScalperTradeEntity, exitPrice: Double, reason: String) {
+        val market = position.market
+
+        if (position.status == "CLOSING") {
+            return
+        }
+
+        // 백오프 체크
+        val lastAttempt = position.lastCloseAttempt
+        if (lastAttempt != null) {
+            val elapsed = java.time.Duration.between(lastAttempt, Instant.now()).seconds
+            if (elapsed < CLOSE_RETRY_BACKOFF_SECONDS) {
+                return
+            }
+        }
+
+        // 최대 시도 횟수 체크
+        if (position.closeAttemptCount >= MAX_CLOSE_ATTEMPTS) {
+            handleAbandonedPosition(position, exitPrice, "MAX_ATTEMPTS")
+            return
+        }
+
+        log.info("[$market] 청산 시도 #${position.closeAttemptCount + 1}: $reason")
+
+        val positionAmount = BigDecimal(position.quantity * exitPrice)
+
+        if (positionAmount < MIN_ORDER_AMOUNT && reason != "STOP_LOSS") {
+            handleAbandonedPosition(position, exitPrice, "MIN_AMOUNT")
+            return
+        }
+
+        position.status = "CLOSING"
+        position.exitReason = reason
+        position.exitPrice = exitPrice
+        position.lastCloseAttempt = Instant.now()
+        position.closeAttemptCount++
+        tradeRepository.save(position)
+
+        val sellSignal = TradingSignal(
+            market = market,
+            action = SignalAction.SELL,
+            confidence = 100.0,
+            price = BigDecimal(exitPrice),
+            reason = "Meme Scalper 청산: $reason",
+            strategy = "MEME_SCALPER"
+        )
+
+        val orderResult = orderExecutor.execute(sellSignal, positionAmount)
+
+        if (orderResult.success) {
+            val actualPrice = orderResult.price?.toDouble() ?: exitPrice
+
+            if (orderResult.executedQuantity != null && orderResult.executedQuantity > BigDecimal.ZERO) {
+                finalizeClose(position, actualPrice, reason)
+            } else {
+                position.closeOrderId = orderResult.orderId
+                tradeRepository.save(position)
+            }
+        } else {
+            val errorMessage = orderResult.message ?: ""
+
+            if (errorMessage.contains("insufficient") ||
+                errorMessage.contains("부족") ||
+                errorMessage.contains("최소")) {
+                handleAbandonedPosition(position, exitPrice, "API_ERROR")
+            } else {
+                position.status = "OPEN"
+                position.closeOrderId = null
+                tradeRepository.save(position)
+            }
+        }
+    }
+
+    /**
+     * 청산 완료 처리
+     */
+    private fun finalizeClose(position: MemeScalperTradeEntity, actualPrice: Double, reason: String) {
+        val market = position.market
+
+        val pnlAmount = (actualPrice - position.entryPrice) * position.quantity
+        val pnlPercent = ((actualPrice - position.entryPrice) / position.entryPrice) * 100
+
+        val safePnlAmount = if (pnlAmount.isNaN() || pnlAmount.isInfinite()) 0.0 else pnlAmount
+        val safePnlPercent = if (pnlPercent.isNaN() || pnlPercent.isInfinite()) 0.0 else pnlPercent
+
+        position.exitPrice = actualPrice
+        position.exitTime = Instant.now()
+        position.exitReason = reason
+        position.pnlAmount = safePnlAmount
+        position.pnlPercent = safePnlPercent
+        position.status = "CLOSED"
+
+        tradeRepository.save(position)
+
+        // 피크 데이터 정리
+        peakPrices.remove(position.id)
+        peakVolumes.remove(position.id)
+
+        // 일일 통계 업데이트
+        dailyPnl += safePnlAmount
+        if (safePnlAmount < 0) {
+            consecutiveLosses++
+        } else {
+            consecutiveLosses = 0
+        }
+
+        // Slack 알림
+        val emoji = if (safePnlAmount >= 0) "+" else ""
+        val holdingSeconds = ChronoUnit.SECONDS.between(position.entryTime, Instant.now())
+        slackNotifier.sendSystemNotification(
+            "Meme Scalper 청산",
+            """
+            마켓: $market
+            사유: $reason
+            진입가: ${position.entryPrice}원
+            청산가: ${actualPrice}원
+            손익: $emoji${String.format("%.0f", safePnlAmount)}원 (${String.format("%.2f", safePnlPercent)}%)
+            보유시간: ${holdingSeconds}초
+            일일 손익: ${String.format("%.0f", dailyPnl)}원
+            연속 손실: ${consecutiveLosses}회
+            """.trimIndent()
+        )
+
+        log.info("[$market] 청산 완료: $reason, 손익=${safePnlAmount}원 (${safePnlPercent}%)")
+    }
+
+    /**
+     * ABANDONED 처리
+     */
+    private fun handleAbandonedPosition(position: MemeScalperTradeEntity, exitPrice: Double, reason: String) {
+        val market = position.market
+
+        position.exitPrice = exitPrice
+        position.exitTime = Instant.now()
+        position.exitReason = "ABANDONED_$reason"
+        position.pnlAmount = 0.0
+        position.pnlPercent = 0.0
+        position.status = "ABANDONED"
+
+        tradeRepository.save(position)
+        peakPrices.remove(position.id)
+        peakVolumes.remove(position.id)
+
+        slackNotifier.sendWarning(market, "Meme Scalper 포지션 ABANDONED: $reason")
+        log.warn("[$market] ABANDONED 처리: $reason")
+    }
+
+    /**
+     * 거래 가능 여부 체크
+     */
+    private fun canTrade(): Boolean {
+        // 일일 거래 횟수 한도
+        if (dailyTradeCount >= properties.dailyMaxTrades) {
+            log.debug("일일 거래 한도 도달 ($dailyTradeCount/${properties.dailyMaxTrades})")
+            return false
+        }
+
+        // 일일 손실 한도
+        if (dailyPnl <= -properties.dailyMaxLossKrw) {
+            log.debug("일일 손실 한도 도달 (${dailyPnl}원)")
+            return false
+        }
+
+        // 연속 손실 한도
+        if (consecutiveLosses >= properties.maxConsecutiveLosses) {
+            log.debug("연속 손실 한도 도달 (${consecutiveLosses}회)")
+            return false
+        }
+
+        return true
+    }
+
+    /**
+     * 일일 리셋 체크
+     */
+    private fun checkDailyReset() {
+        val today = LocalDate.now()
+        if (today != lastResetDate) {
+            // 전일 통계 저장
+            saveDailyStats(lastResetDate)
+
+            // 리셋
+            dailyTradeCount = 0
+            dailyPnl = 0.0
+            consecutiveLosses = 0
+            lastResetDate = today
+
+            log.info("=== Meme Scalper 일일 리셋 ===")
+        }
+    }
+
+    /**
+     * 일일 통계 저장
+     */
+    private fun saveDailyStats(date: LocalDate) {
+        try {
+            val startOfDay = date.atStartOfDay(ZoneId.systemDefault()).toInstant()
+            val trades = tradeRepository.findTodayClosedTrades(startOfDay)
+
+            if (trades.isEmpty()) return
+
+            val winningTrades = trades.count { (it.pnlAmount ?: 0.0) > 0 }
+            val losingTrades = trades.count { (it.pnlAmount ?: 0.0) < 0 }
+            val totalPnl = trades.sumOf { it.pnlAmount ?: 0.0 }
+            val winRate = if (trades.isNotEmpty()) winningTrades.toDouble() / trades.size else 0.0
+
+            val avgHolding = trades
+                .mapNotNull { trade ->
+                    trade.exitTime?.let { ChronoUnit.SECONDS.between(trade.entryTime, it).toDouble() }
+                }
+                .average()
+
+            val stats = statsRepository.findByDate(date) ?: MemeScalperDailyStatsEntity(date = date)
+            stats.totalTrades = trades.size
+            stats.winningTrades = winningTrades
+            stats.losingTrades = losingTrades
+            stats.totalPnl = totalPnl
+            stats.winRate = winRate
+            stats.avgHoldingSeconds = avgHolding
+            stats.maxSingleLoss = trades.mapNotNull { it.pnlAmount }.minOrNull()
+            stats.maxSingleProfit = trades.mapNotNull { it.pnlAmount }.maxOrNull()
+
+            statsRepository.save(stats)
+            log.info("일일 통계 저장: $date, 거래=${trades.size}, 승률=${String.format("%.1f", winRate * 100)}%, 손익=$totalPnl")
+        } catch (e: Exception) {
+            log.error("일일 통계 저장 실패: ${e.message}")
+        }
+    }
+
+    /**
+     * 상태 조회 (API용)
+     */
+    fun getStatus(): Map<String, Any> {
+        val openPositions = tradeRepository.findByStatus("OPEN")
+        return mapOf(
+            "enabled" to properties.enabled,
+            "openPositions" to openPositions.size,
+            "dailyTradeCount" to dailyTradeCount,
+            "dailyPnl" to dailyPnl,
+            "consecutiveLosses" to consecutiveLosses,
+            "canTrade" to canTrade()
+        )
+    }
+
+    /**
+     * 서킷 브레이커 리셋
+     */
+    fun resetCircuitBreaker(): Map<String, Any> {
+        consecutiveLosses = 0
+        log.info("서킷 브레이커 리셋")
+        return mapOf("success" to true, "consecutiveLosses" to 0)
+    }
+
+    /**
+     * 수동 청산
+     */
+    fun manualClose(market: String): Map<String, Any?> {
+        val positions = tradeRepository.findByMarketAndStatus(market, "OPEN")
+        if (positions.isEmpty()) {
+            return mapOf("success" to false, "error" to "열린 포지션 없음")
+        }
+
+        val results = positions.map { position ->
+            val ticker = bithumbPublicApi.getCurrentPrice(market)?.firstOrNull()
+            val exitPrice = ticker?.tradePrice?.toDouble() ?: position.entryPrice
+
+            closePosition(position, exitPrice, "MANUAL")
+
+            mapOf("positionId" to position.id, "exitPrice" to exitPrice)
+        }
+
+        return mapOf("success" to true, "closedPositions" to results)
+    }
+}

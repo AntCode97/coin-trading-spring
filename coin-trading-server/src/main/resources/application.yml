@@ -164,6 +164,42 @@ volumesurge:
   # 경보 신선도 완화: 5분 → 10분
   alert-freshness-min: ${VOLUME_SURGE_ALERT_FRESHNESS:10}
 
+# Meme Scalper 전략 설정 (세력 코인 초단타 - 펌프앤덤프 스캘핑)
+memescalper:
+  enabled: ${MEME_SCALPER_ENABLED:false}
+  polling-interval-ms: ${MEME_SCALPER_POLLING_MS:5000}
+  position-size-krw: ${MEME_SCALPER_POSITION_SIZE:5000}
+  max-positions: ${MEME_SCALPER_MAX_POSITIONS:3}
+  # 타이트한 손절/익절
+  stop-loss-percent: ${MEME_SCALPER_STOP_LOSS:-1.5}
+  take-profit-percent: ${MEME_SCALPER_TAKE_PROFIT:2.0}
+  position-timeout-min: ${MEME_SCALPER_TIMEOUT_MIN:5}
+  # 펌프 감지 조건
+  volume-spike-ratio: ${MEME_SCALPER_VOLUME_SPIKE:5.0}
+  price-spike-percent: ${MEME_SCALPER_PRICE_SPIKE:3.0}
+  min-bid-imbalance: ${MEME_SCALPER_MIN_IMBALANCE:0.3}
+  max-rsi: ${MEME_SCALPER_MAX_RSI:80}
+  # 청산 신호
+  volume-drop-ratio: ${MEME_SCALPER_VOLUME_DROP:0.3}
+  imbalance-exit-threshold: ${MEME_SCALPER_IMBALANCE_EXIT:0.0}
+  # 리스크 관리
+  cooldown-sec: ${MEME_SCALPER_COOLDOWN_SEC:60}
+  max-consecutive-losses: ${MEME_SCALPER_MAX_LOSSES:3}
+  daily-max-loss-krw: ${MEME_SCALPER_DAILY_MAX_LOSS:20000}
+  daily-max-trades: ${MEME_SCALPER_DAILY_MAX_TRADES:50}
+  # 필터 (대형 코인 제외)
+  exclude-markets:
+    - KRW-BTC
+    - KRW-ETH
+    - KRW-XRP
+    - KRW-SOL
+    - KRW-ADA
+    - KRW-DOGE
+    - KRW-DOT
+    - KRW-MATIC
+  min-trading-value-krw: ${MEME_SCALPER_MIN_TRADING_VALUE:100000000}
+  max-trading-value-krw: ${MEME_SCALPER_MAX_TRADING_VALUE:50000000000}
+
 # Actuator
 management:
   endpoints:
