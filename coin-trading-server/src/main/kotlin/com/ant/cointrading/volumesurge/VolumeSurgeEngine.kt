@@ -1,5 +1,6 @@
 package com.ant.cointrading.volumesurge
 
+import com.ant.cointrading.api.bithumb.BithumbPrivateApi
 import com.ant.cointrading.api.bithumb.BithumbPublicApi
 import com.ant.cointrading.config.VolumeSurgeProperties
 import com.ant.cointrading.model.SignalAction
@@ -33,6 +34,7 @@ import java.util.concurrent.ConcurrentHashMap
 class VolumeSurgeEngine(
     private val properties: VolumeSurgeProperties,
     private val bithumbPublicApi: BithumbPublicApi,
+    private val bithumbPrivateApi: BithumbPrivateApi,
     private val volumeSurgeFilter: VolumeSurgeFilter,
     private val volumeSurgeAnalyzer: VolumeSurgeAnalyzer,
     private val orderExecutor: OrderExecutor,
@@ -321,19 +323,113 @@ class VolumeSurgeEngine(
 
     /**
      * 포지션 모니터링 (1초마다)
+     *
+     * OPEN 포지션: 손절/익절/트레일링/타임아웃 조건 체크
+     * CLOSING 포지션: 청산 주문 상태 확인 또는 재시도
      */
     @Scheduled(fixedDelay = 1000)
     fun monitorPositions() {
         if (!properties.enabled) return
 
+        // OPEN 포지션 모니터링
         val openPositions = tradeRepository.findByStatus("OPEN")
-        if (openPositions.isEmpty()) return
-
         openPositions.forEach { position ->
             try {
                 monitorSinglePosition(position)
             } catch (e: Exception) {
                 log.error("[${position.market}] 포지션 모니터링 오류: ${e.message}")
+            }
+        }
+
+        // CLOSING 포지션 모니터링 (청산 진행 중)
+        val closingPositions = tradeRepository.findByStatus("CLOSING")
+        closingPositions.forEach { position ->
+            try {
+                monitorClosingPosition(position)
+            } catch (e: Exception) {
+                log.error("[${position.market}] 청산 모니터링 오류: ${e.message}")
+            }
+        }
+    }
+
+    /**
+     * 청산 중인 포지션 모니터링
+     *
+     * - 청산 주문 상태 확인 (Private API 사용)
+     * - 일정 시간 후 미체결이면 취소 후 재시도
+     */
+    private fun monitorClosingPosition(position: VolumeSurgeTradeEntity) {
+        val market = position.market
+        val closeOrderId = position.closeOrderId
+
+        // 청산 주문 ID가 없으면 OPEN으로 되돌리고 다시 시도
+        if (closeOrderId.isNullOrBlank()) {
+            log.warn("[$market] 청산 주문 ID 없음, OPEN으로 복원")
+            position.status = "OPEN"
+            position.closeAttemptCount = 0
+            tradeRepository.save(position)
+            return
+        }
+
+        // 주문 상태 조회 (Private API)
+        try {
+            val orderStatus = bithumbPrivateApi.getOrder(closeOrderId)
+
+            when (orderStatus?.state) {
+                "done" -> {
+                    // 체결 완료
+                    val actualExitPrice = orderStatus.price?.toDouble() ?: position.exitPrice ?: 0.0
+                    finalizeClose(position, actualExitPrice, position.exitReason ?: "UNKNOWN")
+                    log.info("[$market] 청산 주문 체결 확인: $closeOrderId")
+                }
+                "cancel" -> {
+                    // 주문 취소됨 - OPEN으로 되돌림
+                    log.warn("[$market] 청산 주문 취소됨: $closeOrderId")
+                    position.status = "OPEN"
+                    position.closeOrderId = null
+                    position.closeAttemptCount = 0
+                    tradeRepository.save(position)
+                }
+                "wait" -> {
+                    // 대기 중 - 30초 이상이면 취소 후 재시도
+                    val elapsed = java.time.Duration.between(
+                        position.lastCloseAttempt ?: Instant.now(),
+                        Instant.now()
+                    ).seconds
+
+                    if (elapsed > 30) {
+                        log.warn("[$market] 청산 주문 30초 미체결, 취소 시도: $closeOrderId")
+                        // 주문 취소 시도
+                        try {
+                            bithumbPrivateApi.cancelOrder(closeOrderId)
+                            log.info("[$market] 청산 주문 취소 완료: $closeOrderId")
+                        } catch (e: Exception) {
+                            log.warn("[$market] 주문 취소 실패 (이미 체결되었을 수 있음): ${e.message}")
+                        }
+                        position.status = "OPEN"
+                        position.closeOrderId = null
+                        tradeRepository.save(position)
+                    }
+                }
+                else -> {
+                    // 알 수 없는 상태 또는 조회 실패
+                    log.debug("[$market] 청산 주문 상태: ${orderStatus?.state}")
+                }
+            }
+        } catch (e: Exception) {
+            log.error("[$market] 청산 주문 상태 조회 실패: ${e.message}")
+            // 5분 이상 CLOSING 상태면 OPEN으로 복원
+            val elapsed = java.time.Duration.between(
+                position.lastCloseAttempt ?: Instant.now(),
+                Instant.now()
+            ).toMinutes()
+
+            if (elapsed >= 5) {
+                log.warn("[$market] 5분 이상 CLOSING 상태, OPEN으로 복원")
+                position.status = "OPEN"
+                position.closeOrderId = null
+                position.closeAttemptCount = 0
+                tradeRepository.save(position)
             }
         }
     }
@@ -421,45 +517,74 @@ class VolumeSurgeEngine(
     companion object {
         // 빗썸 최소 주문 금액 (KRW) - 수수료(0.04%) 고려
         private val MIN_ORDER_AMOUNT_KRW = BigDecimal("5100")
+
+        // 청산 재시도 백오프 (초)
+        private const val CLOSE_RETRY_BACKOFF_SECONDS = 10L
+
+        // 최대 청산 시도 횟수
+        private const val MAX_CLOSE_ATTEMPTS = 5
     }
 
     /**
      * 포지션 청산
      *
-     * 퀀트 최적화: 최소 금액 미달 시에도 일단 API 호출 시도
-     * - 빗썸이 허용하면 청산 완료
-     * - 에러 발생 시 ABANDONED 처리
-     * - 손절은 무조건 시도 (손실 최소화)
+     * 중복 주문 방지 로직:
+     * 1. 이미 CLOSING 상태면 스킵 (기존 주문 대기)
+     * 2. 백오프 시간 내 재시도 방지
+     * 3. 최대 시도 횟수 초과 시 ABANDONED 처리
      */
     private fun closePosition(position: VolumeSurgeTradeEntity, exitPrice: Double, reason: String) {
         val market = position.market
 
-        log.info("[$market] 포지션 청산: $reason, 가격=$exitPrice")
+        // 이미 CLOSING 상태면 중복 청산 방지
+        if (position.status == "CLOSING") {
+            log.debug("[$market] 이미 청산 진행 중 (CLOSING), 스킵")
+            return
+        }
 
-        // 금액 = 수량 * 현재가 (OrderExecutor는 금액 기준으로 동작)
+        // 백오프 체크: 마지막 시도 후 일정 시간 경과 확인
+        val lastAttempt = position.lastCloseAttempt
+        if (lastAttempt != null) {
+            val elapsed = java.time.Duration.between(lastAttempt, Instant.now()).seconds
+            if (elapsed < CLOSE_RETRY_BACKOFF_SECONDS) {
+                log.debug("[$market] 백오프 중 (${elapsed}s < ${CLOSE_RETRY_BACKOFF_SECONDS}s), 스킵")
+                return
+            }
+        }
+
+        // 최대 시도 횟수 체크
+        if (position.closeAttemptCount >= MAX_CLOSE_ATTEMPTS) {
+            log.error("[$market] 청산 시도 ${MAX_CLOSE_ATTEMPTS}회 초과, ABANDONED 처리")
+            handleAbandonedPosition(position, exitPrice, "ABANDONED_MAX_ATTEMPTS")
+            return
+        }
+
+        log.info("[$market] 포지션 청산 시도 #${position.closeAttemptCount + 1}: $reason, 가격=$exitPrice")
+
+        // 금액 = 수량 * 현재가
         val positionAmount = BigDecimal(position.quantity * exitPrice)
 
-        // 최소 금액 미달 경고 (하지만 손절은 시도)
+        // 최소 금액 미달 체크
         val isBelowMinAmount = positionAmount < MIN_ORDER_AMOUNT_KRW
         val isStopLoss = reason == "STOP_LOSS"
 
-        if (isBelowMinAmount) {
-            log.warn("[$market] 최소 주문 금액 미달: ${positionAmount.toPlainString()}원 < ${MIN_ORDER_AMOUNT_KRW}원")
-
-            // 손절이 아닌 경우에만 ABANDONED 처리 (익절, 트레일링, 타임아웃)
-            // 손절은 무조건 시도 (손실 확대 방지)
-            if (!isStopLoss) {
-                log.warn("[$market] 손절이 아니므로 ABANDONED 처리 (무한루프 방지)")
-                handleAbandonedPosition(position, exitPrice, "ABANDONED_MIN_AMOUNT")
-                return
-            }
-
-            log.info("[$market] 손절 시도 - 최소 금액 미달이지만 API 호출 시도")
+        if (isBelowMinAmount && !isStopLoss) {
+            log.warn("[$market] 최소 주문 금액 미달, ABANDONED 처리")
+            handleAbandonedPosition(position, exitPrice, "ABANDONED_MIN_AMOUNT")
+            return
         }
 
-        log.info("[$market] 매도 금액: ${positionAmount.toPlainString()}원 (수량: ${position.quantity})")
+        // 상태를 CLOSING으로 변경 (중복 청산 방지)
+        position.status = "CLOSING"
+        position.exitReason = reason
+        position.exitPrice = exitPrice
+        position.lastCloseAttempt = Instant.now()
+        position.closeAttemptCount++
+        tradeRepository.save(position)
 
-        // 실제 매도 주문 실행
+        log.info("[$market] 매도 주문 실행: ${positionAmount.toPlainString()}원")
+
+        // 매도 주문 실행
         val sellSignal = TradingSignal(
             market = market,
             action = SignalAction.SELL,
@@ -471,35 +596,56 @@ class VolumeSurgeEngine(
 
         val orderResult = orderExecutor.execute(sellSignal, positionAmount)
 
-        // 주문 실패 처리
-        if (!orderResult.success) {
-            val errorMessage = orderResult.message ?: ""
+        // 주문 성공
+        if (orderResult.success) {
+            val actualExitPrice = orderResult.price?.toDouble() ?: exitPrice
+            position.closeOrderId = orderResult.orderId
 
-            // 잔고 부족 에러: 코인이 없으므로 ABANDONED 처리 (무한루프 방지)
-            if (errorMessage.contains("insufficient_funds") ||
-                errorMessage.contains("주문가능한 금액") ||
-                errorMessage.contains("부족")
-            ) {
-                log.error("[$market] 잔고 부족으로 청산 불가 - ABANDONED 처리")
-                handleAbandonedPosition(position, exitPrice, "ABANDONED_NO_BALANCE")
-                return
+            // 즉시 체결 확인
+            if (orderResult.executedQuantity != null && orderResult.executedQuantity > BigDecimal.ZERO) {
+                // 체결됨 - 바로 종료 처리
+                finalizeClose(position, actualExitPrice, reason)
+            } else {
+                // 미체결 - CLOSING 상태로 유지, monitorClosingPosition에서 확인
+                position.closeOrderId = orderResult.orderId
+                tradeRepository.save(position)
+                log.info("[$market] 청산 주문 접수됨, 체결 대기: ${orderResult.orderId}")
             }
-
-            // 최소 금액 에러: ABANDONED 처리
-            if (errorMessage.contains("최소") || errorMessage.contains("minimum")) {
-                log.error("[$market] 최소 금액 미달로 청산 불가 - ABANDONED 처리")
-                handleAbandonedPosition(position, exitPrice, "ABANDONED_MIN_AMOUNT_API")
-                return
-            }
-
-            // 다른 에러: 로그만 남기고 다음 사이클에서 재시도
-            log.error("[$market] 매도 주문 실패: ${orderResult.message}, 다음 사이클에서 재시도")
             return
         }
 
-        val actualExitPrice = orderResult.price?.toDouble() ?: exitPrice
+        // 주문 실패 처리
+        val errorMessage = orderResult.message ?: ""
+        log.error("[$market] 매도 주문 실패: $errorMessage")
 
-        // Infinity/NaN 방지
+        // 복구 불가능한 에러: ABANDONED 처리
+        if (errorMessage.contains("insufficient_funds") ||
+            errorMessage.contains("주문가능한 금액") ||
+            errorMessage.contains("부족") ||
+            errorMessage.contains("최소") ||
+            errorMessage.contains("minimum")
+        ) {
+            log.error("[$market] 복구 불가능한 에러, ABANDONED 처리")
+            handleAbandonedPosition(position, exitPrice, "ABANDONED_${orderResult.rejectionReason ?: "API_ERROR"}")
+            return
+        }
+
+        // 재시도 가능한 에러: OPEN으로 되돌림 (백오프 후 재시도)
+        log.warn("[$market] 일시적 에러, 백오프 후 재시도 예정 (시도 ${position.closeAttemptCount}/${MAX_CLOSE_ATTEMPTS})")
+        position.status = "OPEN"
+        position.closeOrderId = null
+        tradeRepository.save(position)
+    }
+
+    /**
+     * 청산 완료 처리 (finalizeClose)
+     *
+     * CLOSING 상태의 포지션을 CLOSED로 전환하고 손익 계산
+     */
+    private fun finalizeClose(position: VolumeSurgeTradeEntity, actualExitPrice: Double, reason: String) {
+        val market = position.market
+
+        // 손익 계산
         val pnlAmount = if (position.entryPrice > 0 && position.quantity > 0) {
             (actualExitPrice - position.entryPrice) * position.quantity
         } else {
@@ -511,7 +657,7 @@ class VolumeSurgeEngine(
             0.0
         }
 
-        // NaN/Infinity 최종 검사
+        // NaN/Infinity 방지
         val safePnlAmount = if (pnlAmount.isNaN() || pnlAmount.isInfinite()) 0.0 else pnlAmount
         val safePnlPercent = if (pnlPercent.isNaN() || pnlPercent.isInfinite()) 0.0 else pnlPercent
 
@@ -528,11 +674,10 @@ class VolumeSurgeEngine(
         highestPrices.remove(position.id)
 
         // 서킷 브레이커 업데이트
-        updateCircuitBreaker(pnlAmount)
+        updateCircuitBreaker(safePnlAmount)
 
         // Slack 알림
-        val emoji = if (pnlAmount >= 0) "+" else ""
-        val orderStatus = if (orderResult.success) "체결완료" else "주문실패"
+        val emoji = if (safePnlAmount >= 0) "+" else ""
         slackNotifier.sendSystemNotification(
             "Volume Surge 청산",
             """
@@ -540,14 +685,14 @@ class VolumeSurgeEngine(
             사유: $reason
             진입가: ${position.entryPrice}원
             청산가: ${actualExitPrice}원
-            손익: $emoji${String.format("%.0f", pnlAmount)}원 (${String.format("%.2f", pnlPercent)}%)
+            손익: $emoji${String.format("%.0f", safePnlAmount)}원 (${String.format("%.2f", safePnlPercent)}%)
             보유시간: ${ChronoUnit.MINUTES.between(position.entryTime, Instant.now())}분
-            주문상태: $orderStatus
-            주문ID: ${orderResult.orderId ?: "N/A"}
+            주문상태: 체결완료
+            주문ID: ${position.closeOrderId ?: "N/A"}
             """.trimIndent()
         )
 
-        log.info("[$market] 청산 완료: 손익=${pnlAmount}원 (${pnlPercent}%), orderId=${orderResult.orderId}")
+        log.info("[$market] 청산 완료: 손익=${safePnlAmount}원 (${safePnlPercent}%)")
     }
 
     /**

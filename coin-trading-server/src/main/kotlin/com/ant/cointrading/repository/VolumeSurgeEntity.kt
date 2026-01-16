@@ -170,9 +170,21 @@ class VolumeSurgeTradeEntity(
 
     // === 상태 ===
 
-    /** 포지션 상태 (OPEN/CLOSED) */
+    /** 포지션 상태 (OPEN/CLOSING/CLOSED/ABANDONED) */
     @Column(nullable = false, length = 20)
     var status: String = "OPEN",
+
+    /** 청산 주문 ID (미체결 청산 추적용) */
+    @Column(length = 50)
+    var closeOrderId: String? = null,
+
+    /** 마지막 청산 시도 시각 (재시도 백오프용) */
+    @Column
+    var lastCloseAttempt: Instant? = null,
+
+    /** 청산 시도 횟수 */
+    @Column
+    var closeAttemptCount: Int = 0,
 
     /** 생성 시각 */
     @Column(nullable = false)
