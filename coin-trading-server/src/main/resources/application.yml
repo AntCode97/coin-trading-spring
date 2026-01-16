@@ -166,7 +166,7 @@ volumesurge:
 
 # Meme Scalper 전략 설정 (세력 코인 초단타 - 펌프앤덤프 스캘핑)
 memescalper:
-  enabled: ${MEME_SCALPER_ENABLED:false}
+  enabled: ${MEME_SCALPER_ENABLED:true}
   polling-interval-ms: ${MEME_SCALPER_POLLING_MS:5000}
   position-size-krw: ${MEME_SCALPER_POSITION_SIZE:5000}
   max-positions: ${MEME_SCALPER_MAX_POSITIONS:3}
