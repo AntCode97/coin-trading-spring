@@ -65,6 +65,13 @@ class MemeScalperEngine(
         private val MIN_ORDER_AMOUNT = BigDecimal("5100")
         private const val CLOSE_RETRY_BACKOFF_SECONDS = 5L
         private const val MAX_CLOSE_ATTEMPTS = 3
+
+        // 스캘핑 최소 보유 시간 (초) - 수수료 0.08% 고려
+        // 너무 빠른 청산은 수수료만 날림
+        private const val MIN_HOLDING_SECONDS = 10L
+
+        // 최소 수익률 (%) - 수수료 0.08% × 2 = 0.16% 이상이어야 실익
+        private const val MIN_PROFIT_PERCENT = 0.1
     }
 
     @PostConstruct
@@ -246,8 +253,19 @@ class MemeScalperEngine(
             return
         }
 
-        val executedPrice = orderResult.price?.toDouble() ?: signal.currentPrice.toDouble()
+        // 체결가 결정 - 우선순위: orderResult > API 현재가 > signal
+        val executedPrice = orderResult.price?.toDouble()?.takeIf { it > 0 }
+            ?: bithumbPublicApi.getCurrentPrice(market)?.firstOrNull()?.tradePrice?.toDouble()
+            ?: signal.currentPrice.toDouble()
+
         val executedQuantity = orderResult.executedQuantity?.toDouble() ?: 0.0
+
+        // 진입가 검증 - 0이면 포지션 생성 불가
+        if (executedPrice <= 0) {
+            log.error("[$market] 유효하지 않은 진입가: $executedPrice - 포지션 생성 취소")
+            cooldowns[market] = Instant.now().plus(60, ChronoUnit.SECONDS)
+            return
+        }
 
         if (executedQuantity <= 0) {
             log.error("[$market] 체결 수량 0")
@@ -299,16 +317,43 @@ class MemeScalperEngine(
 
     /**
      * 단일 포지션 모니터링
+     *
+     * 20년차 퀀트의 포지션 모니터링:
+     * 1. 진입가 무결성 검증 - 0원이면 거래 불가
+     * 2. 최소 보유 시간 - 수수료 고려 최소 10초
+     * 3. 안전한 손익률 계산 - NaN/Infinity 방지
      */
     private fun monitorSinglePosition(position: MemeScalperTradeEntity) {
         val market = position.market
 
-        // 현재가 조회
+        // 0. 진입가 무결성 검증 - 진입가가 0이면 거래 불가능
+        if (position.entryPrice <= 0) {
+            log.error("[$market] 진입가 무효(${position.entryPrice}) - 포지션 정리 필요")
+            // 현재가로 진입가 보정 시도
+            val ticker = bithumbPublicApi.getCurrentPrice(market)?.firstOrNull()
+            if (ticker != null) {
+                position.entryPrice = ticker.tradePrice.toDouble()
+                position.entryTime = Instant.now()  // 진입 시간도 리셋
+                tradeRepository.save(position)
+                log.info("[$market] 진입가 보정: ${position.entryPrice}원")
+            }
+            return  // 이번 사이클은 스킵
+        }
+
+        // 1. 최소 보유 시간 체크 - 수수료(0.08%) 고려 최소 10초 보유
+        val holdingSeconds = ChronoUnit.SECONDS.between(position.entryTime, Instant.now())
+        if (holdingSeconds < MIN_HOLDING_SECONDS) {
+            return  // 아직 판단하지 않음 - 너무 빠른 청산은 수수료 손실
+        }
+
+        // 2. 현재가 조회
         val ticker = bithumbPublicApi.getCurrentPrice(market)?.firstOrNull() ?: return
         val currentPrice = ticker.tradePrice.toDouble()
-        val pnlPercent = ((currentPrice - position.entryPrice) / position.entryPrice) * 100
 
-        // 피크 업데이트
+        // 3. 안전한 손익률 계산 - NaN/Infinity 방지
+        val pnlPercent = calculateSafePnlPercent(currentPrice, position.entryPrice)
+
+        // 4. 피크 업데이트
         val peakPrice = peakPrices.getOrDefault(position.id!!, position.entryPrice)
         if (currentPrice > peakPrice) {
             peakPrices[position.id!!] = currentPrice
@@ -316,32 +361,43 @@ class MemeScalperEngine(
             tradeRepository.save(position)
         }
 
-        // 1. 손절 체크
+        // 5. 손절 체크 (손절은 최소 보유 시간 이후에만)
         if (pnlPercent <= properties.stopLossPercent) {
             closePosition(position, currentPrice, "STOP_LOSS")
             return
         }
 
-        // 2. 익절 체크
-        if (pnlPercent >= properties.takeProfitPercent) {
+        // 6. 익절 체크 (수수료 0.08% 고려 - 최소 0.1% 이상 수익 시에만)
+        if (pnlPercent >= properties.takeProfitPercent && pnlPercent > MIN_PROFIT_PERCENT) {
             closePosition(position, currentPrice, "TAKE_PROFIT")
             return
         }
 
-        // 3. 타임아웃 체크 (5분)
-        val holdingSeconds = ChronoUnit.SECONDS.between(position.entryTime, Instant.now())
+        // 7. 타임아웃 체크
         if (holdingSeconds >= properties.positionTimeoutMin * 60) {
             closePosition(position, currentPrice, "TIMEOUT")
             return
         }
 
-        // 4. 청산 신호 체크 (거래량 급감, 호가창 반전)
-        val peakVol = peakVolumes.getOrDefault(position.id!!, 1.0)
-        val exitSignal = detector.detectExitSignal(market, peakVol)
-        if (exitSignal != null) {
-            closePosition(position, currentPrice, exitSignal.reason)
-            return
+        // 8. 청산 신호 체크 (거래량 급감, 호가창 반전) - 30초 이후에만
+        if (holdingSeconds >= 30) {
+            val peakVol = peakVolumes.getOrDefault(position.id!!, 1.0)
+            val exitSignal = detector.detectExitSignal(market, peakVol)
+            if (exitSignal != null) {
+                closePosition(position, currentPrice, exitSignal.reason)
+                return
+            }
         }
+    }
+
+    /**
+     * 안전한 손익률 계산
+     * 0으로 나누기 방지, NaN/Infinity 처리
+     */
+    private fun calculateSafePnlPercent(currentPrice: Double, entryPrice: Double): Double {
+        if (entryPrice <= 0) return 0.0
+        val pnl = ((currentPrice - entryPrice) / entryPrice) * 100
+        return if (pnl.isNaN() || pnl.isInfinite()) 0.0 else pnl
     }
 
     /**
