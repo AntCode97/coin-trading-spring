@@ -192,6 +192,10 @@ class MemeScalperEngine(
 
     /**
      * 진입 조건 체크
+     *
+     * 중복 진입 방지:
+     * 1. DB 포지션 체크 (OPEN, CLOSING 상태)
+     * 2. 실제 잔고 체크 (이미 해당 코인 보유 시 진입 불가)
      */
     private fun shouldEnter(signal: PumpSignal): Boolean {
         val market = signal.market
@@ -203,11 +207,26 @@ class MemeScalperEngine(
             return false
         }
 
-        // 이미 열린 포지션 체크
-        val existing = tradeRepository.findByMarketAndStatus(market, "OPEN")
-        if (existing.isNotEmpty()) {
-            log.debug("[$market] 이미 열린 포지션 존재")
+        // 이미 열린 포지션 체크 (OPEN, CLOSING 모두)
+        val existingOpen = tradeRepository.findByMarketAndStatus(market, "OPEN")
+        val existingClosing = tradeRepository.findByMarketAndStatus(market, "CLOSING")
+        if (existingOpen.isNotEmpty() || existingClosing.isNotEmpty()) {
+            log.debug("[$market] 이미 포지션 존재 (OPEN=${existingOpen.size}, CLOSING=${existingClosing.size})")
             return false
+        }
+
+        // 실제 잔고 체크 - 이미 해당 코인 보유 시 진입 불가 (ABANDONED 케이스 방지)
+        val coinSymbol = market.removePrefix("KRW-")
+        try {
+            val balances = bithumbPrivateApi.getBalances()
+            val coinBalance = balances?.find { it.currency == coinSymbol }?.balance ?: BigDecimal.ZERO
+            if (coinBalance > BigDecimal.ZERO) {
+                log.warn("[$market] 이미 $coinSymbol 잔고 보유 중: $coinBalance - 중복 진입 방지")
+                return false
+            }
+        } catch (e: Exception) {
+            log.warn("[$market] 잔고 조회 실패, 진입 보류: ${e.message}")
+            return false  // 잔고 확인 안 되면 진입하지 않음
         }
 
         // RSI 과매수 체크
@@ -216,9 +235,9 @@ class MemeScalperEngine(
             return false
         }
 
-        // 최소 점수 체크
-        if (signal.score < 60) {
-            log.debug("[$market] 점수 부족 (${signal.score} < 60)")
+        // 최소 점수 체크 (MemeScalperDetector.MIN_ENTRY_SCORE와 동일)
+        if (signal.score < 70) {
+            log.debug("[$market] 점수 부족 (${signal.score} < 70)")
             return false
         }
 
