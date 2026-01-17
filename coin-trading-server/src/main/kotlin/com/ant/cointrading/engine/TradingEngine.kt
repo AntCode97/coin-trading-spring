@@ -21,6 +21,7 @@ import org.slf4j.LoggerFactory
 import org.springframework.scheduling.annotation.Scheduled
 import org.springframework.stereotype.Component
 import java.math.BigDecimal
+import java.time.Duration
 import java.time.Instant
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicLong
@@ -62,12 +63,18 @@ class TradingEngine(
         const val KEY_REGIME_DETECTOR_TYPE = "regime.detector.type"
         const val REGIME_DETECTOR_HMM = "hmm"
         const val REGIME_DETECTOR_SIMPLE = "simple"
+
+        // 중복 알림 방지 쿨다운 (10분)
+        const val ALERT_COOLDOWN_MINUTES = 10L
     }
 
     private val log = LoggerFactory.getLogger(TradingEngine::class.java)
 
     // 마켓별 상태
     private val marketStates = ConcurrentHashMap<String, MarketState>()
+
+    // 마켓별 마지막 리스크 경고 시간 (중복 알림 방지)
+    private val lastRiskAlertTime = ConcurrentHashMap<String, Instant>()
 
     data class MarketState(
         var candles: List<Candle> = emptyList(),
@@ -193,7 +200,14 @@ class TradingEngine(
         val riskCheck = riskManager.canTrade(market, krwBalance)
         if (!riskCheck.canTrade) {
             log.warn("[$market] 리스크 체크 실패: ${riskCheck.reason}")
-            slackNotifier.sendWarning(market, "리스크 체크 실패: ${riskCheck.reason}")
+
+            // 중복 알림 방지: 같은 마켓에서 10분 이내에 같은 경고는 스킵
+            val lastAlert = lastRiskAlertTime[market]
+            val now = Instant.now()
+            if (lastAlert == null || Duration.between(lastAlert, now).toMinutes() >= ALERT_COOLDOWN_MINUTES) {
+                slackNotifier.sendWarning(market, "리스크 체크 실패: ${riskCheck.reason}")
+                lastRiskAlertTime[market] = now
+            }
             return
         }
 
