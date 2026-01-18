@@ -2,6 +2,8 @@ package com.ant.cointrading.mcp.tool
 
 import com.ant.cointrading.repository.DailyStatsRepository
 import com.ant.cointrading.repository.TradeRepository
+import com.ant.cointrading.repository.MemeScalperTradeRepository
+import com.ant.cointrading.repository.VolumeSurgeTradeRepository
 import org.springaicommunity.mcp.annotation.McpTool
 import org.springaicommunity.mcp.annotation.McpToolParam
 import org.springframework.stereotype.Component
@@ -103,7 +105,9 @@ data class OptimizationReport(
 @Component
 class PerformanceTools(
     private val tradeRepository: TradeRepository,
-    private val dailyStatsRepository: DailyStatsRepository
+    private val dailyStatsRepository: DailyStatsRepository,
+    private val memeScalperRepository: MemeScalperTradeRepository,
+    private val volumeSurgeRepository: VolumeSurgeTradeRepository
 ) {
 
     @McpTool(description = "최근 거래 기록을 조회합니다.")
@@ -201,55 +205,85 @@ class PerformanceTools(
 
     @McpTool(description = "특정 전략의 성과를 분석합니다.")
     fun getStrategyPerformance(
-        @McpToolParam(description = "전략 이름: DCA, GRID, MEAN_REVERSION") strategy: String,
+        @McpToolParam(description = "전략 이름: DCA, GRID, MEAN_REVERSION, MEME_SCALPER, VOLUME_SURGE") strategy: String,
         @McpToolParam(description = "분석 기간 (일)") days: Int
     ): StrategyPerformance {
         val since = Instant.now().minus(days.toLong(), ChronoUnit.DAYS)
-        val trades = tradeRepository.findByStrategyAndCreatedAtBetween(strategy.uppercase(), since, Instant.now())
 
-        if (trades.isEmpty()) {
+        // 전략별 전용 테이블에서 조회
+        return when (strategy.uppercase()) {
+            "MEME_SCALPER" -> getMemeScalperPerformance(since, days)
+            "VOLUME_SURGE" -> getVolumeSurgePerformance(since, days)
+            else -> getGeneralStrategyPerformance(strategy, since, days)
+        }
+    }
+
+    private fun getMemeScalperPerformance(since: Instant, days: Int): StrategyPerformance {
+        val trades = memeScalperRepository.findByCreatedAtAfter(since)
+            .filter { it.status == "CLOSED" }
+
+        return buildPerformance("MEME_SCALPER", days, trades.size,
+            trades.mapNotNull { it.pnlAmount },
+            trades.mapNotNull { it.pnlPercent })
+    }
+
+    private fun getVolumeSurgePerformance(since: Instant, days: Int): StrategyPerformance {
+        val trades = volumeSurgeRepository.findByCreatedAtBetweenOrderByCreatedAtDesc(since, Instant.now())
+            .filter { it.status == "CLOSED" }
+
+        return buildPerformance("VOLUME_SURGE", days, trades.size,
+            trades.mapNotNull { it.pnlAmount },
+            trades.mapNotNull { it.pnlPercent })
+    }
+
+    private fun getGeneralStrategyPerformance(strategy: String, since: Instant, days: Int): StrategyPerformance {
+        val trades = tradeRepository.findByStrategyAndCreatedAtBetween(strategy.uppercase(), since, Instant.now())
+        val sellTrades = trades.filter { it.side == "SELL" && it.pnl != null }
+
+        return buildPerformance(strategy.uppercase(), days, trades.size,
+            sellTrades.mapNotNull { it.pnl },
+            sellTrades.mapNotNull { it.pnlPercent })
+    }
+
+    private fun buildPerformance(
+        strategy: String,
+        days: Int,
+        totalTrades: Int,
+        pnlAmounts: List<Double>,
+        pnlPercents: List<Double>
+    ): StrategyPerformance {
+        if (pnlAmounts.isEmpty()) {
             return StrategyPerformance(
-                strategy = strategy,
-                period = "${days}일",
-                totalTrades = 0,
-                totalPnl = "0",
-                winRate = "0.0",
-                sharpeRatio = "0.00",
-                maxDrawdown = "0.0",
-                avgPnlPercent = "0.00",
-                message = "해당 전략의 거래 기록이 없습니다."
+                strategy = strategy, period = "${days}일", totalTrades = totalTrades,
+                totalPnl = "0", winRate = "0.0", sharpeRatio = "0.00",
+                maxDrawdown = "0.0", avgPnlPercent = "0.00",
+                message = if (totalTrades == 0) "거래 기록 없음" else "청산된 거래 없음"
             )
         }
 
-        val sellTrades = trades.filter { it.side == "SELL" && it.pnl != null }
-        val pnlList = sellTrades.mapNotNull { it.pnlPercent }
-
-        val avgReturn = if (pnlList.isNotEmpty()) pnlList.average() else 0.0
-        val stdReturn = if (pnlList.size > 1) {
-            sqrt(pnlList.map { (it - avgReturn) * (it - avgReturn) }.average())
+        val avgReturn = pnlPercents.average()
+        val stdReturn = if (pnlPercents.size > 1) {
+            sqrt(pnlPercents.map { (it - avgReturn) * (it - avgReturn) }.average())
         } else 0.0
         val sharpeRatio = if (stdReturn > 0) avgReturn / stdReturn * sqrt(252.0) else 0.0
 
         var peak = 0.0
         var maxDrawdown = 0.0
         var cumReturn = 0.0
-        for (trade in sellTrades) {
-            cumReturn += trade.pnl ?: 0.0
+        for (pnl in pnlAmounts) {
+            cumReturn += pnl
             if (cumReturn > peak) peak = cumReturn
             val drawdown = if (peak > 0) (peak - cumReturn) / peak * 100 else 0.0
             if (drawdown > maxDrawdown) maxDrawdown = drawdown
         }
 
+        val winCount = pnlAmounts.count { it > 0 }
         return StrategyPerformance(
             strategy = strategy,
             period = "${days}일",
-            totalTrades = trades.size,
-            totalPnl = String.format("%.0f", sellTrades.sumOf { it.pnl ?: 0.0 }),
-            winRate = String.format("%.1f",
-                if (sellTrades.isNotEmpty())
-                    sellTrades.count { (it.pnl ?: 0.0) > 0 }.toDouble() / sellTrades.size * 100
-                else 0.0
-            ),
+            totalTrades = totalTrades,
+            totalPnl = String.format("%.0f", pnlAmounts.sum()),
+            winRate = String.format("%.1f", winCount.toDouble() / pnlAmounts.size * 100),
             sharpeRatio = String.format("%.2f", sharpeRatio),
             maxDrawdown = String.format("%.1f", maxDrawdown),
             avgPnlPercent = String.format("%.2f", avgReturn)

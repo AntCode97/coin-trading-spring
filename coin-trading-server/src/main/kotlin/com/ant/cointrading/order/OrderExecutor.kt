@@ -692,7 +692,14 @@ class OrderExecutor(
         // 시장가 주문이므로 체결된 금액 / 체결 수량으로 역산
         val executedPrice = if (signal.action == SignalAction.BUY) {
             // 매수: locked(투입금) / executedVolume
-            val invested = order.locked ?: positionSize
+            // 주의: 체결 완료 후 API 조회 시 locked가 0이 되므로 positionSize로 대체
+            val locked = order.locked
+            val invested = if (locked == null || locked <= BigDecimal.ZERO) {
+                log.debug("[${signal.market}] locked가 0 또는 null - positionSize($positionSize) 사용")
+                positionSize
+            } else {
+                locked
+            }
             invested.divide(executedVolume, 8, RoundingMode.HALF_UP)
         } else {
             // 매도: (locked + paidFee) / executedVolume 또는 order.price 사용
@@ -774,6 +781,8 @@ class OrderExecutor(
 
     /**
      * 거래 기록 저장
+     *
+     * SELL 거래 시 마지막 BUY 거래를 찾아 PnL 계산
      */
     private fun saveTradeRecord(
         signal: TradingSignal,
@@ -788,19 +797,50 @@ class OrderExecutor(
         orderType: OrderType = OrderType.MARKET
     ) {
         try {
+            val isSell = signal.action == SignalAction.SELL
+            val sellPrice = (executedPrice ?: signal.price).toDouble()
+            val sellQuantity = (executedQuantity ?: calculateQuantity(signal.price, positionSize)).toDouble()
+            val sellFee = fee.toDouble()
+
+            // SELL 시 PnL 계산
+            var pnl: Double? = null
+            var pnlPercent: Double? = null
+
+            if (isSell) {
+                val lastBuy = tradeRepository.findLastBuyByMarket(signal.market)
+                if (lastBuy != null && lastBuy.price > 0) {
+                    val buyPrice = lastBuy.price
+                    val buyFee = lastBuy.fee
+
+                    // PnL = (매도가 - 매수가) * 수량 - 매수수수료 - 매도수수료
+                    pnl = (sellPrice - buyPrice) * sellQuantity - buyFee - sellFee
+
+                    // PnL% = ((매도가 - 매수가) / 매수가) * 100
+                    pnlPercent = ((sellPrice - buyPrice) / buyPrice) * 100
+
+                    log.info("[${signal.market}] PnL 계산 완료: 매수가=${buyPrice}, 매도가=${sellPrice}, " +
+                            "PnL=${String.format("%.0f", pnl)}원 (${String.format("%.2f", pnlPercent)}%)")
+
+                    // CircuitBreaker에 거래 결과 기록
+                    circuitBreaker.recordTradeResult(signal.market, pnlPercent)
+                } else {
+                    log.warn("[${signal.market}] 매칭되는 BUY 거래를 찾을 수 없음 - PnL 계산 불가")
+                }
+            }
+
             val entity = TradeEntity(
                 orderId = orderId,
                 market = signal.market,
-                side = if (signal.action == SignalAction.BUY) "BUY" else "SELL",
+                side = if (isSell) "SELL" else "BUY",
                 type = orderType.name,
-                price = (executedPrice ?: signal.price).toDouble(),
-                quantity = (executedQuantity ?: calculateQuantity(signal.price, positionSize)).toDouble(),
+                price = sellPrice,
+                quantity = sellQuantity,
                 totalAmount = positionSize.toDouble(),
-                fee = fee.toDouble(),
+                fee = sellFee,
                 slippage = slippagePercent,
                 isPartialFill = isPartialFill,
-                pnl = null,
-                pnlPercent = null,
+                pnl = pnl,
+                pnlPercent = pnlPercent,
                 strategy = signal.strategy,
                 regime = null,
                 confidence = signal.confidence,
@@ -809,7 +849,7 @@ class OrderExecutor(
             )
 
             tradeRepository.save(entity)
-            log.debug("[${signal.market}] 거래 기록 저장: orderId=$orderId, type=$orderType")
+            log.debug("[${signal.market}] 거래 기록 저장: orderId=$orderId, type=$orderType, pnl=$pnl")
 
         } catch (e: Exception) {
             log.error("[${signal.market}] 거래 기록 저장 실패: ${e.message}", e)
