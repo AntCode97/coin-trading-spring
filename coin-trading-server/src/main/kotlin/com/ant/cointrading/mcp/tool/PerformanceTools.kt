@@ -3,6 +3,7 @@ package com.ant.cointrading.mcp.tool
 import com.ant.cointrading.repository.DailyStatsRepository
 import com.ant.cointrading.repository.TradeRepository
 import com.ant.cointrading.repository.MemeScalperTradeRepository
+import com.ant.cointrading.repository.MemeScalperDailyStatsRepository
 import com.ant.cointrading.repository.VolumeSurgeTradeRepository
 import org.springaicommunity.mcp.annotation.McpTool
 import org.springaicommunity.mcp.annotation.McpToolParam
@@ -97,6 +98,46 @@ data class OptimizationReport(
     val recommendations: List<String>
 )
 
+/** MemeScalper 거래 정보 */
+data class MemeScalperTradeInfo(
+    val id: Long?,
+    val market: String,
+    val entryPrice: Double,
+    val exitPrice: Double?,
+    val quantity: Double,
+    val pnlAmount: Double?,
+    val pnlPercent: Double?,
+    val exitReason: String?,
+    val status: String,
+    val entryTime: String,
+    val exitTime: String?
+)
+
+/** VolumeSurge 거래 정보 */
+data class VolumeSurgeTradeInfo(
+    val id: Long?,
+    val market: String,
+    val entryPrice: Double,
+    val exitPrice: Double?,
+    val quantity: Double,
+    val pnlAmount: Double?,
+    val pnlPercent: Double?,
+    val exitReason: String?,
+    val status: String,
+    val entryTime: String,
+    val exitTime: String?
+)
+
+/** 열린 포지션 정보 */
+data class OpenPositionInfo(
+    val strategy: String,
+    val market: String,
+    val entryPrice: Double,
+    val quantity: Double,
+    val entryTime: String,
+    val holdingMinutes: Long
+)
+
 /**
  * 거래 성과 분석 MCP 도구
  *
@@ -107,6 +148,7 @@ class PerformanceTools(
     private val tradeRepository: TradeRepository,
     private val dailyStatsRepository: DailyStatsRepository,
     private val memeScalperRepository: MemeScalperTradeRepository,
+    private val memeScalperStatsRepository: MemeScalperDailyStatsRepository,
     private val volumeSurgeRepository: VolumeSurgeTradeRepository
 ) {
 
@@ -132,6 +174,88 @@ class PerformanceTools(
                 createdAt = trade.createdAt.toString()
             )
         }
+    }
+
+    @McpTool(description = "MemeScalper 거래 기록을 조회합니다.")
+    fun getMemeScalperTrades(
+        @McpToolParam(description = "조회할 거래 수 (최대 50)") limit: Int
+    ): List<MemeScalperTradeInfo> {
+        val since = Instant.now().minus(30, ChronoUnit.DAYS)
+        return memeScalperRepository.findByCreatedAtAfter(since)
+            .sortedByDescending { it.createdAt }
+            .take(limit.coerceAtMost(50))
+            .map { trade ->
+                MemeScalperTradeInfo(
+                    id = trade.id,
+                    market = trade.market,
+                    entryPrice = trade.entryPrice,
+                    exitPrice = trade.exitPrice,
+                    quantity = trade.quantity,
+                    pnlAmount = trade.pnlAmount,
+                    pnlPercent = trade.pnlPercent,
+                    exitReason = trade.exitReason,
+                    status = trade.status,
+                    entryTime = trade.entryTime.toString(),
+                    exitTime = trade.exitTime?.toString()
+                )
+            }
+    }
+
+    @McpTool(description = "VolumeSurge 거래 기록을 조회합니다.")
+    fun getVolumeSurgeTrades(
+        @McpToolParam(description = "조회할 거래 수 (최대 50)") limit: Int
+    ): List<VolumeSurgeTradeInfo> {
+        val since = Instant.now().minus(30, ChronoUnit.DAYS)
+        val now = Instant.now()
+        return volumeSurgeRepository.findByCreatedAtBetweenOrderByCreatedAtDesc(since, now)
+            .take(limit.coerceAtMost(50))
+            .map { trade ->
+                VolumeSurgeTradeInfo(
+                    id = trade.id,
+                    market = trade.market,
+                    entryPrice = trade.entryPrice,
+                    exitPrice = trade.exitPrice,
+                    quantity = trade.quantity,
+                    pnlAmount = trade.pnlAmount,
+                    pnlPercent = trade.pnlPercent,
+                    exitReason = trade.exitReason,
+                    status = trade.status,
+                    entryTime = trade.entryTime.toString(),
+                    exitTime = trade.exitTime?.toString()
+                )
+            }
+    }
+
+    @McpTool(description = "현재 열린 포지션을 조회합니다.")
+    fun getOpenPositions(): List<OpenPositionInfo> {
+        val now = Instant.now()
+        val positions = mutableListOf<OpenPositionInfo>()
+
+        // MemeScalper 열린 포지션
+        memeScalperRepository.findByStatus("OPEN").forEach { trade ->
+            positions.add(OpenPositionInfo(
+                strategy = "MEME_SCALPER",
+                market = trade.market,
+                entryPrice = trade.entryPrice,
+                quantity = trade.quantity,
+                entryTime = trade.entryTime.toString(),
+                holdingMinutes = ChronoUnit.MINUTES.between(trade.entryTime, now)
+            ))
+        }
+
+        // VolumeSurge 열린 포지션
+        volumeSurgeRepository.findByStatus("OPEN").forEach { trade ->
+            positions.add(OpenPositionInfo(
+                strategy = "VOLUME_SURGE",
+                market = trade.market,
+                entryPrice = trade.entryPrice,
+                quantity = trade.quantity,
+                entryTime = trade.entryTime.toString(),
+                holdingMinutes = ChronoUnit.MINUTES.between(trade.entryTime, now)
+            ))
+        }
+
+        return positions
     }
 
     @McpTool(description = "전체 거래 성과 요약을 조회합니다.")
@@ -294,19 +418,38 @@ class PerformanceTools(
     fun getDailyPerformance(
         @McpToolParam(description = "조회할 일수 (최대 30)") days: Int
     ): List<DailyPerformanceInfo> {
-        val stats = dailyStatsRepository.findTop30ByOrderByDateDesc()
-            .take(days.coerceAtMost(30))
+        val results = mutableListOf<DailyPerformanceInfo>()
 
-        return stats.map { stat ->
-            DailyPerformanceInfo(
-                date = stat.date,
-                market = stat.market,
-                totalTrades = stat.totalTrades,
-                winRate = String.format("%.1f", stat.winRate),
-                totalPnl = String.format("%.0f", stat.totalPnl),
-                maxDrawdown = String.format("%.1f", stat.maxDrawdown)
-            )
-        }
+        // 일반 TradeEntity 기반 통계 (DailyStatsEntity)
+        dailyStatsRepository.findTop30ByOrderByDateDesc()
+            .take(days.coerceAtMost(30))
+            .forEach { stat ->
+                results.add(DailyPerformanceInfo(
+                    date = stat.date,
+                    market = stat.market,
+                    totalTrades = stat.totalTrades,
+                    winRate = String.format("%.1f", stat.winRate * 100),
+                    totalPnl = String.format("%.0f", stat.totalPnl),
+                    maxDrawdown = String.format("%.1f", stat.maxDrawdown)
+                ))
+            }
+
+        // MemeScalper 전용 일일 통계
+        memeScalperStatsRepository.findTop30ByOrderByDateDesc()
+            .take(days.coerceAtMost(30))
+            .forEach { stat ->
+                results.add(DailyPerformanceInfo(
+                    date = stat.date.toString(),
+                    market = "MEME_SCALPER",
+                    totalTrades = stat.totalTrades,
+                    winRate = String.format("%.1f", stat.winRate * 100),
+                    totalPnl = String.format("%.0f", stat.totalPnl),
+                    maxDrawdown = "0.0"
+                ))
+            }
+
+        // 날짜순 정렬 후 반환
+        return results.sortedByDescending { it.date }.take(days.coerceAtMost(30))
     }
 
     @McpTool(description = "전략 최적화를 위한 분석 보고서를 생성합니다.")
