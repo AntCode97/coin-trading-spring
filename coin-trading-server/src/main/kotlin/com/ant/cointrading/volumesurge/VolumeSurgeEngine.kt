@@ -532,6 +532,7 @@ class VolumeSurgeEngine(
      * 1. 이미 CLOSING 상태면 스킵 (기존 주문 대기)
      * 2. 백오프 시간 내 재시도 방지
      * 3. 최대 시도 횟수 초과 시 ABANDONED 처리
+     * 4. 실제 잔고 확인 후 매도 (버그 수정)
      */
     private fun closePosition(position: VolumeSurgeTradeEntity, exitPrice: Double, reason: String) {
         val market = position.market
@@ -561,15 +562,31 @@ class VolumeSurgeEngine(
 
         log.info("[$market] 포지션 청산 시도 #${position.closeAttemptCount + 1}: $reason, 가격=$exitPrice")
 
-        // 금액 = 수량 * 현재가
-        val positionAmount = BigDecimal(position.quantity * exitPrice)
+        // [BUG FIX] 실제 잔고 확인 - DB 수량과 실제 잔고가 다를 수 있음
+        val coinSymbol = market.removePrefix("KRW-")
+        val actualBalance = try {
+            bithumbPrivateApi.getBalances()?.find { it.currency == coinSymbol }?.balance ?: BigDecimal.ZERO
+        } catch (e: Exception) {
+            log.warn("[$market] 잔고 조회 실패, DB 수량 사용: ${e.message}")
+            BigDecimal(position.quantity)
+        }
 
-        // 최소 금액 미달 체크
+        // 실제 잔고가 없으면 이미 청산된 것으로 판단
+        if (actualBalance <= BigDecimal.ZERO) {
+            log.warn("[$market] 실제 잔고 없음 (DB: ${position.quantity}, 실제: 0) - ABANDONED 처리")
+            handleAbandonedPosition(position, exitPrice, "ABANDONED_NO_BALANCE")
+            return
+        }
+
+        // 실제 매도 수량 결정 (DB 수량과 실제 잔고 중 작은 값)
+        val sellQuantity = actualBalance.toDouble().coerceAtMost(position.quantity)
+        val positionAmount = BigDecimal(sellQuantity * exitPrice)
+
+        // 최소 금액 미달 체크 (손절 포함 모든 케이스에 적용)
         val isBelowMinAmount = positionAmount < MIN_ORDER_AMOUNT_KRW
-        val isStopLoss = reason == "STOP_LOSS"
 
-        if (isBelowMinAmount && !isStopLoss) {
-            log.warn("[$market] 최소 주문 금액 미달, ABANDONED 처리")
+        if (isBelowMinAmount) {
+            log.warn("[$market] 최소 주문 금액 미달 (${positionAmount.toPlainString()}원 < ${MIN_ORDER_AMOUNT_KRW}원), ABANDONED 처리")
             handleAbandonedPosition(position, exitPrice, "ABANDONED_MIN_AMOUNT")
             return
         }
@@ -580,6 +597,11 @@ class VolumeSurgeEngine(
         position.exitPrice = exitPrice
         position.lastCloseAttempt = Instant.now()
         position.closeAttemptCount++
+        // 실제 잔고로 수량 업데이트
+        if (sellQuantity != position.quantity) {
+            log.info("[$market] 매도 수량 조정: ${position.quantity} -> $sellQuantity")
+            position.quantity = sellQuantity
+        }
         tradeRepository.save(position)
 
         log.info("[$market] 매도 주문 실행: ${positionAmount.toPlainString()}원")

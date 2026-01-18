@@ -97,50 +97,73 @@ Bithumb 암호화폐 자동 트레이딩 시스템 (Spring Boot + Kotlin)
 ```
 coin-trading-spring/
 ├── coin-trading-server/
-│   └── src/main/kotlin/com/ant/cointrading/
-│       │
-│       ├── engine/
-│       │   └── TradingEngine.kt          # 메인 엔진 (1분 주기 분석)
-│       │
-│       ├── regime/                        # 시장 레짐 감지
-│       │   ├── RegimeDetector.kt         # ADX/ATR 기반 (기본)
-│       │   └── HmmRegimeDetector.kt      # HMM 기반 (고급)
-│       │
-│       ├── strategy/                      # 트레이딩 전략
-│       │   ├── DcaStrategy.kt            # 분할 매수
-│       │   ├── GridStrategy.kt           # 격자 매매
-│       │   ├── MeanReversionStrategy.kt  # 평균 회귀
-│       │   ├── OrderBookImbalanceStrategy.kt  # 호가 불균형
-│       │   └── StrategySelector.kt       # 레짐별 전략 선택
-│       │
-│       ├── risk/                          # 리스크 관리
-│       │   ├── RiskManager.kt            # 포지션 사이징
-│       │   ├── CircuitBreaker.kt         # 연속 손실/에러 차단
-│       │   └── MarketConditionChecker.kt # 스프레드/유동성 검사
-│       │
+│   ├── src/main/kotlin/com/ant/cointrading/
+│   │   │
+│   │   ├── engine/
+│   │   │   └── TradingEngine.kt          # 메인 엔진 (1분 주기 분석)
+│   │   │
+│   │   ├── regime/                        # 시장 레짐 감지
+│   │   │   ├── RegimeDetector.kt         # ADX/ATR 기반 (기본)
+│   │   │   └── HmmRegimeDetector.kt      # HMM 기반 (고급)
+│   │   │
+│   │   ├── strategy/                      # 트레이딩 전략
+│   │   │   ├── DcaStrategy.kt            # 분할 매수
+│   │   │   ├── GridStrategy.kt           # 격자 매매
+│   │   │   ├── MeanReversionStrategy.kt  # 평균 회귀
+│   │   │   ├── OrderBookImbalanceStrategy.kt  # 호가 불균형
+│   │   │   └── StrategySelector.kt       # 레짐별 전략 선택
+│   │   │
+│   │   ├── volumesurge/                   # 거래량 급등 단타 전략
+│   │   │   ├── VolumeSurgeEngine.kt      # 메인 엔진
+│   │   │   ├── VolumeSurgeFilter.kt      # LLM 필터 (펌프앤덤프 감지)
+│   │   │   ├── VolumeSurgeAnalyzer.kt    # 기술적 분석
+│   │   │   └── VolumeSurgeReflector.kt   # 학습/회고 시스템
+│   │   │
+│   │   ├── memescalper/                   # 밈코인 스캘핑 전략
+│   │   │   └── MemeScalperEngine.kt      # 초단기 매매 엔진
+│   │   │
+│   │   ├── risk/                          # 리스크 관리
+│   │   │   ├── RiskManager.kt            # 포지션 사이징
+│   │   │   ├── CircuitBreaker.kt         # 연속 손실/에러 차단
+│   │   │   └── MarketConditionChecker.kt # 스프레드/유동성 검사
+│   │   │
+│   │   ├── order/
+│   │   │   ├── OrderExecutor.kt          # 주문 실행/체결 확인
+│   │   │   └── PendingOrderManager.kt    # 미체결 주문 관리
+│   │   │
+│   │   ├── optimizer/                     # LLM 최적화
+│   │   │   ├── LlmOptimizer.kt           # AI 최적화 엔진
+│   │   │   └── OptimizerTools.kt         # LLM용 도구 정의
+│   │   │
+│   │   ├── service/                       # 서비스
+│   │   │   ├── KeyValueService.kt        # 동적 설정 (Redis 대체)
+│   │   │   └── ModelSelector.kt          # LLM 모델 선택
+│   │   │
+│   │   ├── api/bithumb/                   # 빗썸 API
+│   │   │   ├── BithumbPublicApi.kt       # 공개 API (시세)
+│   │   │   └── BithumbPrivateApi.kt      # 비공개 API (주문)
+│   │   │
+│   │   ├── controller/                    # REST API
+│   │   │   ├── TradingController.kt      # 트레이딩 API
+│   │   │   └── SettingsController.kt     # 설정 API
+│   │   │
+│   │   └── repository/                    # DB
+│   │       ├── TradeEntity.kt            # 거래 기록
+│   │       ├── KeyValueEntity.kt         # 설정 저장
+│   │       └── AuditLogEntity.kt         # 감사 로그
+│   │
+│   └── src/test/kotlin/com/ant/cointrading/  # 테스트
 │       ├── order/
-│       │   └── OrderExecutor.kt          # 주문 실행/체결 확인
-│       │
-│       ├── optimizer/                     # LLM 최적화
-│       │   ├── LlmOptimizer.kt           # AI 최적화 엔진
-│       │   └── OptimizerTools.kt         # LLM용 도구 정의
-│       │
-│       ├── service/                       # 서비스
-│       │   ├── KeyValueService.kt        # 동적 설정 (Redis 대체)
-│       │   └── ModelSelector.kt          # LLM 모델 선택
-│       │
-│       ├── api/bithumb/                   # 빗썸 API
-│       │   ├── BithumbPublicApi.kt       # 공개 API (시세)
-│       │   └── BithumbPrivateApi.kt      # 비공개 API (주문)
-│       │
-│       ├── controller/                    # REST API
-│       │   ├── TradingController.kt      # 트레이딩 API
-│       │   └── SettingsController.kt     # 설정 API
-│       │
-│       └── repository/                    # DB
-│           ├── TradeEntity.kt            # 거래 기록
-│           ├── KeyValueEntity.kt         # 설정 저장
-│           └── AuditLogEntity.kt         # 감사 로그
+│       │   └── OrderExecutorTest.kt      # 주문 실행 테스트
+│       ├── volumesurge/
+│       │   └── VolumeSurgeEngineTest.kt  # 거래량 급등 테스트
+│       └── domain/
+│           └── TradingRulesTest.kt       # 도메인 규칙 테스트
+│
+├── .claude/skills/                        # Claude 스킬
+│   ├── quant-trading/                    # 퀀트 트레이딩 가이드
+│   ├── spring-ai/                        # Spring AI 가이드
+│   └── bithumb-api/                      # Bithumb API 가이드
 │
 ├── docs/
 │   └── QUANT_RESEARCH.md                  # 퀀트 연구 노트
@@ -272,6 +295,8 @@ curl -X POST http://localhost:8080/api/settings/regime \
 | Grid | 횡보장 | 가격대별 격자 주문 |
 | MeanReversion | 상승장 | RSI 과매도 시 매수, 과매수 시 매도 |
 | OrderBookImbalance | 전체 | 호가 불균형 감지 시 단타 |
+| VolumeSurge | 전체 | 거래량 급등 감지 → LLM 필터 → 단타 |
+| MemeScalper | 전체 | 밈코인 급등 감지 → 초단기 스캘핑 |
 
 **위치:** `strategy/` 디렉토리
 
@@ -541,11 +566,12 @@ curl -X POST http://localhost:8080/api/settings/regime \
 |------|------|------|
 | Language | Kotlin | 2.3.0 |
 | JDK | OpenJDK | 25 |
-| Framework | Spring Boot | 4.0.1 |
-| AI | Spring AI | 1.1.1 |
+| Framework | Spring Boot | 3.5.9 |
+| AI | Spring AI | 1.1.2 |
 | Database | MySQL | 8.x |
 | Build | Gradle | 9.2.1 |
 | Exchange | Bithumb | Private/Public API |
+| Test | JUnit 5, Mockito | Latest |
 
 ---
 

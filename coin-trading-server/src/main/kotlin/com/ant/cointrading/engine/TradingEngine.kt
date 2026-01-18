@@ -74,6 +74,7 @@ class TradingEngine(
     private val marketStates = ConcurrentHashMap<String, MarketState>()
 
     // 마켓별 마지막 리스크 경고 시간 (중복 알림 방지)
+    // [BUG FIX] compute 메서드로 원자적 업데이트하여 race condition 방지
     private val lastRiskAlertTime = ConcurrentHashMap<String, Instant>()
 
     data class MarketState(
@@ -201,12 +202,16 @@ class TradingEngine(
         if (!riskCheck.canTrade) {
             log.warn("[$market] 리스크 체크 실패: ${riskCheck.reason}")
 
-            // 중복 알림 방지: 같은 마켓에서 10분 이내에 같은 경고는 스킵
-            val lastAlert = lastRiskAlertTime[market]
-            val now = Instant.now()
-            if (lastAlert == null || Duration.between(lastAlert, now).toMinutes() >= ALERT_COOLDOWN_MINUTES) {
-                slackNotifier.sendWarning(market, "리스크 체크 실패: ${riskCheck.reason}")
-                lastRiskAlertTime[market] = now
+            // [BUG FIX] 원자적 업데이트로 중복 알림 race condition 방지
+            val reason = riskCheck.reason
+            lastRiskAlertTime.compute(market) { _, lastAlert ->
+                val now = Instant.now()
+                if (lastAlert == null || Duration.between(lastAlert, now).toMinutes() >= ALERT_COOLDOWN_MINUTES) {
+                    slackNotifier.sendWarning(market, "리스크 체크 실패: $reason")
+                    now
+                } else {
+                    lastAlert
+                }
             }
             return
         }
@@ -214,10 +219,23 @@ class TradingEngine(
         // 3. 포지션 사이징
         val positionSize = riskManager.calculatePositionSize(market, krwBalance, signal.confidence)
 
-        // 잔고 부족 체크
-        if (signal.action == SignalAction.BUY && positionSize > krwBalance) {
-            log.warn("[$market] 잔고 부족: 필요 $positionSize, 보유 $krwBalance")
-            return
+        // [BUG FIX] 매수/매도 모두 잔고 체크
+        if (signal.action == SignalAction.BUY) {
+            if (positionSize > krwBalance) {
+                log.warn("[$market] KRW 잔고 부족: 필요 $positionSize, 보유 $krwBalance")
+                return
+            }
+        } else if (signal.action == SignalAction.SELL) {
+            // 매도 시 코인 잔고 확인
+            val parts = market.split("_")
+            if (parts.size == 2) {
+                val coinSymbol = parts[0]  // BTC_KRW -> BTC
+                val coinBalance = balances.find { it.currency == coinSymbol }?.balance ?: BigDecimal.ZERO
+                if (coinBalance <= BigDecimal.ZERO) {
+                    log.warn("[$market] $coinSymbol 잔고 없음: $coinBalance - 매도 취소")
+                    return
+                }
+            }
         }
 
         // 4. 주문 실행 (MarketConditionChecker는 OrderExecutor 내부에서 호출)

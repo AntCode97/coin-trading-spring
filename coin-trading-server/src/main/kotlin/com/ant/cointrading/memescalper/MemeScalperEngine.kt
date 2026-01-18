@@ -483,6 +483,10 @@ class MemeScalperEngine(
 
     /**
      * 포지션 청산
+     *
+     * 버그 수정:
+     * 1. 실제 잔고 확인 후 매도
+     * 2. 손절 포함 모든 케이스에 최소 금액 검증
      */
     private fun closePosition(position: MemeScalperTradeEntity, exitPrice: Double, reason: String) {
         val market = position.market
@@ -508,9 +512,29 @@ class MemeScalperEngine(
 
         log.info("[$market] 청산 시도 #${position.closeAttemptCount + 1}: $reason")
 
-        val positionAmount = BigDecimal(position.quantity * exitPrice)
+        // [BUG FIX] 실제 잔고 확인
+        val coinSymbol = market.removePrefix("KRW-")
+        val actualBalance = try {
+            bithumbPrivateApi.getBalances()?.find { it.currency == coinSymbol }?.balance ?: BigDecimal.ZERO
+        } catch (e: Exception) {
+            log.warn("[$market] 잔고 조회 실패, DB 수량 사용: ${e.message}")
+            BigDecimal(position.quantity)
+        }
 
-        if (positionAmount < MIN_ORDER_AMOUNT && reason != "STOP_LOSS") {
+        // 실제 잔고 없으면 이미 청산됨
+        if (actualBalance <= BigDecimal.ZERO) {
+            log.warn("[$market] 실제 잔고 없음 - ABANDONED 처리")
+            handleAbandonedPosition(position, exitPrice, "NO_BALANCE")
+            return
+        }
+
+        // 실제 매도 수량 결정
+        val sellQuantity = actualBalance.toDouble().coerceAtMost(position.quantity)
+        val positionAmount = BigDecimal(sellQuantity * exitPrice)
+
+        // 최소 금액 미달 체크 (손절 포함 모든 케이스에 적용)
+        if (positionAmount < MIN_ORDER_AMOUNT) {
+            log.warn("[$market] 최소 주문 금액 미달 (${positionAmount.toPlainString()}원)")
             handleAbandonedPosition(position, exitPrice, "MIN_AMOUNT")
             return
         }
@@ -520,6 +544,11 @@ class MemeScalperEngine(
         position.exitPrice = exitPrice
         position.lastCloseAttempt = Instant.now()
         position.closeAttemptCount++
+        // 실제 잔고로 수량 업데이트
+        if (sellQuantity != position.quantity) {
+            log.info("[$market] 매도 수량 조정: ${position.quantity} -> $sellQuantity")
+            position.quantity = sellQuantity
+        }
         tradeRepository.save(position)
 
         val sellSignal = TradingSignal(
