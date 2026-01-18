@@ -567,22 +567,74 @@ BUILD SUCCESSFUL
 
 ---
 
-## 8. Conclusion
+## 8. MCP Tools Enhancement (2026-01-18)
+
+### 8.1 수정된 MCP 도구
+
+**getStrategyPerformance** - 전략별 올바른 테이블 조회
+```kotlin
+when (strategy.uppercase()) {
+    "MEME_SCALPER" -> memeScalperRepository.findByCreatedAtAfter(since)
+    "VOLUME_SURGE" -> volumeSurgeRepository.findByCreatedAtBetweenOrderByCreatedAtDesc(since, now)
+    else -> tradeRepository.findByStrategyAndCreatedAtBetween(strategy, since, now)
+}
+```
+
+**getOptimizationReport** - 5개 전략 모두 포함
+- DCA, GRID, MEAN_REVERSION: TradeEntity
+- MEME_SCALPER: MemeScalperTradeEntity
+- VOLUME_SURGE: VolumeSurgeTradeEntity
+
+### 8.2 추가 필요 MCP 도구
+
+| 도구 | 설명 | 우선순위 |
+|------|------|----------|
+| getMemeScalperTrades | MemeScalper 전용 거래 목록 조회 | High |
+| getVolumeSurgeTrades | VolumeSurge 전용 거래 목록 조회 | High |
+| getOpenPositions | 현재 열린 포지션 조회 | Medium |
+| getTodayPnl | 오늘 손익 요약 | Medium |
+
+---
+
+## 9. Conclusion
 
 This trading system is **well-architected and production-ready**. The main areas for improvement are:
+
+### Immediate Actions (High Priority)
+
+1. **서버 재시작** - MCP 도구 변경 반영 필요
+2. **PnL 데이터 검증** - 실제 DB에 pnlAmount가 저장되고 있는지 확인
+3. **일일 통계 저장** - DailyStatsEntity가 비어 있음, 통계 저장 로직 확인
+
+### Medium Priority
 
 1. **More aggressive trading** - Current parameters are too conservative
 2. **New revenue streams** - Funding rate arbitrage, cross-exchange arbitrage
 3. **Enhanced AI tools** - Backtesting, correlation analysis
 4. **Better data collection** - Orderbook snapshots, sentiment data
 
+### Safety Verification ✅
+
 The fear of "infinite buy-sell loops" is unfounded due to:
 - CircuitBreaker (3 consecutive loss limit)
 - State-based position management
 - Cooldown periods
 - Slack alerts for monitoring
+- Minimum holding time (10 seconds) - fee drain prevention
 
-**Recommendation**: Deploy with confidence, but increase monitoring for the first 2 weeks.
+**Recommendation**: Deploy with confidence. Server restart required to apply MCP tool fixes.
+
+---
+
+## 10. Change Log
+
+| Date | Changes |
+|------|---------|
+| 2026-01-18 | PerformanceTools: getStrategyPerformance 전략별 테이블 분기 추가 |
+| 2026-01-18 | PerformanceTools: getOptimizationReport에 MEME_SCALPER, VOLUME_SURGE 추가 |
+| 2026-01-18 | OrderExecutor: BUY price 0.0 버그 수정 (locked <= 0 체크) |
+| 2026-01-18 | Safety Tests: CircuitBreaker, InfiniteLoopPrevention, PnlCalculation 추가 |
+| 2026-01-18 | QUANT_ANALYSIS_REPORT.md: 실제 거래 데이터 반영 |
 
 ---
 
