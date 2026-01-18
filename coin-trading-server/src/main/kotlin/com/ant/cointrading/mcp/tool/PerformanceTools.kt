@@ -313,14 +313,28 @@ class PerformanceTools(
     fun getOptimizationReport(): OptimizationReport {
         val last30Days = Instant.now().minus(30, ChronoUnit.DAYS)
         val last7Days = Instant.now().minus(7, ChronoUnit.DAYS)
+        val now = Instant.now()
 
-        val trades30 = tradeRepository.findByCreatedAtBetween(last30Days, Instant.now())
-        val trades7 = tradeRepository.findByCreatedAtBetween(last7Days, Instant.now())
+        // 일반 전략 (TradeEntity)
+        val trades30 = tradeRepository.findByCreatedAtBetween(last30Days, now)
+        val trades7 = tradeRepository.findByCreatedAtBetween(last7Days, now)
 
-        val strategyComparison = listOf("DCA", "GRID", "MEAN_REVERSION").map { strategy ->
+        // MEME_SCALPER (전용 테이블)
+        val memeScalper30 = memeScalperRepository.findByCreatedAtAfter(last30Days)
+            .filter { it.status == "CLOSED" }
+        val memeScalper7 = memeScalperRepository.findByCreatedAtAfter(last7Days)
+            .filter { it.status == "CLOSED" }
+
+        // VOLUME_SURGE (전용 테이블)
+        val volumeSurge30 = volumeSurgeRepository.findByCreatedAtBetweenOrderByCreatedAtDesc(last30Days, now)
+            .filter { it.status == "CLOSED" }
+        val volumeSurge7 = volumeSurgeRepository.findByCreatedAtBetweenOrderByCreatedAtDesc(last7Days, now)
+            .filter { it.status == "CLOSED" }
+
+        // 일반 전략 비교
+        val generalComparison = listOf("DCA", "GRID", "MEAN_REVERSION").map { strategy ->
             val strategyTrades = trades30.filter { it.strategy == strategy }
             val sellTrades = strategyTrades.filter { it.side == "SELL" && it.pnl != null }
-
             StrategyComparison(
                 strategy = strategy,
                 trades30d = strategyTrades.size,
@@ -331,9 +345,34 @@ class PerformanceTools(
             )
         }
 
-        val recentTrend = trades7.groupBy { it.strategy }.mapValues { (_, trades) ->
+        // MEME_SCALPER 비교
+        val memeScalperComparison = StrategyComparison(
+            strategy = "MEME_SCALPER",
+            trades30d = memeScalper30.size,
+            pnl30d = memeScalper30.sumOf { it.pnlAmount ?: 0.0 },
+            winRate30d = if (memeScalper30.isNotEmpty())
+                memeScalper30.count { (it.pnlAmount ?: 0.0) > 0 }.toDouble() / memeScalper30.size * 100
+            else 0.0
+        )
+
+        // VOLUME_SURGE 비교
+        val volumeSurgeComparison = StrategyComparison(
+            strategy = "VOLUME_SURGE",
+            trades30d = volumeSurge30.size,
+            pnl30d = volumeSurge30.sumOf { it.pnlAmount ?: 0.0 },
+            winRate30d = if (volumeSurge30.isNotEmpty())
+                volumeSurge30.count { (it.pnlAmount ?: 0.0) > 0 }.toDouble() / volumeSurge30.size * 100
+            else 0.0
+        )
+
+        val strategyComparison = generalComparison + listOf(memeScalperComparison, volumeSurgeComparison)
+
+        // 7일 추세
+        val generalTrend = trades7.groupBy { it.strategy }.mapValues { (_, trades) ->
             trades.filter { it.side == "SELL" }.sumOf { it.pnl ?: 0.0 }
-        }
+        }.toMutableMap()
+        generalTrend["MEME_SCALPER"] = memeScalper7.sumOf { it.pnlAmount ?: 0.0 }
+        generalTrend["VOLUME_SURGE"] = volumeSurge7.sumOf { it.pnlAmount ?: 0.0 }
 
         val bestStrategy = strategyComparison.maxByOrNull { it.pnl30d }?.strategy ?: "MEAN_REVERSION"
 
@@ -351,12 +390,14 @@ class PerformanceTools(
             recommendations.add("현재 전략 성과가 양호합니다. 기존 설정 유지 권장.")
         }
 
+        val totalTrades = trades30.size + memeScalper30.size + volumeSurge30.size
+
         return OptimizationReport(
             generatedAt = LocalDate.now().format(DateTimeFormatter.ISO_DATE),
             analysisPeriod = "최근 30일",
-            totalTrades = trades30.size,
+            totalTrades = totalTrades,
             strategyComparison = strategyComparison,
-            recentTrend7d = recentTrend,
+            recentTrend7d = generalTrend,
             recommendedStrategy = bestStrategy,
             recommendations = recommendations
         )

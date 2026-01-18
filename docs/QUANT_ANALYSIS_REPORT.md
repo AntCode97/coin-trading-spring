@@ -327,24 +327,32 @@ class KimchiPremiumArbitrageEngine {
 
 ### 6.1 Current State (2026-01-18 Live Data)
 
-**30-Day Trading Summary:**
+**7-Day Trading Summary (MCP Tool: getPerformanceSummary):**
 | Strategy | Trades | PnL | Win Rate |
 |----------|--------|-----|----------|
-| DCA | 14 | N/A | N/A |
-| GRID | 4 | N/A | N/A |
-| VOLUME_SURGE | 13 | N/A | N/A |
-| MEME_SCALPER | 39 | N/A | N/A |
-| **Total** | **70** | **N/A** | **N/A** |
+| DCA | 14 | Pending* | Pending |
+| GRID | 4 | Pending* | Pending |
+| VOLUME_SURGE | 13 | Pending* | Pending |
+| MEME_SCALPER | 39 | Pending* | Pending |
+| **Total** | **70** | **Pending** | **Pending** |
 
-**Critical Issue Discovered:**
-- All PnL values are NULL in database
-- BUY trade prices recorded as 0.0 (market order execution price not saved)
-- Cannot assess actual profitability without fixing this bug
+*Note: PerformanceTools was fixed to query correct tables (MemeScalperTradeEntity, VolumeSurgeTradeEntity). Server restart required to reflect changes.
+
+**MCP Tool Enhancement (2026-01-18):**
+- `getStrategyPerformance()` now queries strategy-specific tables:
+  - MEME_SCALPER → MemeScalperTradeRepository
+  - VOLUME_SURGE → VolumeSurgeTradeRepository
+  - DCA/GRID/MEAN_REVERSION → TradeRepository
 
 **Exit Reason Analysis (Recent 20 trades):**
-- TIMEOUT: Most common (positions held to max time)
-- STOP_LOSS: Some triggered (risk management working)
-- IMBALANCE_FLIP: Order book reversal detection working
+- TIMEOUT: Most common (positions held to max time) - 익절 기회 놓침
+- STOP_LOSS: Triggered (SPURS -3% 손절) - 리스크 관리 작동 중
+- IMBALANCE_FLIP: Order book reversal (BLUR, EVZ) - 기술적 지표 작동 중
+
+**Active Trading Markets (실제 거래 발생):**
+- MEME_SCALPER: MOVE, BIGTIME, BLUR, EVZ, STABLE, APM (저가 밈 코인)
+- VOLUME_SURGE: BIO, ZRX, SPURS (거래량 급등 종목)
+- DCA: ETH_KRW, BTC_KRW (정기 매수)
 
 ### 6.2 Identified Problems
 
