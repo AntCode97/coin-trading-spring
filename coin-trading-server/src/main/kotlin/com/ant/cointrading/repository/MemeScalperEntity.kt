@@ -168,6 +168,16 @@ class MemeScalperDailyStatsEntity(
     @Column
     var maxSingleProfit: Double? = null,
 
+    // === 서킷 브레이커 상태 (재시작 시 복원용) ===
+
+    /** 연속 손실 횟수 */
+    @Column(nullable = false)
+    var consecutiveLosses: Int = 0,
+
+    /** 마지막 서킷브레이커 상태 업데이트 시각 */
+    @Column
+    var circuitBreakerUpdatedAt: Instant? = null,
+
     /** 생성 시각 */
     @Column(nullable = false)
     var createdAt: Instant = Instant.now()

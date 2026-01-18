@@ -108,7 +108,7 @@ class MemeScalperEngine(
     }
 
     /**
-     * 일일 통계 초기화
+     * 일일 통계 초기화 (서버 재시작 시 복원)
      */
     private fun initializeDailyStats() {
         val today = LocalDate.now()
@@ -117,7 +117,14 @@ class MemeScalperEngine(
         dailyTradeCount = tradeRepository.countTodayTrades(startOfDay)
         dailyPnl = tradeRepository.sumTodayPnl(startOfDay)
 
-        log.info("일일 통계 초기화: 거래=${dailyTradeCount}회, 손익=${dailyPnl}원")
+        // 서킷브레이커 상태 복원 (연속 손실)
+        val todayStats = statsRepository.findByDate(today)
+        if (todayStats != null) {
+            consecutiveLosses = todayStats.consecutiveLosses
+            log.info("서킷브레이커 상태 복원: 연속손실=${consecutiveLosses}회")
+        }
+
+        log.info("일일 통계 초기화: 거래=${dailyTradeCount}회, 손익=${dailyPnl}원, 연속손실=${consecutiveLosses}회")
     }
 
     /**
@@ -619,6 +626,9 @@ class MemeScalperEngine(
             consecutiveLosses = 0
         }
 
+        // 서킷브레이커 상태 DB 저장 (재시작 시 복원용)
+        saveCircuitBreakerState()
+
         // Slack 알림
         val emoji = if (safePnlAmount >= 0) "+" else ""
         val holdingSeconds = ChronoUnit.SECONDS.between(position.entryTime, Instant.now())
@@ -734,9 +744,11 @@ class MemeScalperEngine(
             stats.avgHoldingSeconds = avgHolding
             stats.maxSingleLoss = trades.mapNotNull { it.pnlAmount }.minOrNull()
             stats.maxSingleProfit = trades.mapNotNull { it.pnlAmount }.maxOrNull()
+            stats.consecutiveLosses = consecutiveLosses
+            stats.circuitBreakerUpdatedAt = Instant.now()
 
             statsRepository.save(stats)
-            log.info("일일 통계 저장: $date, 거래=${trades.size}, 승률=${String.format("%.1f", winRate * 100)}%, 손익=$totalPnl")
+            log.info("일일 통계 저장: $date, 거래=${trades.size}, 승률=${String.format("%.1f", winRate * 100)}%, 손익=$totalPnl, 연속손실=$consecutiveLosses")
         } catch (e: Exception) {
             log.error("일일 통계 저장 실패: ${e.message}")
         }
@@ -785,5 +797,20 @@ class MemeScalperEngine(
         }
 
         return mapOf("success" to true, "closedPositions" to results)
+    }
+
+    /**
+     * 서킷브레이커 상태 DB 저장 (재시작 시 복원용)
+     */
+    private fun saveCircuitBreakerState() {
+        try {
+            val today = LocalDate.now()
+            val stats = statsRepository.findByDate(today) ?: MemeScalperDailyStatsEntity(date = today)
+            stats.consecutiveLosses = consecutiveLosses
+            stats.circuitBreakerUpdatedAt = Instant.now()
+            statsRepository.save(stats)
+        } catch (e: Exception) {
+            log.error("서킷브레이커 상태 저장 실패: ${e.message}")
+        }
     }
 }

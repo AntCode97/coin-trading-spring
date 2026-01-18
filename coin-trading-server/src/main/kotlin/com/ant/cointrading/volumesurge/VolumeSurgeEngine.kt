@@ -14,6 +14,7 @@ import org.springframework.scheduling.annotation.Scheduled
 import org.springframework.stereotype.Component
 import java.math.BigDecimal
 import java.time.Instant
+import java.time.LocalDate
 import java.time.temporal.ChronoUnit
 import java.util.concurrent.ConcurrentHashMap
 
@@ -40,14 +41,15 @@ class VolumeSurgeEngine(
     private val orderExecutor: OrderExecutor,
     private val alertRepository: VolumeSurgeAlertRepository,
     private val tradeRepository: VolumeSurgeTradeRepository,
+    private val dailySummaryRepository: VolumeSurgeDailySummaryRepository,
     private val slackNotifier: SlackNotifier
 ) {
     private val log = LoggerFactory.getLogger(javaClass)
 
-    // 서킷 브레이커 상태
-    private var consecutiveLosses = 0
-    private var dailyPnl = 0.0
-    private var lastResetDate = Instant.now()
+    // 서킷 브레이커 상태 (재시작 시 DB에서 복원)
+    @Volatile private var consecutiveLosses = 0
+    @Volatile private var dailyPnl = 0.0
+    @Volatile private var lastResetDate = Instant.now()
 
     // 트레일링 스탑 고점 추적
     private val highestPrices = ConcurrentHashMap<Long, Double>()
@@ -64,12 +66,16 @@ class VolumeSurgeEngine(
     }
 
     /**
-     * 서버 재시작 시 열린 포지션 상태 복원
+     * 서버 재시작 시 상태 복원
      *
      * - 트레일링 스탑 고점을 메모리 맵에 로드
-     * - 서킷 브레이커는 보수적으로 리셋 (재시작 후 거래 가능)
+     * - 서킷 브레이커 상태 DB에서 복원 (연속손실, 일일손익)
      */
     private fun restoreOpenPositions() {
+        // 1. 서킷 브레이커 상태 복원
+        restoreCircuitBreakerState()
+
+        // 2. 열린 포지션 복원
         val openPositions = tradeRepository.findByStatus("OPEN")
         if (openPositions.isEmpty()) {
             log.info("복원할 열린 포지션 없음")
@@ -89,6 +95,29 @@ class VolumeSurgeEngine(
         }
 
         log.info("=== ${openPositions.size}건 포지션 복원 완료, 모니터링 재개 ===")
+    }
+
+    /**
+     * 서킷 브레이커 상태 DB에서 복원
+     */
+    private fun restoreCircuitBreakerState() {
+        val today = LocalDate.now()
+        val todaySummary = dailySummaryRepository.findByDate(today)
+
+        if (todaySummary != null) {
+            // 오늘 요약이 있으면 서킷브레이커 상태 복원
+            consecutiveLosses = todaySummary.consecutiveLosses
+            dailyPnl = todaySummary.totalPnl
+            lastResetDate = todaySummary.circuitBreakerUpdatedAt ?: Instant.now()
+
+            log.info("=== 서킷브레이커 상태 복원 ===")
+            log.info("연속 손실: $consecutiveLosses")
+            log.info("일일 손익: $dailyPnl")
+            log.info("마지막 업데이트: $lastResetDate")
+        } else {
+            // 오늘 요약이 없으면 초기화 상태 유지
+            log.info("오늘의 서킷브레이커 상태 없음, 초기화 상태로 시작")
+        }
     }
 
     /**
@@ -753,11 +782,13 @@ class VolumeSurgeEngine(
     }
 
     /**
-     * 서킷 브레이커 업데이트
+     * 서킷 브레이커 업데이트 및 DB 저장
      */
     private fun updateCircuitBreaker(pnl: Double) {
-        // 일일 리셋 체크
         val now = Instant.now()
+        val today = LocalDate.now()
+
+        // 일일 리셋 체크
         if (ChronoUnit.DAYS.between(lastResetDate, now) >= 1) {
             dailyPnl = 0.0
             consecutiveLosses = 0
@@ -770,6 +801,28 @@ class VolumeSurgeEngine(
             consecutiveLosses++
         } else {
             consecutiveLosses = 0
+        }
+
+        // DB에 서킷브레이커 상태 저장 (재시작 시 복원용)
+        saveCircuitBreakerState(today)
+    }
+
+    /**
+     * 서킷 브레이커 상태 DB에 저장
+     */
+    private fun saveCircuitBreakerState(date: LocalDate) {
+        try {
+            val summary = dailySummaryRepository.findByDate(date)
+                ?: VolumeSurgeDailySummaryEntity(date = date)
+
+            summary.consecutiveLosses = consecutiveLosses
+            summary.totalPnl = dailyPnl
+            summary.circuitBreakerUpdatedAt = Instant.now()
+
+            dailySummaryRepository.save(summary)
+            log.debug("서킷브레이커 상태 저장: 연속손실=$consecutiveLosses, 일일손익=$dailyPnl")
+        } catch (e: Exception) {
+            log.error("서킷브레이커 상태 저장 실패: ${e.message}")
         }
     }
 
