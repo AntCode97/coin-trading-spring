@@ -10,6 +10,7 @@ import com.ant.cointrading.order.OrderExecutor
 import com.ant.cointrading.order.OrderResult
 import com.ant.cointrading.model.OrderSide
 import com.ant.cointrading.repository.VolumeSurgeAlertRepository
+import com.ant.cointrading.repository.VolumeSurgeDailySummaryRepository
 import com.ant.cointrading.repository.VolumeSurgeTradeEntity
 import com.ant.cointrading.repository.VolumeSurgeTradeRepository
 import org.junit.jupiter.api.BeforeEach
@@ -64,6 +65,9 @@ class VolumeSurgeEngineTest {
     private lateinit var tradeRepository: VolumeSurgeTradeRepository
 
     @Mock
+    private lateinit var dailySummaryRepository: VolumeSurgeDailySummaryRepository
+
+    @Mock
     private lateinit var slackNotifier: SlackNotifier
 
     private lateinit var engine: VolumeSurgeEngine
@@ -79,6 +83,7 @@ class VolumeSurgeEngineTest {
             orderExecutor,
             alertRepository,
             tradeRepository,
+            dailySummaryRepository,
             slackNotifier
         )
     }

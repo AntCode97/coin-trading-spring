@@ -16,6 +16,8 @@ data class PumpSignal(
     val priceSpikePercent: Double,   // 가격 스파이크 (%)
     val bidImbalance: Double,        // 호가창 매수 Imbalance
     val rsi: Double,                 // RSI
+    val macdSignal: String,          // MACD 신호 (BULLISH/BEARISH/NEUTRAL)
+    val spreadPercent: Double,       // 스프레드 (%)
     val currentPrice: BigDecimal,    // 현재가
     val tradingValue: BigDecimal,    // 24시간 거래대금
     val score: Int                   // 종합 점수 (0-100)
@@ -38,8 +40,14 @@ class MemeScalperDetector(
 
     companion object {
         const val RSI_PERIOD = 9  // 빠른 RSI
-        const val MIN_ENTRY_SCORE = 70  // 진입 최소 점수 (60 → 70)
+        const val MIN_ENTRY_SCORE = 70  // 진입 최소 점수
         const val MIN_PRICE_SPIKE_PERCENT = 1.0  // 최소 가격 스파이크 1% 필수
+        const val MAX_SPREAD_PERCENT = 0.5  // 최대 스프레드 0.5%
+
+        // MACD 설정 (스캘핑용 빠른 설정)
+        const val MACD_FAST = 5
+        const val MACD_SLOW = 13
+        const val MACD_SIGNAL = 6
     }
 
     /**
@@ -80,9 +88,9 @@ class MemeScalperDetector(
      * 단일 마켓 펌프 감지
      */
     fun detectPump(market: String): PumpSignal? {
-        // 1분봉 데이터 조회 (최근 10개)
-        val candles = bithumbPublicApi.getOhlcv(market, "minute1", 10) ?: return null
-        if (candles.size < 6) return null
+        // 1분봉 데이터 조회 (MACD 계산 위해 더 많이)
+        val candles = bithumbPublicApi.getOhlcv(market, "minute1", 20) ?: return null
+        if (candles.size < 15) return null
 
         // 최신순 정렬 (API는 최신이 앞)
         val sortedCandles = candles.sortedByDescending { it.timestamp }
@@ -114,14 +122,26 @@ class MemeScalperDetector(
             return null
         }
 
-        // 호가창 Imbalance 계산
-        val bidImbalance = calculateImbalance(market)
+        // 호가창 데이터로 Imbalance와 스프레드 계산
+        val orderbook = bithumbPublicApi.getOrderbook(market)?.firstOrNull()
+        val bidImbalance = calculateImbalanceFromOrderbook(orderbook)
+        val spreadPercent = calculateSpread(orderbook)
+
+        // 스프레드 필터 (0.5% 초과 시 제외 - 슬리피지 위험)
+        if (spreadPercent > MAX_SPREAD_PERCENT) {
+            log.debug("[$market] 스프레드 과다: ${String.format("%.2f", spreadPercent)}%")
+            return null
+        }
 
         // RSI 계산
-        val rsi = calculateRsi(sortedCandles.map { it.tradePrice.toDouble() })
+        val closes = sortedCandles.map { it.tradePrice.toDouble() }
+        val rsi = calculateRsi(closes)
+
+        // MACD 계산
+        val macdSignal = calculateMacdSignal(closes)
 
         // 점수 계산
-        val score = calculateScore(volumeSpikeRatio, priceSpikePercent, bidImbalance, rsi)
+        val score = calculateScore(volumeSpikeRatio, priceSpikePercent, bidImbalance, rsi, macdSignal)
 
         return PumpSignal(
             market = market,
@@ -129,6 +149,8 @@ class MemeScalperDetector(
             priceSpikePercent = priceSpikePercent,
             bidImbalance = bidImbalance,
             rsi = rsi,
+            macdSignal = macdSignal,
+            spreadPercent = spreadPercent,
             currentPrice = currentPrice,
             tradingValue = tradingValue,
             score = score
@@ -136,20 +158,37 @@ class MemeScalperDetector(
     }
 
     /**
-     * 호가창 Imbalance 계산
-     *
-     * Imbalance = (Bid Volume - Ask Volume) / (Bid Volume + Ask Volume)
-     * 양수: 매수 압력, 음수: 매도 압력
+     * 호가창 Imbalance 계산 (orderbook 파라미터 버전)
      */
-    private fun calculateImbalance(market: String): Double {
-        val orderbook = bithumbPublicApi.getOrderbook(market)?.firstOrNull() ?: return 0.0
-        val units = orderbook.orderbookUnits ?: return 0.0
+    private fun calculateImbalanceFromOrderbook(orderbook: com.ant.cointrading.api.bithumb.OrderbookInfo?): Double {
+        val units = orderbook?.orderbookUnits ?: return 0.0
 
         val bidVolume = units.sumOf { it.bidSize.toDouble() }
         val askVolume = units.sumOf { it.askSize.toDouble() }
 
         val total = bidVolume + askVolume
         return if (total > 0) (bidVolume - askVolume) / total else 0.0
+    }
+
+    /**
+     * 스프레드 계산 (%)
+     * 스프레드 = (최우선 매도호가 - 최우선 매수호가) / 최우선 매수호가 × 100
+     */
+    private fun calculateSpread(orderbook: com.ant.cointrading.api.bithumb.OrderbookInfo?): Double {
+        val units = orderbook?.orderbookUnits?.firstOrNull() ?: return 10.0  // 데이터 없으면 높은 값
+        val bestBid = units.bidPrice.toDouble()
+        val bestAsk = units.askPrice.toDouble()
+
+        if (bestBid <= 0) return 10.0
+        return ((bestAsk - bestBid) / bestBid) * 100
+    }
+
+    /**
+     * 호가창 Imbalance 계산 (market 파라미터 버전 - 청산 신호 감지용)
+     */
+    private fun calculateImbalance(market: String): Double {
+        val orderbook = bithumbPublicApi.getOrderbook(market)?.firstOrNull() ?: return 0.0
+        return calculateImbalanceFromOrderbook(orderbook)
     }
 
     /**
@@ -179,57 +218,128 @@ class MemeScalperDetector(
     }
 
     /**
+     * MACD 신호 계산 (스캘핑용 빠른 설정: 5/13/6)
+     *
+     * @return BULLISH (매수 신호), BEARISH (매도 신호), NEUTRAL (중립)
+     */
+    private fun calculateMacdSignal(closes: List<Double>): String {
+        if (closes.size < MACD_SLOW + MACD_SIGNAL) return "NEUTRAL"
+
+        // EMA 계산
+        val fastEma = calculateEma(closes, MACD_FAST)
+        val slowEma = calculateEma(closes, MACD_SLOW)
+
+        // MACD 라인
+        val macdLine = fastEma.zip(slowEma) { f, s -> f - s }
+        if (macdLine.size < MACD_SIGNAL + 1) return "NEUTRAL"
+
+        // 시그널 라인 (MACD의 EMA)
+        val signalLine = calculateEma(macdLine, MACD_SIGNAL)
+
+        // 최근 2개 값으로 크로스오버 판단
+        val currentMacd = macdLine.lastOrNull() ?: 0.0
+        val previousMacd = macdLine.getOrNull(macdLine.size - 2) ?: 0.0
+        val currentSignal = signalLine.lastOrNull() ?: 0.0
+        val previousSignal = signalLine.getOrNull(signalLine.size - 2) ?: 0.0
+
+        return when {
+            // 골든 크로스 (MACD가 시그널 상향 돌파)
+            previousMacd <= previousSignal && currentMacd > currentSignal -> "BULLISH"
+            // 데드 크로스 (MACD가 시그널 하향 돌파)
+            previousMacd >= previousSignal && currentMacd < currentSignal -> "BEARISH"
+            // MACD가 시그널 위에 있고 상승 중
+            currentMacd > currentSignal && currentMacd > previousMacd -> "BULLISH"
+            // MACD가 시그널 아래에 있고 하락 중
+            currentMacd < currentSignal && currentMacd < previousMacd -> "BEARISH"
+            else -> "NEUTRAL"
+        }
+    }
+
+    /**
+     * EMA (지수이동평균) 계산
+     */
+    private fun calculateEma(data: List<Double>, period: Int): List<Double> {
+        if (data.size < period) return emptyList()
+
+        val multiplier = 2.0 / (period + 1)
+        val result = mutableListOf<Double>()
+
+        // 첫 번째 EMA는 SMA
+        var ema = data.take(period).average()
+        result.add(ema)
+
+        // 이후 EMA 계산
+        for (i in period until data.size) {
+            ema = (data[i] - ema) * multiplier + ema
+            result.add(ema)
+        }
+
+        return result
+    }
+
+    /**
      * 펌프 점수 계산 (0-100)
      *
-     * 배점:
-     * - 거래량 스파이크: 40점 (핵심)
-     * - 가격 스파이크: 30점
-     * - 호가창 Imbalance: 20점
-     * - RSI 조건: 10점
+     * 배점 (컨플루언스 강화):
+     * - 거래량 스파이크: 35점 (핵심)
+     * - 가격 스파이크: 25점
+     * - 호가창 Imbalance: 15점
+     * - RSI 조건: 15점
+     * - MACD 신호: 10점 (추가)
      */
     private fun calculateScore(
         volumeSpikeRatio: Double,
         priceSpikePercent: Double,
         bidImbalance: Double,
-        rsi: Double
+        rsi: Double,
+        macdSignal: String
     ): Int {
         var score = 0
 
-        // 1. 거래량 스파이크 (40점)
+        // 1. 거래량 스파이크 (35점) - 핵심 지표
         score += when {
-            volumeSpikeRatio >= 10.0 -> 40  // 1000%+
-            volumeSpikeRatio >= 7.0 -> 35   // 700%+
-            volumeSpikeRatio >= 5.0 -> 30   // 500%+ (기준)
+            volumeSpikeRatio >= 10.0 -> 35  // 1000%+
+            volumeSpikeRatio >= 7.0 -> 30   // 700%+
+            volumeSpikeRatio >= 5.0 -> 25   // 500%+ (기준)
             volumeSpikeRatio >= 3.0 -> 20   // 300%+
             volumeSpikeRatio >= 2.0 -> 10   // 200%+
             else -> 0
         }
 
-        // 2. 가격 스파이크 (30점)
+        // 2. 가격 스파이크 (25점) - 상승 모멘텀 확인
         score += when {
-            priceSpikePercent >= 10.0 -> 30  // 10%+
-            priceSpikePercent >= 5.0 -> 25   // 5%+
-            priceSpikePercent >= 3.0 -> 20   // 3%+ (기준)
-            priceSpikePercent >= 2.0 -> 15   // 2%+
-            priceSpikePercent >= 1.0 -> 10   // 1%+
+            priceSpikePercent >= 10.0 -> 25  // 10%+
+            priceSpikePercent >= 5.0 -> 22   // 5%+
+            priceSpikePercent >= 3.0 -> 18   // 3%+ (기준)
+            priceSpikePercent >= 2.0 -> 12   // 2%+
+            priceSpikePercent >= 1.0 -> 8    // 1%+
             else -> 0
         }
 
-        // 3. 호가창 Imbalance (20점)
+        // 3. 호가창 Imbalance (15점) - 매수 압력 확인
         score += when {
-            bidImbalance >= 0.5 -> 20   // 강한 매수 압력
-            bidImbalance >= 0.3 -> 15   // 매수 압력 (기준)
-            bidImbalance >= 0.1 -> 10   // 약한 매수 압력
-            bidImbalance >= 0.0 -> 5    // 중립
-            else -> 0                    // 매도 압력
+            bidImbalance >= 0.5 -> 15   // 강한 매수 압력
+            bidImbalance >= 0.3 -> 12   // 매수 압력 (기준)
+            bidImbalance >= 0.1 -> 8    // 약한 매수 압력
+            bidImbalance >= 0.0 -> 4    // 중립
+            else -> 0                    // 매도 압력 - 진입 금지
         }
 
-        // 4. RSI 조건 (10점)
-        // 과매수 영역이 아니면서 상승 중일 때 점수
+        // 4. RSI 조건 (15점) - 과매수 회피
         score += when {
-            rsi in 50.0..70.0 -> 10    // 최적 구간
-            rsi in 40.0..80.0 -> 5     // 허용 구간
+            rsi in 50.0..65.0 -> 15    // 최적 구간 (상승 중이지만 과매수 아님)
+            rsi in 40.0..50.0 -> 10    // 상승 초기
+            rsi in 65.0..75.0 -> 8     // 주의 구간
+            rsi in 75.0..80.0 -> 3     // 위험 구간
             rsi > 80.0 -> 0            // 과매수 - 진입 위험
+            else -> 0
+        }
+
+        // 5. MACD 신호 (10점) - 추세 확인
+        score += when (macdSignal) {
+            "BULLISH" -> 10   // 골든 크로스 또는 상승 추세
+            "NEUTRAL" -> 3    // 중립
+            "BEARISH" -> 0    // 데드 크로스 - 진입 금지
             else -> 0
         }
 

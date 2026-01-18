@@ -77,9 +77,21 @@ class MemeScalperTradeEntity(
     @Column
     var entryRsi: Double? = null,
 
+    /** 진입 시점 MACD 신호 (BULLISH/BEARISH/NEUTRAL) */
+    @Column(length = 10)
+    var entryMacdSignal: String? = null,
+
+    /** 진입 시점 스프레드 (%) */
+    @Column
+    var entrySpread: Double? = null,
+
     /** 피크 가격 (트레일링용) */
     @Column
     var peakPrice: Double? = null,
+
+    /** 트레일링 스탑 활성화 여부 */
+    @Column
+    var trailingActive: Boolean = false,
 
     /** 피크 거래량 (청산 판단용) */
     @Column

@@ -170,10 +170,13 @@ memescalper:
   polling-interval-ms: ${MEME_SCALPER_POLLING_MS:5000}
   position-size-krw: ${MEME_SCALPER_POSITION_SIZE:6000}
   max-positions: ${MEME_SCALPER_MAX_POSITIONS:3}
-  # 타이트한 손절/익절
+  # 타이트한 손절/익절 (2:1 손익비)
   stop-loss-percent: ${MEME_SCALPER_STOP_LOSS:-1.5}
-  take-profit-percent: ${MEME_SCALPER_TAKE_PROFIT:2.0}
+  take-profit-percent: ${MEME_SCALPER_TAKE_PROFIT:3.0}
   position-timeout-min: ${MEME_SCALPER_TIMEOUT_MIN:5}
+  # 트레일링 스탑
+  trailing-stop-trigger: ${MEME_SCALPER_TRAILING_TRIGGER:1.0}
+  trailing-stop-offset: ${MEME_SCALPER_TRAILING_OFFSET:0.5}
   # 펌프 감지 조건
   volume-spike-ratio: ${MEME_SCALPER_VOLUME_SPIKE:5.0}
   price-spike-percent: ${MEME_SCALPER_PRICE_SPIKE:3.0}

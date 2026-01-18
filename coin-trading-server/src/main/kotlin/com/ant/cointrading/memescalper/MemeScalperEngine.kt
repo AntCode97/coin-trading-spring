@@ -21,6 +21,8 @@ import java.time.LocalDate
 import java.time.ZoneId
 import java.time.temporal.ChronoUnit
 import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.locks.ReentrantLock
+import kotlin.concurrent.withLock
 
 /**
  * Meme Scalper 트레이딩 엔진
@@ -50,6 +52,9 @@ class MemeScalperEngine(
 
     // 마켓별 쿨다운 추적
     private val cooldowns = ConcurrentHashMap<String, Instant>()
+
+    // 마켓별 진입 락 (Race Condition 방지)
+    private val entryLocks = ConcurrentHashMap<String, ReentrantLock>()
 
     // 피크 데이터 추적 (청산 판단용)
     private val peakVolumes = ConcurrentHashMap<Long, Double>()
@@ -157,12 +162,18 @@ class MemeScalperEngine(
                 return
             }
 
-            // 최상위 신호로 진입 시도
-            for (signal in signals.take(3)) {  // 상위 3개만
-                if (shouldEnter(signal)) {
-                    enterPosition(signal)
-                    break  // 한 번에 하나만 진입
+            // 최상위 신호로 진입 시도 (락으로 Race Condition 방지)
+            for (signal in signals.take(3)) {
+                val lock = entryLocks.computeIfAbsent(signal.market) { ReentrantLock() }
+                val entered = lock.withLock {
+                    if (shouldEnter(signal)) {
+                        enterPosition(signal)
+                        true
+                    } else {
+                        false
+                    }
                 }
+                if (entered) break  // 한 번에 하나만 진입
             }
         } catch (e: Exception) {
             log.error("펌프 스캔 중 오류: ${e.message}", e)
@@ -222,10 +233,21 @@ class MemeScalperEngine(
             return false
         }
 
-        // 실제 잔고 체크 - 이미 해당 코인 보유 시 진입 불가 (ABANDONED 케이스 방지)
+        // 실제 잔고 체크 - KRW 충분한지 + 이미 해당 코인 보유 시 진입 불가
         val coinSymbol = market.removePrefix("KRW-")
+        val requiredKrw = BigDecimal(properties.positionSizeKrw)
         try {
             val balances = bithumbPrivateApi.getBalances()
+
+            // 1. KRW 잔고 체크 - 포지션 크기 + 여유분(10%)
+            val krwBalance = balances?.find { it.currency == "KRW" }?.balance ?: BigDecimal.ZERO
+            val minRequired = requiredKrw.multiply(BigDecimal("1.1"))  // 10% 여유
+            if (krwBalance < minRequired) {
+                log.warn("[$market] KRW 잔고 부족: ${krwBalance}원 < ${minRequired}원")
+                return false
+            }
+
+            // 2. 코인 잔고 체크 - 이미 보유 시 진입 불가 (ABANDONED 케이스 방지)
             val coinBalance = balances?.find { it.currency == coinSymbol }?.balance ?: BigDecimal.ZERO
             if (coinBalance > BigDecimal.ZERO) {
                 log.warn("[$market] 이미 $coinSymbol 잔고 보유 중: $coinBalance - 중복 진입 방지")
@@ -275,7 +297,15 @@ class MemeScalperEngine(
 
         if (!orderResult.success) {
             log.error("[$market] 매수 주문 실패: ${orderResult.message}")
-            cooldowns[market] = Instant.now().plus(30, ChronoUnit.SECONDS)  // 30초 쿨다운
+            cooldowns[market] = Instant.now().plus(30, ChronoUnit.SECONDS)
+            return
+        }
+
+        // 체결 수량 검증 - 0이면 실패로 간주
+        val executedQuantity = orderResult.executedQuantity?.toDouble() ?: 0.0
+        if (executedQuantity <= 0) {
+            log.error("[$market] 체결 수량 0 - 주문 실패로 간주")
+            cooldowns[market] = Instant.now().plus(30, ChronoUnit.SECONDS)
             return
         }
 
@@ -284,17 +314,38 @@ class MemeScalperEngine(
             ?: bithumbPublicApi.getCurrentPrice(market)?.firstOrNull()?.tradePrice?.toDouble()
             ?: signal.currentPrice.toDouble()
 
-        val executedQuantity = orderResult.executedQuantity?.toDouble() ?: 0.0
-
         // 진입가 검증 - 0이면 포지션 생성 불가
         if (executedPrice <= 0) {
             log.error("[$market] 유효하지 않은 진입가: $executedPrice - 포지션 생성 취소")
+            // 체결되었지만 가격을 모르면 위험 - 수동 확인 필요
+            slackNotifier.sendWarning(market, "매수 체결되었으나 체결가 확인 불가 - 수동 확인 필요")
             cooldowns[market] = Instant.now().plus(60, ChronoUnit.SECONDS)
             return
         }
 
-        if (executedQuantity <= 0) {
-            log.error("[$market] 체결 수량 0")
+        // 체결 금액 검증 - 최소 금액 이하면 의미 없음
+        val executedAmount = BigDecimal(executedPrice * executedQuantity)
+        if (executedAmount < MIN_ORDER_AMOUNT) {
+            log.warn("[$market] 체결 금액 미달 (${executedAmount}원 < ${MIN_ORDER_AMOUNT}원)")
+            // 이미 체결되었으므로 포지션은 생성하되 경고
+        }
+
+        // 슬리피지 경고 - 예상가 대비 2% 이상 차이나면 경고
+        val expectedPrice = signal.currentPrice.toDouble()
+        if (expectedPrice > 0) {
+            val slippagePercent = ((executedPrice - expectedPrice) / expectedPrice) * 100
+            if (kotlin.math.abs(slippagePercent) > 2.0) {
+                log.warn("[$market] 슬리피지 경고: ${String.format("%.2f", slippagePercent)}% (예상=${expectedPrice}, 체결=${executedPrice})")
+                slackNotifier.sendWarning(market, "슬리피지 ${String.format("%.2f", slippagePercent)}% 발생")
+            }
+        }
+
+        // 최종 동시 포지션 수 체크 (Race Condition 방지용 2차 검증)
+        val currentOpenCount = tradeRepository.countByStatus("OPEN")
+        if (currentOpenCount >= properties.maxPositions) {
+            log.warn("[$market] 최대 포지션 초과 (Race Condition 발생) - 포지션 생성 취소")
+            slackNotifier.sendWarning(market, "매수 체결되었으나 최대 포지션 초과 - 수동 매도 필요")
+            cooldowns[market] = Instant.now().plus(60, ChronoUnit.SECONDS)
             return
         }
 
@@ -308,7 +359,10 @@ class MemeScalperEngine(
             entryPriceSpikePercent = signal.priceSpikePercent,
             entryImbalance = signal.bidImbalance,
             entryRsi = signal.rsi,
+            entryMacdSignal = signal.macdSignal,
+            entrySpread = signal.spreadPercent,
             peakPrice = executedPrice,
+            trailingActive = false,
             peakVolume = signal.volumeSpikeRatio,
             status = "OPEN"
         )
@@ -393,19 +447,40 @@ class MemeScalperEngine(
             return
         }
 
-        // 6. 익절 체크 (수수료 0.08% 고려 - 최소 0.1% 이상 수익 시에만)
+        // 6. 트레일링 스탑 로직
+        val triggerPercent = properties.trailingStopTrigger
+        val offsetPercent = properties.trailingStopOffset
+
+        // 트레일링 활성화 조건: 수익이 trigger% 이상
+        if (!position.trailingActive && pnlPercent >= triggerPercent) {
+            position.trailingActive = true
+            log.info("[$market] 트레일링 스탑 활성화 (수익 ${String.format("%.2f", pnlPercent)}%)")
+        }
+
+        // 트레일링 중: 고점 대비 offset% 하락 시 청산
+        if (position.trailingActive) {
+            val peakPriceVal = peakPrices.getOrDefault(position.id!!, position.entryPrice)
+            val drawdownPercent = ((peakPriceVal - currentPrice) / peakPriceVal) * 100
+
+            if (drawdownPercent >= offsetPercent) {
+                closePosition(position, currentPrice, "TRAILING_STOP")
+                return
+            }
+        }
+
+        // 7. 익절 체크 (수수료 0.08% 고려 - 최소 0.1% 이상 수익 시에만)
         if (pnlPercent >= properties.takeProfitPercent && pnlPercent > MIN_PROFIT_PERCENT) {
             closePosition(position, currentPrice, "TAKE_PROFIT")
             return
         }
 
-        // 7. 타임아웃 체크
+        // 8. 타임아웃 체크
         if (holdingSeconds >= properties.positionTimeoutMin * 60) {
             closePosition(position, currentPrice, "TIMEOUT")
             return
         }
 
-        // 8. 청산 신호 체크 (거래량 급감, 호가창 반전) - 30초 이후에만
+        // 9. 청산 신호 체크 (거래량 급감, 호가창 반전) - 30초 이후에만
         if (holdingSeconds >= 30) {
             val peakVol = peakVolumes.getOrDefault(position.id!!, 1.0)
             val exitSignal = detector.detectExitSignal(market, peakVol)

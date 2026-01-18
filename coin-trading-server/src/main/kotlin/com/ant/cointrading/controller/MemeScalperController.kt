@@ -3,6 +3,7 @@ package com.ant.cointrading.controller
 import com.ant.cointrading.config.MemeScalperProperties
 import com.ant.cointrading.memescalper.MemeScalperDetector
 import com.ant.cointrading.memescalper.MemeScalperEngine
+import com.ant.cointrading.memescalper.MemeScalperReflector
 import com.ant.cointrading.repository.MemeScalperDailyStatsRepository
 import com.ant.cointrading.repository.MemeScalperTradeRepository
 import org.springframework.web.bind.annotation.*
@@ -20,6 +21,7 @@ class MemeScalperController(
     private val properties: MemeScalperProperties,
     private val memeScalperEngine: MemeScalperEngine,
     private val memeScalperDetector: MemeScalperDetector,
+    private val memeScalperReflector: MemeScalperReflector,
     private val tradeRepository: MemeScalperTradeRepository,
     private val statsRepository: MemeScalperDailyStatsRepository
 ) {
@@ -221,7 +223,9 @@ class MemeScalperController(
             "riskManagement" to mapOf(
                 "stopLossPercent" to properties.stopLossPercent,
                 "takeProfitPercent" to properties.takeProfitPercent,
-                "positionTimeoutMin" to properties.positionTimeoutMin
+                "positionTimeoutMin" to properties.positionTimeoutMin,
+                "trailingStopTrigger" to properties.trailingStopTrigger,
+                "trailingStopOffset" to properties.trailingStopOffset
             ),
             "pumpDetection" to mapOf(
                 "volumeSpikeRatio" to properties.volumeSpikeRatio,
@@ -245,5 +249,24 @@ class MemeScalperController(
                 "maxTradingValueKrw" to properties.maxTradingValueKrw
             )
         )
+    }
+
+    /**
+     * 수동 회고 실행
+     */
+    @PostMapping("/reflect")
+    fun runReflection(): Map<String, Any> {
+        return try {
+            val result = memeScalperReflector.runManualReflection()
+            mapOf(
+                "success" to true,
+                "result" to result
+            )
+        } catch (e: Exception) {
+            mapOf(
+                "success" to false,
+                "error" to (e.message ?: "Unknown error")
+            )
+        }
     }
 }
