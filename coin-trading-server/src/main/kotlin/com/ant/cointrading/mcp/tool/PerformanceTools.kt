@@ -5,6 +5,9 @@ import com.ant.cointrading.repository.TradeRepository
 import com.ant.cointrading.repository.MemeScalperTradeRepository
 import com.ant.cointrading.repository.MemeScalperDailyStatsRepository
 import com.ant.cointrading.repository.VolumeSurgeTradeRepository
+import com.ant.cointrading.repository.FundingRateRepository
+import com.ant.cointrading.repository.FundingArbPositionRepository
+import com.ant.cointrading.fundingarb.FundingRateMonitor
 import org.springaicommunity.mcp.annotation.McpTool
 import org.springaicommunity.mcp.annotation.McpToolParam
 import org.springframework.stereotype.Component
@@ -138,6 +141,43 @@ data class OpenPositionInfo(
     val holdingMinutes: Long
 )
 
+/** 펀딩 기회 정보 */
+data class FundingOpportunityInfo(
+    val exchange: String,
+    val symbol: String,
+    val fundingRate: String,
+    val annualizedRate: String,
+    val nextFundingTime: String,
+    val minutesUntilFunding: Long,
+    val markPrice: Double,
+    val isRecommendedEntry: Boolean
+)
+
+/** 펀딩 비율 히스토리 */
+data class FundingRateHistoryInfo(
+    val symbol: String,
+    val exchange: String,
+    val fundingRate: Double,
+    val fundingRatePercent: String,
+    val annualizedRate: String?,
+    val fundingTime: String,
+    val markPrice: Double?
+)
+
+/** 펀딩 포지션 정보 */
+data class FundingPositionInfo(
+    val id: Long?,
+    val symbol: String,
+    val spotExchange: String,
+    val perpExchange: String,
+    val spotQuantity: Double,
+    val perpQuantity: Double,
+    val totalFundingReceived: Double,
+    val netPnl: Double?,
+    val status: String,
+    val entryTime: String
+)
+
 /**
  * 거래 성과 분석 MCP 도구
  *
@@ -149,7 +189,10 @@ class PerformanceTools(
     private val dailyStatsRepository: DailyStatsRepository,
     private val memeScalperRepository: MemeScalperTradeRepository,
     private val memeScalperStatsRepository: MemeScalperDailyStatsRepository,
-    private val volumeSurgeRepository: VolumeSurgeTradeRepository
+    private val volumeSurgeRepository: VolumeSurgeTradeRepository,
+    private val fundingRateRepository: FundingRateRepository,
+    private val fundingPositionRepository: FundingArbPositionRepository,
+    private val fundingRateMonitor: FundingRateMonitor
 ) {
 
     @McpTool(description = "최근 거래 기록을 조회합니다.")
@@ -543,6 +586,92 @@ class PerformanceTools(
             recentTrend7d = generalTrend,
             recommendedStrategy = bestStrategy,
             recommendations = recommendations
+        )
+    }
+
+    // ========================================
+    // Funding Rate Arbitrage MCP 도구
+    // ========================================
+
+    @McpTool(description = "현재 펀딩 비율 기회를 스캔합니다. 연환산 15% 이상 수익률 기회를 반환합니다.")
+    fun scanFundingOpportunities(): List<FundingOpportunityInfo> {
+        val opportunities = fundingRateMonitor.manualScan()
+        return opportunities.map { opp ->
+            FundingOpportunityInfo(
+                exchange = opp.exchange,
+                symbol = opp.symbol,
+                fundingRate = opp.fundingRatePercent(),
+                annualizedRate = opp.annualizedRateFormatted(),
+                nextFundingTime = opp.nextFundingTime.toString(),
+                minutesUntilFunding = opp.minutesUntilFunding(),
+                markPrice = opp.markPrice,
+                isRecommendedEntry = opp.isRecommendedEntry()
+            )
+        }
+    }
+
+    @McpTool(description = "특정 심볼의 펀딩 비율 히스토리를 조회합니다.")
+    fun getFundingRateHistory(
+        @McpToolParam(description = "심볼 (예: BTCUSDT, ETHUSDT)") symbol: String,
+        @McpToolParam(description = "조회 개수 (최대 30)") limit: Int
+    ): List<FundingRateHistoryInfo> {
+        return fundingRateRepository.findBySymbolOrderByFundingTimeDesc(symbol.uppercase())
+            .take(limit.coerceAtMost(30))
+            .map { rate ->
+                FundingRateHistoryInfo(
+                    symbol = rate.symbol,
+                    exchange = rate.exchange,
+                    fundingRate = rate.fundingRate,
+                    fundingRatePercent = String.format("%.4f%%", rate.fundingRate * 100),
+                    annualizedRate = rate.annualizedRate?.let { String.format("%.2f%%", it) },
+                    fundingTime = rate.fundingTime.toString(),
+                    markPrice = rate.markPrice
+                )
+            }
+    }
+
+    @McpTool(description = "펀딩 차익거래 포지션 목록을 조회합니다.")
+    fun getFundingPositions(
+        @McpToolParam(description = "상태 필터 (OPEN, CLOSED, ALL)") status: String
+    ): List<FundingPositionInfo> {
+        val positions = if (status.uppercase() == "ALL") {
+            fundingPositionRepository.findTop20ByOrderByCreatedAtDesc()
+        } else {
+            fundingPositionRepository.findByStatus(status.uppercase())
+        }
+
+        return positions.map { pos ->
+            FundingPositionInfo(
+                id = pos.id,
+                symbol = pos.symbol,
+                spotExchange = pos.spotExchange,
+                perpExchange = pos.perpExchange,
+                spotQuantity = pos.spotQuantity,
+                perpQuantity = pos.perpQuantity,
+                totalFundingReceived = pos.totalFundingReceived,
+                netPnl = pos.netPnl,
+                status = pos.status,
+                entryTime = pos.entryTime.toString()
+            )
+        }
+    }
+
+    @McpTool(description = "펀딩 비율 모니터링 상태를 조회합니다.")
+    fun getFundingMonitorStatus(): Map<String, Any?> {
+        val status = fundingRateMonitor.getStatus()
+        return mapOf(
+            "enabled" to status.enabled,
+            "autoTradingEnabled" to status.autoTradingEnabled,
+            "monitoredSymbols" to status.monitoredSymbols,
+            "currentOpportunities" to status.currentOpportunities,
+            "lastCheckTime" to status.lastCheckTime.toString(),
+            "topOpportunity" to status.topOpportunity?.let {
+                mapOf(
+                    "symbol" to it.symbol,
+                    "annualizedRate" to it.annualizedRateFormatted(),
+                    "minutesUntilFunding" to it.minutesUntilFunding()
+                )
+            }
         )
     }
 }

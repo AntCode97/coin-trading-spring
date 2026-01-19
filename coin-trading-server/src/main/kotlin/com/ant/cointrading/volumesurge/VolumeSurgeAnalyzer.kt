@@ -258,10 +258,13 @@ class VolumeSurgeAnalyzer(
         }
 
         // 2. MACD 점수 (추세 방향 확인 - 25점)
+        // 2026-01-19: MACD BEARISH 패널티 강화 (회고 결과 반영)
+        // KRW-SPURS 손실 케이스: MACD BEARISH + 거래량 2.26 = 손실 -4.35%
         score += when (macdSignal) {
             "BULLISH" -> 25           // 상승 신호 = 핵심
             "NEUTRAL" -> 15           // 중립도 허용
-            else -> 5                 // BEARISH도 약간 허용 (초기 반등)
+            "BEARISH" -> -10          // BEARISH = 패널티 (기존 5점 → -10점)
+            else -> 0
         }
 
         // 3. RSI 점수 (모멘텀 확인 - 25점)

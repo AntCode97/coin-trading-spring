@@ -210,6 +210,67 @@ volumesurge:
 
 ---
 
+## 변경사항 (2026-01-19)
+
+### 1. closeAttemptCount null 문제 해결
+
+DB에서 `closeAttemptCount` 컬럼에 null 값이 저장되어 LLM 회고 시스템의 분석 기능이 실패하던 문제 수정:
+
+**수정 파일:**
+- `VolumeSurgeEntity.kt:187` - `@Column(nullable = false)` 추가
+- `MemeScalperEntity.kt:115` - `@Column(nullable = false)` 추가
+
+**마이그레이션 스크립트:** `docs/fix-close-attempt-count-null.sql`
+
+### 2. MACD BEARISH 패널티 적용
+
+LLM 일일 회고 결과 반영. KRW-SPURS 손실 케이스(-4.35%) 분석 후 컨플루언스 점수 계산 수정:
+
+```kotlin
+// VolumeSurgeAnalyzer.kt
+// 변경 전: MACD BEARISH → 5점 (약한 허용)
+// 변경 후: MACD BEARISH → -10점 (패널티)
+
+score += when (macdSignal) {
+    "BULLISH" -> 25
+    "NEUTRAL" -> 15
+    "BEARISH" -> -10  // 기존 5점 → -10점
+    else -> 0
+}
+```
+
+**효과:** MACD BEARISH + 거래량비율 2.26 케이스가 65점 → 50점으로 하락하여 60점 기준 미달로 진입 차단.
+
+### 3. Funding Rate Arbitrage API 구현
+
+**Phase 1 모니터링 완료:**
+
+| 엔드포인트 | 메소드 | 설명 |
+|-----------|--------|------|
+| `/api/funding/status` | GET | 모니터링 상태 조회 |
+| `/api/funding/opportunities` | GET | 현재 펀딩 기회 목록 |
+| `/api/funding/scan` | POST | 수동 스캔 실행 |
+| `/api/funding/info/{symbol}` | GET | 특정 심볼 펀딩 정보 |
+| `/api/funding/history/{symbol}` | GET | 펀딩 비율 히스토리 |
+| `/api/funding/config` | GET | 전략 설정 조회 |
+| `/api/funding/rates/latest` | GET | 최신 펀딩 비율 (심볼별) |
+| `/api/funding/positions` | GET | 포지션 목록 |
+| `/api/funding/stats/daily` | GET | 일일 통계 |
+| `/api/funding/performance` | GET | 성과 요약 |
+
+### 4. MCP 도구 추가 (Funding Rate)
+
+`PerformanceTools.kt`에 4개 MCP 도구 추가:
+
+| 도구 | 설명 |
+|------|------|
+| `scanFundingOpportunities()` | 현재 펀딩 비율 기회 스캔 (연환산 15%+) |
+| `getFundingRateHistory(symbol, limit)` | 특정 심볼 펀딩 비율 히스토리 |
+| `getFundingPositions(status)` | 펀딩 차익거래 포지션 목록 |
+| `getFundingMonitorStatus()` | 모니터링 상태 조회 |
+
+---
+
 ## 변경사항 (2026-01-13)
 
 ### 1. LLM 필터 4시간 쿨다운 추가
@@ -836,16 +897,21 @@ class VolumeSurgePositionManager(
     - KimchiPremiumController: REST API
     - 주요 코인: BTC, ETH, XRP, SOL, ADA, DOGE
 
-11. **MCP 도구 응답 개선**
+11. ~~**MCP 도구 응답 개선**~~ ✅ 완료
    - TechnicalAnalysisTools data class 변환
    - TradingTools data class 변환
    - StrategyTools data class 변환
+   - PerformanceTools data class 변환
 
 ### Phase 3: 확장
 
-12. **Funding Rate Arbitrage**
-    - 현물 Long + 무기한 선물 Short
-    - Binance/Bybit 선물 API 연동
+12. **Funding Rate Arbitrage** (Phase 1 모니터링 완료)
+    - ~~Binance Futures API 클라이언트 구현~~ ✅
+    - ~~FundingRateMonitor 스케줄러 구현~~ ✅
+    - ~~FundingArbitrageController REST API~~ ✅
+    - ~~MCP 도구 추가 (scanFundingOpportunities 등)~~ ✅
+    - Phase 2: 자동 거래 로직 (TODO)
+    - Bybit 선물 API 연동 (TODO)
 
 13. **백테스팅 프레임워크**
     - 과거 데이터로 전략 검증

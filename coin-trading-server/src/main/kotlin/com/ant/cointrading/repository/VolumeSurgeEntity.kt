@@ -183,7 +183,7 @@ class VolumeSurgeTradeEntity(
     var lastCloseAttempt: Instant? = null,
 
     /** 청산 시도 횟수 */
-    @Column
+    @Column(nullable = false)
     var closeAttemptCount: Int = 0,
 
     /** 생성 시각 */
