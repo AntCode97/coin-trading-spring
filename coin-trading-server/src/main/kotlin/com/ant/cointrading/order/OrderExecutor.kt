@@ -798,7 +798,30 @@ class OrderExecutor(
     ) {
         try {
             val isSell = signal.action == SignalAction.SELL
-            val sellPrice = (executedPrice ?: signal.price).toDouble()
+            var tradePrice = (executedPrice ?: signal.price).toDouble()
+
+            // [버그 수정] 가격이 0 이하면 marketConditionChecker를 통해 현재가 조회
+            if (tradePrice <= 0) {
+                log.warn("[${signal.market}] 거래 가격이 0 - executedPrice=${executedPrice}, signal.price=${signal.price}")
+                try {
+                    val marketCondition = marketConditionChecker.checkMarketCondition(signal.market, positionSize)
+                    val midPrice = marketCondition.midPrice
+                    if (midPrice != null && midPrice > BigDecimal.ZERO) {
+                        tradePrice = midPrice.toDouble()
+                        log.info("[${signal.market}] 시장 중간가로 대체: ${tradePrice}")
+                    }
+                } catch (e: Exception) {
+                    log.error("[${signal.market}] 시장 상태 조회 실패: ${e.message}")
+                }
+
+                // 여전히 0이면 저장 스킵 (잘못된 데이터가 DB에 들어가는 것 방지)
+                if (tradePrice <= 0) {
+                    log.error("[${signal.market}] 유효하지 않은 거래 가격 - orderId=$orderId, strategy=${signal.strategy}")
+                    log.error("[${signal.market}] 거래 기록 저장 스킵 (price=0 방지)")
+                    return
+                }
+            }
+
             val sellQuantity = (executedQuantity ?: calculateQuantity(signal.price, positionSize)).toDouble()
             val sellFee = fee.toDouble()
 
@@ -813,12 +836,12 @@ class OrderExecutor(
                     val buyFee = lastBuy.fee
 
                     // PnL = (매도가 - 매수가) * 수량 - 매수수수료 - 매도수수료
-                    pnl = (sellPrice - buyPrice) * sellQuantity - buyFee - sellFee
+                    pnl = (tradePrice - buyPrice) * sellQuantity - buyFee - sellFee
 
                     // PnL% = ((매도가 - 매수가) / 매수가) * 100
-                    pnlPercent = ((sellPrice - buyPrice) / buyPrice) * 100
+                    pnlPercent = ((tradePrice - buyPrice) / buyPrice) * 100
 
-                    log.info("[${signal.market}] PnL 계산 완료: 매수가=${buyPrice}, 매도가=${sellPrice}, " +
+                    log.info("[${signal.market}] PnL 계산 완료: 매수가=${buyPrice}, 매도가=${tradePrice}, " +
                             "PnL=${String.format("%.0f", pnl)}원 (${String.format("%.2f", pnlPercent)}%)")
 
                     // CircuitBreaker에 거래 결과 기록
@@ -833,7 +856,7 @@ class OrderExecutor(
                 market = signal.market,
                 side = if (isSell) "SELL" else "BUY",
                 type = orderType.name,
-                price = sellPrice,
+                price = tradePrice,
                 quantity = sellQuantity,
                 totalAmount = positionSize.toDouble(),
                 fee = sellFee,
