@@ -76,14 +76,20 @@ class MemeScalperReflector(
         4. 시스템 개선 제안
            - 현재 시스템에 없지만 있으면 좋을 기능
 
-        도구 사용:
-        - getTodayStats: 오늘의 통계 조회
-        - getTodayTrades: 오늘의 트레이드 목록 조회
-        - saveReflection: 회고 결과 저장
-        - suggestParameterChange: 파라미터 변경 제안 (Slack 알림 발송됨)
-        - suggestSystemImprovement: 시스템 개선 아이디어 제안
+        도구 사용 (순서 중요):
+        1. getTodayStats: 오늘의 통계 조회
+        2. getTodayTrades: 오늘의 트레이드 목록 조회
+        3. analyzeExitPatterns: 청산 사유별 패턴 분석 (TIMEOUT, STOP_LOSS 비율 파악)
+        4. backtestParameterChange: 파라미터 변경 전 반드시 백테스트 수행
+        5. suggestParameterChange: 백테스트 통과 시에만 파라미터 변경
+        6. saveReflection: 회고 결과 저장
+        7. suggestSystemImprovement: 시스템 개선 아이디어 제안
 
-        반드시 모든 도구를 사용하여 분석을 완료하세요.
+        중요 규칙:
+        - 파라미터 변경 전 반드시 backtestParameterChange로 검증하세요.
+        - 백테스트에서 트레이드 50% 이상 감소 예상 시 변경하지 마세요.
+        - analyzeExitPatterns로 청산 사유별 패턴을 먼저 파악하세요.
+        - 반드시 모든 도구를 사용하여 분석을 완료하세요.
     """.trimIndent()
 
     @PostConstruct
@@ -516,6 +522,169 @@ class MemeScalperReflectorTools(
             "dailyMaxLossKrw" -> properties.dailyMaxLossKrw = value.toInt()
             "positionSizeKrw" -> properties.positionSizeKrw = value.toInt()
         }
+    }
+
+    @Tool(description = """
+        파라미터 변경 전 과거 데이터로 백테스트를 수행합니다.
+        suggestParameterChange 호출 전에 반드시 이 도구로 검증하세요.
+    """)
+    fun backtestParameterChange(
+        @ToolParam(description = "파라미터 이름") paramName: String,
+        @ToolParam(description = "새로운 값") newValue: Double,
+        @ToolParam(description = "백테스트 기간 (일)") historicalDays: Int = 7
+    ): String {
+        log.info("[Tool] backtestParameterChange: $paramName=$newValue, days=$historicalDays")
+
+        val startOfPeriod = Instant.now().minus(historicalDays.toLong(), ChronoUnit.DAYS)
+        val trades = tradeRepository.findByCreatedAtAfter(startOfPeriod)
+            .filter { it.status == "CLOSED" }
+
+        if (trades.isEmpty()) {
+            return "백테스트 기간($historicalDays 일) 내 트레이드가 없습니다."
+        }
+
+        val currentValue = getCurrentParamValue(paramName)
+
+        // 파라미터별 백테스트 시뮬레이션
+        val (filteredIn, filteredOut) = when (paramName) {
+            "volumeSpikeRatio" -> {
+                val passed = trades.count { (it.entryVolumeSpikeRatio ?: 0.0) >= newValue }
+                passed to (trades.size - passed)
+            }
+            "priceSpikePercent" -> {
+                val passed = trades.count { (it.entryPriceSpikePercent ?: 0.0) >= newValue }
+                passed to (trades.size - passed)
+            }
+            "minBidImbalance" -> {
+                val passed = trades.count { (it.entryImbalance ?: 0.0) >= newValue }
+                passed to (trades.size - passed)
+            }
+            "maxRsi" -> {
+                val passed = trades.count { (it.entryRsi ?: 100.0) <= newValue }
+                passed to (trades.size - passed)
+            }
+            "stopLossPercent" -> {
+                // 손절 변경 시 수익 변화
+                val stoppedEarlier = trades.count { trade ->
+                    val pnl = trade.pnlPercent ?: 0.0
+                    pnl < 0 && pnl > newValue && pnl <= currentValue
+                }
+                val stoppedLater = trades.count { trade ->
+                    val pnl = trade.pnlPercent ?: 0.0
+                    pnl < 0 && pnl <= newValue && pnl > currentValue
+                }
+                stoppedEarlier to stoppedLater
+            }
+            "takeProfitPercent" -> {
+                val wouldHaveTakenProfit = trades.count { trade ->
+                    val pnl = trade.pnlPercent ?: 0.0
+                    pnl > 0 && pnl >= newValue
+                }
+                wouldHaveTakenProfit to (trades.size - wouldHaveTakenProfit)
+            }
+            else -> trades.size to 0
+        }
+
+        // 필터링 후 성과
+        val winningTrades = trades.filter { (it.pnlAmount ?: 0.0) > 0 }
+        val totalPnl = trades.sumOf { it.pnlAmount ?: 0.0 }
+        val winRate = if (trades.isNotEmpty()) winningTrades.size.toDouble() / trades.size * 100 else 0.0
+
+        val estimatedImpact = when {
+            filteredIn > trades.size * 0.9 -> "거의 변화 없음"
+            filteredIn > trades.size * 0.7 -> "소폭 감소 예상 (-10~30%)"
+            filteredIn > trades.size * 0.5 -> "중간 감소 예상 (-30~50%)"
+            else -> "대폭 감소 예상 (-50% 이상)"
+        }
+
+        return """
+            === 백테스트 결과 ($historicalDays 일) ===
+
+            파라미터: $paramName
+            현재값: $currentValue → 새 값: $newValue
+
+            분석 기간 트레이드: ${trades.size}건
+            승리: ${winningTrades.size}건 / 패배: ${trades.size - winningTrades.size}건
+            승률: ${String.format("%.1f", winRate)}%
+            총 손익: ${String.format("%.0f", totalPnl)}원
+
+            새 파라미터 적용 시:
+            - 진입 가능 트레이드: $filteredIn 건
+            - 필터링된 트레이드: $filteredOut 건
+            - 예상 영향: $estimatedImpact
+
+            권장사항: ${
+            when {
+                paramName in listOf("stopLossPercent", "takeProfitPercent") ->
+                    "손절/익절 변경은 신중하게 결정하세요."
+                filteredIn < trades.size * 0.5 ->
+                    "트레이드 수가 절반 이하로 감소합니다. 신중하게 결정하세요."
+                else -> "변경 적용 가능합니다."
+            }
+        }
+        """.trimIndent()
+    }
+
+    @Tool(description = """
+        청산 사유별 패턴을 분석합니다.
+        TAKE_PROFIT, TRAILING_STOP, STOP_LOSS, TIMEOUT 별 특성 파악.
+    """)
+    fun analyzeExitPatterns(
+        @ToolParam(description = "분석 기간 (일)") days: Int = 7
+    ): String {
+        log.info("[Tool] analyzeExitPatterns: days=$days")
+
+        val startOfPeriod = Instant.now().minus(days.toLong(), ChronoUnit.DAYS)
+        val trades = tradeRepository.findByCreatedAtAfter(startOfPeriod)
+            .filter { it.status == "CLOSED" }
+
+        if (trades.isEmpty()) {
+            return "분석 기간($days 일) 내 트레이드가 없습니다."
+        }
+
+        // 청산 사유별 그룹화
+        val byExitReason = trades.groupBy { it.exitReason ?: "UNKNOWN" }
+
+        val analysis = byExitReason.map { (reason, reasonTrades) ->
+            val count = reasonTrades.size
+            val avgPnl = reasonTrades.mapNotNull { it.pnlAmount }.average().takeIf { !it.isNaN() } ?: 0.0
+            val avgVolumeSpike = reasonTrades.mapNotNull { it.entryVolumeSpikeRatio }.average().takeIf { !it.isNaN() }
+            val avgRsi = reasonTrades.mapNotNull { it.entryRsi }.average().takeIf { !it.isNaN() }
+            val avgImbalance = reasonTrades.mapNotNull { it.entryImbalance }.average().takeIf { !it.isNaN() }
+            val avgHoldingSec = reasonTrades.filter { it.exitTime != null }
+                .map { ChronoUnit.SECONDS.between(it.entryTime, it.exitTime) }
+                .average().takeIf { !it.isNaN() }
+
+            """
+            === $reason (${count}건) ===
+            평균 손익: ${String.format("%.0f", avgPnl)}원
+            평균 보유: ${avgHoldingSec?.let { String.format("%.0f", it) } ?: "N/A"}초
+            진입 시 거래량 스파이크: ${avgVolumeSpike?.let { String.format("%.1f", it) } ?: "N/A"}x
+            진입 시 RSI: ${avgRsi?.let { String.format("%.0f", it) } ?: "N/A"}
+            진입 시 Imbalance: ${avgImbalance?.let { String.format("%.2f", it) } ?: "N/A"}
+            """.trimIndent()
+        }
+
+        // 인사이트 생성
+        val timeoutRatio = (byExitReason["TIMEOUT"]?.size ?: 0).toDouble() / trades.size * 100
+        val stopLossRatio = (byExitReason["STOP_LOSS"]?.size ?: 0).toDouble() / trades.size * 100
+
+        val insights = mutableListOf<String>()
+        if (timeoutRatio > 30) {
+            insights.add("TIMEOUT 비율이 ${String.format("%.0f", timeoutRatio)}%로 높습니다. 진입 조건 강화 또는 타임아웃 연장 권장.")
+        }
+        if (stopLossRatio > 40) {
+            insights.add("STOP_LOSS 비율이 ${String.format("%.0f", stopLossRatio)}%로 높습니다. 손절 조건 검토 필요.")
+        }
+
+        return """
+            === 청산 사유별 패턴 분석 ($days 일, ${trades.size}건) ===
+
+            ${analysis.joinToString("\n\n")}
+
+            === 인사이트 ===
+            ${if (insights.isEmpty()) "특이사항 없음" else insights.joinToString("\n")}
+        """.trimIndent()
     }
 
     @Tool(description = "시스템 개선 아이디어를 제안합니다. Slack 알림이 발송됩니다.")

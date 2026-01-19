@@ -90,7 +90,7 @@ class MemeScalperTradeEntity(
     var peakPrice: Double? = null,
 
     /** 트레일링 스탑 활성화 여부 */
-    @Column
+    @Column(nullable = false)
     var trailingActive: Boolean = false,
 
     /** 피크 거래량 (청산 판단용) */
