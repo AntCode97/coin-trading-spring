@@ -65,7 +65,7 @@ class VolumeSurgeProperties {
     var takeProfitPercent: Double = 5.0
 
     /** ATR 기반 동적 손절 사용 여부 */
-    var useDynamicStopLoss: Boolean = false
+    var useDynamicStopLoss: Boolean = true
 
     /** 트레일링 스탑 트리거 (%) - 이 수익률 이상에서 활성화 */
     var trailingStopTrigger: Double = 2.0
