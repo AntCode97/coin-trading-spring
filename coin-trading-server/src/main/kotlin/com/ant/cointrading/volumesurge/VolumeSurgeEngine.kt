@@ -319,7 +319,14 @@ class VolumeSurgeEngine(
             val appliedStopLossPercent = stopLossResult?.stopLossPercent
                 ?: kotlin.math.abs(properties.stopLossPercent)
 
-            log.info("[$market] 손절 설정: ${String.format("%.2f", appliedStopLossPercent)}% (방식: ${stopLossResult?.method ?: "FIXED"})")
+            // 동적 익절 계산 (R:R 2:1 확보)
+            val appliedTakeProfitPercent = if (properties.useDynamicTakeProfit) {
+                appliedStopLossPercent * properties.takeProfitMultiplier
+            } else {
+                properties.takeProfitPercent
+            }
+
+            log.info("[$market] 리스크 관리 설정: 손절=${String.format("%.2f", appliedStopLossPercent)}%, 익절=${String.format("%.2f", appliedTakeProfitPercent)}% (R:R=${String.format("%.1f", appliedTakeProfitPercent / appliedStopLossPercent)}:1, 방식: ${if (properties.useDynamicTakeProfit) "DYNAMIC" else "FIXED"})")
 
             // 트레이드 엔티티 생성
             val trade = VolumeSurgeTradeEntity(
@@ -518,15 +525,22 @@ class VolumeSurgeEngine(
         val pnlPercent = ((currentPrice - entryPrice) / entryPrice) * 100
 
         // 1. 손절 체크 (저장된 손절 비율 사용, 없으면 기본값)
-        val stopLossPercent = -(position.appliedStopLossPercent
-            ?: kotlin.math.abs(properties.stopLossPercent))
+        val appliedStopLoss = position.appliedStopLossPercent
+            ?: kotlin.math.abs(properties.stopLossPercent)
+        val stopLossPercent = -appliedStopLoss
         if (pnlPercent <= stopLossPercent) {
             closePosition(position, currentPrice, "STOP_LOSS")
             return
         }
 
-        // 2. 익절 체크 (+5%)
-        if (pnlPercent >= properties.takeProfitPercent) {
+        // 2. 익절 체크 (동적: 손절 × 배수, 고정: takeProfitPercent)
+        val takeProfitPercent = if (properties.useDynamicTakeProfit) {
+            // 동적 익절: R:R 비율 확보 (예: 손절 5% → 익절 10%)
+            appliedStopLoss * properties.takeProfitMultiplier
+        } else {
+            properties.takeProfitPercent
+        }
+        if (pnlPercent >= takeProfitPercent) {
             closePosition(position, currentPrice, "TAKE_PROFIT")
             return
         }

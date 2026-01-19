@@ -14,7 +14,8 @@ import org.springframework.stereotype.Component
  * - 거래량 비율 300% 이상에서 의미 있는 급등
  * - RSI 70 이하에서 진입 (과매수 회피)
  * - 컨플루언스 60점 이상 (최소 2~3개 지표 일치)
- * - 손절 -2%, 익절 +5% (리스크:리워드 = 1:2.5)
+ * - 손절: ATR 기반 동적 (횡보 1.5x, 추세 3x, 고변동 4x)
+ * - 익절: 동적 (손절 × 2 = R:R 2:1 확보)
  *
  * LLM 회고 시스템이 파라미터를 자동 변경하면 KeyValueService에 저장되고,
  * 재시작 시 @PostConstruct에서 복원된다.
@@ -61,11 +62,17 @@ class VolumeSurgeProperties {
     /** 손절 (%) - 고정 손절 사용 시 */
     var stopLossPercent: Double = -2.0
 
-    /** 익절 (%) */
-    var takeProfitPercent: Double = 5.0
+    /** 익절 (%) - 고정 익절 사용 시 */
+    var takeProfitPercent: Double = 6.0
 
     /** ATR 기반 동적 손절 사용 여부 */
     var useDynamicStopLoss: Boolean = true
+
+    /** 동적 익절 사용 여부 (손절 × 배수 = 익절) */
+    var useDynamicTakeProfit: Boolean = true
+
+    /** 동적 익절 배수 (R:R 비율, 기본 2.0 = 손절의 2배) */
+    var takeProfitMultiplier: Double = 2.0
 
     /** 트레일링 스탑 트리거 (%) - 이 수익률 이상에서 활성화 */
     var trailingStopTrigger: Double = 2.0
@@ -154,6 +161,18 @@ class VolumeSurgeProperties {
         keyValueService.getDouble("volumesurge.takeProfitPercent", -1.0).takeIf { it > 0 }?.let {
             log.info("복원: takeProfitPercent = $takeProfitPercent -> $it")
             takeProfitPercent = it
+            restoredCount++
+        }
+
+        keyValueService.getDouble("volumesurge.takeProfitMultiplier", -1.0).takeIf { it > 0 }?.let {
+            log.info("복원: takeProfitMultiplier = $takeProfitMultiplier -> $it")
+            takeProfitMultiplier = it
+            restoredCount++
+        }
+
+        keyValueService.getBoolean("volumesurge.useDynamicTakeProfit")?.let {
+            log.info("복원: useDynamicTakeProfit = $useDynamicTakeProfit -> $it")
+            useDynamicTakeProfit = it
             restoredCount++
         }
 
