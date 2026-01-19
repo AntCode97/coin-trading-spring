@@ -66,6 +66,13 @@ class TradingEngine(
 
         // 중복 알림 방지 쿨다운 (10분)
         const val ALERT_COOLDOWN_MINUTES = 10L
+
+        // 무한 루프 방지 설정
+        // 최소 보유 시간: 매수 후 최소 5분은 보유해야 매도 가능 (수수료 손실 방지)
+        const val MIN_HOLDING_SECONDS = 300L  // 5분
+
+        // 거래 쿨다운: 매도 후 최소 5분은 대기해야 재매수 가능 (급등락 회피)
+        const val TRADE_COOLDOWN_SECONDS = 300L  // 5분
     }
 
     private val log = LoggerFactory.getLogger(TradingEngine::class.java)
@@ -76,6 +83,12 @@ class TradingEngine(
     // 마켓별 마지막 리스크 경고 시간 (중복 알림 방지)
     // [BUG FIX] compute 메서드로 원자적 업데이트하여 race condition 방지
     private val lastRiskAlertTime = ConcurrentHashMap<String, Instant>()
+
+    // [무한 루프 방지] 마켓별 마지막 매수 시간 (최소 보유 시간 체크용)
+    private val lastBuyTime = ConcurrentHashMap<String, Instant>()
+
+    // [무한 루프 방지] 마켓별 마지막 매도 시간 (재매수 쿨다운 체크용)
+    private val lastSellTime = ConcurrentHashMap<String, Instant>()
 
     data class MarketState(
         var candles: List<Candle> = emptyList(),
@@ -176,6 +189,33 @@ class TradingEngine(
             return
         }
 
+        // 0.5 [무한 루프 방지] 쿨다운 및 최소 보유 시간 체크
+        val now = Instant.now()
+
+        if (signal.action == SignalAction.BUY) {
+            // 매수 시: 마지막 매도 후 쿨다운 체크
+            val lastSell = lastSellTime[market]
+            if (lastSell != null) {
+                val secondsSinceSell = Duration.between(lastSell, now).seconds
+                if (secondsSinceSell < TRADE_COOLDOWN_SECONDS) {
+                    val remaining = TRADE_COOLDOWN_SECONDS - secondsSinceSell
+                    log.info("[$market] 재매수 쿨다운 중: ${remaining}초 남음")
+                    return
+                }
+            }
+        } else if (signal.action == SignalAction.SELL) {
+            // 매도 시: 최소 보유 시간 체크
+            val lastBuy = lastBuyTime[market]
+            if (lastBuy != null) {
+                val secondsSinceBuy = Duration.between(lastBuy, now).seconds
+                if (secondsSinceBuy < MIN_HOLDING_SECONDS) {
+                    val remaining = MIN_HOLDING_SECONDS - secondsSinceBuy
+                    log.info("[$market] 최소 보유 시간 미충족: ${remaining}초 남음 (수수료 손실 방지)")
+                    return
+                }
+            }
+        }
+
         // 1. 잔고 조회
         val balances = try {
             bithumbPrivateApi.getBalances()
@@ -219,22 +259,30 @@ class TradingEngine(
         // 3. 포지션 사이징
         val positionSize = riskManager.calculatePositionSize(market, krwBalance, signal.confidence)
 
-        // [BUG FIX] 매수/매도 모두 잔고 체크
+        // [BUG FIX] 매수/매도 모두 잔고 체크 + 중복 매수 방지
+        val parts = market.split("_")
+        val coinSymbol = if (parts.size == 2) parts[0] else market  // BTC_KRW -> BTC
+        val coinBalance = balances.find { it.currency == coinSymbol }?.balance ?: BigDecimal.ZERO
+
         if (signal.action == SignalAction.BUY) {
+            // KRW 잔고 확인
             if (positionSize > krwBalance) {
                 log.warn("[$market] KRW 잔고 부족: 필요 $positionSize, 보유 $krwBalance")
                 return
             }
+
+            // [무한 루프 방지] 이미 코인을 보유하고 있으면 추가 매수 금지
+            // 최소 주문 금액(5000원) 이상의 가치가 있으면 보유로 간주
+            val coinValueKrw = coinBalance.multiply(state.currentPrice)
+            if (coinValueKrw >= BigDecimal("5000")) {
+                log.warn("[$market] 이미 $coinSymbol 보유 중: ${coinBalance} (${coinValueKrw}원 상당) - 중복 매수 방지")
+                return
+            }
         } else if (signal.action == SignalAction.SELL) {
             // 매도 시 코인 잔고 확인
-            val parts = market.split("_")
-            if (parts.size == 2) {
-                val coinSymbol = parts[0]  // BTC_KRW -> BTC
-                val coinBalance = balances.find { it.currency == coinSymbol }?.balance ?: BigDecimal.ZERO
-                if (coinBalance <= BigDecimal.ZERO) {
-                    log.warn("[$market] $coinSymbol 잔고 없음: $coinBalance - 매도 취소")
-                    return
-                }
+            if (coinBalance <= BigDecimal.ZERO) {
+                log.warn("[$market] $coinSymbol 잔고 없음: $coinBalance - 매도 취소")
+                return
             }
         }
 
@@ -243,6 +291,19 @@ class TradingEngine(
 
         // 5. 결과 처리
         if (result.success) {
+            // [무한 루프 방지] 매수/매도 시간 기록
+            when (signal.action) {
+                SignalAction.BUY -> {
+                    lastBuyTime[market] = Instant.now()
+                    log.info("[$market] 매수 시간 기록 - 최소 ${MIN_HOLDING_SECONDS}초 보유 필요")
+                }
+                SignalAction.SELL -> {
+                    lastSellTime[market] = Instant.now()
+                    log.info("[$market] 매도 시간 기록 - 재매수 ${TRADE_COOLDOWN_SECONDS}초 쿨다운")
+                }
+                else -> {}
+            }
+
             // DCA 전략인 경우 매수 시간 기록
             if (signal.strategy == "DCA" && signal.action == SignalAction.BUY) {
                 (state.currentStrategy as? DcaStrategy)?.recordBuy(market)
