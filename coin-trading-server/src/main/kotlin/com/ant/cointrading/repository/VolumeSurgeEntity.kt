@@ -138,6 +138,24 @@ class VolumeSurgeTradeEntity(
     @Column
     var confluenceScore: Int? = null,
 
+    // === ATR 기반 동적 손절 ===
+
+    /** 진입 시점 ATR */
+    @Column
+    var entryAtr: Double? = null,
+
+    /** 진입 시점 ATR 비율 (%) */
+    @Column
+    var entryAtrPercent: Double? = null,
+
+    /** 적용된 손절 비율 (%) - 동적 또는 고정 */
+    @Column
+    var appliedStopLossPercent: Double? = null,
+
+    /** 손절 방식 (ATR_DYNAMIC / FIXED) */
+    @Column(length = 20)
+    var stopLossMethod: String? = null,
+
     // === LLM 판단 기록 ===
 
     /** LLM 진입 판단 사유 */

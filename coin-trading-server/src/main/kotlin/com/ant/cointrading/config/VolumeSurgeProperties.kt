@@ -58,11 +58,14 @@ class VolumeSurgeProperties {
 
     // === 리스크 관리 ===
 
-    /** 손절 (%) */
+    /** 손절 (%) - 고정 손절 사용 시 */
     var stopLossPercent: Double = -2.0
 
     /** 익절 (%) */
     var takeProfitPercent: Double = 5.0
+
+    /** ATR 기반 동적 손절 사용 여부 */
+    var useDynamicStopLoss: Boolean = false
 
     /** 트레일링 스탑 트리거 (%) - 이 수익률 이상에서 활성화 */
     var trailingStopTrigger: Double = 2.0

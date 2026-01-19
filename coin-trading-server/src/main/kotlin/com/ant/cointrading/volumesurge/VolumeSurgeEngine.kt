@@ -8,6 +8,7 @@ import com.ant.cointrading.model.TradingSignal
 import com.ant.cointrading.notification.SlackNotifier
 import com.ant.cointrading.order.OrderExecutor
 import com.ant.cointrading.repository.*
+import com.ant.cointrading.risk.StopLossCalculator
 import jakarta.annotation.PostConstruct
 import org.slf4j.LoggerFactory
 import org.springframework.scheduling.annotation.Scheduled
@@ -42,7 +43,8 @@ class VolumeSurgeEngine(
     private val alertRepository: VolumeSurgeAlertRepository,
     private val tradeRepository: VolumeSurgeTradeRepository,
     private val dailySummaryRepository: VolumeSurgeDailySummaryRepository,
-    private val slackNotifier: SlackNotifier
+    private val slackNotifier: SlackNotifier,
+    private val stopLossCalculator: StopLossCalculator
 ) {
     private val log = LoggerFactory.getLogger(javaClass)
 
@@ -307,6 +309,18 @@ class VolumeSurgeEngine(
 
             log.info("[$market] 매수 체결: 가격=${executedPrice}, 수량=${executedQuantity}")
 
+            // ATR 기반 동적 손절 계산 (활성화된 경우)
+            val stopLossResult = if (properties.useDynamicStopLoss) {
+                stopLossCalculator.calculate(market, executedPrice.toDouble())
+            } else {
+                null
+            }
+
+            val appliedStopLossPercent = stopLossResult?.stopLossPercent
+                ?: kotlin.math.abs(properties.stopLossPercent)
+
+            log.info("[$market] 손절 설정: ${String.format("%.2f", appliedStopLossPercent)}% (방식: ${stopLossResult?.method ?: "FIXED"})")
+
             // 트레이드 엔티티 생성
             val trade = VolumeSurgeTradeEntity(
                 alertId = alert.id,
@@ -319,6 +333,10 @@ class VolumeSurgeEngine(
                 entryBollingerPosition = analysis.bollingerPosition,
                 entryVolumeRatio = analysis.volumeRatio,
                 confluenceScore = analysis.confluenceScore,
+                entryAtr = stopLossResult?.atr,
+                entryAtrPercent = stopLossResult?.atrPercent,
+                appliedStopLossPercent = appliedStopLossPercent,
+                stopLossMethod = stopLossResult?.method?.name ?: "FIXED",
                 llmEntryReason = filterResult.reason,
                 llmConfidence = filterResult.confidence,
                 status = "OPEN"
@@ -499,8 +517,10 @@ class VolumeSurgeEngine(
         val entryPrice = position.entryPrice
         val pnlPercent = ((currentPrice - entryPrice) / entryPrice) * 100
 
-        // 1. 손절 체크 (-2%)
-        if (pnlPercent <= properties.stopLossPercent) {
+        // 1. 손절 체크 (저장된 손절 비율 사용, 없으면 기본값)
+        val stopLossPercent = -(position.appliedStopLossPercent
+            ?: kotlin.math.abs(properties.stopLossPercent))
+        if (pnlPercent <= stopLossPercent) {
             closePosition(position, currentPrice, "STOP_LOSS")
             return
         }
