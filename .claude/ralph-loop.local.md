@@ -227,31 +227,64 @@ if (tradePrice <= 0) {
 
 ---
 
-## 다음 반복 계획
+## 반복 5 (2026-01-19) - 완료
 
-### 5. Volume Surge R:R 개선 실험 (분석 완료)
-
-**현재 상태 분석**:
-- ATR 기반 동적 손절 이미 활성화 (`useDynamicStopLoss = true`)
-- `StopLossCalculator.kt:42` - 최대 손절: 10%
-- `VolumeSurgeProperties.kt:30` - 익절: 5%
+### Volume Surge R:R 개선 구현
 
 **문제 원인**:
 - 고변동 시장에서 ATR 손절이 4x까지 허용 → 최대 10% 손실
 - 익절은 고정 5% → **R:R = 0.5:1 (불리)**
 
-**권장 개선안**:
-1. **즉시**: 익절 목표 상향 (5% → 10%)
-2. **중기**: 동적 익절 구현 (ATR × 2 = 익절 목표)
-3. **고려**: 레짐별 진입 필터 (고변동장 진입 회피)
+**구현 내용**:
+
+#### 1. VolumeSurgeProperties 변경
 
 ```kotlin
-// 개선 코드 예시: VolumeSurgeProperties
-takeProfitPercent: Double = 10.0  // 5% → 10%
+// 기본 익절 상향: 5% → 6%
+var takeProfitPercent: Double = 6.0
 
-// 또는 동적 익절 (R:R 2:1 확보)
-val takeProfitPercent = stopLossResult.stopLossPercent * 2
+// 동적 익절 활성화 (신규)
+var useDynamicTakeProfit: Boolean = true
+
+// 익절 배수 (신규) - 손절의 2배
+var takeProfitMultiplier: Double = 2.0
 ```
+
+#### 2. VolumeSurgeEngine 동적 익절 로직
+
+```kotlin
+// 진입 시 R:R 계산 및 로깅
+val appliedTakeProfitPercent = if (properties.useDynamicTakeProfit) {
+    appliedStopLossPercent * properties.takeProfitMultiplier
+} else {
+    properties.takeProfitPercent
+}
+log.info("[$market] 리스크 관리: 손절=${stopLoss}%, 익절=${takeProfit}% (R:R=${ratio}:1)")
+
+// 모니터링 시 동적 익절 체크
+val takeProfitPercent = if (properties.useDynamicTakeProfit) {
+    appliedStopLoss * properties.takeProfitMultiplier
+} else {
+    properties.takeProfitPercent
+}
+```
+
+#### 3. KeyValueService 파라미터 복원
+
+LLM 회고 시스템이 변경한 파라미터 재시작 후 복원:
+- `volumesurge.takeProfitMultiplier`
+- `volumesurge.useDynamicTakeProfit`
+
+**결과**:
+- ATR 손절 10% → 동적 익절 20% (R:R 2:1)
+- ATR 손절 5% → 동적 익절 10% (R:R 2:1)
+- 고정 손절 사용 시에도 R:R 유지
+
+**커밋**: e51fa07
+
+---
+
+## 다음 반복 계획
 
 ### 6. 백테스팅 프레임워크
 
