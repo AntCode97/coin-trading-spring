@@ -174,8 +174,8 @@ memescalper:
   stop-loss-percent: ${MEME_SCALPER_STOP_LOSS:-1.5}
   take-profit-percent: ${MEME_SCALPER_TAKE_PROFIT:3.0}
   position-timeout-min: ${MEME_SCALPER_TIMEOUT_MIN:10}
-  # 트레일링 스탑
-  trailing-stop-trigger: ${MEME_SCALPER_TRAILING_TRIGGER:1.0}
+  # 트레일링 스탑 (트리거 낮춤: 1.0% → 0.5%로 익절 보호 강화)
+  trailing-stop-trigger: ${MEME_SCALPER_TRAILING_TRIGGER:0.5}
   trailing-stop-offset: ${MEME_SCALPER_TRAILING_OFFSET:0.5}
   # 펌프 감지 조건
   volume-spike-ratio: ${MEME_SCALPER_VOLUME_SPIKE:5.0}
