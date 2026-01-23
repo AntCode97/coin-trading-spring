@@ -2,12 +2,16 @@ package com.ant.cointrading.strategy
 
 import com.ant.cointrading.config.TradingProperties
 import com.ant.cointrading.model.*
+import com.ant.cointrading.repository.DcaPositionEntity
+import com.ant.cointrading.repository.DcaPositionRepository
 import com.ant.cointrading.service.KeyValueService
 import jakarta.annotation.PostConstruct
 import org.slf4j.LoggerFactory
+import org.springframework.scheduling.annotation.Scheduled
 import org.springframework.stereotype.Component
 import java.math.BigDecimal
 import java.time.Instant
+import java.time.temporal.ChronoUnit
 import java.util.concurrent.ConcurrentHashMap
 
 /**
@@ -21,7 +25,8 @@ import java.util.concurrent.ConcurrentHashMap
 @Component
 class DcaStrategy(
     private val tradingProperties: TradingProperties,
-    private val keyValueService: KeyValueService
+    private val keyValueService: KeyValueService,
+    private val dcaPositionRepository: DcaPositionRepository
 ) : TradingStrategy {
 
     private val log = LoggerFactory.getLogger(DcaStrategy::class.java)
@@ -67,7 +72,60 @@ class DcaStrategy(
         val interval = tradingProperties.strategy.dcaInterval
         val lastBuy = lastBuyTime[market]
 
-        // 간격 체크
+        // 1. 청산 조건 체크 (기존 포지션이 있는 경우)
+        val openPositions = dcaPositionRepository.findByMarketAndStatus(market, "OPEN")
+        if (openPositions.isNotEmpty()) {
+            val position = openPositions.first() // 하나의 포지션만 유지
+
+            // 포지션 정보 갱신 (현재가, 수익률)
+            val currentPnlPercent = ((currentPrice.toDouble() - position.averagePrice) / position.averagePrice) * 100
+            position.lastPrice = currentPrice.toDouble()
+            position.lastPriceUpdate = now
+            position.currentPnlPercent = currentPnlPercent
+            dcaPositionRepository.save(position)
+
+            // 익절 체크
+            if (currentPnlPercent >= position.takeProfitPercent) {
+                log.info("[$market] DCA 익절 조건 도달: ${String.format("%.2f", currentPnlPercent)}% >= ${position.takeProfitPercent}%")
+                return TradingSignal(
+                    market = market,
+                    action = SignalAction.SELL,
+                    confidence = 100.0,
+                    price = currentPrice,
+                    reason = "DCA 익절: ${String.format("%.2f", currentPnlPercent)}% 수익 (목표: +${position.takeProfitPercent}%)",
+                    strategy = name
+                )
+            }
+
+            // 손절 체크
+            if (currentPnlPercent <= position.stopLossPercent) {
+                log.warn("[$market] DCA 손절 조건 도달: ${String.format("%.2f", currentPnlPercent)}% <= ${position.stopLossPercent}%")
+                return TradingSignal(
+                    market = market,
+                    action = SignalAction.SELL,
+                    confidence = 100.0,
+                    price = currentPrice,
+                    reason = "DCA 손절: ${String.format("%.2f", currentPnlPercent)}% 손실 (한도: ${position.stopLossPercent}%)",
+                    strategy = name
+                )
+            }
+
+            // 타임아웃 체크 (30일 보유 후 익절 목표 완화)
+            val holdingDays = ChronoUnit.DAYS.between(position.createdAt, now)
+            if (holdingDays >= 30 && currentPnlPercent >= 5.0) {
+                log.info("[$market] DCA 30일 경과 + 5% 이상 수익: ${String.format("%.2f", currentPnlPercent)}%")
+                return TradingSignal(
+                    market = market,
+                    action = SignalAction.SELL,
+                    confidence = 80.0,
+                    price = currentPrice,
+                    reason = "DCA 30일 타임아웃 익절: ${String.format("%.2f", currentPnlPercent)}% 수익",
+                    strategy = name
+                )
+            }
+        }
+
+        // 2. 매수 조건 체크
         val shouldBuy = lastBuy == null ||
                 now.toEpochMilli() - lastBuy.toEpochMilli() >= interval
 
