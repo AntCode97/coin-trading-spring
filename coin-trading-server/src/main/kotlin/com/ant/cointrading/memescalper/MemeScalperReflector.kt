@@ -1,6 +1,7 @@
 package com.ant.cointrading.memescalper
 
 import com.ant.cointrading.config.MemeScalperProperties
+import com.ant.cointrading.mcp.tool.SlackTools
 import com.ant.cointrading.notification.SlackNotifier
 import com.ant.cointrading.repository.MemeScalperDailyStatsEntity
 import com.ant.cointrading.repository.MemeScalperDailyStatsRepository
@@ -35,7 +36,8 @@ class MemeScalperReflector(
     private val keyValueService: KeyValueService,
     private val slackNotifier: SlackNotifier,
     private val objectMapper: ObjectMapper,
-    private val reflectorTools: MemeScalperReflectorTools
+    private val reflectorTools: MemeScalperReflectorTools,
+    private val slackTools: SlackTools
 ) {
     private val log = LoggerFactory.getLogger(javaClass)
 
@@ -76,20 +78,27 @@ class MemeScalperReflector(
         4. 시스템 개선 제안
            - 현재 시스템에 없지만 있으면 좋을 기능
 
+        5. Slack 분석 (새로운 기능!)
+           - listChannels: 채널 목록 확인
+           - getMessagesByChannelName: 특정 채널의 최근 메시지 읽기
+           - 사용자 피드백, 토론 내용을 회고에 반영
+
         도구 사용 (순서 중요):
         1. getTodayStats: 오늘의 통계 조회
         2. getTodayTrades: 오늘의 트레이드 목록 조회
         3. analyzeExitPatterns: 청산 사유별 패턴 분석 (TIMEOUT, STOP_LOSS 비율 파악)
-        4. backtestParameterChange: 파라미터 변경 전 반드시 백테스트 수행
-        5. suggestParameterChange: 백테스트 통과 시에만 파라미터 변경
-        6. saveReflection: 회고 결과 저장
-        7. suggestSystemImprovement: 시스템 개선 아이디어 제안
+        4. [선택] listChannels: 채널 목록 확인
+        5. [선택] getMessagesByChannelName: 사용자 피드백/토론 읽기 (예: coin-bot-alert 채널)
+        6. backtestParameterChange: 파라미터 변경 전 반드시 백테스트 수행
+        7. suggestParameterChange: 백테스트 통과 시에만 파라미터 변경
+        8. saveReflection: 회고 결과 저장
+        9. suggestSystemImprovement: 시스템 개선 아이디어 제안
 
         중요 규칙:
         - 파라미터 변경 전 반드시 backtestParameterChange로 검증하세요.
         - 백테스트에서 트레이드 50% 이상 감소 예상 시 변경하지 마세요.
         - analyzeExitPatterns로 청산 사유별 패턴을 먼저 파악하세요.
-        - 반드시 모든 도구를 사용하여 분석을 완료하세요.
+        - Slack 메시지를 읽어 사용자 피드백이 있다면 회고에 반영하세요.
     """.trimIndent()
 
     @PostConstruct
@@ -151,9 +160,12 @@ class MemeScalperReflector(
         val userPrompt = buildUserPrompt(stats, todayTrades)
 
         try {
+            // ReflectorTools와 SlackTools를 결합하여 ChatClient 생성
+            val allTools = arrayOf(reflectorTools, slackTools)
+
             val chatClient = modelSelector.getChatClient()
                 .mutate()
-                .defaultTools(reflectorTools)
+                .defaultTools(*allTools)
                 .build()
 
             val response = chatClient.prompt()

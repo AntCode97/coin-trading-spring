@@ -1,6 +1,7 @@
 package com.ant.cointrading.volumesurge
 
 import com.ant.cointrading.config.VolumeSurgeProperties
+import com.ant.cointrading.mcp.tool.SlackTools
 import com.ant.cointrading.notification.SlackNotifier
 import com.ant.cointrading.repository.*
 import com.ant.cointrading.service.KeyValueService
@@ -33,7 +34,8 @@ class VolumeSurgeReflector(
     private val keyValueService: KeyValueService,
     private val slackNotifier: SlackNotifier,
     private val objectMapper: ObjectMapper,
-    private val reflectorTools: VolumeSurgeReflectorTools
+    private val reflectorTools: VolumeSurgeReflectorTools,
+    private val slackTools: SlackTools
 ) {
     private val log = LoggerFactory.getLogger(javaClass)
 
@@ -61,21 +63,28 @@ class VolumeSurgeReflector(
            - 더 나은 분석을 위해 필요한 데이터
            - 자동화할 수 있는 수동 작업
            - 추가 API 연동 제안 (예: 특정 거래소, 뉴스 소스)
+        6. Slack 분석 (새로운 기능!)
+           - listChannels: 채널 목록 확인
+           - getMessagesByChannelName: 특정 채널의 최근 메시지 읽기
+           - 사용자 피드백, 토론 내용을 회고에 반영
 
         도구 사용 (순서 중요):
         1. getTodayStats: 오늘의 통계 조회
         2. getTodayTrades: 오늘의 트레이드 목록 조회
         3. analyzeMarketCorrelation: 마켓별/지표별 상관관계 분석 (패턴 파악)
         4. analyzeHistoricalPatterns: 시간대/요일별 패턴 분석 (최적 트레이딩 시간 파악)
-        5. backtestParameterChange: 파라미터 변경 전 반드시 백테스트 수행
-        6. suggestParameterChange: 백테스트 통과 시에만 파라미터 변경 제안
-        7. saveReflection: 회고 결과 저장
-        8. suggestSystemImprovement: 시스템 개선 아이디어 제안 (Slack 알림 발송)
+        5. [선택] listChannels: 채널 목록 확인
+        6. [선택] getMessagesByChannelName: 사용자 피드백/토론 읽기 (예: coin-bot-alert 채널)
+        7. backtestParameterChange: 파라미터 변경 전 반드시 백테스트 수행
+        8. suggestParameterChange: 백테스트 통과 시에만 파라미터 변경 제안
+        9. saveReflection: 회고 결과 저장
+        10. suggestSystemImprovement: 시스템 개선 아이디어 제안 (Slack 알림 발송)
 
         중요 규칙:
         - 파라미터 변경 전 반드시 backtestParameterChange로 검증하세요.
         - 백테스트에서 트레이드 50% 이상 감소 예상 시 변경하지 마세요.
         - analyzeMarketCorrelation과 analyzeHistoricalPatterns로 패턴을 먼저 파악하세요.
+        - Slack 메시지를 읽어 사용자 피드백이 있다면 회고에 반영하세요.
         - 특히 시스템 개선 아이디어가 있으면 suggestSystemImprovement를 호출해주세요.
     """.trimIndent()
 
@@ -142,9 +151,12 @@ class VolumeSurgeReflector(
         val userPrompt = buildUserPrompt(stats, todayTrades)
 
         try {
+            // ReflectorTools와 SlackTools를 결합하여 ChatClient 생성
+            val allTools = arrayOf(reflectorTools, slackTools)
+
             val chatClient = modelSelector.getChatClient()
                 .mutate()
-                .defaultTools(reflectorTools)
+                .defaultTools(*allTools)
                 .build()
 
             val response = chatClient.prompt()
