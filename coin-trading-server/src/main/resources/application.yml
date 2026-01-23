@@ -173,7 +173,7 @@ memescalper:
   # 타이트한 손절/익절 (2:1 손익비)
   stop-loss-percent: ${MEME_SCALPER_STOP_LOSS:-1.5}
   take-profit-percent: ${MEME_SCALPER_TAKE_PROFIT:3.0}
-  position-timeout-min: ${MEME_SCALPER_TIMEOUT_MIN:5}
+  position-timeout-min: ${MEME_SCALPER_TIMEOUT_MIN:10}
   # 트레일링 스탑
   trailing-stop-trigger: ${MEME_SCALPER_TRAILING_TRIGGER:1.0}
   trailing-stop-offset: ${MEME_SCALPER_TRAILING_OFFSET:0.5}

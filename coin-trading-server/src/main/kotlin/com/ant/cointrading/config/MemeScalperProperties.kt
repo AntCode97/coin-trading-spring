@@ -32,8 +32,8 @@ data class MemeScalperProperties(
     /** 익절 비율 (%) - 2:1 손익비를 위해 3% */
     var takeProfitPercent: Double = 3.0,
 
-    /** 타임아웃 (분) - 5분 (TIMEOUT 손실 케이스 다수로 단축) */
-    var positionTimeoutMin: Int = 5,
+    /** 타임아웃 (분) - 10분 (TIMEOUT 분석: 5분 타임아웃에서 평균 +0.07% 수익) */
+    var positionTimeoutMin: Int = 10,
 
     // === 트레일링 스탑 ===
 
