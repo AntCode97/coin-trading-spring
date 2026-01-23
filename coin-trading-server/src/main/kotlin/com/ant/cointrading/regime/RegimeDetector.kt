@@ -1,5 +1,6 @@
 package com.ant.cointrading.regime
 
+import com.ant.cointrading.api.bithumb.CandleResponse
 import com.ant.cointrading.model.Candle
 import com.ant.cointrading.model.MarketRegime
 import com.ant.cointrading.model.RegimeAnalysis
@@ -197,5 +198,25 @@ class RegimeDetector {
         }
 
         return smoothed
+    }
+
+    /**
+     * Bithumb CandleResponse를 사용한 시장 레짐 분석
+     *
+     * @param candleResponses Bithumb API에서 반환한 캔들 데이터 목록
+     * @return 시장 레짐 분석 결과
+     */
+    fun detectFromBithumb(candleResponses: List<CandleResponse>): RegimeAnalysis {
+        val candles = candleResponses.map { response ->
+            Candle(
+                timestamp = Instant.parse(response.candleDateTimeUtc),
+                open = response.openingPrice,
+                high = response.highPrice,
+                low = response.lowPrice,
+                close = response.tradePrice,
+                volume = response.candleAccTradeVolume
+            )
+        }
+        return detect(candles)
     }
 }

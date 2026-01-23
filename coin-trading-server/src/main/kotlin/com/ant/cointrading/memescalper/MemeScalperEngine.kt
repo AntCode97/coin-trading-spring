@@ -8,6 +8,7 @@ import com.ant.cointrading.model.SignalAction
 import com.ant.cointrading.model.TradingSignal
 import com.ant.cointrading.notification.SlackNotifier
 import com.ant.cointrading.order.OrderExecutor
+import com.ant.cointrading.regime.RegimeDetector
 import com.ant.cointrading.repository.MemeScalperDailyStatsEntity
 import com.ant.cointrading.repository.MemeScalperDailyStatsRepository
 import com.ant.cointrading.repository.MemeScalperTradeEntity
@@ -48,7 +49,8 @@ class MemeScalperEngine(
     private val tradeRepository: MemeScalperTradeRepository,
     private val statsRepository: MemeScalperDailyStatsRepository,
     private val slackNotifier: SlackNotifier,
-    private val globalPositionManager: GlobalPositionManager
+    private val globalPositionManager: GlobalPositionManager,
+    private val regimeDetector: RegimeDetector
 ) {
     private val log = LoggerFactory.getLogger(javaClass)
 
@@ -292,14 +294,30 @@ class MemeScalperEngine(
 
         val positionSize = BigDecimal(properties.positionSizeKrw)
 
+        // 시장 레짐 감지 (RegimeDetector 통합)
+        val regime = try {
+            val candles = bithumbPublicApi.getOhlcv(market, "minute60", 100)
+            if (!candles.isNullOrEmpty() && candles.size >= 15) {
+                val regimeAnalysis = regimeDetector.detectFromBithumb(candles)
+                regimeAnalysis.regime.name
+            } else {
+                log.debug("[$market] 캔들 데이터 부족으로 레짐 감지 스킵")
+                null
+            }
+        } catch (e: Exception) {
+            log.warn("[$market] 레짐 감지 실패: ${e.message}")
+            null
+        }
+
         // 매수 주문 실행
         val buySignal = TradingSignal(
             market = market,
             action = SignalAction.BUY,
             confidence = signal.score.toDouble(),
             price = signal.currentPrice,
-            reason = "Meme Scalper 진입: 펌프 감지",
-            strategy = "MEME_SCALPER"
+            reason = "Meme Scalper 진입: 펌프 감지${regime?.let { ", 레짐: $it" } ?: ""}",
+            strategy = "MEME_SCALPER",
+            regime = regime
         )
 
         val orderResult = orderExecutor.execute(buySignal, positionSize)
@@ -373,7 +391,8 @@ class MemeScalperEngine(
             peakPrice = executedPrice,
             trailingActive = false,
             peakVolume = signal.volumeSpikeRatio,
-            status = "OPEN"
+            status = "OPEN",
+            regime = regime  // 레짐 저장
         )
 
         val savedTrade = tradeRepository.save(trade)

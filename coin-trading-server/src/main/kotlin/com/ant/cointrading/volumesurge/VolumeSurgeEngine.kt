@@ -8,6 +8,7 @@ import com.ant.cointrading.model.SignalAction
 import com.ant.cointrading.model.TradingSignal
 import com.ant.cointrading.notification.SlackNotifier
 import com.ant.cointrading.order.OrderExecutor
+import com.ant.cointrading.regime.RegimeDetector
 import com.ant.cointrading.repository.*
 import com.ant.cointrading.risk.DynamicRiskRewardCalculator
 import com.ant.cointrading.risk.StopLossCalculator
@@ -48,7 +49,8 @@ class VolumeSurgeEngine(
     private val slackNotifier: SlackNotifier,
     private val stopLossCalculator: StopLossCalculator,
     private val dynamicRiskRewardCalculator: DynamicRiskRewardCalculator,
-    private val globalPositionManager: GlobalPositionManager
+    private val globalPositionManager: GlobalPositionManager,
+    private val regimeDetector: RegimeDetector
 ) {
     private val log = LoggerFactory.getLogger(javaClass)
 
@@ -263,6 +265,21 @@ class VolumeSurgeEngine(
             val currentPrice = ticker.tradePrice
             val positionSize = BigDecimal(properties.positionSizeKrw)
 
+            // 시장 레짐 감지 (RegimeDetector 통합)
+            val regime = try {
+                val candles = bithumbPublicApi.getOhlcv(market, "minute60", 100)
+                if (!candles.isNullOrEmpty() && candles.size >= 15) {
+                    val regimeAnalysis = regimeDetector.detectFromBithumb(candles)
+                    regimeAnalysis.regime.name
+                } else {
+                    log.debug("[$market] 캔들 데이터 부족으로 레짐 감지 스킵")
+                    null
+                }
+            } catch (e: Exception) {
+                log.warn("[$market] 레짐 감지 실패: ${e.message}")
+                null
+            }
+
             // 실제 매수 주문 실행
             log.info("[$market] 시장가 매수 시도: 금액=${positionSize}원")
 
@@ -271,8 +288,9 @@ class VolumeSurgeEngine(
                 action = SignalAction.BUY,
                 confidence = filterResult.confidence * 100,
                 price = currentPrice,
-                reason = "Volume Surge 진입: ${filterResult.reason}",
-                strategy = "VOLUME_SURGE"
+                reason = "Volume Surge 진입: ${filterResult.reason}${regime?.let { ", 레짐: $it" } ?: ""}",
+                strategy = "VOLUME_SURGE",
+                regime = regime
             )
 
             val orderResult = orderExecutor.execute(buySignal, positionSize)
@@ -352,7 +370,8 @@ class VolumeSurgeEngine(
                 stopLossMethod = stopLossResult?.method?.name ?: "FIXED",
                 llmEntryReason = filterResult.reason,
                 llmConfidence = filterResult.confidence,
-                status = "OPEN"
+                status = "OPEN",
+                regime = regime  // 레짐 저장
             )
 
             val savedTrade = tradeRepository.save(trade)

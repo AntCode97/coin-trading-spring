@@ -4,8 +4,6 @@ import com.ant.cointrading.risk.CircuitBreaker
 import com.ant.cointrading.risk.DailyLossTracker
 import org.springaicommunity.mcp.annotation.McpTool
 import org.springframework.stereotype.Component
-import java.time.Instant
-import java.time.temporal.ChronoUnit
 
 /**
  * 리스크 관리 상태 모니터링 MCP 도구
@@ -24,38 +22,36 @@ class RiskMonitoringTools(
 
     /** 서킷브레이커 상태 */
     data class CircuitBreakerStatus(
-        val globalStatus: String,           // GLOBAL_OPEN, GLOBAL_BLOCKED
-        val marketStatuses: Map<String, MarketStatus>,
-        val blockedMarkets: List<String>,
+        val globalOpen: Boolean,
+        val globalReason: String,
+        val marketStates: Map<String, MarketState>,
         val canTradeGlobally: Boolean
     )
 
     /** 마켓별 서킷브레이커 상태 */
-    data class MarketStatus(
-        val state: String,                  // OPEN, BLOCKED
+    data class MarketState(
+        val isOpen: Boolean,
         val consecutiveLosses: Int,
-        val maxConsecutiveLosses: Int,
-        val lastResetTime: String,
-        val executionFailures: Int,
-        val slippageEvents: Int
+        val consecutiveExecutionFailures: Int,
+        val consecutiveHighSlippage: Int,
+        val reason: String
     )
 
     /** 일일 손실 추적 상태 */
     data class DailyLossStatus(
         val date: String,
-        val totalLoss: Double,
+        val totalPnl: Double,
+        val totalPnlPercent: Double,
         val maxLossLimit: Double,
-        val lossPercent: Double,
-        val isBlocked: Boolean,
-        val remainingBudget: Double,
-        val trades: Int,
-        val warnings: List<String>
+        val isLimitExceeded: Boolean,
+        val remainingLossBudget: Double,
+        val tradingAllowed: Boolean
     )
 
     /** 리스크 요약 */
     data class RiskSummary(
         val timestamp: String,
-        val overallRisk: String,           // LOW, MEDIUM, HIGH, CRITICAL
+        val overallRisk: String,
         val circuitBreaker: CircuitBreakerStatus,
         val dailyLoss: DailyLossStatus,
         val recommendations: List<String>
@@ -71,30 +67,33 @@ class RiskMonitoringTools(
         전역 및 마켓별 서킷브레이커 상태, 차단된 마켓 목록 등을 반환합니다.
     """)
     fun getCircuitBreakerStatus(): CircuitBreakerStatus {
-        val globalState = circuitBreaker.getGlobalState()
-        val marketStates = circuitBreaker.getAllMarketStates()
+        val status = circuitBreaker.getStatus()
+        val globalOpen = status["globalCircuitOpen"] as? Boolean ?: false
+        val globalReason = status["globalCircuitReason"] as? String ?: ""
 
-        val marketStatuses = marketStates.mapValues { (_, state) ->
-            MarketStatus(
-                state = state.state.name,
-                consecutiveLosses = state.consecutiveLosses,
-                maxConsecutiveLosses = state.maxConsecutiveLosses,
-                lastResetTime = state.lastResetTime.toString(),
-                executionFailures = state.executionFailures,
-                slippageEvents = state.slippageEvents
+        @Suppress("UNCHECKED_CAST")
+        val marketStatesMap = status["marketStates"] as? Map<String, Map<String, Any?>> ?: emptyMap()
+
+        val marketStates = marketStatesMap.mapValues { (_, state) ->
+            MarketState(
+                isOpen = state["isOpen"] as? Boolean ?: false,
+                consecutiveLosses = (state["consecutiveLosses"] as? Number)?.toInt() ?: 0,
+                consecutiveExecutionFailures = (state["consecutiveExecutionFailures"] as? Number)?.toInt() ?: 0,
+                consecutiveHighSlippage = (state["consecutiveHighSlippage"] as? Number)?.toInt() ?: 0,
+                reason = state["reason"] as? String ?: ""
             )
         }
 
         val blockedMarkets = marketStates
-            .filter { (_, state) -> state.state == CircuitBreaker.MarketState.BLOCKED }
+            .filter { (_, state) -> state.isOpen }
             .keys
             .toList()
 
         return CircuitBreakerStatus(
-            globalStatus = globalState.name,
-            marketStatuses = marketStatuses,
-            blockedMarkets = blockedMarkets,
-            canTradeGlobally = globalState == CircuitBreaker.GlobalState.GLOBAL_OPEN
+            globalOpen = globalOpen,
+            globalReason = globalReason,
+            marketStates = marketStates,
+            canTradeGlobally = !globalOpen
         )
     }
 
@@ -104,51 +103,16 @@ class RiskMonitoringTools(
         현재 일일 손실, 한도 대비 사용률, 거래 차단 여부 등을 반환합니다.
     """)
     fun getDailyLossStatus(): DailyLossStatus {
-        val now = Instant.now()
-        val startOfDay = now.truncatedTo(ChronoUnit.DAYS)
-
-        // DailyLossTracker에서 상태 조회
-        val capital = dailyLossTracker.getCapital()
-        val currentPnl = dailyLossTracker.getCurrentDailyPnl()
-
-        // 일일 손실 한도 (자본의 5%)
-        val maxLossLimit = capital.toDouble() * 0.05
-
-        // 손실률 계산
-        val lossPercent = if (maxLossLimit > 0) {
-            kotlin.math.abs(currentPnl) / maxLossLimit * 100
-        } else 0.0
-
-        // 거래 차단 여부
-        val isBlocked = dailyLossTracker.isDailyLossExceeded()
-
-        // 남은 예산
-        val remainingBudget = maxLossLimit - kotlin.math.abs(currentPnl)
-
-        // 거래 횟수
-        val trades = dailyLossTracker.getTradeCount()
-
-        // 경고 메시지
-        val warnings = mutableListOf<String>()
-        if (lossPercent > 50) {
-            warnings.add("일일 손실 한도의 50% 이상 사용됨. 새로운 진입을 중단하세요.")
-        }
-        if (lossPercent > 80) {
-            warnings.add("일일 손실 한도의 80% 이상 사용됨. 즉시 모든 포지션을 청산하세요.")
-        }
-        if (trades > 30) {
-            warnings.add("오늘 거래 횟수가 30회를 초과했습니다. 과도한 거래를 피하세요.")
-        }
+        val status = dailyLossTracker.getDailyLossStatus()
 
         return DailyLossStatus(
-            date = startOfDay.toString().substring(0, 10),
-            totalLoss = currentPnl,
-            maxLossLimit = maxLossLimit,
-            lossPercent = lossPercent,
-            isBlocked = isBlocked,
-            remainingBudget = remainingBudget,
-            trades = trades,
-            warnings = warnings
+            date = status.date.toString(),
+            totalPnl = status.totalPnl.toDouble(),
+            totalPnlPercent = status.totalPnlPercent,
+            maxLossLimit = status.maxLossLimit,
+            isLimitExceeded = status.isLimitExceeded,
+            remainingLossBudget = status.remainingLossBudget,
+            tradingAllowed = status.tradingAllowed
         )
     }
 
@@ -158,7 +122,7 @@ class RiskMonitoringTools(
         서킷브레이커, 일일 손실, 포지션 리스크 등을 종합적으로 분석합니다.
     """)
     fun getRiskSummary(): RiskSummary {
-        val now = Instant.now()
+        val now = java.time.Instant.now()
 
         // 서킷브레이커 상태
         val cbStatus = getCircuitBreakerStatus()
@@ -168,11 +132,10 @@ class RiskMonitoringTools(
 
         // 전체 리스크 평가
         val overallRisk = when {
-            cbStatus.globalStatus == "GLOBAL_BLOCKED" -> "CRITICAL"
-            dlStatus.lossPercent > 80 -> "CRITICAL"
-            dlStatus.lossPercent > 50 -> "HIGH"
-            cbStatus.blockedMarkets.isNotEmpty() -> "MEDIUM"
-            dlStatus.lossPercent > 25 -> "MEDIUM"
+            cbStatus.globalOpen -> "CRITICAL"
+            dlStatus.isLimitExceeded -> "CRITICAL"
+            cbStatus.marketStates.any { (_, state) -> state.isOpen } -> "HIGH"
+            dlStatus.totalPnlPercent < -2.5 -> "MEDIUM"
             else -> "LOW"
         }
 
@@ -198,8 +161,8 @@ class RiskMonitoringTools(
         }
 
         // 서킷브레이커 관련 권장사항
-        if (cbStatus.blockedMarkets.isNotEmpty()) {
-            recommendations.add("차단된 마켓: ${cbStatus.blockedMarkets.joinToString(", ")}. 다른 마켓을 고려하세요.")
+        if (cbStatus.globalOpen) {
+            recommendations.add("글로벌 서킷브레이커 발동: ${cbStatus.globalReason}")
         }
 
         return RiskSummary(
@@ -212,34 +175,28 @@ class RiskMonitoringTools(
     }
 
     @McpTool(description = """
-        마켓별 리스크 수준을 평가합니다.
+        특정 마켓의 리스크 수준을 평가합니다.
 
         각 마켓의 서킷브레이커 상태와 최근 성과를 바탕으로 리스크를 평가합니다.
     """)
     fun evaluateMarketRisk(
-        @McpToolParam(description = "마켓 목록 (쉼표로 구분, 예: KRW-BTC,KRW-ETH)") markets: String
+        markets: String
     ): Map<String, String> {
         val marketList = markets.split(",").map { it.trim().uppercase() }
         val riskLevels = mutableMapOf<String, String>()
 
-        val marketStates = circuitBreaker.getAllMarketStates()
+        val cbStatus = getCircuitBreakerStatus()
 
         marketList.forEach { market ->
-            val state = marketStates[market]
+            val state = cbStatus.marketStates[market]
             val riskLevel = when {
-                state == null || state.state == CircuitBreaker.MarketState.OPEN -> {
-                    // 서킷브레이커가 없는 마켓
-                    // TODO: 최근 성과 기반 리스크 평가
+                state == null || !state.isOpen -> {
+                    // 서킷브레이커가 열리지 않은 마켓
                     "LOW"
                 }
-                state.state == CircuitBreaker.MarketState.BLOCKED -> {
-                    when {
-                        state.consecutiveLosses >= 3 -> "HIGH"
-                        state.consecutiveLosses >= 2 -> "MEDIUM"
-                        else -> "LOW"
-                    }
-                }
-                else -> "UNKNOWN"
+                state.consecutiveLosses >= 3 -> "HIGH"
+                state.consecutiveLosses >= 2 -> "MEDIUM"
+                else -> "LOW"
             }
             riskLevels[market] = riskLevel
         }
@@ -253,13 +210,12 @@ class RiskMonitoringTools(
         일일 손실 한도, 최대 연속 손실 횟수 등의 설정값을 반환합니다.
     """)
     fun getRiskParameters(): Map<String, Any> {
+        val dlStatus = getDailyLossStatus()
         return mapOf(
-            "dailyLossLimit" to "5% of capital",
+            "dailyLossLimitPercent" to dlStatus.maxLossLimit,
             "maxConsecutiveLosses" to 3,
-            "slippageWarningThreshold" to "0.5%",
-            "slippageCriticalThreshold" to "2.0%",
-            "capital" to dailyLossTracker.getCapital(),
-            "circuitBreakerResetCooldownMinutes" to 60
+            "dailyLossExceeded" to dlStatus.isLimitExceeded,
+            "tradingAllowed" to dlStatus.tradingAllowed
         )
     }
 }
