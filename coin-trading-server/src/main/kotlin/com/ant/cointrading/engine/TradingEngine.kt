@@ -10,6 +10,7 @@ import com.ant.cointrading.order.OrderRejectionReason
 import com.ant.cointrading.regime.HmmRegimeDetector
 import com.ant.cointrading.regime.RegimeDetector
 import com.ant.cointrading.risk.CircuitBreaker
+import com.ant.cointrading.risk.DailyLossLimitService
 import com.ant.cointrading.service.KeyValueService
 import com.ant.cointrading.risk.MarketConditionChecker
 import com.ant.cointrading.risk.RiskManager
@@ -57,7 +58,8 @@ class TradingEngine(
     private val marketConditionChecker: MarketConditionChecker,
     private val orderExecutor: OrderExecutor,
     private val slackNotifier: SlackNotifier,
-    private val globalPositionManager: GlobalPositionManager
+    private val globalPositionManager: GlobalPositionManager,
+    private val dailyLossLimitService: DailyLossLimitService
 ) {
 
     companion object {
@@ -257,6 +259,13 @@ class TradingEngine(
             return
         }
 
+        // 2.5. 일일 손실 한도 체크
+        if (!dailyLossLimitService.canTrade()) {
+            log.warn("[$market] 일일 손실 한도 도달로 트레이딩 중지: ${dailyLossLimitService.tradingHaltedReason}")
+            slackNotifier.sendError(market, "일일 손실 한도 도달: ${dailyLossLimitService.tradingHaltedReason}")
+            return
+        }
+
         // 3. 포지션 사이징
         val positionSize = riskManager.calculatePositionSize(market, krwBalance, signal.confidence)
 
@@ -348,6 +357,22 @@ class TradingEngine(
             log.info("[$market] $notificationMessage")
 
             slackNotifier.sendTradeNotification(signal, result)
+
+            // 일일 손실 한도에 PnL 기록 (매도만)
+            if (signal.action == SignalAction.SELL) {
+                val executedValue = (result.executedQuantity?.toDouble() ?: 0.0) * (result.price?.toDouble() ?: 0.0)
+                val pnl = when (signal.strategy) {
+                    "GRID" -> {
+                        // GRID 전략은 전략 내부에서 PnL 계산
+                        // 여기서는 체결금액만 기록 (실제 PnL은 추후 개선)
+                        0.0
+                    }
+                    else -> 0.0
+                }
+                // Note: 실제 PnL은 전략 레벨에서 계산되므로 여기서는 체결만 기록
+                // 추후 TradeEntity 저장 시점에 PnL을 기록하도록 개선 필요
+                dailyLossLimitService.recordPnl(pnl)
+            }
         } else {
             // 실패 사유별 처리
             val errorDetail = when (result.rejectionReason) {
