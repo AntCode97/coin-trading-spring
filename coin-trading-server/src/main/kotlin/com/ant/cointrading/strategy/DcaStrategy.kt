@@ -162,16 +162,67 @@ class DcaStrategy(
     }
 
     /**
-     * 매수 완료 기록 (메모리 + DB)
+     * 매수 완료 기록 (메모리 + DB + 포지션 추적)
      */
-    fun recordBuy(market: String) {
+    fun recordBuy(market: String, quantity: Double, price: Double, amount: Double) {
         val now = Instant.now()
         lastBuyTime[market] = now
 
         // DB에도 저장 (재시작 시 복원용)
         val key = KEY_PREFIX + market
         keyValueService.set(key, now.toString(), "dca", "DCA 마지막 매수 시간 ($market)")
-        log.debug("[$market] DCA 매수 시간 기록: $now")
+
+        // DCA 포지션 관리
+        val openPositions = dcaPositionRepository.findByMarketAndStatus(market, "OPEN")
+        if (openPositions.isNotEmpty()) {
+            // 기존 포지션에 추가: 평균가 재계산
+            val position = openPositions.first()
+            val newTotalValue = (position.totalQuantity * position.averagePrice) + (quantity * price)
+            val newTotalQuantity = position.totalQuantity + quantity
+            position.averagePrice = newTotalValue / newTotalQuantity
+            position.totalQuantity = newTotalQuantity
+            position.totalInvested += amount
+            dcaPositionRepository.save(position)
+            log.info("[$market] DCA 포지션 추가: 수량=${quantity}원, 가격=${price}원, 평균가=${position.averagePrice}원")
+        } else {
+            // 새 포지션 생성
+            val position = DcaPositionEntity(
+                market = market,
+                totalQuantity = quantity,
+                averagePrice = price,
+                totalInvested = amount,
+                status = "OPEN",
+                lastPrice = price,
+                lastPriceUpdate = now,
+                currentPnlPercent = 0.0,
+                takeProfitPercent = 15.0,
+                stopLossPercent = -10.0
+            )
+            dcaPositionRepository.save(position)
+            log.info("[$market] DCA 신규 포지션 생성: 수량=${quantity}원, 가격=${price}원")
+        }
+    }
+
+    /**
+     * 매도 완료 기록 (포지션 청산)
+     */
+    fun recordSell(market: String, quantity: Double, price: Double, exitReason: String) {
+        val openPositions = dcaPositionRepository.findByMarketAndStatus(market, "OPEN")
+        if (openPositions.isEmpty()) {
+            log.warn("[$market] DCA 포지션을 찾을 수 없음 (매도 기록 불가)")
+            return
+        }
+
+        val position = openPositions.first()
+        position.status = "CLOSED"
+        position.exitReason = exitReason
+        position.exitPrice = price
+        position.exitedAt = Instant.now()
+        position.realizedPnl = (price - position.averagePrice) * quantity
+        position.realizedPnlPercent = ((price - position.averagePrice) / position.averagePrice) * 100
+        dcaPositionRepository.save(position)
+
+        log.info("[$market] DCA 포지션 청산: 사유=$exitReason, 손익=${position.realizedPnl}원 (${String.format("%.2f", position.realizedPnlPercent)}%)")
     }
 
     /**

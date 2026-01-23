@@ -311,9 +311,27 @@ class TradingEngine(
                 else -> {}
             }
 
-            // DCA 전략인 경우 매수 시간 기록
-            if (signal.strategy == "DCA" && signal.action == SignalAction.BUY) {
-                (state.currentStrategy as? DcaStrategy)?.recordBuy(market)
+            // DCA 전략인 경우 포지션 추적
+            if (signal.strategy == "DCA") {
+                val quantity = result.executedQuantity?.toDouble() ?: 0.0
+                val price = result.price?.toDouble() ?: 0.0
+                val amount = quantity * price
+
+                when (signal.action) {
+                    SignalAction.BUY -> {
+                        (state.currentStrategy as? DcaStrategy)?.recordBuy(market, quantity, price, amount)
+                    }
+                    SignalAction.SELL -> {
+                        val exitReason = when {
+                            signal.reason.contains("익절") -> "TAKE_PROFIT"
+                            signal.reason.contains("손절") -> "STOP_LOSS"
+                            signal.reason.contains("타임아웃") -> "TIMEOUT"
+                            else -> "SIGNAL"
+                        }
+                        (state.currentStrategy as? DcaStrategy)?.recordSell(market, quantity, price, exitReason)
+                    }
+                    else -> {}
+                }
             }
 
             // 슬리피지 경고 포함 알림
