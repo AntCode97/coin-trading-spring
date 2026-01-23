@@ -865,7 +865,7 @@ class OrderExecutor(
                 pnl = pnl,
                 pnlPercent = pnlPercent,
                 strategy = signal.strategy,
-                regime = null,
+                regime = signal.regime,
                 confidence = signal.confidence,
                 reason = signal.reason.take(500),
                 simulated = isSimulated

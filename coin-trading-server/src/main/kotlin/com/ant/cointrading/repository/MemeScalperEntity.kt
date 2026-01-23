@@ -103,6 +103,10 @@ class MemeScalperTradeEntity(
     @Column(nullable = false, length = 20)
     var status: String = "OPEN",
 
+    /** 시장 레짐 (BULL_TREND/BEAR_TREND/SIDEWAYS/HIGH_VOLATILITY) */
+    @Column(length = 30)
+    var regime: String? = null,
+
     /** 청산 주문 ID */
     @Column(length = 50)
     var closeOrderId: String? = null,

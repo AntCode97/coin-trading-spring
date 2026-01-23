@@ -57,6 +57,7 @@ data class TradingSignal(
     val price: BigDecimal,
     val reason: String,
     val strategy: String,
+    val regime: String? = null,     // MarketRegime name (BULL_TREND, BEAR_TREND, SIDEWAYS, HIGH_VOLATILITY)
     val timestamp: Instant = Instant.now()
 )
 
