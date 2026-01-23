@@ -98,13 +98,13 @@ slack:
 
 # 자동 거래 설정
 trading:
-  enabled: ${TRADING_ENABLED:false}
+  enabled: true  # 실거래 활성화 (필요시 false로 변경)
   markets:
     - BTC_KRW
     - ETH_KRW
     - XRP_KRW
     - SOL_KRW
-  order-amount-krw: ${ORDER_AMOUNT_KRW:10000}
+  order-amount-krw: 10000
   max-drawdown-percent: ${MAX_DRAWDOWN_PERCENT:10.0}
   risk-per-trade-percent: ${RISK_PER_TRADE_PERCENT:1.0}
   strategy:
@@ -124,8 +124,8 @@ trading:
 # LLM 최적화 설정
 llm:
   optimizer:
-    enabled: ${LLM_OPTIMIZER_ENABLED:false}
-    cron: ${LLM_OPTIMIZER_CRON:0 0 0 * * *}  # 매일 자정
+    enabled: true  # LLM 최적화 활성화
+    cron: 0 0 0 * * *  # 매일 자정
 
 # Logging 설정
 logging:
@@ -139,7 +139,7 @@ logging:
 
 # Volume Surge 전략 설정 (거래량 급등 단타 - 모멘텀 기반)
 volumesurge:
-  enabled: ${VOLUME_SURGE_ENABLED:false}
+  enabled: true  # Volume Surge 활성화
   polling-interval-ms: ${VOLUME_SURGE_POLLING_MS:30000}
   position-size-krw: ${VOLUME_SURGE_POSITION_SIZE:10000}
   max-positions: ${VOLUME_SURGE_MAX_POSITIONS:5}

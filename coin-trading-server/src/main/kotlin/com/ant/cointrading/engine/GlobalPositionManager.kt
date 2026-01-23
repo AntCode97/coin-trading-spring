@@ -176,6 +176,11 @@ class GlobalPositionManager(
             else -> market
         }
     }
+
+    /**
+     * 마켓명 정규화 (테스트용 public)
+     */
+    fun normalizeMarket(market: String): String = normalizeMarket(market)
 }
 
 /**
