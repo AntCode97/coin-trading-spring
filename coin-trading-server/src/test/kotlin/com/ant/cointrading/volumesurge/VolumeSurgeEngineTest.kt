@@ -14,6 +14,7 @@ import com.ant.cointrading.repository.VolumeSurgeAlertRepository
 import com.ant.cointrading.repository.VolumeSurgeDailySummaryRepository
 import com.ant.cointrading.repository.VolumeSurgeTradeEntity
 import com.ant.cointrading.repository.VolumeSurgeTradeRepository
+import com.ant.cointrading.risk.DynamicRiskRewardCalculator
 import com.ant.cointrading.risk.StopLossCalculator
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.DisplayName
@@ -76,6 +77,9 @@ class VolumeSurgeEngineTest {
     private lateinit var stopLossCalculator: StopLossCalculator
 
     @Mock
+    private lateinit var dynamicRiskRewardCalculator: DynamicRiskRewardCalculator
+
+    @Mock
     private lateinit var globalPositionManager: GlobalPositionManager
 
     private lateinit var engine: VolumeSurgeEngine
@@ -94,6 +98,7 @@ class VolumeSurgeEngineTest {
             dailySummaryRepository,
             slackNotifier,
             stopLossCalculator,
+            dynamicRiskRewardCalculator,
             globalPositionManager
         )
     }
