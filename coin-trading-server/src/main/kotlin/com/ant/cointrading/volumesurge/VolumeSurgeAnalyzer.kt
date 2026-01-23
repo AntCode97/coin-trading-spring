@@ -274,17 +274,21 @@ class VolumeSurgeAnalyzer(
     }
 
     /**
-     * 컨플루언스 점수 계산 (0~100) - 모멘텀/순추세 기준 + 다이버전스/히스토그램
+     * 컨플루언스 점수 계산 (0~100) - quant-trading 스킬 기반 재조정
      *
-     * quant-trading 스킬 기반 4중 컨플루언스 + 다이버전스/히스토그램 보너스:
+     * 4중 컨플루언스 기본 배점 + 보너스:
      *
-     * 배점:
-     * - 거래량: 30점 (핵심 지표)
-     * - MACD: 20점 (추세 확인)
-     * - MACD 히스토그램 반전: +10점 보너스 (조기 진입 신호)
+     * 기본 배점 (80점 만점):
+     * - 거래량: 20점 (핵심 지표)
+     * - MACD: 15점 (추세 확인)
      * - RSI: 20점 (모멘텀 확인)
-     * - RSI 다이버전스: +15점 보너스 (강세 다이버전스, MODERATE+ 강도)
-     * - 볼린저: 20점 (돌파 확인)
+     * - 볼린저: 25점 (돌파 확인)
+     *
+     * 보너스 (20점):
+     * - MACD 히스토그램 반전: +10점 (조기 진입 신호)
+     * - RSI 강세 다이버전스: +15점 (반전 신호, STRONG/MODERATE)
+     *
+     * 최대: 100점, 권장 진입 기준: 60점 이상
      */
     private fun calculateConfluenceScore(
         rsi: Double,
@@ -297,21 +301,21 @@ class VolumeSurgeAnalyzer(
     ): Int {
         var score = 0
 
-        // 1. 거래량 점수 (Volume Surge의 핵심 - 30점)
+        // 1. 거래량 점수 (Volume Surge의 핵심 - 20점)
         score += when {
-            volumeRatio >= 5.0 -> 30  // 500% 이상 = 폭발적 급등
-            volumeRatio >= 3.0 -> 25  // 300% 이상 = 강한 급등
-            volumeRatio >= 2.0 -> 20  // 200% 이상 = 급등
-            volumeRatio >= 1.5 -> 15  // 150% 이상 = 상승
-            volumeRatio >= 1.2 -> 10  // 120% 이상
+            volumeRatio >= 5.0 -> 20  // 500% 이상 = 폭발적 급등
+            volumeRatio >= 3.0 -> 17  // 300% 이상 = 강한 급등
+            volumeRatio >= 2.0 -> 14  // 200% 이상 = 급등
+            volumeRatio >= 1.5 -> 10  // 150% 이상 = 상승
+            volumeRatio >= 1.2 -> 5   // 120% 이상
             else -> 0
         }
 
-        // 2. MACD 점수 (추세 방향 확인 - 20점)
+        // 2. MACD 점수 (추세 방향 확인 - 15점)
         score += when (macdSignal) {
-            "BULLISH" -> 20           // 상승 신호 = 핵심
-            "NEUTRAL" -> 10           // 중립도 허용
-            "BEARISH" -> -15          // BEARISH = 패널티 강화
+            "BULLISH" -> 15           // 상승 신호
+            "NEUTRAL" -> 8            // 중립
+            "BEARISH" -> -5           // BEARISH = 약한 패널티
             else -> 0
         }
 
@@ -342,10 +346,10 @@ class VolumeSurgeAnalyzer(
             score += divergenceBonus
         }
 
-        // 6. 볼린저밴드 점수 (돌파/위치 확인 - 20점)
+        // 6. 볼린저밴드 점수 (돌파/위치 확인 - 25점)
         score += when (bollingerPosition) {
-            "UPPER" -> 20             // 상단 돌파 = 강한 모멘텀
-            "MIDDLE" -> 15            // 중앙 = 안정적 상승
+            "UPPER" -> 25             // 상단 돌파 = 강한 모멘텀
+            "MIDDLE" -> 18            // 중앙 = 안정적 상승
             "LOWER" -> 10             // 하단 = 반등 가능성
             else -> 10
         }

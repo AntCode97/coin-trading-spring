@@ -9,6 +9,7 @@ import com.ant.cointrading.model.TradingSignal
 import com.ant.cointrading.notification.SlackNotifier
 import com.ant.cointrading.order.OrderExecutor
 import com.ant.cointrading.repository.*
+import com.ant.cointrading.risk.DynamicRiskRewardCalculator
 import com.ant.cointrading.risk.StopLossCalculator
 import jakarta.annotation.PostConstruct
 import org.slf4j.LoggerFactory
@@ -46,6 +47,7 @@ class VolumeSurgeEngine(
     private val dailySummaryRepository: VolumeSurgeDailySummaryRepository,
     private val slackNotifier: SlackNotifier,
     private val stopLossCalculator: StopLossCalculator,
+    private val dynamicRiskRewardCalculator: DynamicRiskRewardCalculator,
     private val globalPositionManager: GlobalPositionManager
 ) {
     private val log = LoggerFactory.getLogger(javaClass)
@@ -320,14 +322,16 @@ class VolumeSurgeEngine(
             val appliedStopLossPercent = stopLossResult?.stopLossPercent
                 ?: kotlin.math.abs(properties.stopLossPercent)
 
-            // 동적 익절 계산 (R:R 2:1 확보)
+            // 동적 익절 계산 (quant-trading 스킬 기반 신뢰도별 R:R)
+            val confidence = filterResult.confidence * 100  // 0~100
+            val rrResult = dynamicRiskRewardCalculator.calculate(confidence, appliedStopLossPercent)
             val appliedTakeProfitPercent = if (properties.useDynamicTakeProfit) {
-                appliedStopLossPercent * properties.takeProfitMultiplier
+                rrResult.takeProfitPercent
             } else {
                 properties.takeProfitPercent
             }
 
-            log.info("[$market] 리스크 관리 설정: 손절=${String.format("%.2f", appliedStopLossPercent)}%, 익절=${String.format("%.2f", appliedTakeProfitPercent)}% (R:R=${String.format("%.1f", appliedTakeProfitPercent / appliedStopLossPercent)}:1, 방식: ${if (properties.useDynamicTakeProfit) "DYNAMIC" else "FIXED"})")
+            log.info("[$market] 리스크 관리 설정: 신뢰도=${String.format("%.0f", confidence)}%, 손절=${String.format("%.2f", appliedStopLossPercent)}%, 익절=${String.format("%.2f", appliedTakeProfitPercent)}% (R:R=${String.format("%.1f", rrResult.riskReward)}:1, ${rrResult.reason})")
 
             // 트레이드 엔티티 생성
             val trade = VolumeSurgeTradeEntity(
@@ -344,6 +348,7 @@ class VolumeSurgeEngine(
                 entryAtr = stopLossResult?.atr,
                 entryAtrPercent = stopLossResult?.atrPercent,
                 appliedStopLossPercent = appliedStopLossPercent,
+                appliedTakeProfitPercent = appliedTakeProfitPercent,
                 stopLossMethod = stopLossResult?.method?.name ?: "FIXED",
                 llmEntryReason = filterResult.reason,
                 llmConfidence = filterResult.confidence,
@@ -534,13 +539,13 @@ class VolumeSurgeEngine(
             return
         }
 
-        // 2. 익절 체크 (동적: 손절 × 배수, 고정: takeProfitPercent)
-        val takeProfitPercent = if (properties.useDynamicTakeProfit) {
-            // 동적 익절: R:R 비율 확보 (예: 손절 5% → 익절 10%)
-            appliedStopLoss * properties.takeProfitMultiplier
-        } else {
-            properties.takeProfitPercent
-        }
+        // 2. 익절 체크 (저장된 익절 비율 사용, 없으면 계산)
+        val takeProfitPercent = position.appliedTakeProfitPercent
+            ?: if (properties.useDynamicTakeProfit) {
+                appliedStopLoss * properties.takeProfitMultiplier
+            } else {
+                properties.takeProfitPercent
+            }
         if (pnlPercent >= takeProfitPercent) {
             closePosition(position, currentPrice, "TAKE_PROFIT")
             return

@@ -152,6 +152,10 @@ class VolumeSurgeTradeEntity(
     @Column
     var appliedStopLossPercent: Double? = null,
 
+    /** 적용된 익절 비율 (%) - 동적 또는 고정 */
+    @Column
+    var appliedTakeProfitPercent: Double? = null,
+
     /** 손절 방식 (ATR_DYNAMIC / FIXED) */
     @Column(length = 20)
     var stopLossMethod: String? = null,
