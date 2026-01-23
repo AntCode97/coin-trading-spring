@@ -6,6 +6,7 @@ import com.ant.cointrading.config.VolumeSurgeProperties
 import com.ant.cointrading.indicator.DivergenceDetector
 import com.ant.cointrading.indicator.DivergenceStrength
 import com.ant.cointrading.indicator.DivergenceType
+import com.ant.cointrading.indicator.MultiTimeFrameAnalyzer
 import org.slf4j.LoggerFactory
 import org.springframework.stereotype.Component
 import java.math.BigDecimal
@@ -25,6 +26,8 @@ data class VolumeSurgeAnalysis(
     val rsiDivergence: DivergenceType,  // RSI 다이버전스
     val divergenceStrength: DivergenceStrength?,  // 다이버전스 강도
     val confluenceScore: Int,    // 0 ~ 100
+    val mtfAlignmentBonus: Int,  // 멀티 타임프레임 정렬 보너스 (0 ~ 15)
+    val mtfRecommendation: String, // MTF 진입 권장사항
     var rejectReason: String? = null
 )
 
@@ -38,7 +41,8 @@ data class VolumeSurgeAnalysis(
 class VolumeSurgeAnalyzer(
     private val bithumbPublicApi: BithumbPublicApi,
     private val properties: VolumeSurgeProperties,
-    private val divergenceDetector: DivergenceDetector
+    private val divergenceDetector: DivergenceDetector,
+    private val multiTimeFrameAnalyzer: MultiTimeFrameAnalyzer
 ) {
     private val log = LoggerFactory.getLogger(javaClass)
 
@@ -53,7 +57,7 @@ class VolumeSurgeAnalyzer(
     }
 
     /**
-     * 기술적 분석 수행 (확장 - RSI 다이버전스, MACD 히스토그램 반전)
+     * 기술적 분석 수행 (확장 - MTF 정렬 포함)
      */
     fun analyze(market: String): VolumeSurgeAnalysis? {
         log.info("[$market] 기술적 분석 시작")
@@ -89,7 +93,31 @@ class VolumeSurgeAnalyzer(
         // 거래량 비율 계산
         val volumeRatio = calculateVolumeRatio(volumes)
 
-        // 컨플루언스 점수 계산 (다이버전스, 히스토그램 반전 포함)
+        // 멀티 타임프레임 분석 (quant-trading 스킬 기반)
+        val mtfAnalysis = multiTimeFrameAnalyzer.analyze(market)
+        val mtfAlignmentBonus = mtfAnalysis?.alignmentBonus ?: 0
+        val mtfRecommendation = mtfAnalysis?.recommendation ?: "MTF 분석 불가"
+
+        // 역방향 정렬 시 진입 차단
+        if (mtfAlignmentBonus < 0) {
+            log.warn("[$market] MTF 역방향 정렬: $mtfRecommendation")
+            return VolumeSurgeAnalysis(
+                market = market,
+                rsi = rsi,
+                macdSignal = macdSignal,
+                macdHistogramReversal = macdHistogramReversal,
+                bollingerPosition = bollingerPosition,
+                volumeRatio = volumeRatio,
+                rsiDivergence = divergenceResult.type,
+                divergenceStrength = if (divergenceResult.hasDivergence) divergenceResult.strength else null,
+                confluenceScore = 0,
+                mtfAlignmentBonus = mtfAlignmentBonus,
+                mtfRecommendation = mtfRecommendation,
+                rejectReason = "MTF 역방향 정렬: $mtfRecommendation"
+            )
+        }
+
+        // 컨플루언스 점수 계산 (MTF 보너스 포함)
         val confluenceScore = calculateConfluenceScore(
             rsi = rsi,
             macdSignal = macdSignal,
@@ -97,7 +125,8 @@ class VolumeSurgeAnalyzer(
             bollingerPosition = bollingerPosition,
             volumeRatio = volumeRatio,
             rsiDivergence = divergenceResult.type,
-            divergenceStrength = divergenceResult.strength
+            divergenceStrength = divergenceResult.strength,
+            mtfAlignmentBonus = mtfAlignmentBonus
         )
 
         log.info("""
@@ -107,6 +136,7 @@ class VolumeSurgeAnalyzer(
             볼린저: $bollingerPosition
             거래량비율: ${String.format("%.2f", volumeRatio)}x
             RSI 다이버전스: ${divergenceResult.type} (${divergenceResult.strength})
+            MTF 정렬: +${mtfAlignmentBonus}점 ($mtfRecommendation)
             컨플루언스: ${confluenceScore}점
         """.trimIndent())
 
@@ -119,7 +149,9 @@ class VolumeSurgeAnalyzer(
             volumeRatio = volumeRatio,
             rsiDivergence = divergenceResult.type,
             divergenceStrength = if (divergenceResult.hasDivergence) divergenceResult.strength else null,
-            confluenceScore = confluenceScore
+            confluenceScore = confluenceScore,
+            mtfAlignmentBonus = mtfAlignmentBonus,
+            mtfRecommendation = mtfRecommendation
         )
     }
 
@@ -274,7 +306,7 @@ class VolumeSurgeAnalyzer(
     }
 
     /**
-     * 컨플루언스 점수 계산 (0~100) - quant-trading 스킬 기반 재조정
+     * 컨플루언스 점수 계산 (0~100) - quant-trading 스킬 기반 재조정 + MTF 보너스
      *
      * 4중 컨플루언스 기본 배점 + 보너스:
      *
@@ -284,11 +316,12 @@ class VolumeSurgeAnalyzer(
      * - RSI: 20점 (모멘텀 확인)
      * - 볼린저: 25점 (돌파 확인)
      *
-     * 보너스 (20점):
+     * 보너스 (35점):
      * - MACD 히스토그램 반전: +10점 (조기 진입 신호)
      * - RSI 강세 다이버전스: +15점 (반전 신호, STRONG/MODERATE)
+     * - MTF 정렬 보너스: +15점 (3개 정렬), +5점 (2개 정렬), -5점 (역방향)
      *
-     * 최대: 100점, 권장 진입 기준: 60점 이상
+     * 최대: 115점 (실제 100점 coerceln), 권장 진입 기준: 60점 이상
      */
     private fun calculateConfluenceScore(
         rsi: Double,
@@ -297,7 +330,8 @@ class VolumeSurgeAnalyzer(
         bollingerPosition: String,
         volumeRatio: Double,
         rsiDivergence: com.ant.cointrading.indicator.DivergenceType,
-        divergenceStrength: com.ant.cointrading.indicator.DivergenceStrength?
+        divergenceStrength: com.ant.cointrading.indicator.DivergenceStrength?,
+        mtfAlignmentBonus: Int = 0
     ): Int {
         var score = 0
 
@@ -353,6 +387,10 @@ class VolumeSurgeAnalyzer(
             "LOWER" -> 10             // 하단 = 반등 가능성
             else -> 10
         }
+
+        // 7. MTF 정렬 보너스 (+15점, +5점, -5점)
+        // quant-trading 스킬: 3개 정렬 = +15점, 2개 = +5점, 역방향 = -5점
+        score += mtfAlignmentBonus
 
         return score.coerceIn(0, 100)
     }
