@@ -15,6 +15,8 @@ interface MemeScalperTradeRepository : JpaRepository<MemeScalperTradeEntity, Lon
 
     fun countByStatus(status: String): Int
 
+    fun countByMarketAndStatus(market: String, status: String): Long
+
     fun findTopByMarketOrderByCreatedAtDesc(market: String): MemeScalperTradeEntity?
 
     fun findByCreatedAtAfter(time: Instant): List<MemeScalperTradeEntity>

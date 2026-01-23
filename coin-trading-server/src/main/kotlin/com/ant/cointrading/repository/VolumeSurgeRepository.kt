@@ -102,6 +102,9 @@ interface VolumeSurgeTradeRepository : JpaRepository<VolumeSurgeTradeEntity, Lon
     /** 열린 포지션 수 */
     fun countByStatus(status: String): Long
 
+    /** 특정 마켓의 특정 상태 포지션 수 */
+    fun countByMarketAndStatus(market: String, status: String): Long
+
     /** 최근 N개 트레이드 조회 */
     fun findTop20ByOrderByCreatedAtDesc(): List<VolumeSurgeTradeEntity>
 }

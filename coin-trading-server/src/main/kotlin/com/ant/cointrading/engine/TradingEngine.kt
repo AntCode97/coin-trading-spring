@@ -56,7 +56,8 @@ class TradingEngine(
     private val circuitBreaker: CircuitBreaker,
     private val marketConditionChecker: MarketConditionChecker,
     private val orderExecutor: OrderExecutor,
-    private val slackNotifier: SlackNotifier
+    private val slackNotifier: SlackNotifier,
+    private val globalPositionManager: GlobalPositionManager
 ) {
 
     companion object {
@@ -271,11 +272,17 @@ class TradingEngine(
                 return
             }
 
-            // [무한 루프 방지] 이미 코인을 보유하고 있으면 추가 매수 금지
-            // 최소 주문 금액(5000원) 이상의 가치가 있으면 보유로 간주
+            // [무한 루프 방지 + 엔진 간 충돌 방지]
+            // 1. 이미 코인을 보유하고 있으면 추가 매수 금지
             val coinValueKrw = coinBalance.multiply(state.currentPrice)
             if (coinValueKrw >= BigDecimal("5000")) {
                 log.warn("[$market] 이미 $coinSymbol 보유 중: ${coinBalance} (${coinValueKrw}원 상당) - 중복 매수 방지")
+                return
+            }
+
+            // 2. 다른 엔진(VolumeSurge, MemeScalper)에서 해당 마켓에 포지션이 있는지 확인
+            if (globalPositionManager.hasOpenPosition(market)) {
+                log.warn("[$market] 다른 엔진에서 열린 포지션 존재 - TradingEngine 진입 차단")
                 return
             }
         } else if (signal.action == SignalAction.SELL) {

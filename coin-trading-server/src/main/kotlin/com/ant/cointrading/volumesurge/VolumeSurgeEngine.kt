@@ -3,6 +3,7 @@ package com.ant.cointrading.volumesurge
 import com.ant.cointrading.api.bithumb.BithumbPrivateApi
 import com.ant.cointrading.api.bithumb.BithumbPublicApi
 import com.ant.cointrading.config.VolumeSurgeProperties
+import com.ant.cointrading.engine.GlobalPositionManager
 import com.ant.cointrading.model.SignalAction
 import com.ant.cointrading.model.TradingSignal
 import com.ant.cointrading.notification.SlackNotifier
@@ -44,7 +45,8 @@ class VolumeSurgeEngine(
     private val tradeRepository: VolumeSurgeTradeRepository,
     private val dailySummaryRepository: VolumeSurgeDailySummaryRepository,
     private val slackNotifier: SlackNotifier,
-    private val stopLossCalculator: StopLossCalculator
+    private val stopLossCalculator: StopLossCalculator,
+    private val globalPositionManager: GlobalPositionManager
 ) {
     private val log = LoggerFactory.getLogger(javaClass)
 
@@ -936,12 +938,22 @@ class VolumeSurgeEngine(
         }
 
         // 이미 해당 마켓에 열린 포지션이 있는지 확인
+        // [엔진 간 충돌 방지] GlobalPositionManager로 모든 엔진의 포지션 확인
         val existingPosition = tradeRepository.findByMarketAndStatus(market, "OPEN")
         if (existingPosition.isNotEmpty()) {
             return mapOf(
                 "success" to false,
                 "market" to market,
                 "error" to "이미 열린 포지션 존재 (id=${existingPosition.first().id})"
+            )
+        }
+
+        // 다른 엔진(TradingEngine, MemeScalper)에서 포지션 확인
+        if (globalPositionManager.hasOpenPosition(market)) {
+            return mapOf(
+                "success" to false,
+                "market" to market,
+                "error" to "다른 엔진에서 열린 포지션 존재 - VolumeSurge 진입 차단"
             )
         }
 

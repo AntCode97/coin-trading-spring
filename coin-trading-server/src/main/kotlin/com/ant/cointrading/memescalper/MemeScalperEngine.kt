@@ -3,6 +3,7 @@ package com.ant.cointrading.memescalper
 import com.ant.cointrading.api.bithumb.BithumbPrivateApi
 import com.ant.cointrading.api.bithumb.BithumbPublicApi
 import com.ant.cointrading.config.MemeScalperProperties
+import com.ant.cointrading.engine.GlobalPositionManager
 import com.ant.cointrading.model.SignalAction
 import com.ant.cointrading.model.TradingSignal
 import com.ant.cointrading.notification.SlackNotifier
@@ -46,7 +47,8 @@ class MemeScalperEngine(
     private val orderExecutor: OrderExecutor,
     private val tradeRepository: MemeScalperTradeRepository,
     private val statsRepository: MemeScalperDailyStatsRepository,
-    private val slackNotifier: SlackNotifier
+    private val slackNotifier: SlackNotifier,
+    private val globalPositionManager: GlobalPositionManager
 ) {
     private val log = LoggerFactory.getLogger(javaClass)
 
@@ -214,6 +216,7 @@ class MemeScalperEngine(
      * 중복 진입 방지:
      * 1. DB 포지션 체크 (OPEN, CLOSING 상태)
      * 2. 실제 잔고 체크 (이미 해당 코인 보유 시 진입 불가)
+     * 3. [엔진 간 충돌 방지] 다른 엔진의 포지션 확인
      */
     private fun shouldEnter(signal: PumpSignal): Boolean {
         val market = signal.market
@@ -230,6 +233,12 @@ class MemeScalperEngine(
         val existingClosing = tradeRepository.findByMarketAndStatus(market, "CLOSING")
         if (existingOpen.isNotEmpty() || existingClosing.isNotEmpty()) {
             log.debug("[$market] 이미 포지션 존재 (OPEN=${existingOpen.size}, CLOSING=${existingClosing.size})")
+            return false
+        }
+
+        // [엔진 간 충돌 방지] 다른 엔진(TradingEngine, VolumeSurge)에서 포지션 확인
+        if (globalPositionManager.hasOpenPosition(market)) {
+            log.debug("[$market] 다른 엔진에서 열린 포지션 존재 - MemeScalper 진입 차단")
             return false
         }
 
