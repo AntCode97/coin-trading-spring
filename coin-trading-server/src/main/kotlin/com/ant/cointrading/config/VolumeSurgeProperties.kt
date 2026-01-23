@@ -38,13 +38,13 @@ class VolumeSurgeProperties {
     // === 진입 조건 ===
 
     /** 최소 거래량 비율 (20일 평균 대비) */
-    var minVolumeRatio: Double = 3.0
+    var minVolumeRatio: Double = 1.5
 
-    /** 최대 RSI (과매수 영역 진입 제한) */
-    var maxRsi: Double = 70.0
+    /** 최대 RSI (과매수 영역 진입 제한) - 모멘텀 전략이므로 80까지 허용 */
+    var maxRsi: Double = 80.0
 
-    /** 최소 컨플루언스 점수 */
-    var minConfluenceScore: Int = 60
+    /** 최소 컨플루언스 점수 - 거래량이 충분하면 완화됨 */
+    var minConfluenceScore: Int = 40
 
     /** 최소 시가총액 (KRW) */
     var minMarketCapKrw: Long = 50_000_000_000
@@ -55,7 +55,7 @@ class VolumeSurgeProperties {
     var positionSizeKrw: Int = 10000
 
     /** 최대 동시 포지션 수 */
-    var maxPositions: Int = 3
+    var maxPositions: Int = 5
 
     // === 리스크 관리 ===
 
@@ -80,16 +80,16 @@ class VolumeSurgeProperties {
     /** 트레일링 스탑 오프셋 (%) - 고점 대비 이 비율 하락 시 청산 */
     var trailingStopOffset: Double = 1.0
 
-    /** 포지션 타임아웃 (분) */
-    var positionTimeoutMin: Int = 30
+    /** 포지션 타임아웃 (분) - 모멘텀 유지 시간 고려하여 60분으로 확대 */
+    var positionTimeoutMin: Int = 60
 
     // === 필터링 ===
 
     /** 경보 신선도 (분) - 이 시간 이내 경보만 처리 */
     var alertFreshnessMin: Int = 5
 
-    /** 같은 종목 재진입 쿨다운 (분) */
-    var cooldownMin: Int = 60
+    /** 같은 종목 재진입 쿨다운 (분) - 30분로 단축하여 더 많은 기회 포착 */
+    var cooldownMin: Int = 30
 
     /** LLM 필터 쿨다운 (분) - LLM 검증 후 이 시간 동안 재호출 안 함 */
     var llmCooldownMin: Int = 240

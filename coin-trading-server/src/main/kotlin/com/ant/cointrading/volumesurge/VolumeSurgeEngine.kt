@@ -210,10 +210,9 @@ class VolumeSurgeEngine(
      * - 컨플루언스 점수가 낮아도 거래량이 충분하면 진입
      */
     private fun shouldEnter(analysis: VolumeSurgeAnalysis): Boolean {
-        // RSI 극단적 과매수만 거부 (80 → 허용 범위 확대)
-        val effectiveMaxRsi = 80.0
-        if (analysis.rsi > effectiveMaxRsi) {
-            analysis.rejectReason = "RSI 극단적 과매수 (${String.format("%.1f", analysis.rsi)} > $effectiveMaxRsi)"
+        // RSI 극단적 과매수만 거부 (Properties.maxRsi 사용)
+        if (analysis.rsi > properties.maxRsi) {
+            analysis.rejectReason = "RSI 극단적 과매수 (${String.format("%.1f", analysis.rsi)} > ${properties.maxRsi})"
             return false
         }
 
