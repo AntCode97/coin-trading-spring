@@ -647,6 +647,39 @@ Claude Code에서 MCP 연결 후 사용 가능한 도구:
 | `sellLimitOrder` | 지정가 매도 |
 | `getStrategyConfig` | 전략 설정 조회 |
 | `setStrategy` | 전략 변경 |
+
+---
+
+## MCP 서버 연결
+
+### 로컬 개발 환경
+
+```bash
+# 로컬 MCP 서버 연결
+claude mcp add coin-trading-spring --transport stdio
+```
+
+### 원격 서버 연결 (Live 배포 환경)
+
+```bash
+# 원격 MCP 서버 연결 (Live 배포된 서버)
+claude mcp add coin-trading-spring --transport http http://183.101.185.112:1104/mcp
+```
+
+### MCP Tool 어노테이션
+
+MCP 도구를 생성할 때 두 가지 어노테이션을 모두 사용하여 로컬/원격 환경 모두 지원:
+
+```kotlin
+@McpTool(description = "도구 설명")
+@Tool(description = "동일한 도구 설명 (Spring AI 호환)")
+fun myTool(...): String {
+    // ...
+}
+```
+
+- `@McpTool`: Claude Code 전용 (MCP 직접 연결 시)
+- `@Tool`: Spring AI LLM용 (Spring AI MCP Adapter 사용 시)
 | `getPerformanceSummary` | 성과 요약 |
 | `getOptimizationReport` | 최적화 리포트 |
 

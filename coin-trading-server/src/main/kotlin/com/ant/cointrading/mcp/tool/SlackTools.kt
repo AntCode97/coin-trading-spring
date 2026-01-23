@@ -2,6 +2,8 @@ package com.ant.cointrading.mcp.tool
 
 import com.fasterxml.jackson.databind.JsonNode
 import com.fasterxml.jackson.databind.ObjectMapper
+import org.springaicommunity.mcp.annotation.McpTool
+import org.springaicommunity.mcp.annotation.McpToolParam
 import org.slf4j.LoggerFactory
 import org.springframework.ai.tool.annotation.Tool
 import org.springframework.ai.tool.annotation.ToolParam
@@ -43,6 +45,18 @@ class SlackTools(
     // 채널 관리
     // ===========================================
 
+    @McpTool(description = """
+        Slack 워크스페이스의 모든 공개 채널 목록을 조회합니다.
+
+        반환 정보:
+        - 채널 ID
+        - 채널 이름
+        - 채널 설명
+        - 채널 생성일
+        - 멤버 수
+
+        참고: Bot에 channels:read scope가 필요합니다.
+    """)
     @Tool(description = """
         Slack 워크스페이스의 모든 공개 채널 목록을 조회합니다.
 
@@ -109,6 +123,16 @@ class SlackTools(
         }
     }
 
+    @McpTool(description = """
+        Slack 워크스페이스의 모든 채널(공개, 프라이빗, DM) 목록을 조회합니다.
+
+        반환 정보:
+        - 공개 채널 (channels)
+        - 프라이빗 채널 (groups)
+        - DM (ims)
+
+        참고: Bot에 channels:read, groups:read, im:read scope가 필요합니다.
+    """)
     @Tool(description = """
         Slack 워크스페이스의 모든 채널(공개, 프라이빗, DM) 목록을 조회합니다.
 
@@ -197,6 +221,15 @@ class SlackTools(
     // 메시지 읽기
     // ===========================================
 
+    @McpTool(description = """
+        특정 채널의 최근 메시지를 읽습니다.
+
+        파라미터:
+        - channelId: 채널 ID (예: C0123456789)
+        - limit: 조회할 메시지 수 (기본 50, 최대 200)
+
+        참고: Bot에 channels:history 또는 groups:history, im:history scope가 필요합니다.
+    """)
     @Tool(description = """
         특정 채널의 최근 메시지를 읽습니다.
 
@@ -257,6 +290,13 @@ class SlackTools(
         }
     }
 
+    @McpTool(description = """
+        채널 이름으로 메시지를 읽습니다 (채널 ID를 모를 때 사용).
+
+        파라미터:
+        - channelName: 채널 이름 (예: coin-bot-alert, #coin-bot-alert)
+        - limit: 조회할 메시지 수 (기본 50, 최대 200)
+    """)
     @Tool(description = """
         채널 이름으로 메시지를 읽습니다 (채널 ID를 모를 때 사용).
 
@@ -284,6 +324,13 @@ class SlackTools(
         return getMessages(channelId, limit)
     }
 
+    @McpTool(description = """
+        특정 사용자가 보낸 DM을 조회합니다.
+
+        파라미터:
+        - userId: 사용자 ID (listAllConversations로 확인 가능)
+        - limit: 조회할 메시지 수 (기본 50, 최대 200)
+    """)
     @Tool(description = """
         특정 사용자가 보낸 DM을 조회합니다.
 
@@ -349,6 +396,15 @@ class SlackTools(
     // 메시지 보내기
     // ===========================================
 
+    @McpTool(description = """
+        특정 채널에 메시지를 보냅니다.
+
+        파라미터:
+        - channelId: 메시지를 보낼 채널 ID
+        - text: 메시지 내용
+
+        참고: Bot에 chat:write scope가 필요합니다.
+    """)
     @Tool(description = """
         특정 채널에 메시지를 보냅니다.
 
@@ -395,6 +451,13 @@ class SlackTools(
         }
     }
 
+    @McpTool(description = """
+        채널 이름으로 메시지를 보냅니다 (채널 ID를 모를 때 사용).
+
+        파라미터:
+        - channelName: 채널 이름 (# 없이)
+        - text: 메시지 내용
+    """)
     @Tool(description = """
         채널 이름으로 메시지를 보냅니다 (채널 ID를 모를 때 사용).
 
@@ -420,6 +483,15 @@ class SlackTools(
         return sendMessage(channelId, text)
     }
 
+    @McpTool(description = """
+        특정 사용자에게 DM을 보냅니다.
+
+        파라미터:
+        - userId: 사용자 ID
+        - text: 메시지 내용
+
+        참고: 먼저 DM을 열려면 사용자와의 대화가 있어야 합니다.
+    """)
     @Tool(description = """
         특정 사용자에게 DM을 보냅니다.
 
