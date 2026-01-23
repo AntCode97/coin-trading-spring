@@ -5,6 +5,7 @@ import com.ant.cointrading.api.bithumb.BithumbPrivateApi
 import com.ant.cointrading.api.bithumb.BithumbPublicApi
 import com.ant.cointrading.api.bithumb.TickerInfo
 import com.ant.cointrading.config.VolumeSurgeProperties
+import com.ant.cointrading.engine.GlobalPositionManager
 import com.ant.cointrading.notification.SlackNotifier
 import com.ant.cointrading.order.OrderExecutor
 import com.ant.cointrading.order.OrderResult
@@ -74,6 +75,9 @@ class VolumeSurgeEngineTest {
     @Mock
     private lateinit var stopLossCalculator: StopLossCalculator
 
+    @Mock
+    private lateinit var globalPositionManager: GlobalPositionManager
+
     private lateinit var engine: VolumeSurgeEngine
 
     @BeforeEach
@@ -89,7 +93,8 @@ class VolumeSurgeEngineTest {
             tradeRepository,
             dailySummaryRepository,
             slackNotifier,
-            stopLossCalculator
+            stopLossCalculator,
+            globalPositionManager
         )
     }
 

@@ -5,6 +5,7 @@ import com.ant.cointrading.api.bithumb.BithumbPrivateApi
 import com.ant.cointrading.api.bithumb.BithumbPublicApi
 import com.ant.cointrading.api.bithumb.TickerInfo
 import com.ant.cointrading.config.MemeScalperProperties
+import com.ant.cointrading.engine.GlobalPositionManager
 import com.ant.cointrading.notification.SlackNotifier
 import com.ant.cointrading.order.OrderExecutor
 import com.ant.cointrading.repository.MemeScalperDailyStatsRepository
@@ -64,6 +65,9 @@ class MemeScalperEngineTest {
     @Mock
     private lateinit var slackNotifier: SlackNotifier
 
+    @Mock
+    private lateinit var globalPositionManager: GlobalPositionManager
+
     private lateinit var engine: MemeScalperEngine
 
     @BeforeEach
@@ -76,7 +80,8 @@ class MemeScalperEngineTest {
             orderExecutor,
             tradeRepository,
             statsRepository,
-            slackNotifier
+            slackNotifier,
+            globalPositionManager
         )
 
         // 기본 설정

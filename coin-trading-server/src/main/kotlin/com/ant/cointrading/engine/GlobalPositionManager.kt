@@ -165,7 +165,7 @@ class GlobalPositionManager(
         lastCacheUpdate = System.currentTimeMillis()
     }
 
-    private fun normalizeMarket(market: String): String {
+    private fun doNormalizeMarket(market: String): String {
         // KRW-BTC, BTC_KRW, KRW_BTC 등 다양한 형식을 KRW-BTC로 통일
         return when {
             market.contains("-") -> market
@@ -180,7 +180,7 @@ class GlobalPositionManager(
     /**
      * 마켓명 정규화 (테스트용 public)
      */
-    fun normalizeMarket(market: String): String = normalizeMarket(market)
+    fun normalizeMarket(market: String): String = doNormalizeMarket(market)
 }
 
 /**
