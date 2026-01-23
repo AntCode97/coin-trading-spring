@@ -100,10 +100,10 @@ slack:
 trading:
   enabled: true  # 실거래 활성화 (필요시 false로 변경)
   markets:
-    - BTC_KRW
-    - ETH_KRW
-    - XRP_KRW
-    - SOL_KRW
+    - KRW-BTC
+    - KRW-ETH
+    - KRW-XRP
+    - KRW-SOL
   order-amount-krw: 10000
   max-drawdown-percent: ${MAX_DRAWDOWN_PERCENT:10.0}
   risk-per-trade-percent: ${RISK_PER_TRADE_PERCENT:1.0}

@@ -9,7 +9,7 @@ import java.math.BigDecimal
 @ConfigurationProperties(prefix = "trading")
 data class TradingProperties(
     val enabled: Boolean = false,
-    val markets: List<String> = listOf("BTC_KRW", "ETH_KRW"),
+    val markets: List<String> = listOf("KRW-BTC", "KRW-ETH"),
     val orderAmountKrw: BigDecimal = BigDecimal("10000"),
     val maxDrawdownPercent: Double = 10.0,
     val riskPerTradePercent: Double = 1.0,
