@@ -497,7 +497,29 @@ suspend fun checkPendingOrders() {
 
 ## 배포
 
-### Docker Hub 빌드 & 푸시
+### 자동 배포 (Watchtower)
+
+**git push 후 약 15분 후 자동 배포됩니다.**
+
+1. **커밋 & 푸시**:
+   ```bash
+   git add .
+   git commit -m "feat: 새 기능 추가"
+   git push origin main
+   ```
+
+2. **GitHub Actions 자동화**:
+   - Docker Hub에 `dbswns97/coin-trading-server:latest` 푸시
+   - 빌드 시간: 약 2-3분
+
+3. **NAS Watchtower 자동 업데이트**:
+   - 5분마다 Docker Hub 체크
+   - 새 이미지 감지 시 자동으로 컨테이너 재시작
+   - Zero-downtime 배포 (롤링업 없는 업데이트)
+
+**전체 소요 시간: 약 15분** (빌드 2-3분 + Watchtower 체크 5분 이내)
+
+### Docker Hub 빌드 & 푸시 (수동)
 
 ```bash
 ./docker-build-push.sh              # latest 태그
@@ -505,12 +527,14 @@ suspend fun checkPendingOrders() {
 ./docker-build-push.sh --no-cache   # 캐시 없이 빌드
 ```
 
-### NAS 배포
+### NAS 초기 설정 (최초 1회)
 
 ```bash
-# NAS에서 실행
-docker pull dbswns97/coin-trading-server:latest
+# NAS에서 docker-compose.nas.yml로 시작
+cd /path/to/coin-trading-spring
 docker-compose -f docker-compose.nas.yml up -d
+
+# 이후 Watchtower가 자동 업데이트 담당
 ```
 
 ### 환경 변수
