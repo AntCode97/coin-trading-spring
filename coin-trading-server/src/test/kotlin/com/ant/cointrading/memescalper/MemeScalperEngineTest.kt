@@ -8,6 +8,7 @@ import com.ant.cointrading.config.MemeScalperProperties
 import com.ant.cointrading.engine.GlobalPositionManager
 import com.ant.cointrading.notification.SlackNotifier
 import com.ant.cointrading.order.OrderExecutor
+import com.ant.cointrading.regime.RegimeDetector
 import com.ant.cointrading.repository.MemeScalperDailyStatsRepository
 import com.ant.cointrading.repository.MemeScalperTradeEntity
 import com.ant.cointrading.repository.MemeScalperTradeRepository
@@ -68,6 +69,9 @@ class MemeScalperEngineTest {
     @Mock
     private lateinit var globalPositionManager: GlobalPositionManager
 
+    @Mock
+    private lateinit var regimeDetector: RegimeDetector
+
     private lateinit var engine: MemeScalperEngine
 
     @BeforeEach
@@ -81,7 +85,8 @@ class MemeScalperEngineTest {
             tradeRepository,
             statsRepository,
             slackNotifier,
-            globalPositionManager
+            globalPositionManager,
+            regimeDetector
         )
 
         // 기본 설정
