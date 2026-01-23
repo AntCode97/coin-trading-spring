@@ -346,10 +346,11 @@ class VolumeSurgeAnalyzer(
         }
 
         // 2. MACD 점수 (추세 방향 확인 - 15점)
+        // MACD BEARISH 시 강력한 패널티 적용 (MemeScalper, VolumeSurge 통일)
         score += when (macdSignal) {
             "BULLISH" -> 15           // 상승 신호
             "NEUTRAL" -> 8            // 중립
-            "BEARISH" -> -5           // BEARISH = 약한 패널티
+            "BEARISH" -> -20          // BEARISH = 강력한 패널티 (-5점 → -20점)
             else -> 0
         }
 

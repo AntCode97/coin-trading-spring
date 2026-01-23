@@ -30,7 +30,7 @@ class VolumeSurgeProperties {
     private lateinit var keyValueService: KeyValueService
 
     /** 전략 활성화 여부 */
-    var enabled: Boolean = false
+    var enabled: Boolean = true
 
     /** 경보 폴링 간격 (밀리초) */
     var pollingIntervalMs: Long = 30000

@@ -336,11 +336,11 @@ class MemeScalperDetector(
         }
 
         // 5. MACD 신호 (10점) - 추세 확인
-        // MACD BEARISH 시 패널티 적용 (VolumeSurge Analyzer와 동일)
+        // MACD BEARISH 시 강력한 패널티 적용 (VolumeSurge Analyzer와 동일)
         score += when (macdSignal) {
             "BULLISH" -> 10   // 골든 크로스 또는 상승 추세
             "NEUTRAL" -> 3    // 중립
-            "BEARISH" -> -10  // 데드 크로스 - 패널티 (0점 → -10점)
+            "BEARISH" -> -20  // 데드 크로스 - 강력한 패널티 (-10점 → -20점)
             else -> 0
         }
 
