@@ -52,7 +52,8 @@ class MeanReversionStrategy(
                 confidence = 0.0,
                 price = currentPrice,
                 reason = "데이터 부족 (${candles.size}/${config.bollingerPeriod + RSI_PERIOD} 캔들)",
-                strategy = name
+                strategy = name,
+                regime = regime.regime.name
             )
         }
 
@@ -100,7 +101,8 @@ class MeanReversionStrategy(
                         confidence = confluenceResult.score.toDouble(),
                         price = currentPrice,
                         reason = "하단 이탈이지만 컨플루언스 부족 (${confluenceResult.score}/100): ${confluenceResult.details}",
-                        strategy = name
+                        strategy = name,
+                        regime = regime.regime.name
                     )
                 } else {
                     TradingSignal(
@@ -109,7 +111,8 @@ class MeanReversionStrategy(
                         confidence = confluenceResult.score.toDouble(),
                         price = currentPrice,
                         reason = buildReasonWithConfluence(zScore, sma, lowerBand, upperBand, rsi, volumeRatio, confluenceResult),
-                        strategy = name
+                        strategy = name,
+                        regime = regime.regime.name
                     )
                 }
             }
@@ -123,7 +126,8 @@ class MeanReversionStrategy(
                         confidence = confluenceResult.score.toDouble(),
                         price = currentPrice,
                         reason = "상단 이탈이지만 컨플루언스 부족 (${confluenceResult.score}/100): ${confluenceResult.details}",
-                        strategy = name
+                        strategy = name,
+                        regime = regime.regime.name
                     )
                 } else {
                     TradingSignal(
@@ -132,7 +136,8 @@ class MeanReversionStrategy(
                         confidence = confluenceResult.score.toDouble(),
                         price = currentPrice,
                         reason = buildReasonWithConfluence(zScore, sma, lowerBand, upperBand, rsi, volumeRatio, confluenceResult),
-                        strategy = name
+                        strategy = name,
+                        regime = regime.regime.name
                     )
                 }
             }
@@ -145,7 +150,8 @@ class MeanReversionStrategy(
                     confidence = 100.0,
                     price = currentPrice,
                     reason = buildReason(zScore, sma, lowerBand, upperBand, "평균 근처 (RSI: ${String.format("%.1f", rsi)})"),
-                    strategy = name
+                    strategy = name,
+                    regime = regime.regime.name
                 )
             }
         }

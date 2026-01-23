@@ -93,7 +93,8 @@ class DcaStrategy(
                     confidence = 100.0,
                     price = currentPrice,
                     reason = "DCA 익절: ${String.format("%.2f", currentPnlPercent)}% 수익 (목표: +${position.takeProfitPercent}%)",
-                    strategy = name
+                    strategy = name,
+                    regime = regime.regime.name
                 )
             }
 
@@ -106,7 +107,8 @@ class DcaStrategy(
                     confidence = 100.0,
                     price = currentPrice,
                     reason = "DCA 손절: ${String.format("%.2f", currentPnlPercent)}% 손실 (한도: ${position.stopLossPercent}%)",
-                    strategy = name
+                    strategy = name,
+                    regime = regime.regime.name
                 )
             }
 
@@ -120,7 +122,8 @@ class DcaStrategy(
                     confidence = 80.0,
                     price = currentPrice,
                     reason = "DCA 30일 타임아웃 익절: ${String.format("%.2f", currentPnlPercent)}% 수익",
-                    strategy = name
+                    strategy = name,
+                    regime = regime.regime.name
                 )
             }
         }
@@ -144,7 +147,8 @@ class DcaStrategy(
                 confidence = confidence,
                 price = currentPrice,
                 reason = buildReason(regime, lastBuy),
-                strategy = name
+                strategy = name,
+                regime = regime.regime.name
             )
         } else {
             val remainingMs = interval - (now.toEpochMilli() - (lastBuy?.toEpochMilli() ?: 0))
@@ -156,7 +160,8 @@ class DcaStrategy(
                 confidence = 100.0,
                 price = currentPrice,
                 reason = "DCA 간격 대기 중 (${String.format("%.1f", remainingHours)}시간 후 매수)",
-                strategy = name
+                strategy = name,
+                regime = regime.regime.name
             )
         }
     }

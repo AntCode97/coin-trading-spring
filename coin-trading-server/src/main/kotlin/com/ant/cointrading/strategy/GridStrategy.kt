@@ -150,7 +150,8 @@ class GridStrategy(
                     confidence = 50.0,
                     price = currentPrice,
                     reason = "그리드 재설정 중 (가격 범위 이탈)",
-                    strategy = name
+                    strategy = name,
+                    regime = regime.regime.name
                 )
             }
         }
@@ -178,7 +179,8 @@ class GridStrategy(
                 confidence = confidence,
                 price = currentPrice,
                 reason = buildReason(triggeredLevel, state.basePrice, currentPrice),
-                strategy = name
+                strategy = name,
+                regime = regime.regime.name
             )
         } else {
             TradingSignal(
@@ -187,7 +189,8 @@ class GridStrategy(
                 confidence = 100.0,
                 price = currentPrice,
                 reason = "그리드 레벨 대기 중 (기준가: ${state.basePrice})",
-                strategy = name
+                strategy = name,
+                regime = regime.regime.name
             )
         }
     }
