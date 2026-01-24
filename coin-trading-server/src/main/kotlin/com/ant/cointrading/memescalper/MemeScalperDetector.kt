@@ -5,6 +5,8 @@ import com.ant.cointrading.config.MemeScalperProperties
 import org.slf4j.LoggerFactory
 import org.springframework.stereotype.Component
 import java.math.BigDecimal
+import java.time.Instant
+import java.time.temporal.ChronoUnit
 import kotlin.math.abs
 
 /**
@@ -38,6 +40,9 @@ class MemeScalperDetector(
 ) {
     private val log = LoggerFactory.getLogger(javaClass)
 
+    // 실패 마켓 캐시 (TTL 기반)
+    private val failedMarkets = mutableMapOf<String, Instant>()
+
     companion object {
         const val RSI_PERIOD = 9  // 빠른 RSI
         const val MIN_ENTRY_SCORE = 70  // 진입 최소 점수
@@ -48,21 +53,57 @@ class MemeScalperDetector(
         const val MACD_FAST = 5
         const val MACD_SLOW = 13
         const val MACD_SIGNAL = 6
+
+        // 실패 마켓 캐시 TTL (1시간)
+        private val FAILURE_TTL_MINUTES = 60L
+    }
+
+    /**
+     * 만료된 실패 마켓 정리
+     */
+    private fun cleanExpiredFailures() {
+        val cutoff = Instant.now().minus(FAILURE_TTL_MINUTES, ChronoUnit.MINUTES)
+        val beforeSize = failedMarkets.size
+        failedMarkets.entries.removeIf { it.value < cutoff }
+        val removed = beforeSize - failedMarkets.size
+        if (removed > 0) {
+            log.debug("실패 마켓 캐시 정리: ${removed}개 제거 (남은: ${failedMarkets.size}개)")
+        }
+    }
+
+    /**
+     * 마켓 실패 여부 체크 (TTL 고려)
+     */
+    private fun isMarketFailed(market: String): Boolean {
+        val failedAt = failedMarkets[market] ?: return false
+        val cutoff = Instant.now().minus(FAILURE_TTL_MINUTES, ChronoUnit.MINUTES)
+        return failedAt > cutoff
+    }
+
+    /**
+     * 마켓 실패 기록
+     */
+    private fun markFailure(market: String) {
+        failedMarkets[market] = Instant.now()
     }
 
     /**
      * 전체 마켓 스캔하여 펌프 신호 감지
      */
     fun scanForPumps(): List<PumpSignal> {
+        // 만료된 실패 마켓 정리
+        cleanExpiredFailures()
+
         val allMarkets = bithumbPublicApi.getMarketAll() ?: return emptyList()
 
-        // KRW 마켓만 필터링
+        // KRW 마켓만 필터링 (제외 마켓 + 실패 마켓 제외)
         val krwMarkets = allMarkets
             .filter { it.market.startsWith("KRW-") }
             .filter { it.market !in properties.excludeMarkets }
+            .filter { !isMarketFailed(it.market) }
             .map { it.market }
 
-        log.debug("스캔 대상 마켓: ${krwMarkets.size}개")
+        log.debug("스캔 대상 마켓: ${krwMarkets.size}개 (실패 캐시: ${failedMarkets.size}개)")
 
         val signals = mutableListOf<PumpSignal>()
 
@@ -77,6 +118,7 @@ class MemeScalperDetector(
                 }
             } catch (e: Exception) {
                 log.debug("[$market] 분석 실패: ${e.message}")
+                markFailure(market)
             }
         }
 
@@ -91,6 +133,7 @@ class MemeScalperDetector(
         // 1분봉 데이터 조회 (MACD 계산 위해 더 많이)
         val candles = bithumbPublicApi.getOhlcv(market, "minute1", 20)
         if (candles == null || candles.size < 15) {
+            markFailure(market)
             return null
         }
 
