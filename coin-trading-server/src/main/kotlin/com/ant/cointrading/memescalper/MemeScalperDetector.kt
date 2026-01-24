@@ -38,9 +38,6 @@ class MemeScalperDetector(
 ) {
     private val log = LoggerFactory.getLogger(javaClass)
 
-    // 비상장 코인 캐시 (API 호출 실패 마켓 저장)
-    private val failedMarkets = mutableSetOf<String>()
-
     companion object {
         const val RSI_PERIOD = 9  // 빠른 RSI
         const val MIN_ENTRY_SCORE = 70  // 진입 최소 점수
@@ -59,14 +56,13 @@ class MemeScalperDetector(
     fun scanForPumps(): List<PumpSignal> {
         val allMarkets = bithumbPublicApi.getMarketAll() ?: return emptyList()
 
-        // KRW 마켓만 필터링 (제외 마켓 + 실패 마켓 제외)
+        // KRW 마켓만 필터링
         val krwMarkets = allMarkets
             .filter { it.market.startsWith("KRW-") }
             .filter { it.market !in properties.excludeMarkets }
-            .filter { it.market !in failedMarkets }
             .map { it.market }
 
-        log.debug("스캔 대상 마켓: ${krwMarkets.size}개 (제외됨: ${failedMarkets.size}개)")
+        log.debug("스캔 대상 마켓: ${krwMarkets.size}개")
 
         val signals = mutableListOf<PumpSignal>()
 
@@ -81,8 +77,6 @@ class MemeScalperDetector(
                 }
             } catch (e: Exception) {
                 log.debug("[$market] 분석 실패: ${e.message}")
-                // 첫 번째 실패 시 캐시에 추가 (비상장 코인 등)
-                failedMarkets.add(market)
             }
         }
 
@@ -97,8 +91,6 @@ class MemeScalperDetector(
         // 1분봉 데이터 조회 (MACD 계산 위해 더 많이)
         val candles = bithumbPublicApi.getOhlcv(market, "minute1", 20)
         if (candles == null || candles.size < 15) {
-            // 비상장 코인 등 데이터가 없는 경우 실패 마켓에 추가
-            failedMarkets.add(market)
             return null
         }
 
