@@ -136,6 +136,14 @@ class VolumeSurgeEngine(
 
         log.info("[$market] 경보 처리 시작")
 
+        // 마켓 유효성 검증 (상장 코인 여부 확인)
+        val ticker = bithumbPublicApi.getCurrentPrice(market)?.firstOrNull()
+        if (ticker == null) {
+            log.warn("[$market] 상장 폐지 또는 존재하지 않는 마켓")
+            markAlertProcessed(alert, "SKIPPED", "상장 폐지 코�")
+            return
+        }
+
         // 서킷 브레이커 체크
         if (!canTrade()) {
             log.warn("[$market] 서킷 브레이커 발동, 거래 중지")
