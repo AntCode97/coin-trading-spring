@@ -6,6 +6,7 @@ import com.ant.cointrading.repository.TradeRepository
 import org.slf4j.LoggerFactory
 import org.springframework.stereotype.Component
 import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.locks.ReentrantLock
 
 /**
  * 글로벌 포지션 관리자
@@ -16,6 +17,8 @@ import java.util.concurrent.ConcurrentHashMap
  * - MemeScalperEngine → MemeScalperTradeEntity
  *
  * 해결: 모든 엔진의 포지션 상태를 중앙 집중 관리
+ *
+ * 동시성: ReentrantLock으로 hasOpenPosition 원자성 보장
  */
 @Component
 class GlobalPositionManager(
@@ -25,6 +28,9 @@ class GlobalPositionManager(
 ) {
     private val log = LoggerFactory.getLogger(javaClass)
 
+    // 동시성 제어를 위한 락
+    private val lock = ReentrantLock()
+
     // 캐시 (마켓별 포지션 존재 여부)
     private val positionCache = ConcurrentHashMap<String, Set<String>>()
     private var lastCacheUpdate = 0L
@@ -33,34 +39,41 @@ class GlobalPositionManager(
     /**
      * 마켓에 열린 포지션이 있는지 확인 (모든 엔진 통합)
      *
+     * ReentrantLock으로 동시성 제어: 여러 엔진이 동시에 호출해도 안전
+     *
      * @param market 마켓 코드 (예: KRW-BTC, BTC_KRW)
      * @return 해당 마켓에 열린 포지션이 있으면 true
      */
     fun hasOpenPosition(market: String): Boolean {
-        val normalizedMarket = normalizeMarket(market)
+        lock.lock()
+        try {
+            val normalizedMarket = normalizeMarket(market)
 
-        // 캐시 확인
-        if (System.currentTimeMillis() - lastCacheUpdate < CACHE_TTL_MS) {
-            return positionCache[normalizedMarket]?.isNotEmpty() == true
+            // 캐시 확인
+            if (System.currentTimeMillis() - lastCacheUpdate < CACHE_TTL_MS) {
+                return positionCache[normalizedMarket]?.isNotEmpty() == true
+            }
+
+            // TradingEngine: 마지막 BUY가 있는데 매칭되는 SELL이 없으면 포지션으로 간주
+            val hasInTrades = tradeRepository.findLastBuyByMarket(normalizedMarket) != null
+
+            val hasInVolumeSurge = volumeSurgeRepository.findByMarketAndStatus(normalizedMarket, "OPEN").isNotEmpty()
+
+            val hasInMemeScalper = memeScalperRepository.findByMarketAndStatus(normalizedMarket, "OPEN").isNotEmpty()
+
+            val hasPosition = hasInTrades || hasInVolumeSurge || hasInMemeScalper
+
+            // 캐시 업데이트
+            updateCache(normalizedMarket, hasInTrades, hasInVolumeSurge, hasInMemeScalper)
+
+            if (hasPosition) {
+                log.debug("[$market] 열린 포지션 감지: Trades=$hasInTrades, VolumeSurge=$hasInVolumeSurge, MemeScalper=$hasInMemeScalper")
+            }
+
+            return hasPosition
+        } finally {
+            lock.unlock()
         }
-
-        // TradingEngine: 마지막 BUY가 있는데 매칭되는 SELL이 없으면 포지션으로 간주
-        val hasInTrades = tradeRepository.findLastBuyByMarket(normalizedMarket) != null
-
-        val hasInVolumeSurge = volumeSurgeRepository.findByMarketAndStatus(normalizedMarket, "OPEN").isNotEmpty()
-
-        val hasInMemeScalper = memeScalperRepository.findByMarketAndStatus(normalizedMarket, "OPEN").isNotEmpty()
-
-        val hasPosition = hasInTrades || hasInVolumeSurge || hasInMemeScalper
-
-        // 캐시 업데이트
-        updateCache(normalizedMarket, hasInTrades, hasInVolumeSurge, hasInMemeScalper)
-
-        if (hasPosition) {
-            log.debug("[$market] 열린 포지션 감지: Trades=$hasInTrades, VolumeSurge=$hasInVolumeSurge, MemeScalper=$hasInMemeScalper")
-        }
-
-        return hasPosition
     }
 
     /**
@@ -96,15 +109,22 @@ class GlobalPositionManager(
 
     /**
      * 포지션 캐시 무효화 (포지션 진입/청산 시 호출)
+     *
+     * ReentrantLock으로 캐시 무효화 작업 원자성 보장
      */
     fun invalidateCache(market: String? = null) {
-        if (market != null) {
-            positionCache.remove(normalizeMarket(market))
-        } else {
-            positionCache.clear()
+        lock.lock()
+        try {
+            if (market != null) {
+                positionCache.remove(normalizeMarket(market))
+            } else {
+                positionCache.clear()
+            }
+            lastCacheUpdate = 0L
+            log.debug("포지션 캐시 무효화: ${market ?: "ALL"}")
+        } finally {
+            lock.unlock()
         }
-        lastCacheUpdate = 0L
-        log.debug("포지션 캐시 무효화: ${market ?: "ALL"}")
     }
 
     /**
