@@ -1,9 +1,14 @@
 package com.ant.cointrading.api.bithumb
 
+import com.fasterxml.jackson.core.type.TypeReference
+import com.fasterxml.jackson.databind.JsonNode
+import com.fasterxml.jackson.databind.ObjectMapper
 import org.slf4j.LoggerFactory
 import org.springframework.core.ParameterizedTypeReference
 import org.springframework.stereotype.Component
 import org.springframework.web.reactive.function.client.WebClient
+import java.io.ByteArrayInputStream
+import java.nio.charset.StandardCharsets
 
 /**
  * Bithumb Public API 클라이언트
@@ -11,7 +16,8 @@ import org.springframework.web.reactive.function.client.WebClient
  */
 @Component
 class BithumbPublicApi(
-    private val bithumbWebClient: WebClient
+    private val bithumbWebClient: WebClient,
+    private val objectMapper: ObjectMapper
 ) {
     private val log = LoggerFactory.getLogger(javaClass)
 
@@ -62,16 +68,49 @@ class BithumbPublicApi(
 
     /**
      * 현재가 정보 조회
+     *
+     * Bithumb API 특성: 비상장 코인 요청 시 HTTP 200 + {"status":"5500",...} 반환
+     * ObjectMapper로 직접 파싱하여 status 필드 체크
      */
     fun getCurrentPrice(markets: String): List<TickerInfo>? {
         return try {
-            bithumbWebClient.get()
+            val responseBody = bithumbWebClient.get()
                 .uri { it.path("/v1/ticker").queryParam("markets", markets).build() }
                 .retrieve()
-                .bodyToMono(object : ParameterizedTypeReference<List<TickerInfo>>() {})
+                .bodyToMono(String::class.java)
                 .block()
+
+            if (responseBody == null) {
+                log.warn("Empty response for market $markets")
+                return null
+            }
+
+            // JSON 파싱 및 status 체크
+            val jsonNode: JsonNode = objectMapper.readTree(responseBody)
+
+            // Bithumb API 응답 형식: {"status":"0000","data":[...]} 또는 {"status":"5500","message":"..."}
+            val status = jsonNode.get("status")?.asText()
+            if (status != null && status != "0000") {
+                val message = jsonNode.get("message")?.asText() ?: "Unknown error"
+                log.warn("Bithumb API error [$status] for market $markets: $message")
+                return null
+            }
+
+            // 정상 응답: data 필드의 리스트 반환
+            val dataNode = jsonNode.get("data")
+            if (dataNode == null || !dataNode.isArray) {
+                log.warn("Invalid response format for market $markets")
+                return null
+            }
+
+            // List<TickerInfo>로 변환
+            objectMapper.readValue(
+                ByteArrayInputStream(dataNode.toString().toByteArray(StandardCharsets.UTF_8)),
+                object : TypeReference<List<TickerInfo>>() {}
+            )
+
         } catch (e: Exception) {
-            log.error("Failed to get current price: {}", e.message)
+            log.error("Failed to get current price for $markets: ${e.message}")
             null
         }
     }
