@@ -76,14 +76,20 @@ class BithumbPublicApi(
             val status = jsonNode.get("status")?.asText()
             if (status != null && status != "0000") {
                 val message = jsonNode.get("message")?.asText() ?: "Unknown error"
-                log.warn("Bithumb API error [$status] for OHLCV $market: $message")
+                // 비상장 코인(5500)은 정상적인 상황이므로 DEBUG 레벨로 처리
+                if (status == "5500") {
+                    log.debug("비상장 코인 OHLCV $market: $message")
+                } else {
+                    log.warn("Bithumb API error [$status] for OHLCV $market: $message")
+                }
                 return null
             }
 
             // 정상 응답: data 필드의 리스트 반환
             val dataNode = jsonNode.get("data")
             if (dataNode == null || !dataNode.isArray) {
-                log.warn("Invalid response format for OHLCV $market")
+                // 비상장 코인 등 정상적인 응답이 아닌 경우 (status 5500 등은 위에서 이미 처리됨)
+                log.debug("Invalid response format for OHLCV $market")
                 return null
             }
 

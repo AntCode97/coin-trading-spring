@@ -162,7 +162,8 @@ class MemeScalperEngine(
         try {
             val signals = detector.scanForPumps()
             if (signals.isEmpty()) {
-                log.debug("펌프 신호 없음")
+                // TRACE 레벨로 변경 - 너무 잦은 로그 출력 방지
+                log.trace("펌프 신호 없음")
                 return
             }
 
