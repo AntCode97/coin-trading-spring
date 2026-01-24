@@ -21,7 +21,7 @@ import org.springframework.stereotype.Component
 class FundingArbitrageProperties {
 
     /** 전략 활성화 여부 */
-    var enabled: Boolean = false
+    var enabled: Boolean = true
 
     /** 자동 거래 활성화 (false = 모니터링만) */
     var autoTradingEnabled: Boolean = false
