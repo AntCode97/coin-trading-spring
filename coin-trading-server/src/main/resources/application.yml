@@ -173,7 +173,8 @@ memescalper:
   # 타이트한 손절/익절 (2:1 손익비)
   stop-loss-percent: ${MEME_SCALPER_STOP_LOSS:-1.5}
   take-profit-percent: ${MEME_SCALPER_TAKE_PROFIT:3.0}
-  position-timeout-min: ${MEME_SCALPER_TIMEOUT_MIN:10}
+  # 타임아웃 연장: 10분 → 15분 (트레일링 스탑으로 더 큰 수익 추격)
+  position-timeout-min: ${MEME_SCALPER_TIMEOUT_MIN:15}
   # 트레일링 스탑 (트리거 낮춤: 1.0% → 0.5%로 익절 보호 강화)
   trailing-stop-trigger: ${MEME_SCALPER_TRAILING_TRIGGER:0.5}
   trailing-stop-offset: ${MEME_SCALPER_TRAILING_OFFSET:0.5}
