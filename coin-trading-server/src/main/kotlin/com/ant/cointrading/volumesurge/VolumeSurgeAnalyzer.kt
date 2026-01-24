@@ -98,9 +98,12 @@ class VolumeSurgeAnalyzer(
         val mtfAlignmentBonus = mtfAnalysis?.alignmentBonus ?: 0
         val mtfRecommendation = mtfAnalysis?.recommendation ?: "MTF 분석 불가"
 
-        // 역방향 정렬 시 진입 차단
-        if (mtfAlignmentBonus < 0) {
-            log.warn("[$market] MTF 역방향 정렬: $mtfRecommendation")
+        // Volume Surge는 모멘텀 전략이므로 MTF 완화:
+        // - 3개 이상 하락 정렬 (bonus <= -15)만 차단
+        // - -5 (2개 하락)은 허용 (거래량이 핵심)
+        // - 0 (혼조)도 허용
+        if (mtfAlignmentBonus <= -15) {
+            log.warn("[$market] MTF 강한 하락 정렬 차단: $mtfRecommendation")
             return VolumeSurgeAnalysis(
                 market = market,
                 rsi = rsi,
@@ -113,8 +116,13 @@ class VolumeSurgeAnalyzer(
                 confluenceScore = 0,
                 mtfAlignmentBonus = mtfAlignmentBonus,
                 mtfRecommendation = mtfRecommendation,
-                rejectReason = "MTF 역방향 정렬: $mtfRecommendation"
+                rejectReason = "MTF 강한 하락 정렬: $mtfRecommendation"
             )
+        }
+
+        // MTF 약한 하락/혼조는 거래량 보고 판단 (로그만 출력)
+        if (mtfAlignmentBonus < 0) {
+            log.info("[$market] MTF 약한 하락/혼조지만 거래량 중심 진입 검토: $mtfRecommendation")
         }
 
         // 컨플루언스 점수 계산 (MTF 보너스 포함)
