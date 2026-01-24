@@ -13,11 +13,15 @@ COPY build.gradle.kts .
 COPY settings.gradle.kts .
 COPY coin-trading-server/build.gradle.kts coin-trading-server/
 
+# Install git (required for build-info)
+RUN apk add --no-cache git
+
+# Copy source and .git (for build-info git metadata)
+COPY coin-trading-server/src coin-trading-server/src
+COPY .git .git
+
 # Download dependencies
 RUN chmod +x gradlew && ./gradlew dependencies --no-daemon || true
-
-# Copy source
-COPY coin-trading-server/src coin-trading-server/src
 
 # Build
 RUN ./gradlew :coin-trading-server:bootJar --no-daemon -x test
