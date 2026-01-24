@@ -216,22 +216,55 @@ class BithumbPublicApi(
     /**
      * 최근 체결 내역 조회
      *
+     * Bithumb API 특성: 비상장 코인 요청 시 HTTP 200 + {"status":"5500",...} 반환
+     * ObjectMapper로 직접 파싱하여 status 필드 체크
+     *
      * @param market 마켓 코드 (예: KRW-BTC)
      * @param count 조회 개수 (1-500)
      */
     fun getTradesTicks(market: String, count: Int): List<TradeResponse>? {
         return try {
-            bithumbWebClient.get()
+            val responseBody = bithumbWebClient.get()
                 .uri { it.path("/v1/trades/ticks")
                     .queryParam("market", market)
                     .queryParam("count", count.coerceAtMost(500))
                     .build()
                 }
                 .retrieve()
-                .bodyToMono(object : ParameterizedTypeReference<List<TradeResponse>>() {})
+                .bodyToMono(String::class.java)
                 .block()
+
+            if (responseBody == null) {
+                log.warn("Empty response for trades ticks $market")
+                return null
+            }
+
+            // JSON 파싱 및 status 체크
+            val jsonNode: JsonNode = objectMapper.readTree(responseBody)
+
+            // Bithumb API 응답 형식: {"status":"0000","data":[...]} 또는 {"status":"5500","message":"..."}
+            val status = jsonNode.get("status")?.asText()
+            if (status != null && status != "0000") {
+                val message = jsonNode.get("message")?.asText() ?: "Unknown error"
+                log.warn("Bithumb API error [$status] for trades ticks $market: $message")
+                return null
+            }
+
+            // 정상 응답: data 필드의 리스트 반환
+            val dataNode = jsonNode.get("data")
+            if (dataNode == null || !dataNode.isArray) {
+                log.warn("Invalid response format for trades ticks $market")
+                return null
+            }
+
+            // List<TradeResponse>로 변환
+            objectMapper.readValue(
+                ByteArrayInputStream(dataNode.toString().toByteArray(StandardCharsets.UTF_8)),
+                object : TypeReference<List<TradeResponse>>() {}
+            )
+
         } catch (e: Exception) {
-            log.error("Failed to get trades ticks: {}", e.message)
+            log.error("Failed to get trades ticks for $market: ${e.message}")
             null
         }
     }
