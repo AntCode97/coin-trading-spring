@@ -24,6 +24,9 @@ class BithumbPublicApi(
     /**
      * OHLCV(캔들) 데이터 조회
      *
+     * Bithumb API 특성: 비상장 코인 요청 시 HTTP 200 + {"status":"5500",...} 반환
+     * ObjectMapper로 직접 파싱하여 status 필드 체크
+     *
      * @param market 마켓 코드 (예: KRW-BTC)
      * @param interval 캔들 단위 (minute1, minute3, minute5, minute10, minute15, minute30, minute60, minute240, day, week, month)
      * @param count 조회 개수 (최대 200)
@@ -47,7 +50,7 @@ class BithumbPublicApi(
         }
 
         return try {
-            bithumbWebClient.get()
+            val responseBody = bithumbWebClient.get()
                 .uri { builder ->
                     val b = builder.path(endpoint)
                         .queryParam("market", market)
@@ -58,10 +61,40 @@ class BithumbPublicApi(
                     b.build()
                 }
                 .retrieve()
-                .bodyToMono(object : ParameterizedTypeReference<List<CandleResponse>>() {})
+                .bodyToMono(String::class.java)
                 .block()
+
+            if (responseBody == null) {
+                log.warn("Empty response for OHLCV $market")
+                return null
+            }
+
+            // JSON 파싱 및 status 체크
+            val jsonNode: JsonNode = objectMapper.readTree(responseBody)
+
+            // Bithumb API 응답 형식: {"status":"0000","data":[...]} 또는 {"status":"5500","message":"..."}
+            val status = jsonNode.get("status")?.asText()
+            if (status != null && status != "0000") {
+                val message = jsonNode.get("message")?.asText() ?: "Unknown error"
+                log.warn("Bithumb API error [$status] for OHLCV $market: $message")
+                return null
+            }
+
+            // 정상 응답: data 필드의 리스트 반환
+            val dataNode = jsonNode.get("data")
+            if (dataNode == null || !dataNode.isArray) {
+                log.warn("Invalid response format for OHLCV $market")
+                return null
+            }
+
+            // List<CandleResponse>로 변환
+            objectMapper.readValue(
+                ByteArrayInputStream(dataNode.toString().toByteArray(StandardCharsets.UTF_8)),
+                object : TypeReference<List<CandleResponse>>() {}
+            )
+
         } catch (e: Exception) {
-            log.error("Failed to get OHLCV: {}", e.message)
+            log.error("Failed to get OHLCV for $market: ${e.message}")
             null
         }
     }
