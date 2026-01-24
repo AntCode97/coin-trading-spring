@@ -70,6 +70,11 @@ tasks.withType<Test> {
 }
 
 // bootRun 시 루트 디렉토리에서 실행 (.env 파일 읽기 위함)
+// Spring Boot build-info 생성 (git 메타데이터 포함)
+springBoot {
+    buildInfo()
+}
+
 tasks.named<org.springframework.boot.gradle.tasks.run.BootRun>("bootRun") {
     workingDir = rootProject.projectDir
 
