@@ -27,7 +27,8 @@ class StrategySelector(
     private val gridStrategy: GridStrategy,
     private val meanReversionStrategy: MeanReversionStrategy,
     private val orderBookImbalanceStrategy: OrderBookImbalanceStrategy,
-    private val breakoutStrategy: BreakoutStrategy
+    private val breakoutStrategy: BreakoutStrategy,
+    private val enhancedBreakoutStrategy: EnhancedBreakoutStrategy
 ) {
 
     private val log = LoggerFactory.getLogger(StrategySelector::class.java)
@@ -60,6 +61,7 @@ class StrategySelector(
             StrategyType.MEAN_REVERSION -> meanReversionStrategy
             StrategyType.ORDER_BOOK_IMBALANCE -> orderBookImbalanceStrategy
             StrategyType.BREAKOUT -> breakoutStrategy
+            StrategyType.BREAKOUT_ENHANCED -> enhancedBreakoutStrategy
         }
     }
 
@@ -199,7 +201,7 @@ class StrategySelector(
      * 모든 전략 목록
      */
     fun getAllStrategies(): List<TradingStrategy> {
-        return listOf(dcaStrategy, gridStrategy, meanReversionStrategy, orderBookImbalanceStrategy, breakoutStrategy)
+        return listOf(dcaStrategy, gridStrategy, meanReversionStrategy, orderBookImbalanceStrategy, breakoutStrategy, enhancedBreakoutStrategy)
     }
 
     /**

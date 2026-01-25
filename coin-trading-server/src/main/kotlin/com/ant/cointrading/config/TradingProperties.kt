@@ -36,5 +36,6 @@ enum class StrategyType {
     GRID,                   // Grid Trading - 횡보장에서 효과적
     MEAN_REVERSION,         // Mean Reversion - Sharpe Ratio 2.3
     ORDER_BOOK_IMBALANCE,   // Order Book Imbalance - 초단기 호가창 불균형 전략
-    BREAKOUT                // Breakout - 볼린저 밴드 돌파 전략
+    BREAKOUT,               // Breakout - 볼린저 밴드 돌파 전략
+    BREAKOUT_ENHANCED       // Enhanced Breakout - 4지표 컨플루언스 + ATR 동적 손절
 }
