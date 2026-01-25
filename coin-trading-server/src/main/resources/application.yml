@@ -164,6 +164,19 @@ volumesurge:
   # 경보 신선도 완화: 5분 → 10분
   alert-freshness-min: ${VOLUME_SURGE_ALERT_FRESHNESS:10}
 
+# Breakout 전략 설정 (볼린저 밴드 돌파)
+breakout:
+  enabled: ${BREAKOUT_ENABLED:false}  # 백테스팅 후 활성화
+  position-size-krw: ${BREAKOUT_POSITION_SIZE:10000}
+  bollinger-period: ${BREAKOUT_BB_PERIOD:50}
+  bollinger-std-dev: ${BREAKOUT_BB_STD_DEV:2.0}
+  min-breakout-volume-ratio: ${BREAKOUT_MIN_VOLUME_RATIO:1.5}
+  stop-loss-percent: ${BREAKOUT_STOP_LOSS:-2.0}
+  take-profit-percent: ${BREAKOUT_TAKE_PROFIT:8.0}
+  trailing-stop-trigger: ${BREAKOUT_TRAILING_TRIGGER:3.0}
+  trailing-stop-offset: ${BREAKOUT_TRAILING_OFFSET:1.0}
+  cooldown-minutes: ${BREAKOUT_COOLDOWN:60}
+
 # Meme Scalper 전략 설정 (세력 코인 초단타 - 펌프앤덤프 스캘핑)
 memescalper:
   enabled: ${MEME_SCALPER_ENABLED:true}

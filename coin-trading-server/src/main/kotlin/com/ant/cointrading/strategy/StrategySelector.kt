@@ -26,7 +26,8 @@ class StrategySelector(
     private val dcaStrategy: DcaStrategy,
     private val gridStrategy: GridStrategy,
     private val meanReversionStrategy: MeanReversionStrategy,
-    private val orderBookImbalanceStrategy: OrderBookImbalanceStrategy
+    private val orderBookImbalanceStrategy: OrderBookImbalanceStrategy,
+    private val breakoutStrategy: BreakoutStrategy
 ) {
 
     private val log = LoggerFactory.getLogger(StrategySelector::class.java)
@@ -58,6 +59,7 @@ class StrategySelector(
             StrategyType.GRID -> gridStrategy
             StrategyType.MEAN_REVERSION -> meanReversionStrategy
             StrategyType.ORDER_BOOK_IMBALANCE -> orderBookImbalanceStrategy
+            StrategyType.BREAKOUT -> breakoutStrategy
         }
     }
 
@@ -109,7 +111,7 @@ class StrategySelector(
         }
 
         return when (regime.regime) {
-            MarketRegime.BULL_TREND -> dcaStrategy
+            MarketRegime.BULL_TREND -> breakoutStrategy  // 상승 추세에서는 Breakout 전략
             MarketRegime.BEAR_TREND -> dcaStrategy  // 하락장에서도 DCA (금액 조절은 리스크 관리에서)
             MarketRegime.SIDEWAYS -> {
                 // 횡보장에서는 변동성에 따라 선택
@@ -119,7 +121,7 @@ class StrategySelector(
                     meanReversionStrategy
                 }
             }
-            MarketRegime.HIGH_VOLATILITY -> dcaStrategy  // 고변동성에서는 보수적으로
+            MarketRegime.HIGH_VOLATILITY -> breakoutStrategy  // 고변동성에서도 Breakout
         }
     }
 
@@ -197,7 +199,7 @@ class StrategySelector(
      * 모든 전략 목록
      */
     fun getAllStrategies(): List<TradingStrategy> {
-        return listOf(dcaStrategy, gridStrategy, meanReversionStrategy, orderBookImbalanceStrategy)
+        return listOf(dcaStrategy, gridStrategy, meanReversionStrategy, orderBookImbalanceStrategy, breakoutStrategy)
     }
 
     /**

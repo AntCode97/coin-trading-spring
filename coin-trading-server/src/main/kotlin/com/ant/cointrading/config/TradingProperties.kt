@@ -35,5 +35,6 @@ enum class StrategyType {
     DCA,                    // Dollar Cost Averaging - 검증된 18.7% 연간 수익
     GRID,                   // Grid Trading - 횡보장에서 효과적
     MEAN_REVERSION,         // Mean Reversion - Sharpe Ratio 2.3
-    ORDER_BOOK_IMBALANCE    // Order Book Imbalance - 초단기 호가창 불균형 전략
+    ORDER_BOOK_IMBALANCE,   // Order Book Imbalance - 초단기 호가창 불균형 전략
+    BREAKOUT                // Breakout - 볼린저 밴드 돌파 전략
 }
