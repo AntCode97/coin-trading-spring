@@ -9,6 +9,7 @@ import com.ant.cointrading.repository.OhlcvHistoryRepository
 import com.ant.cointrading.strategy.BreakoutStrategy
 import com.fasterxml.jackson.databind.ObjectMapper
 import org.slf4j.LoggerFactory
+import org.springframework.scheduling.annotation.Scheduled
 import org.springframework.stereotype.Component
 import java.time.LocalDate
 
@@ -31,6 +32,41 @@ class WalkForwardOptimizer(
 
     companion object {
         const val MIN_DATA_POINTS = 100  // 최소 데이터 포인트 수
+    }
+
+    /**
+     * 매일 자동 최적화 (새벽 3시 - OHLCV 수집 이후 실행)
+     *
+     * 최근 3개월 데이터로 Breakout 파라미터 최적화
+     */
+    @Scheduled(cron = "0 0 3 * * ?")  // 매일 새벽 3시
+    fun autoOptimizeDaily() {
+        log.info("=== 자동 백테스트 최적화 시작 ===")
+
+        val markets = listOf("KRW-BTC", "KRW-ETH", "KRW-XRP", "KRW-SOL")
+        val endDate = LocalDate.now()
+        val startDate = endDate.minusMonths(3)
+
+        markets.forEach { market ->
+            try {
+                val result = optimizeBreakout(
+                    market = market,
+                    startDate = startDate,
+                    endDate = endDate,
+                    interval = "day"
+                )
+                log.info(
+                    "[$market] 최적화 완료: " +
+                            "Sharpe=${String.format("%.2f", result.result?.sharpeRatio)}, " +
+                            "Return=${String.format("%.2f", result.result?.totalReturn)}%, " +
+                            "파라미터=${result.parameters}"
+                )
+            } catch (e: Exception) {
+                log.warn("[$market] 최적화 실패: ${e.message}")
+            }
+        }
+
+        log.info("=== 자동 백테스트 최적화 완료 ===")
     }
 
     /**
