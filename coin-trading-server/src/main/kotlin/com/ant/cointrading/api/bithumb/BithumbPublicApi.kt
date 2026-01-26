@@ -88,8 +88,9 @@ class BithumbPublicApi(
             // 정상 응답: data 필드의 리스트 반환
             val dataNode = jsonNode.get("data")
             if (dataNode == null || !dataNode.isArray) {
-                // 비상장 코인 등 정상적인 응답이 아닌 경우 (status 5500 등은 위에서 이미 처리됨)
-                log.debug("Invalid response format for OHLCV $market")
+                // 일시적인 API 응답 오류 (네트워크/서버 부하) 가능성 높음
+                val responsePreview = responseBody.take(200)
+                log.debug("Invalid response format for OHLCV $market - Response: $responsePreview")
                 return null
             }
 
@@ -138,7 +139,9 @@ class BithumbPublicApi(
             // 정상 응답: data 필드의 리스트 반환
             val dataNode = jsonNode.get("data")
             if (dataNode == null || !dataNode.isArray) {
-                log.warn("Invalid response format for market $markets")
+                // 일시적인 API 응답 오류 (네트워크/서버 부하) 가능성 높음
+                val responsePreview = responseBody.take(200)
+                log.debug("Invalid response format for market $markets - Response: $responsePreview")
                 return null
             }
 
@@ -187,7 +190,8 @@ class BithumbPublicApi(
             // 정상 응답: data 필드의 리스트 반환
             val dataNode = jsonNode.get("data")
             if (dataNode == null || !dataNode.isArray) {
-                log.warn("Invalid response format for orderbook $markets")
+                val responsePreview = responseBody.take(200)
+                log.debug("Invalid response format for orderbook $markets - Response: $responsePreview")
                 return null
             }
 
@@ -259,7 +263,8 @@ class BithumbPublicApi(
             // 정상 응답: data 필드의 리스트 반환
             val dataNode = jsonNode.get("data")
             if (dataNode == null || !dataNode.isArray) {
-                log.warn("Invalid response format for trades ticks $market")
+                val responsePreview = responseBody.take(200)
+                log.debug("Invalid response format for trades ticks $market - Response: $responsePreview")
                 return null
             }
 
