@@ -125,10 +125,18 @@ class BithumbPublicApi(
                 return null
             }
 
-            // JSON 파싱 및 status 체크
+            // JSON 파싱
             val jsonNode: JsonNode = objectMapper.readTree(responseBody)
 
-            // Bithumb API 응답 형식: {"status":"0000","data":[...]} 또는 {"status":"5500","message":"..."}
+            // /v1/ticker?markets= API는 배열 형태로 직접 반환
+            if (jsonNode.isArray) {
+                return objectMapper.readValue(
+                    ByteArrayInputStream(responseBody.toByteArray(StandardCharsets.UTF_8)),
+                    object : TypeReference<List<TickerInfo>>() {}
+                )
+            }
+
+            // 구버전 API 형식: {"status":"0000","data":[...]}
             val status = jsonNode.get("status")?.asText()
             if (status != null && status != "0000") {
                 val message = jsonNode.get("message")?.asText() ?: "Unknown error"
@@ -136,21 +144,17 @@ class BithumbPublicApi(
                 return null
             }
 
-            // 정상 응답: data 필드의 리스트 반환
             val dataNode = jsonNode.get("data")
-            if (dataNode == null || !dataNode.isArray) {
-                // 일시적인 API 응답 오류 (네트워크/서버 부하) 가능성 높음
-                val responsePreview = responseBody.take(200)
-                log.debug("Invalid response format for market $markets - Response: $responsePreview")
-                return null
+            if (dataNode != null && dataNode.isArray) {
+                return objectMapper.readValue(
+                    ByteArrayInputStream(dataNode.toString().toByteArray(StandardCharsets.UTF_8)),
+                    object : TypeReference<List<TickerInfo>>() {}
+                )
             }
 
-            // List<TickerInfo>로 변환
-            objectMapper.readValue(
-                ByteArrayInputStream(dataNode.toString().toByteArray(StandardCharsets.UTF_8)),
-                object : TypeReference<List<TickerInfo>>() {}
-            )
-
+            val responsePreview = responseBody.take(200)
+            log.warn("Invalid response format for market $markets - Response: $responsePreview")
+            return null
         } catch (e: Exception) {
             log.error("Failed to get current price for $markets: ${e.message}")
             null
@@ -176,10 +180,18 @@ class BithumbPublicApi(
                 return null
             }
 
-            // JSON 파싱 및 status 체크
+            // JSON 파싱
             val jsonNode: JsonNode = objectMapper.readTree(responseBody)
 
-            // Bithumb API 응답 형식: {"status":"0000","data":[...]} 또는 {"status":"5500","message":"..."}
+            // /v1/orderbook?markets= API는 배열 형태로 직접 반환
+            if (jsonNode.isArray) {
+                return objectMapper.readValue(
+                    ByteArrayInputStream(responseBody.toByteArray(StandardCharsets.UTF_8)),
+                    object : TypeReference<List<OrderbookInfo>>() {}
+                )
+            }
+
+            // 구버전 API 형식: {"status":"0000","data":[...]}
             val status = jsonNode.get("status")?.asText()
             if (status != null && status != "0000") {
                 val message = jsonNode.get("message")?.asText() ?: "Unknown error"
@@ -187,20 +199,17 @@ class BithumbPublicApi(
                 return null
             }
 
-            // 정상 응답: data 필드의 리스트 반환
             val dataNode = jsonNode.get("data")
-            if (dataNode == null || !dataNode.isArray) {
-                val responsePreview = responseBody.take(200)
-                log.debug("Invalid response format for orderbook $markets - Response: $responsePreview")
-                return null
+            if (dataNode != null && dataNode.isArray) {
+                return objectMapper.readValue(
+                    ByteArrayInputStream(dataNode.toString().toByteArray(StandardCharsets.UTF_8)),
+                    object : TypeReference<List<OrderbookInfo>>() {}
+                )
             }
 
-            // List<OrderbookInfo>로 변환
-            objectMapper.readValue(
-                ByteArrayInputStream(dataNode.toString().toByteArray(StandardCharsets.UTF_8)),
-                object : TypeReference<List<OrderbookInfo>>() {}
-            )
-
+            val responsePreview = responseBody.take(200)
+            log.warn("Invalid response format for orderbook $markets - Response: $responsePreview")
+            return null
         } catch (e: Exception) {
             log.error("Failed to get orderbook for $markets: ${e.message}")
             null
@@ -249,10 +258,18 @@ class BithumbPublicApi(
                 return null
             }
 
-            // JSON 파싱 및 status 체크
+            // JSON 파싱
             val jsonNode: JsonNode = objectMapper.readTree(responseBody)
 
-            // Bithumb API 응답 형식: {"status":"0000","data":[...]} 또는 {"status":"5500","message":"..."}
+            // /v1/trades/ticks API는 배열 형태로 직접 반환
+            if (jsonNode.isArray) {
+                return objectMapper.readValue(
+                    ByteArrayInputStream(responseBody.toByteArray(StandardCharsets.UTF_8)),
+                    object : TypeReference<List<TradeResponse>>() {}
+                )
+            }
+
+            // 구버전 API 형식: {"status":"0000","data":[...]}
             val status = jsonNode.get("status")?.asText()
             if (status != null && status != "0000") {
                 val message = jsonNode.get("message")?.asText() ?: "Unknown error"
@@ -260,20 +277,17 @@ class BithumbPublicApi(
                 return null
             }
 
-            // 정상 응답: data 필드의 리스트 반환
             val dataNode = jsonNode.get("data")
-            if (dataNode == null || !dataNode.isArray) {
-                val responsePreview = responseBody.take(200)
-                log.debug("Invalid response format for trades ticks $market - Response: $responsePreview")
-                return null
+            if (dataNode != null && dataNode.isArray) {
+                return objectMapper.readValue(
+                    ByteArrayInputStream(dataNode.toString().toByteArray(StandardCharsets.UTF_8)),
+                    object : TypeReference<List<TradeResponse>>() {}
+                )
             }
 
-            // List<TradeResponse>로 변환
-            objectMapper.readValue(
-                ByteArrayInputStream(dataNode.toString().toByteArray(StandardCharsets.UTF_8)),
-                object : TypeReference<List<TradeResponse>>() {}
-            )
-
+            val responsePreview = responseBody.take(200)
+            log.warn("Invalid response format for trades ticks $market - Response: $responsePreview")
+            return null
         } catch (e: Exception) {
             log.error("Failed to get trades ticks for $market: ${e.message}")
             null
