@@ -131,7 +131,7 @@ class OrderExecutor(
     private fun executeSimulated(signal: TradingSignal, positionSize: BigDecimal): OrderResult {
         val orderId = "SIM-${System.currentTimeMillis()}"
         val quantity = calculateQuantity(signal.price, positionSize)
-        val estimatedFee = positionSize.multiply(BigDecimal("0.0004"))  // 빗썸 수수료 0.04%
+        val estimatedFee = positionSize.multiply(tradingProperties.feeRate)  // 설정된 수수료
 
         log.info("""
             [시뮬레이션] 주문 실행
@@ -141,6 +141,7 @@ class OrderExecutor(
             금액: $positionSize
             신뢰도: ${signal.confidence}%
             전략: ${signal.strategy}
+            수수료: ${tradingProperties.feeRate.multiply(BigDecimal(100))}%
         """.trimIndent())
 
         // 거래 기록 저장

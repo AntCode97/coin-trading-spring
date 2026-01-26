@@ -300,10 +300,14 @@ class CircuitBreaker(
             수동 재개: /api/circuit-breaker/reset/$market
         """.trimIndent())
 
-        // 다수 마켓에서 서킷 발동 시 글로벌 서킷 발동
+        // 다수 마켓에서 서킷 발동 시 글로벌 서킷 발동 (비율 기반)
         val openCircuits = circuitStates.count { it.value.isOpen }
-        if (openCircuits >= 2) {
-            tripGlobalCircuit("${openCircuits}개 마켓에서 서킷 브레이커 발동")
+        val totalMarkets = circuitStates.size
+        val tripRatio = if (totalMarkets > 0) openCircuits.toDouble() / totalMarkets else 0.0
+
+        // 50% 이상 마켓에서 서킷 발동 시 글로벌 서킷 발동
+        if (openCircuits >= 2 && tripRatio >= 0.5) {
+            tripGlobalCircuit("${openCircuits}개/${totalMarkets}개 마켓 (${String.format("%.0f", tripRatio * 100)}%)에서 서킷 발동")
         }
     }
 

@@ -13,6 +13,7 @@ data class TradingProperties(
     val orderAmountKrw: BigDecimal = BigDecimal("10000"),
     val maxDrawdownPercent: Double = 10.0,
     val riskPerTradePercent: Double = 1.0,
+    val feeRate: BigDecimal = BigDecimal("0.0004"),  // 빗썸 수수료 0.04% (VIP 등급에 따라 변경 가능)
     val strategy: StrategyConfig = StrategyConfig()
 )
 

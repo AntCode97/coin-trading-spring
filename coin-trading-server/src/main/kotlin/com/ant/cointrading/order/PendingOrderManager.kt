@@ -3,6 +3,7 @@ package com.ant.cointrading.order
 import com.ant.cointrading.api.bithumb.BithumbPrivateApi
 import com.ant.cointrading.api.bithumb.BithumbPublicApi
 import com.ant.cointrading.api.bithumb.OrderResponse
+import com.ant.cointrading.config.TradingProperties
 import com.ant.cointrading.model.SignalAction
 import com.ant.cointrading.model.TradingSignal
 import com.ant.cointrading.notification.SlackNotifier
@@ -46,7 +47,8 @@ class PendingOrderManager(
     private val bithumbPublicApi: BithumbPublicApi,
     private val marketConditionChecker: MarketConditionChecker,
     private val circuitBreaker: CircuitBreaker,
-    private val slackNotifier: SlackNotifier
+    private val slackNotifier: SlackNotifier,
+    private val tradingProperties: TradingProperties
 ) {
     private val log = LoggerFactory.getLogger(PendingOrderManager::class.java)
 
@@ -525,7 +527,7 @@ class PendingOrderManager(
         if (order.filledQuantity <= BigDecimal.ZERO) return
 
         val filledAmount = order.filledQuantity.multiply(order.avgFilledPrice ?: order.orderPrice)
-        val fee = filledAmount.multiply(BigDecimal("0.0004"))  // 빗썸 수수료 0.04%
+        val fee = filledAmount.multiply(tradingProperties.feeRate)  // 설정된 수수료
 
         val trade = TradeEntity(
             orderId = order.orderId,
@@ -545,7 +547,7 @@ class PendingOrderManager(
         )
 
         tradeRepository.save(trade)
-        log.info("[${order.market}] 부분 체결 기록 저장: ${order.filledQuantity}")
+        log.info("[${order.market}] 부분 체결 기록 저장: ${order.filledQuantity} (수수료: ${tradingProperties.feeRate.multiply(BigDecimal(100))}%)")
     }
 
     /**
