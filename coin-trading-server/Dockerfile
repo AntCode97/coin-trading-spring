@@ -39,8 +39,9 @@ USER appuser
 COPY --from=builder /app/coin-trading-server/build/libs/*.jar app.jar
 
 # Environment
-# 힙 메모리: 최대 1GB, ParallelGC 사용 (G1 GC는 힙 6GB+에 최적화)
-ENV JAVA_OPTS="-Xms512m -Xmx1024m -XX:+UseParallelGC"
+# 힙 512MB + SerialGC: 스케줄링 중심 시스템, GC 지연 무관, 처리량 최적화
+# (사용자 요청 없어 GC 일시정지 시간 중요하지 않음)
+ENV JAVA_OPTS="-Xms256m -Xmx512m -XX:+UseSerialGC"
 ENV SERVER_PORT=8080
 
 EXPOSE 8080
