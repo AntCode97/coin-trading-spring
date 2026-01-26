@@ -17,8 +17,9 @@ import java.util.concurrent.locks.ReentrantLock
  * - MemeScalperEngine → MemeScalperTradeEntity
  *
  * 해결: 모든 엔진의 포지션 상태를 중앙 집중 관리
+ *        진입 락 (tryAcquirePosition)으로 경합 조건 해결
  *
- * 동시성: ReentrantLock으로 hasOpenPosition 원자성 보장
+ * 동시성: ReentrantLock으로 원자성 보장
  */
 @Component
 class GlobalPositionManager(
@@ -31,10 +32,84 @@ class GlobalPositionManager(
     // 동시성 제어를 위한 락
     private val lock = ReentrantLock()
 
+    // 포지션 점유 추적 (엔진별 마켓 점유)
+    private val positionOwners = ConcurrentHashMap<String, String>()  // market -> engineName
+
     // 캐시 (마켓별 포지션 존재 여부)
     private val positionCache = ConcurrentHashMap<String, Set<String>>()
     private var lastCacheUpdate = 0L
     private val CACHE_TTL_MS = 5000L  // 5초 캐시
+
+    /**
+     * 포지션 진입 시도 (원자적)
+     *
+     * 여러 엔진이 동시에 진입 시도 시도해도 단 하나만 성공
+     * ReentrantLock의 tryLock()으로 락 획득 시도
+     *
+     * @param market 마켓 코드
+     * @param engineName 진입 시도 엔진 이름
+     * @return 진입 성공 시 true, 이미 포지션 있거나 락 획득 실패 시 false
+     */
+    fun tryAcquirePosition(market: String, engineName: String): Boolean {
+        val normalizedMarket = normalizeMarket(market)
+
+        // 락 획득 시도 (비블로킹, 즉시 false 반환)
+        if (!lock.tryLock()) {
+            log.debug("[$market] 포지션 진입 시도 실패: 락 획득 중 (엔진: $engineName)")
+            return false
+        }
+
+        try {
+            // 이미 다른 엔진이 점유 중인지 확인
+            val currentOwner = positionOwners[normalizedMarket]
+            if (currentOwner != null) {
+                log.debug("[$market] 포지션 진입 실패: 이미 $currentOwner 엔진이 점유 중")
+                return false
+            }
+
+            // DB에 포지션 존재 확인
+            val hasInTrades = tradeRepository.findLastBuyByMarket(normalizedMarket) != null
+            val hasInVolumeSurge = volumeSurgeRepository.findByMarketAndStatus(normalizedMarket, "OPEN").isNotEmpty()
+            val hasInMemeScalper = memeScalperRepository.findByMarketAndStatus(normalizedMarket, "OPEN").isNotEmpty()
+
+            if (hasInTrades || hasInVolumeSurge || hasInMemeScalper) {
+                log.debug("[$market] 포지션 진입 실패: DB에 이미 포지션 존재 (Trades=$hasInTrades, VolumeSurge=$hasInVolumeSurge, MemeScalper=$hasInMemeScalper)")
+                return false
+            }
+
+            // 포지션 점유 등록
+            positionOwners[normalizedMarket] = engineName
+            log.info("[$market] 포지션 진입 성공: 엔진=$engineName")
+
+            return true
+        } finally {
+            lock.unlock()
+        }
+    }
+
+    /**
+     * 포지션 해제 (진입 엔진에서 호출)
+     *
+     * @param market 마켓 코드
+     * @param engineName 해제 요청 엔진 이름 (검증용)
+     */
+    fun releasePosition(market: String, engineName: String) {
+        val normalizedMarket = normalizeMarket(market)
+
+        lock.lock()
+        try {
+            val currentOwner = positionOwners[normalizedMarket]
+            if (currentOwner == engineName) {
+                positionOwners.remove(normalizedMarket)
+                invalidateCache(normalizedMarket)
+                log.info("[$market] 포지션 해제: 엔진=$engineName")
+            } else {
+                log.warn("[$market] 포지션 해제 실패: 현재 owner=$currentOwner, 요청=$engineName")
+            }
+        } finally {
+            lock.unlock()
+        }
+    }
 
     /**
      * 마켓에 열린 포지션이 있는지 확인 (모든 엔진 통합)

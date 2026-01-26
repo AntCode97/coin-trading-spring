@@ -7,6 +7,7 @@ import org.springframework.stereotype.Component
 import java.math.BigDecimal
 import java.math.RoundingMode
 import java.time.Instant
+import java.time.temporal.ChronoUnit
 import java.util.concurrent.ConcurrentHashMap
 
 /**
@@ -49,6 +50,7 @@ class MarketConditionChecker(
         const val MAX_VOLATILITY_1MIN = 2.0      // 1분 내 최대 변동률 2%
         const val MAX_API_ERRORS = 5             // 연속 API 에러 허용 횟수
         const val PRICE_HISTORY_SIZE = 60        // 최근 60개 가격 저장 (1분)
+        const val ERROR_RESET_MINUTES = 5L        // 에러 카운터 리셋 대기 시간 (분)
     }
 
     /**
@@ -271,10 +273,20 @@ class MarketConditionChecker(
     }
 
     /**
-     * API 상태 확인
+     * API 상태 확인 (시간 기반 에러 카운터 리셋)
      */
     private fun checkApiHealth(market: String): ApiHealthCheck {
         val errorCount = apiErrorCounts[market] ?: 0
+        val lastErrorTime = lastApiSuccess[market]
+
+        // 마지막 성공 후 ERROR_RESET_MINUTES 경과 시 에러 카운터 리셋
+        if (errorCount > 0 && lastErrorTime != null) {
+            val minutesSinceLastSuccess = ChronoUnit.MINUTES.between(lastErrorTime, Instant.now())
+            if (minutesSinceLastSuccess >= ERROR_RESET_MINUTES) {
+                apiErrorCounts[market] = 0
+                log.info("[$market] API 에러 카운터 리셋 (${ERROR_RESET_MINUTES}분 경과)")
+            }
+        }
 
         if (errorCount >= MAX_API_ERRORS) {
             return ApiHealthCheck(
