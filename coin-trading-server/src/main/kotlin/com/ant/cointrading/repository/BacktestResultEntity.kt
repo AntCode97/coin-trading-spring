@@ -46,22 +46,22 @@ class BacktestResultEntity {
     @Column(name = "losing_trades", nullable = false)
     var losingTrades: Int = 0
 
-    @Column(name = "total_return", nullable = false, precision = 10, scale = 4)
+    @Column(name = "total_return", nullable = false)
     var totalReturn: Double = 0.0
 
-    @Column(name = "max_drawdown", nullable = false, precision = 10, scale = 4)
+    @Column(name = "max_drawdown", nullable = false)
     var maxDrawdown: Double = 0.0
 
-    @Column(name = "sharpe_ratio", nullable = false, precision = 10, scale = 4)
+    @Column(name = "sharpe_ratio", nullable = false)
     var sharpeRatio: Double = 0.0
 
-    @Column(name = "profit_factor", precision = 10, scale = 4)
+    @Column(name = "profit_factor")
     var profitFactor: Double? = null
 
-    @Column(name = "avg_win", precision = 10, scale = 4)
+    @Column(name = "avg_win")
     var avgWin: Double? = null
 
-    @Column(name = "avg_loss", precision = 10, scale = 4)
+    @Column(name = "avg_loss")
     var avgLoss: Double? = null
 
     @Column(name = "created_at", nullable = false)

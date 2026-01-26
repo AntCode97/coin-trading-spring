@@ -33,19 +33,19 @@ class OhlcvHistoryEntity {
     @Column(name = "timestamp", nullable = false)
     var timestamp: Long = 0L
 
-    @Column(name = "open", nullable = false, precision = 20, scale = 8)
+    @Column(name = "open", nullable = false)
     var open: Double = 0.0
 
-    @Column(name = "high", nullable = false, precision = 20, scale = 8)
+    @Column(name = "high", nullable = false)
     var high: Double = 0.0
 
-    @Column(name = "low", nullable = false, precision = 20, scale = 8)
+    @Column(name = "low", nullable = false)
     var low: Double = 0.0
 
-    @Column(name = "close", nullable = false, precision = 20, scale = 8)
+    @Column(name = "close", nullable = false)
     var close: Double = 0.0
 
-    @Column(name = "volume", nullable = false, precision = 30, scale = 8)
+    @Column(name = "volume", nullable = false)
     var volume: Double = 0.0
 
     @Column(name = "created_at", nullable = false)

@@ -31,19 +31,19 @@ class BacktestTradeEntity {
     @Column(name = "exit_time")
     var exitTime: Instant? = null
 
-    @Column(name = "entry_price", nullable = false, precision = 20, scale = 8)
+    @Column(name = "entry_price", nullable = false)
     var entryPrice: Double = 0.0
 
-    @Column(name = "exit_price", precision = 20, scale = 8)
+    @Column(name = "exit_price")
     var exitPrice: Double? = null
 
-    @Column(name = "quantity", nullable = false, precision = 20, scale = 8)
+    @Column(name = "quantity", nullable = false)
     var quantity: Double = 0.0
 
-    @Column(name = "pnl", precision = 20, scale = 8)
+    @Column(name = "pnl")
     var pnl: Double? = null
 
-    @Column(name = "pnl_percent", precision = 10, scale = 4)
+    @Column(name = "pnl_percent")
     var pnlPercent: Double? = null
 
     @Column(name = "entry_reason", length = 500)
