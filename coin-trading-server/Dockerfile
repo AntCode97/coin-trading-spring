@@ -39,9 +39,9 @@ USER appuser
 COPY --from=builder /app/coin-trading-server/build/libs/*.jar app.jar
 
 # Environment
-# 힙 512MB + SerialGC: 스케줄링 중심 시스템, GC 지연 무관, 처리량 최적화
-# (사용자 요청 없어 GC 일시정지 시간 중요하지 않음)
-ENV JAVA_OPTS="-Xms256m -Xmx512m -XX:+UseSerialGC"
+# 힙 1GB, GC 명시하지 않고 JVM 판단에 맡김
+# (Java 25 기본 G1 GC, 힙 크기에 따라 자동 조절)
+ENV JAVA_OPTS="-Xms512m -Xmx1024m"
 ENV SERVER_PORT=8080
 
 EXPOSE 8080
