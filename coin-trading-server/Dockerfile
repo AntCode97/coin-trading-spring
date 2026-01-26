@@ -39,8 +39,8 @@ USER appuser
 COPY --from=builder /app/coin-trading-server/build/libs/*.jar app.jar
 
 # Environment
-# 힙 메모리: 초기 512MB, 최대 1GB (Spring Boot + Virtual Thread + API 클라이언트)
-ENV JAVA_OPTS="-Xms512m -Xmx1024m"
+# 힙 메모리: 최대 1GB, ParallelGC 사용 (G1 GC는 힙 6GB+에 최적화)
+ENV JAVA_OPTS="-Xms512m -Xmx1024m -XX:+UseParallelGC"
 ENV SERVER_PORT=8080
 
 EXPOSE 8080
