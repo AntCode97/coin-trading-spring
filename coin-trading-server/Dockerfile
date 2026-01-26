@@ -39,7 +39,8 @@ USER appuser
 COPY --from=builder /app/coin-trading-server/build/libs/*.jar app.jar
 
 # Environment
-ENV JAVA_OPTS="-Xms256m -Xmx512m"
+# 힙 메모리: 초기 512MB, 최대 1GB (Spring Boot + Virtual Thread + API 클라이언트)
+ENV JAVA_OPTS="-Xms512m -Xmx1024m"
 ENV SERVER_PORT=8080
 
 EXPOSE 8080
