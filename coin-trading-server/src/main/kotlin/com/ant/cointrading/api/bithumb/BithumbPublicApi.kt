@@ -1,9 +1,11 @@
 package com.ant.cointrading.api.bithumb
 
+import com.ant.cointrading.event.TradingErrorEvent
 import com.fasterxml.jackson.core.type.TypeReference
 import com.fasterxml.jackson.databind.JsonNode
 import com.fasterxml.jackson.databind.ObjectMapper
 import org.slf4j.LoggerFactory
+import org.springframework.context.ApplicationEventPublisher
 import org.springframework.core.ParameterizedTypeReference
 import org.springframework.stereotype.Component
 import org.springframework.web.reactive.function.client.WebClient
@@ -13,11 +15,14 @@ import java.nio.charset.StandardCharsets
 /**
  * Bithumb Public API 클라이언트
  * 인증 불필요한 공개 API
+ *
+ * 에러 발생 시 TradingErrorEvent 발행하여 Slack 알림
  */
 @Component
 class BithumbPublicApi(
     private val bithumbWebClient: WebClient,
-    private val objectMapper: ObjectMapper
+    private val objectMapper: ObjectMapper,
+    private val eventPublisher: ApplicationEventPublisher
 ) {
     private val log = LoggerFactory.getLogger(javaClass)
 
@@ -69,14 +74,30 @@ class BithumbPublicApi(
                 return null
             }
 
-            // JSON 파싱 및 status 체크
+            // JSON 파싱
             val jsonNode: JsonNode = objectMapper.readTree(responseBody)
 
-            // Bithumb API 응답 형식: {"status":"0000","data":[...]} 또는 {"status":"5500","message":"..."}
+            // /v1/candles API는 배열 형태로 직접 반환
+            if (jsonNode.isArray) {
+                return objectMapper.readValue(
+                    ByteArrayInputStream(responseBody.toByteArray(StandardCharsets.UTF_8)),
+                    object : TypeReference<List<CandleResponse>>() {}
+                )
+            }
+
+            // 에러 응답 체크: {"error":{"name":404,"message":"Code not found"}}
+            val errorNode = jsonNode.get("error")
+            if (errorNode != null) {
+                val errorCode = errorNode.get("name")?.asText()
+                val errorMessage = errorNode.get("message")?.asText() ?: "Unknown error"
+                log.warn("Bithumb API error [$errorCode] for OHLCV $market: $errorMessage")
+                return null
+            }
+
+            // 구버전 API 형식: {"status":"0000","data":[...]}
             val status = jsonNode.get("status")?.asText()
             if (status != null && status != "0000") {
                 val message = jsonNode.get("message")?.asText() ?: "Unknown error"
-                // 비상장 코인(5500)은 정상적인 상황이므로 DEBUG 레벨로 처리
                 if (status == "5500") {
                     log.debug("비상장 코인 OHLCV $market: $message")
                 } else {
@@ -85,23 +106,27 @@ class BithumbPublicApi(
                 return null
             }
 
-            // 정상 응답: data 필드의 리스트 반환
             val dataNode = jsonNode.get("data")
-            if (dataNode == null || !dataNode.isArray) {
-                // 일시적인 API 응답 오류 (네트워크/서버 부하) 가능성 높음
-                val responsePreview = responseBody.take(200)
-                log.debug("Invalid response format for OHLCV $market - Response: $responsePreview")
-                return null
+            if (dataNode != null && dataNode.isArray) {
+                return objectMapper.readValue(
+                    ByteArrayInputStream(dataNode.toString().toByteArray(StandardCharsets.UTF_8)),
+                    object : TypeReference<List<CandleResponse>>() {}
+                )
             }
 
-            // List<CandleResponse>로 변환
-            objectMapper.readValue(
-                ByteArrayInputStream(dataNode.toString().toByteArray(StandardCharsets.UTF_8)),
-                object : TypeReference<List<CandleResponse>>() {}
-            )
-
+            val responsePreview = responseBody.take(200)
+            log.warn("Invalid response format for OHLCV $market - Response: $responsePreview")
+            return null
         } catch (e: Exception) {
-            log.error("Failed to get OHLCV for $market: ${e.message}")
+            log.error("Failed to get OHLCV for $market: ${e.message}", e)
+            eventPublisher.publishEvent(TradingErrorEvent(
+                source = this,
+                component = "BithumbPublicApi",
+                operation = "getOhlcv",
+                market = market,
+                errorMessage = e.message ?: "Unknown error",
+                exception = e
+            ))
             null
         }
     }
@@ -156,7 +181,15 @@ class BithumbPublicApi(
             log.warn("Invalid response format for market $markets - Response: $responsePreview")
             return null
         } catch (e: Exception) {
-            log.error("Failed to get current price for $markets: ${e.message}")
+            log.error("Failed to get current price for $markets: ${e.message}", e)
+            eventPublisher.publishEvent(TradingErrorEvent(
+                source = this,
+                component = "BithumbPublicApi",
+                operation = "getCurrentPrice",
+                market = markets,
+                errorMessage = e.message ?: "Unknown error",
+                exception = e
+            ))
             null
         }
     }
@@ -211,7 +244,15 @@ class BithumbPublicApi(
             log.warn("Invalid response format for orderbook $markets - Response: $responsePreview")
             return null
         } catch (e: Exception) {
-            log.error("Failed to get orderbook for $markets: ${e.message}")
+            log.error("Failed to get orderbook for $markets: ${e.message}", e)
+            eventPublisher.publishEvent(TradingErrorEvent(
+                source = this,
+                component = "BithumbPublicApi",
+                operation = "getOrderbook",
+                market = markets,
+                errorMessage = e.message ?: "Unknown error",
+                exception = e
+            ))
             null
         }
     }
@@ -227,7 +268,15 @@ class BithumbPublicApi(
                 .bodyToMono(object : ParameterizedTypeReference<List<MarketInfo>>() {})
                 .block()
         } catch (e: Exception) {
-            log.error("Failed to get market list: {}", e.message)
+            log.error("Failed to get market list: {}", e.message, e)
+            eventPublisher.publishEvent(TradingErrorEvent(
+                source = this,
+                component = "BithumbPublicApi",
+                operation = "getMarketAll",
+                market = null,
+                errorMessage = e.message ?: "Unknown error",
+                exception = e
+            ))
             null
         }
     }
@@ -289,7 +338,15 @@ class BithumbPublicApi(
             log.warn("Invalid response format for trades ticks $market - Response: $responsePreview")
             return null
         } catch (e: Exception) {
-            log.error("Failed to get trades ticks for $market: ${e.message}")
+            log.error("Failed to get trades ticks for $market: ${e.message}", e)
+            eventPublisher.publishEvent(TradingErrorEvent(
+                source = this,
+                component = "BithumbPublicApi",
+                operation = "getTradesTicks",
+                market = market,
+                errorMessage = e.message ?: "Unknown error",
+                exception = e
+            ))
             null
         }
     }
@@ -311,7 +368,15 @@ class BithumbPublicApi(
                 .bodyToMono(object : ParameterizedTypeReference<List<VirtualAssetWarning>>() {})
                 .block()
         } catch (e: Exception) {
-            log.error("Failed to get virtual asset warning: {}", e.message)
+            log.error("Failed to get virtual asset warning: {}", e.message, e)
+            eventPublisher.publishEvent(TradingErrorEvent(
+                source = this,
+                component = "BithumbPublicApi",
+                operation = "getVirtualAssetWarning",
+                market = null,
+                errorMessage = e.message ?: "Unknown error",
+                exception = e
+            ))
             null
         }
     }

@@ -12,6 +12,7 @@ import org.springframework.stereotype.Component
 import java.time.Instant
 import java.time.temporal.ChronoUnit
 import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.Executors
 
 /**
  * Funding Rate Monitor
@@ -20,6 +21,7 @@ import java.util.concurrent.ConcurrentHashMap
  * - 1분마다 주요 코인의 펀딩 비율 조회
  * - 연환산 15% 이상 기회 발견 시 Slack 알림
  * - 펀딩 히스토리 DB 저장 (8시간마다)
+ * - Virtual Thread 병렬 처리
  *
  * 퀀트 인사이트:
  * - 펀딩 비율 > 0: Long 포지션이 Short에게 지불 → Short 유리
@@ -43,6 +45,9 @@ class FundingRateMonitor(
 
     // 알림 쿨다운 (같은 심볼에 대해 1시간 이내 재알림 방지)
     private val ALERT_COOLDOWN_MINUTES = 60L
+
+    // Virtual Thread Executor (병렬 처리용)
+    private val virtualThreadExecutor = Executors.newVirtualThreadPerTaskExecutor()
 
     /**
      * 1분마다 펀딩 비율 모니터링
@@ -68,6 +73,7 @@ class FundingRateMonitor(
 
     /**
      * 8시간마다 펀딩 히스토리 저장
+     * Virtual Thread로 병렬 처리
      */
     @Scheduled(cron = "0 0 0,8,16 * * *")  // 00:00, 08:00, 16:00 UTC
     fun saveFundingHistory() {
@@ -75,30 +81,33 @@ class FundingRateMonitor(
 
         log.info("펀딩 히스토리 저장 시작")
 
-        properties.symbols.forEach { symbol ->
-            try {
-                val history = binanceFuturesApi.getFundingRateHistory(symbol, 1)
-                history?.firstOrNull()?.let { rate ->
-                    val fundingTime = Instant.ofEpochMilli(rate.fundingTime)
+        // Virtual Thread로 병렬 처리
+        virtualThreadExecutor.submit {
+            properties.symbols.forEach { symbol ->
+                try {
+                    val history = binanceFuturesApi.getFundingRateHistory(symbol, 1)
+                    history?.firstOrNull()?.let { rate ->
+                        val fundingTime = Instant.ofEpochMilli(rate.fundingTime)
 
-                    // 중복 저장 방지
-                    if (!fundingRateRepository.existsBySymbolAndFundingTime(symbol, fundingTime)) {
-                        val entity = FundingRateEntity(
-                            exchange = "BINANCE",
-                            symbol = symbol,
-                            fundingRate = rate.fundingRate.toDouble(),
-                            fundingTime = fundingTime,
-                            annualizedRate = rate.fundingRate.toDouble() * 3 * 365 * 100,
-                            markPrice = rate.markPrice?.toDouble()
-                        )
-                        fundingRateRepository.save(entity)
-                        log.info("펀딩 히스토리 저장: $symbol ${rate.fundingRate}")
+                        // 중복 저장 방지
+                        if (!fundingRateRepository.existsBySymbolAndFundingTime(symbol, fundingTime)) {
+                            val entity = FundingRateEntity(
+                                exchange = "BINANCE",
+                                symbol = symbol,
+                                fundingRate = rate.fundingRate.toDouble(),
+                                fundingTime = fundingTime,
+                                annualizedRate = rate.fundingRate.toDouble() * 3 * 365 * 100,
+                                markPrice = rate.markPrice?.toDouble()
+                            )
+                            fundingRateRepository.save(entity)
+                            log.info("펀딩 히스토리 저장: $symbol ${rate.fundingRate}")
+                        }
                     }
+                } catch (e: Exception) {
+                    log.error("펀딩 히스토리 저장 실패 [$symbol]: ${e.message}", e)
                 }
-            } catch (e: Exception) {
-                log.error("펀딩 히스토리 저장 실패 [$symbol]: ${e.message}")
             }
-        }
+        }.get()
     }
 
     /**

@@ -4,16 +4,20 @@ import com.ant.cointrading.api.bithumb.BithumbPublicApi
 import com.ant.cointrading.api.bithumb.CandleResponse
 import com.ant.cointrading.repository.OhlcvHistoryEntity
 import com.ant.cointrading.repository.OhlcvHistoryRepository
+import kotlinx.coroutines.async
+import kotlinx.coroutines.coroutineScope
 import org.slf4j.LoggerFactory
 import org.springframework.scheduling.annotation.Scheduled
 import org.springframework.stereotype.Component
 import java.time.Instant
 import java.time.format.DateTimeFormatter
+import java.util.concurrent.Executors
 
 /**
  * 과거 OHLCV 데이터 수집기
  *
  * 매일 자정에 과거 데이터를 수집하여 DB에 저장
+ * Virtual Thread 기반 병렬 처리로 수집 속도 최적화
  */
 @Component
 class OhlcvHistoryCollector(
@@ -23,9 +27,11 @@ class OhlcvHistoryCollector(
     private val log = LoggerFactory.getLogger(javaClass)
 
     private val intervals = listOf("minute60", "day", "week", "month")
+    private val virtualThreadExecutor = Executors.newVirtualThreadPerTaskExecutor()
 
     /**
      * 매일 새벽 2시에 과거 데이터 수집 (배치 작업)
+     * Virtual Thread로 병렬 처리
      */
     @Scheduled(cron = "0 0 2 * * ?")
     fun collectHistoricalData() {
@@ -40,15 +46,18 @@ class OhlcvHistoryCollector(
         val krwMarkets = allMarkets.filter { it.market.startsWith("KRW-") }
         log.info("KRW 마켓 ${krwMarkets.size}개 발견")
 
-        krwMarkets.forEach { marketInfo ->
-            intervals.forEach { interval ->
-                try {
-                    collectForInterval(marketInfo.market, interval)
-                } catch (e: Exception) {
-                    log.error("수집 실패 [${marketInfo.market}][$interval]: ${e.message}")
+        // Virtual Thread로 병렬 처리
+        virtualThreadExecutor.submit {
+            krwMarkets.forEach { marketInfo ->
+                intervals.forEach { interval ->
+                    try {
+                        collectForInterval(marketInfo.market, interval)
+                    } catch (e: Exception) {
+                        log.error("수집 실패 [${marketInfo.market}][$interval]: ${e.message}", e)
+                    }
                 }
             }
-        }
+        }.get() // 모든 작업 완료 대기
 
         log.info("=== OHLCV 히스토리 수집 완료 ===")
     }

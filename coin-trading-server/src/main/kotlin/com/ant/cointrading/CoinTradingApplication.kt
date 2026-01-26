@@ -3,6 +3,7 @@ package com.ant.cointrading
 import org.springframework.boot.autoconfigure.SpringBootApplication
 import org.springframework.boot.context.properties.ConfigurationPropertiesScan
 import org.springframework.boot.runApplication
+import org.springframework.scheduling.annotation.EnableAsync
 import org.springframework.scheduling.annotation.EnableScheduling
 
 /**
@@ -12,13 +13,16 @@ import org.springframework.scheduling.annotation.EnableScheduling
  * 1. 룰 기반 자동 매매 엔진 (실시간)
  * 2. MCP 도구 서버 (LLM 연동)
  * 3. LLM 기반 전략 최적화 (주기적)
+ * 4. 에러 이벤트 발행 및 Slack 알림
  *
  * 흐름:
  * - 평소: 룰 기반 전략이 시장 분석 및 자동 매매
  * - 주기적: LLM이 거래 성과 분석 및 전략 파라미터 튜닝
+ * - 에러 발생 시: Slack으로 실시간 알림
  */
 @SpringBootApplication
 @EnableScheduling
+@EnableAsync
 @ConfigurationPropertiesScan
 class CoinTradingApplication
 
