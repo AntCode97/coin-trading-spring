@@ -273,7 +273,7 @@ class ConfluenceAnalyzer(
 
         val recentCloses = closes.takeLast(period)
         val sma = recentCloses.average()
-        val variance = recentCloses.map { val diff = it - sma; diff * diff }.average()
+        val variance = recentCloses.map { (it - sma).let { diff -> diff * diff } }.average()
         val stdDev = sqrt(variance)
 
         val upperBand = sma + (bollingerStdDev * stdDev)

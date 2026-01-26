@@ -111,7 +111,7 @@ class OhlcvHistoryCollector(
             )
 
             // 다음 페이지 조회를 위해 마지막 캔들의 타임스탬프 사용
-            to = formatToTimestamp(candles.last())
+            to = candles.lastOrNull()?.let { formatToTimestamp(it) }
         }
 
         log.info("수집 완료 [$market][$interval] - 저장: $totalCollected, 중복: $totalSkipped")

@@ -128,7 +128,8 @@ class WalkForwardOptimizer(
             }
 
             for (value in values[depth]) {
-                generate(current + (keys[depth] to value!!), depth + 1)
+                val nonNullValue = value ?: continue
+                generate(current + (keys[depth] to nonNullValue), depth + 1)
             }
         }
 
@@ -324,7 +325,7 @@ class WalkForwardOptimizer(
 
             val recentCloses = closes.takeLast(period)
             val sma = recentCloses.average()
-            val variance = recentCloses.map { val diff = it - sma; diff * diff }.average()
+            val variance = recentCloses.map { (it - sma).let { diff -> diff * diff } }.average()
             val stdDev = kotlin.math.sqrt(variance)
 
             val upperBand = sma + (bollingerStdDev * stdDev)

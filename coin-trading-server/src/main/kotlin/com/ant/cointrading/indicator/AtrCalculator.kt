@@ -1,6 +1,8 @@
 package com.ant.cointrading.indicator
 
 import com.ant.cointrading.model.Candle
+import kotlin.math.abs
+import kotlin.math.max
 import kotlin.math.sqrt
 
 /**
@@ -33,7 +35,8 @@ class AtrCalculator(private val period: Int = 14) {
         // 이후는 Wilder's smoothing
         for (i in (period + 1) until candles.size) {
             val tr = calculateTr(candles[i - 1], candles[i])
-            val atr = (atrList.last()!! * (period - 1) + tr) / period
+            val lastAtr = atrList.lastOrNull() ?: initialAtr
+            val atr = (lastAtr * (period - 1) + tr) / period
             atrList.add(atr)
         }
 
@@ -59,10 +62,10 @@ class AtrCalculator(private val period: Int = 14) {
         val prevClose = prevCandle.close.toDouble()
 
         val hl = high - low
-        val hpc = kotlin.math.abs(high - prevClose)
-        val lpc = kotlin.math.abs(low - prevClose)
+        val hpc = abs(high - prevClose)
+        val lpc = abs(low - prevClose)
 
-        return kotlin.math.max(hl, kotlin.math.max(hpc, lpc))
+        return max(hl, max(hpc, lpc))
     }
 
     companion object {

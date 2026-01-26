@@ -31,7 +31,6 @@ class BasicSimulator : Simulator {
 
         val trades = mutableListOf<BacktestTrade>()
         val equityCurve = mutableListOf(initialCapital)
-        val capitalHistory = mutableListOf(initialCapital)
 
         var capital = initialCapital
         var position = 0.0  // 보유 코인 수량
@@ -123,7 +122,6 @@ class BasicSimulator : Simulator {
             // 4. 자산 기록 (평가 금액 = 현금 + 포지션 가치)
             val currentEquity = capital + (position * currentPrice)
             equityCurve.add(currentEquity)
-            capitalHistory.add(capital)
         }
 
         // 최종 정산 (남은 포지션이 있으면 마지막 가격으로 청산)
@@ -213,8 +211,7 @@ class BasicSimulator : Simulator {
 
         val sharpeRatio = if (returns.isNotEmpty()) {
             val avgReturn = returns.average()
-            val variance = returns.map { (it - avgReturn) * (it - avgReturn) }.average()
-            val stdDev = sqrt(variance)
+            val stdDev = sqrt(returns.map { (it - avgReturn).let { diff -> diff * diff } }.average())
             if (stdDev > 0) {
                 // 연환산 (일봉 기준 252일)
                 (avgReturn / stdDev) * sqrt(252.0)

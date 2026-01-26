@@ -93,7 +93,7 @@ object KellyPositionSizer {
         capital: Double,
         maxRiskPercent: Double = 2.0
     ): Boolean {
-        val potentialLoss = positionAmount * (kotlin.math.abs(stopLossPercent) / 100.0)
+        val potentialLoss = positionAmount * (max(stopLossPercent, -stopLossPercent) / 100.0)
         val riskPercent = (potentialLoss / capital) * 100
         return riskPercent <= maxRiskPercent
     }
