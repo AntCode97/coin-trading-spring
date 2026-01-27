@@ -3,6 +3,7 @@ package com.ant.cointrading.notification
 import com.ant.cointrading.model.TradingSignal
 import com.ant.cointrading.order.OrderResult
 import org.slf4j.LoggerFactory
+import org.springframework.beans.factory.annotation.Qualifier
 import org.springframework.beans.factory.annotation.Value
 import org.springframework.stereotype.Component
 import org.springframework.web.client.RestClient
@@ -15,7 +16,7 @@ import java.time.format.DateTimeFormatter
  */
 @Component
 class SlackNotifier(
-    private val restClient: RestClient
+    @Qualifier("slackRestClient") private val restClient: RestClient
 ) {
     private val log = LoggerFactory.getLogger(SlackNotifier::class.java)
 

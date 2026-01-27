@@ -10,12 +10,12 @@ import java.time.Instant
 @Table(
     name = "ohlcv_history",
     indexes = [
-        Index(name = "idx_market_interval", columnList = "market,interval"),
+        Index(name = "idx_market_interval", columnList = "market,`interval`"),
         Index(name = "idx_timestamp", columnList = "timestamp"),
-        Index(name = "idx_market_interval_timestamp", columnList = "market,interval,timestamp")
+        Index(name = "idx_market_interval_timestamp", columnList = "market,`interval`,timestamp")
     ],
     uniqueConstraints = [
-        UniqueConstraint(name = "uk_market_interval_time", columnNames = ["market", "interval", "timestamp"])
+        UniqueConstraint(name = "uk_market_interval_time", columnNames = ["market", "`interval`", "timestamp"])
     ]
 )
 class OhlcvHistoryEntity {
@@ -27,7 +27,7 @@ class OhlcvHistoryEntity {
     @Column(name = "market", nullable = false, length = 20)
     var market: String = ""
 
-    @Column(name = "interval", nullable = false, length = 20)
+    @Column(name = "`interval`", nullable = false, length = 20)
     var interval: String = ""
 
     @Column(name = "timestamp", nullable = false)

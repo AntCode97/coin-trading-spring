@@ -7,6 +7,7 @@ import org.springaicommunity.mcp.annotation.McpToolParam
 import org.slf4j.LoggerFactory
 import org.springframework.ai.tool.annotation.Tool
 import org.springframework.ai.tool.annotation.ToolParam
+import org.springframework.beans.factory.annotation.Qualifier
 import org.springframework.beans.factory.annotation.Value
 import org.springframework.stereotype.Component
 import org.springframework.web.client.RestClient
@@ -31,7 +32,7 @@ import java.time.Instant
  */
 @Component
 class SlackTools(
-    private val restClient: RestClient,
+    @Qualifier("slackRestClient") private val restClient: RestClient,
     private val objectMapper: ObjectMapper
 ) {
     private val log = LoggerFactory.getLogger(SlackTools::class.java)
