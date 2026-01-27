@@ -445,10 +445,14 @@ class TradingEngine(
      */
     private fun fetchCandles(market: String): List<Candle> {
         return try {
-            // Bithumb API는 "KRW-BTC" 형식 사용
-            val apiMarket = market.replace("_", "-").let {
-                val parts = it.split("-")
-                if (parts.size == 2) "${parts[1]}-${parts[0]}" else it
+            // market 형식 통일: KRW-BTC, BTC_KRW 등 → KRW-BTC
+            val apiMarket = when {
+                market.contains("-") -> market // 이미 KRW-BTC 형식이면 그대로 사용
+                market.contains("_") -> {
+                    val parts = market.split("_")
+                    if (parts.size == 2) "${parts[1]}-${parts[0]}" else market // BTC_KRW → KRW-BTC
+                }
+                else -> market
             }
 
             val response = bithumbPublicApi.getOhlcv(apiMarket, "minute60", 100)
