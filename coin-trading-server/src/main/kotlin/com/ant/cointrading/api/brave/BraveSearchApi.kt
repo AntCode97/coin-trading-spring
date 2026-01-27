@@ -5,8 +5,9 @@ import org.slf4j.LoggerFactory
 import org.springframework.beans.factory.annotation.Value
 import org.springframework.http.HttpStatus
 import org.springframework.stereotype.Component
-import org.springframework.web.reactive.function.client.WebClient
-import org.springframework.web.reactive.function.client.WebClientResponseException
+import org.springframework.web.client.RestClient
+import org.springframework.web.client.HttpClientErrorException
+import org.springframework.web.client.HttpServerErrorException
 import java.time.Instant
 import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicLong
@@ -24,14 +25,11 @@ import java.util.concurrent.atomic.AtomicLong
  */
 @Component
 class BraveSearchApi(
+    private val braveSearchRestClient: RestClient,
     @Value("\${BRAVE_SEARCH_FREE_API_KEY:}") private val freeApiKey: String,
     @Value("\${BRAVE_SEARCH_BASE_API_KEY:}") private val baseApiKey: String
 ) {
     private val log = LoggerFactory.getLogger(javaClass)
-
-    private val webClient = WebClient.builder()
-        .baseUrl("https://api.search.brave.com")
-        .build()
 
     // Free API Rate Limit 관리 (1초당 1회)
     private val lastFreeApiCall = AtomicLong(0)
@@ -94,7 +92,7 @@ class BraveSearchApi(
         }
 
         return try {
-            val response = webClient.get()
+            val response = braveSearchRestClient.get()
                 .uri { uriBuilder ->
                     uriBuilder
                         .path("/res/v1/web/search")
@@ -104,12 +102,9 @@ class BraveSearchApi(
                         .queryParam("safesearch", "moderate")
                         .build()
                 }
-                .header("Accept", "application/json")
-                .header("Accept-Encoding", "gzip")
                 .header("X-Subscription-Token", apiKey)
                 .retrieve()
-                .bodyToMono(BraveSearchResponse::class.java)
-                .block()
+                .body(BraveSearchResponse::class.java)
 
             if (isFreeApi) {
                 lastFreeApiCall.set(System.currentTimeMillis())
@@ -126,7 +121,7 @@ class BraveSearchApi(
                 )
             } ?: emptyList()
 
-        } catch (e: WebClientResponseException) {
+        } catch (e: HttpClientErrorException) {
             when (e.statusCode) {
                 HttpStatus.TOO_MANY_REQUESTS -> {
                     log.warn("Brave Search Rate Limit 초과 (${if (isFreeApi) "Free" else "Base"} API)")
@@ -137,10 +132,13 @@ class BraveSearchApi(
                     null
                 }
                 else -> {
-                    log.error("Brave Search 오류: ${e.statusCode} - ${e.message}")
+                    log.error("Brave Search 클라이언트 오류: ${e.statusCode} - ${e.message}")
                     null
                 }
             }
+        } catch (e: HttpServerErrorException) {
+            log.error("Brave Search 서버 오류: ${e.statusCode} - ${e.message}")
+            null
         } catch (e: Exception) {
             log.error("Brave Search 실패: ${e.message}", e)
             null

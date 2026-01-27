@@ -5,8 +5,8 @@ import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.DisplayName
 import org.junit.jupiter.api.Tag
 import org.junit.jupiter.api.Test
-import org.springframework.web.reactive.function.client.WebClient
 import org.springframework.test.context.ActiveProfiles
+import org.springframework.web.client.RestClient
 import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
 
@@ -41,15 +41,15 @@ class BithumbPublicApiIntegrationTest {
         val isCI = System.getenv("CI")?.toBoolean() ?: false
         Assumptions.assumeFalse(isCI, "CI 환경에서는 Bithumb API 통합 테스트를 건너뜁니다 (IP 제한)")
 
-        // WebClient 직접 생성
-        val webClient = WebClient.builder()
+        // RestClient 직접 생성
+        val restClient = RestClient.builder()
             .baseUrl("https://api.bithumb.com")
             .build()
 
         // 이벤트 퍼블리셔는 mock (실제로는 사용하지 않음)
         val eventPublisher = org.mockito.kotlin.mock<org.springframework.context.ApplicationEventPublisher>()
 
-        bithumbPublicApi = BithumbPublicApi(webClient, objectMapper, eventPublisher)
+        bithumbPublicApi = BithumbPublicApi(restClient, objectMapper, eventPublisher)
     }
 
     @Test

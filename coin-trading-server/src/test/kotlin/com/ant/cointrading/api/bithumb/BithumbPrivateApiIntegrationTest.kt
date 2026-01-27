@@ -6,6 +6,7 @@ import org.junit.jupiter.api.Tag
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.DisplayName
 import org.springframework.test.context.ActiveProfiles
+import org.springframework.web.client.RestClient
 import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
 
@@ -47,8 +48,8 @@ class BithumbPrivateApiIntegrationTest {
         Assumptions.assumeTrue(!accessKey.isNullOrBlank() && !secretKey.isNullOrBlank(),
             "BITHUMB_ACCESS_KEY와 BITHUMB_SECRET_KEY 환경 변수가 필요합니다")
 
-        // WebClient와 Properties 직접 생성
-        val webClient = org.springframework.web.reactive.function.client.WebClient.builder()
+        // RestClient와 Properties 직접 생성
+        val restClient = RestClient.builder()
             .baseUrl("https://api.bithumb.com")
             .build()
 
@@ -58,7 +59,7 @@ class BithumbPrivateApiIntegrationTest {
             secretKey = secretKey
         )
 
-        bithumbPrivateApi = BithumbPrivateApi(webClient, properties, objectMapper)
+        bithumbPrivateApi = BithumbPrivateApi(restClient, properties, objectMapper)
     }
 
     @Test

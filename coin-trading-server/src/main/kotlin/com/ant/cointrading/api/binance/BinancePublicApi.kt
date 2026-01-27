@@ -3,7 +3,7 @@ package com.ant.cointrading.api.binance
 import org.slf4j.LoggerFactory
 import org.springframework.core.ParameterizedTypeReference
 import org.springframework.stereotype.Component
-import org.springframework.web.reactive.function.client.WebClient
+import org.springframework.web.client.RestClient
 import java.math.BigDecimal
 
 /**
@@ -13,12 +13,10 @@ import java.math.BigDecimal
  * API Key 불필요 (Public Endpoint).
  */
 @Component
-class BinancePublicApi {
+class BinancePublicApi(
+    private val binancePublicRestClient: RestClient
+) {
     private val log = LoggerFactory.getLogger(javaClass)
-
-    private val webClient = WebClient.builder()
-        .baseUrl("https://api.binance.com")
-        .build()
 
     /**
      * 단일 심볼 현재가 조회
@@ -27,11 +25,10 @@ class BinancePublicApi {
      */
     fun getPrice(symbol: String): BigDecimal? {
         return try {
-            val response = webClient.get()
+            val response = binancePublicRestClient.get()
                 .uri("/api/v3/ticker/price?symbol=$symbol")
                 .retrieve()
-                .bodyToMono(BinanceSimpleTicker::class.java)
-                .block()
+                .body(BinanceSimpleTicker::class.java)
 
             response?.price
         } catch (e: Exception) {
@@ -45,11 +42,10 @@ class BinancePublicApi {
      */
     fun getAllPrices(): List<BinanceSimpleTicker>? {
         return try {
-            webClient.get()
+            binancePublicRestClient.get()
                 .uri("/api/v3/ticker/price")
                 .retrieve()
-                .bodyToMono(object : ParameterizedTypeReference<List<BinanceSimpleTicker>>() {})
-                .block()
+                .body(object : ParameterizedTypeReference<List<BinanceSimpleTicker>>() {})
         } catch (e: Exception) {
             log.error("Binance 전체 현재가 조회 실패: ${e.message}")
             null
@@ -63,11 +59,10 @@ class BinancePublicApi {
      */
     fun get24hrTicker(symbol: String): BinanceTickerInfo? {
         return try {
-            webClient.get()
+            binancePublicRestClient.get()
                 .uri("/api/v3/ticker/24hr?symbol=$symbol")
                 .retrieve()
-                .bodyToMono(BinanceTickerInfo::class.java)
-                .block()
+                .body(BinanceTickerInfo::class.java)
         } catch (e: Exception) {
             log.error("Binance 24시간 티커 조회 실패 [$symbol]: ${e.message}")
             null

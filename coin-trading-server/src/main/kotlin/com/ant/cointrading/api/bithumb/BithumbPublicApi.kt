@@ -8,7 +8,8 @@ import org.slf4j.LoggerFactory
 import org.springframework.context.ApplicationEventPublisher
 import org.springframework.core.ParameterizedTypeReference
 import org.springframework.stereotype.Component
-import org.springframework.web.reactive.function.client.WebClient
+import org.springframework.web.client.RestClient
+import org.springframework.web.client.toEntity
 import java.io.ByteArrayInputStream
 import java.nio.charset.StandardCharsets
 
@@ -16,11 +17,13 @@ import java.nio.charset.StandardCharsets
  * Bithumb Public API 클라이언트
  * 인증 불필요한 공개 API
  *
+ * RestClient 사용 (Virtual Thread 기반)
+ *
  * 에러 발생 시 TradingErrorEvent 발행하여 Slack 알림
  */
 @Component
 class BithumbPublicApi(
-    private val bithumbWebClient: WebClient,
+    private val bithumbRestClient: RestClient,
     private val objectMapper: ObjectMapper,
     private val eventPublisher: ApplicationEventPublisher
 ) {
@@ -55,7 +58,7 @@ class BithumbPublicApi(
         }
 
         return try {
-            val responseBody = bithumbWebClient.get()
+            val response = bithumbRestClient.get()
                 .uri { builder ->
                     val b = builder.path(endpoint)
                         .queryParam("market", market)
@@ -66,9 +69,9 @@ class BithumbPublicApi(
                     b.build()
                 }
                 .retrieve()
-                .bodyToMono(String::class.java)
-                .block()
+                .toEntity<String>()
 
+            val responseBody = response.body
             if (responseBody == null) {
                 log.warn("Empty response for OHLCV $market")
                 return null
@@ -139,12 +142,12 @@ class BithumbPublicApi(
      */
     fun getCurrentPrice(markets: String): List<TickerInfo>? {
         return try {
-            val responseBody = bithumbWebClient.get()
+            val response = bithumbRestClient.get()
                 .uri { it.path("/v1/ticker").queryParam("markets", markets).build() }
                 .retrieve()
-                .bodyToMono(String::class.java)
-                .block()
+                .toEntity<String>()
 
+            val responseBody = response.body
             if (responseBody == null) {
                 log.warn("Empty response for market $markets")
                 return null
@@ -202,12 +205,12 @@ class BithumbPublicApi(
      */
     fun getOrderbook(markets: String): List<OrderbookInfo>? {
         return try {
-            val responseBody = bithumbWebClient.get()
+            val response = bithumbRestClient.get()
                 .uri { it.path("/v1/orderbook").queryParam("markets", markets).build() }
                 .retrieve()
-                .bodyToMono(String::class.java)
-                .block()
+                .toEntity<String>()
 
+            val responseBody = response.body
             if (responseBody == null) {
                 log.warn("Empty response for orderbook $markets")
                 return null
@@ -262,11 +265,10 @@ class BithumbPublicApi(
      */
     fun getMarketAll(): List<MarketInfo>? {
         return try {
-            bithumbWebClient.get()
+            bithumbRestClient.get()
                 .uri("/v1/market/all")
                 .retrieve()
-                .bodyToMono(object : ParameterizedTypeReference<List<MarketInfo>>() {})
-                .block()
+                .body(object : ParameterizedTypeReference<List<MarketInfo>>() {})
         } catch (e: Exception) {
             log.error("Failed to get market list: {}", e.message, e)
             eventPublisher.publishEvent(TradingErrorEvent(
@@ -292,16 +294,16 @@ class BithumbPublicApi(
      */
     fun getTradesTicks(market: String, count: Int): List<TradeResponse>? {
         return try {
-            val responseBody = bithumbWebClient.get()
+            val response = bithumbRestClient.get()
                 .uri { it.path("/v1/trades/ticks")
                     .queryParam("market", market)
                     .queryParam("count", count.coerceAtMost(500))
                     .build()
                 }
                 .retrieve()
-                .bodyToMono(String::class.java)
-                .block()
+                .toEntity<String>()
 
+            val responseBody = response.body
             if (responseBody == null) {
                 log.warn("Empty response for trades ticks $market")
                 return null
@@ -362,11 +364,10 @@ class BithumbPublicApi(
      */
     fun getVirtualAssetWarning(): List<VirtualAssetWarning>? {
         return try {
-            bithumbWebClient.get()
+            bithumbRestClient.get()
                 .uri("/v1/market/virtual_asset_warning")
                 .retrieve()
-                .bodyToMono(object : ParameterizedTypeReference<List<VirtualAssetWarning>>() {})
-                .block()
+                .body(object : ParameterizedTypeReference<List<VirtualAssetWarning>>() {})
         } catch (e: Exception) {
             log.error("Failed to get virtual asset warning: {}", e.message, e)
             eventPublisher.publishEvent(TradingErrorEvent(

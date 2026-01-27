@@ -8,8 +8,8 @@ import org.slf4j.LoggerFactory
 import org.springframework.core.ParameterizedTypeReference
 import org.springframework.http.MediaType
 import org.springframework.stereotype.Component
-import org.springframework.web.reactive.function.client.WebClient
-import org.springframework.web.reactive.function.client.WebClientResponseException
+import org.springframework.web.client.RestClient
+import org.springframework.web.client.toEntity
 import java.math.BigDecimal
 import java.nio.charset.StandardCharsets
 import java.security.MessageDigest
@@ -20,10 +20,12 @@ import java.util.*
  *
  * 인증이 필요한 비공개 API (주문, 잔고, 입출금)
  * JWT + SHA512 해시 인증 사용
+ *
+ * RestClient 사용 (Virtual Thread 기반)
  */
 @Component
 class BithumbPrivateApi(
-    private val bithumbWebClient: WebClient,
+    private val bithumbRestClient: RestClient,
     private val properties: BithumbProperties,
     private val objectMapper: ObjectMapper
 ) {
@@ -38,12 +40,11 @@ class BithumbPrivateApi(
         val token = createToken(null)
 
         return try {
-            bithumbWebClient.get()
+            bithumbRestClient.get()
                 .uri("/v1/accounts")
                 .header("Authorization", token)
                 .retrieve()
-                .bodyToMono(object : ParameterizedTypeReference<List<Balance>>() {})
-                .block()
+                .body(object : ParameterizedTypeReference<List<Balance>>() {})
         } catch (e: Exception) {
             log.error("잔고 조회 실패: {}", extractErrorMessage(e))
             null
@@ -75,12 +76,11 @@ class BithumbPrivateApi(
         val token = createToken(queryHash)
 
         return try {
-            bithumbWebClient.get()
+            bithumbRestClient.get()
                 .uri { it.path("/v1/orders/chance").queryParam("market", market).build() }
                 .header("Authorization", token)
                 .retrieve()
-                .bodyToMono(object : ParameterizedTypeReference<Map<String, Any>>() {})
-                .block()
+                .body(object : ParameterizedTypeReference<Map<String, Any>>() {})
         } catch (e: Exception) {
             log.error("주문 가능 정보 조회 실패 [{}]: {}", market, extractErrorMessage(e))
             null
@@ -176,25 +176,31 @@ class BithumbPrivateApi(
         val token = createToken(queryHash)
 
         return try {
-            val response = bithumbWebClient.post()
+            val response = bithumbRestClient.post()
                 .uri("/v1/orders")
                 .header("Authorization", token)
                 .contentType(MediaType.APPLICATION_JSON)
-                .bodyValue(body)
+                .body(body)
                 .retrieve()
-                .bodyToMono(OrderResponse::class.java)
-                .block()
+                .toEntity<OrderResponse>()
 
-            response ?: throw BithumbApiException("empty_response", "주문 응답이 비어있음")
-        } catch (e: WebClientResponseException) {
-            val error = parseError(e.responseBodyAsString)
-            log.error("주문 실패 [{}]: {}", body["market"], error?.error?.message ?: e.message)
-            throw BithumbApiException(error?.error?.name, error?.error?.message, e)
+            response.body ?: throw BithumbApiException("empty_response", "주문 응답이 비어있음")
         } catch (e: BithumbApiException) {
             throw e
         } catch (e: Exception) {
-            log.error("주문 실패 [{}]: {}", body["market"], e.message)
-            throw BithumbApiException("unknown", e.message, e)
+            val errorResponse = try {
+                // RestClientException에서 body 추출 시도
+                e.message?.let { parseError(it) }
+            } catch (ex: Exception) {
+                null
+            }
+
+            log.error("주문 실패 [{}]: {}", body["market"], errorResponse?.error?.message ?: e.message)
+            throw BithumbApiException(
+                errorResponse?.error?.name,
+                errorResponse?.error?.message,
+                e
+            )
         }
     }
 
@@ -211,12 +217,11 @@ class BithumbPrivateApi(
         val token = createToken(queryHash)
 
         return try {
-            bithumbWebClient.get()
+            bithumbRestClient.get()
                 .uri { it.path("/v1/order").queryParam("uuid", uuid).build() }
                 .header("Authorization", token)
                 .retrieve()
-                .bodyToMono(OrderResponse::class.java)
-                .block()
+                .body(OrderResponse::class.java)
         } catch (e: Exception) {
             log.error("주문 조회 실패 [{}]: {}", uuid, extractErrorMessage(e))
             null
@@ -244,7 +249,7 @@ class BithumbPrivateApi(
         val token = createToken(queryHash)
 
         return try {
-            bithumbWebClient.get()
+            bithumbRestClient.get()
                 .uri { builder ->
                     val b = builder.path("/v1/orders")
                         .queryParam("page", page)
@@ -256,8 +261,7 @@ class BithumbPrivateApi(
                 }
                 .header("Authorization", token)
                 .retrieve()
-                .bodyToMono(object : ParameterizedTypeReference<List<OrderResponse>>() {})
-                .block()
+                .body(object : ParameterizedTypeReference<List<OrderResponse>>() {})
         } catch (e: Exception) {
             log.error("주문 목록 조회 실패: {}", extractErrorMessage(e))
             null
@@ -279,23 +283,28 @@ class BithumbPrivateApi(
         val token = createToken(queryHash)
 
         return try {
-            val response = bithumbWebClient.delete()
+            val response = bithumbRestClient.delete()
                 .uri { it.path("/v1/order").queryParam("uuid", uuid).build() }
                 .header("Authorization", token)
                 .retrieve()
-                .bodyToMono(OrderResponse::class.java)
-                .block()
+                .toEntity<OrderResponse>()
 
-            response ?: throw BithumbApiException("empty_response", "취소 응답이 비어있음")
-        } catch (e: WebClientResponseException) {
-            val error = parseError(e.responseBodyAsString)
-            log.error("주문 취소 실패 [{}]: {}", uuid, error?.error?.message ?: e.message)
-            throw BithumbApiException(error?.error?.name, error?.error?.message, e)
+            response.body ?: throw BithumbApiException("empty_response", "취소 응답이 비어있음")
         } catch (e: BithumbApiException) {
             throw e
         } catch (e: Exception) {
-            log.error("주문 취소 실패 [{}]: {}", uuid, e.message)
-            throw BithumbApiException("unknown", e.message, e)
+            val errorResponse = try {
+                e.message?.let { parseError(it) }
+            } catch (ex: Exception) {
+                null
+            }
+
+            log.error("주문 취소 실패 [{}]: {}", uuid, errorResponse?.error?.message ?: e.message)
+            throw BithumbApiException(
+                errorResponse?.error?.name,
+                errorResponse?.error?.message,
+                e
+            )
         }
     }
 
@@ -351,10 +360,7 @@ class BithumbPrivateApi(
      */
     private fun extractErrorMessage(e: Exception): String {
         return when (e) {
-            is WebClientResponseException -> {
-                val error = parseError(e.responseBodyAsString)
-                error?.error?.message ?: e.message ?: "Unknown error"
-            }
+            is BithumbApiException -> e.message ?: "Unknown error"
             else -> e.message ?: "Unknown error"
         }
     }

@@ -3,9 +3,9 @@ package com.ant.cointrading.api.binance
 import org.slf4j.LoggerFactory
 import org.springframework.core.ParameterizedTypeReference
 import org.springframework.stereotype.Component
-import org.springframework.web.reactive.function.client.WebClient
-import reactor.util.retry.Retry
-import java.time.Duration
+import org.springframework.web.client.RestClient
+import org.springframework.web.client.HttpClientErrorException
+import org.springframework.web.client.HttpServerErrorException
 import java.time.Instant
 
 /**
@@ -16,18 +16,16 @@ import java.time.Instant
  * 재시도 로직: Exponential Backoff (초기 1초, 최대 10초, 3회 재시도)
  */
 @Component
-class BinanceFuturesApi {
+class BinanceFuturesApi(
+    private val binanceRestClient: RestClient
+) {
     private val log = LoggerFactory.getLogger(javaClass)
-
-    private val webClient = WebClient.builder()
-        .baseUrl("https://fapi.binance.com")
-        .build()
 
     companion object {
         // 재시도 설정
-        private const val MAX_RETRY_ATTEMPTS = 3L
-        private val INITIAL_BACKOFF = Duration.ofSeconds(1)
-        private val MAX_BACKOFF = Duration.ofSeconds(10)
+        private const val MAX_RETRY_ATTEMPTS = 3
+        private const val INITIAL_BACKOFF_MS = 1000L
+        private const val MAX_BACKOFF_MS = 10000L
     }
 
     /**
@@ -37,23 +35,11 @@ class BinanceFuturesApi {
      * @return 프리미엄 인덱스 정보 (펀딩 비율 포함)
      */
     fun getPremiumIndex(symbol: String): BinancePremiumIndex? {
-        return try {
-            webClient.get()
+        return executeWithRetry(symbol) {
+            binanceRestClient.get()
                 .uri("/fapi/v1/premiumIndex?symbol=$symbol")
                 .retrieve()
-                .bodyToMono(BinancePremiumIndex::class.java)
-                .retryWhen(
-                    Retry.backoff(MAX_RETRY_ATTEMPTS, INITIAL_BACKOFF)
-                        .maxBackoff(MAX_BACKOFF)
-                        .filter { it is java.io.IOException || it is java.net.SocketTimeoutException }
-                        .doBeforeRetry { signal ->
-                            log.warn("Binance API 재시도 [$symbol] (시도 ${signal.totalRetries() + 1}/$MAX_RETRY_ATTEMPTS)")
-                        }
-                )
-                .block()
-        } catch (e: Exception) {
-            log.error("Binance Futures 프리미엄 인덱스 조회 실패 [$symbol]: ${e.message}")
-            null
+                .body(BinancePremiumIndex::class.java)
         }
     }
 
@@ -61,23 +47,11 @@ class BinanceFuturesApi {
      * 모든 심볼의 프리미엄 인덱스 조회
      */
     fun getAllPremiumIndex(): List<BinancePremiumIndex>? {
-        return try {
-            webClient.get()
+        return executeWithRetry("all_symbols") {
+            binanceRestClient.get()
                 .uri("/fapi/v1/premiumIndex")
                 .retrieve()
-                .bodyToMono(object : ParameterizedTypeReference<List<BinancePremiumIndex>>() {})
-                .retryWhen(
-                    Retry.backoff(MAX_RETRY_ATTEMPTS, INITIAL_BACKOFF)
-                        .maxBackoff(MAX_BACKOFF)
-                        .filter { it is java.io.IOException || it is java.net.SocketTimeoutException }
-                        .doBeforeRetry { signal ->
-                            log.warn("Binance API 전체 프리미엄 인덱스 재시도 (시도 ${signal.totalRetries() + 1}/$MAX_RETRY_ATTEMPTS)")
-                        }
-                )
-                .block()
-        } catch (e: Exception) {
-            log.error("Binance Futures 전체 프리미엄 인덱스 조회 실패: ${e.message}")
-            null
+                .body(object : ParameterizedTypeReference<List<BinancePremiumIndex>>() {})
         }
     }
 
@@ -88,23 +62,11 @@ class BinanceFuturesApi {
      * @param limit 조회할 개수 (최대 1000)
      */
     fun getFundingRateHistory(symbol: String, limit: Int = 100): List<BinanceFundingRate>? {
-        return try {
-            webClient.get()
+        return executeWithRetry(symbol) {
+            binanceRestClient.get()
                 .uri("/fapi/v1/fundingRate?symbol=$symbol&limit=$limit")
                 .retrieve()
-                .bodyToMono(object : ParameterizedTypeReference<List<BinanceFundingRate>>() {})
-                .retryWhen(
-                    Retry.backoff(MAX_RETRY_ATTEMPTS, INITIAL_BACKOFF)
-                        .maxBackoff(MAX_BACKOFF)
-                        .filter { it is java.io.IOException || it is java.net.SocketTimeoutException }
-                        .doBeforeRetry { signal ->
-                            log.warn("Binance API 펀딩 비율 히스토리 재시도 [$symbol] (시도 ${signal.totalRetries() + 1}/$MAX_RETRY_ATTEMPTS)")
-                        }
-                )
-                .block()
-        } catch (e: Exception) {
-            log.error("Binance Futures 펀딩 비율 히스토리 조회 실패 [$symbol]: ${e.message}")
-            null
+                .body(object : ParameterizedTypeReference<List<BinanceFundingRate>>() {})
         }
     }
 
@@ -114,23 +76,11 @@ class BinanceFuturesApi {
      * @param symbol 심볼
      */
     fun getMarkPrice(symbol: String): BinanceMarkPrice? {
-        return try {
-            webClient.get()
+        return executeWithRetry(symbol) {
+            binanceRestClient.get()
                 .uri("/fapi/v1/premiumIndex?symbol=$symbol")
                 .retrieve()
-                .bodyToMono(BinanceMarkPrice::class.java)
-                .retryWhen(
-                    Retry.backoff(MAX_RETRY_ATTEMPTS, INITIAL_BACKOFF)
-                        .maxBackoff(MAX_BACKOFF)
-                        .filter { it is java.io.IOException || it is java.net.SocketTimeoutException }
-                        .doBeforeRetry { signal ->
-                            log.warn("Binance API 마크 가격 재시도 [$symbol] (시도 ${signal.totalRetries() + 1}/$MAX_RETRY_ATTEMPTS)")
-                        }
-                )
-                .block()
-        } catch (e: Exception) {
-            log.error("Binance Futures 마크 가격 조회 실패 [$symbol]: ${e.message}")
-            null
+                .body(BinanceMarkPrice::class.java)
         }
     }
 
@@ -208,5 +158,52 @@ class BinanceFuturesApi {
                 )
             }
         )
+    }
+
+    /**
+     * Exponential Backoff 재시도 로직 (Virtual Thread 기반)
+     */
+    private fun <T> executeWithRetry(operationName: String, block: () -> T?): T? {
+        var lastException: Exception? = null
+
+        for (attempt in 1..MAX_RETRY_ATTEMPTS) {
+            try {
+                return block()
+            } catch (e: HttpClientErrorException) {
+                // 4xx 에러는 재시도 안 함
+                log.error("Binance API 클라이언트 에러 [$operationName]: ${e.statusCode} - ${e.message}")
+                return null
+            } catch (e: HttpServerErrorException) {
+                // 5xx 에러는 재시도
+                lastException = e
+                if (attempt < MAX_RETRY_ATTEMPTS) {
+                    val backoffMs = calculateBackoff(attempt)
+                    log.warn("Binance API 서버 에러 [$operationName] (시도 $attempt/$MAX_RETRY_ATTEMPTS). ${backoffMs}ms 후 재시도")
+                    Thread.sleep(backoffMs)
+                }
+            } catch (e: java.io.IOException) {
+                // 네트워크 에러는 재시도
+                lastException = e
+                if (attempt < MAX_RETRY_ATTEMPTS) {
+                    val backoffMs = calculateBackoff(attempt)
+                    log.warn("Binance API 네트워크 에러 [$operationName] (시도 $attempt/$MAX_RETRY_ATTEMPTS). ${backoffMs}ms 후 재시도")
+                    Thread.sleep(backoffMs)
+                }
+            } catch (e: Exception) {
+                log.error("Binance API 알 수 없는 에러 [$operationName]: ${e.message}", e)
+                return null
+            }
+        }
+
+        log.error("Binance API 재시도 실패 [$operationName]: 최대 재시도 횟수 초과")
+        return null
+    }
+
+    /**
+     * Exponential Backoff 계산
+     */
+    private fun calculateBackoff(attempt: Int): Long {
+        val backoff = INITIAL_BACKOFF_MS * (1 shl (attempt - 1)) // 2^(attempt-1)
+        return backoff.coerceAtMost(MAX_BACKOFF_MS)
     }
 }

@@ -2,7 +2,7 @@ package com.ant.cointrading.api.exchangerate
 
 import org.slf4j.LoggerFactory
 import org.springframework.stereotype.Component
-import org.springframework.web.reactive.function.client.WebClient
+import org.springframework.web.client.RestClient
 import java.math.BigDecimal
 import java.time.Duration
 import java.time.Instant
@@ -14,12 +14,10 @@ import java.time.Instant
  * 일일 호출 제한이 있으므로 캐싱 적용 (1시간)
  */
 @Component
-class ExchangeRateApi {
+class ExchangeRateApi(
+    private val exchangeRateRestClient: RestClient
+) {
     private val log = LoggerFactory.getLogger(javaClass)
-
-    private val webClient = WebClient.builder()
-        .baseUrl("https://open.er-api.com")
-        .build()
 
     // 캐시
     @Volatile
@@ -58,11 +56,10 @@ class ExchangeRateApi {
 
         // API 호출
         return try {
-            val response = webClient.get()
+            val response = exchangeRateRestClient.get()
                 .uri("/v6/latest/USD")
                 .retrieve()
-                .bodyToMono(ExchangeRateResponse::class.java)
-                .block()
+                .body(ExchangeRateResponse::class.java)
 
             val rate = response?.rates?.get("KRW")
             if (rate != null) {

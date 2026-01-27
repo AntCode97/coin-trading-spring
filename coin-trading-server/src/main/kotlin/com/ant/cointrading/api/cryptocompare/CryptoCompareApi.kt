@@ -2,9 +2,8 @@ package com.ant.cointrading.api.cryptocompare
 
 import com.fasterxml.jackson.annotation.JsonProperty
 import org.slf4j.LoggerFactory
-import org.springframework.core.ParameterizedTypeReference
 import org.springframework.stereotype.Component
-import org.springframework.web.reactive.function.client.WebClient
+import org.springframework.web.client.RestClient
 import java.time.Instant
 
 /**
@@ -16,12 +15,10 @@ import java.time.Instant
  * Rate Limit: 시간당 100,000 호출 (API 키 없이)
  */
 @Component
-class CryptoCompareApi {
+class CryptoCompareApi(
+    private val cryptoCompareRestClient: RestClient
+) {
     private val log = LoggerFactory.getLogger(javaClass)
-
-    private val webClient = WebClient.builder()
-        .baseUrl("https://min-api.cryptocompare.com")
-        .build()
 
     /**
      * 특정 코인 관련 뉴스 검색
@@ -32,7 +29,7 @@ class CryptoCompareApi {
      */
     fun getNews(symbol: String, limit: Int = 10): List<CryptoNews> {
         return try {
-            val response = webClient.get()
+            val response = cryptoCompareRestClient.get()
                 .uri { uriBuilder ->
                     uriBuilder
                         .path("/data/v2/news/")
@@ -42,8 +39,7 @@ class CryptoCompareApi {
                         .build()
                 }
                 .retrieve()
-                .bodyToMono(CryptoNewsResponse::class.java)
-                .block()
+                .body(CryptoNewsResponse::class.java)
 
             response?.data?.take(limit) ?: emptyList()
 
@@ -58,7 +54,7 @@ class CryptoCompareApi {
      */
     fun getLatestNews(limit: Int = 20): List<CryptoNews> {
         return try {
-            val response = webClient.get()
+            val response = cryptoCompareRestClient.get()
                 .uri { uriBuilder ->
                     uriBuilder
                         .path("/data/v2/news/")
@@ -68,8 +64,7 @@ class CryptoCompareApi {
                         .build()
                 }
                 .retrieve()
-                .bodyToMono(CryptoNewsResponse::class.java)
-                .block()
+                .body(CryptoNewsResponse::class.java)
 
             response?.data?.take(limit) ?: emptyList()
 
