@@ -9,7 +9,7 @@ import org.springframework.ai.tool.annotation.Tool
 import org.springframework.ai.tool.annotation.ToolParam
 import org.springframework.beans.factory.annotation.Value
 import org.springframework.stereotype.Component
-import org.springframework.web.reactive.function.client.WebClient
+import org.springframework.web.client.RestClient
 import java.time.Instant
 
 /**
@@ -31,7 +31,7 @@ import java.time.Instant
  */
 @Component
 class SlackTools(
-    private val webClient: WebClient,
+    private val restClient: RestClient,
     private val objectMapper: ObjectMapper
 ) {
     private val log = LoggerFactory.getLogger(SlackTools::class.java)
@@ -77,12 +77,11 @@ class SlackTools(
         log.info("[Tool] listChannels 호출")
 
         return try {
-            val response = webClient.get()
+            val response = restClient.get()
                 .uri("$baseUrl/conversations.list")
                 .header("Authorization", "Bearer $token")
                 .retrieve()
-                .bodyToMono(String::class.java)
-                .block()
+                .body(String::class.java)
 
             val json = objectMapper.readTree(response)
 
@@ -178,12 +177,11 @@ class SlackTools(
 
     private fun fetchConversations(types: String): String {
         return try {
-            val response = webClient.get()
+            val response = restClient.get()
                 .uri("$baseUrl/conversations.list?types=$types")
                 .header("Authorization", "Bearer $token")
                 .retrieve()
-                .bodyToMono(String::class.java)
-                .block()
+                .body(String::class.java)
 
             val json = objectMapper.readTree(response)
 
@@ -251,12 +249,11 @@ class SlackTools(
         log.info("[Tool] getMessages 호출: channelId=$channelId, limit=$actualLimit")
 
         return try {
-            val response = webClient.get()
+            val response = restClient.get()
                 .uri("$baseUrl/conversations.history?channel=$channelId&limit=$actualLimit")
                 .header("Authorization", "Bearer $token")
                 .retrieve()
-                .bodyToMono(String::class.java)
-                .block()
+                .body(String::class.java)
 
             val json = objectMapper.readTree(response)
 
@@ -356,12 +353,11 @@ class SlackTools(
             }
 
             // 2. 메시지 조회
-            val response = webClient.get()
+            val response = restClient.get()
                 .uri("$baseUrl/conversations.history?channel=$dmChannelId&limit=${limit.coerceIn(1, 200)}")
                 .header("Authorization", "Bearer $token")
                 .retrieve()
-                .bodyToMono(String::class.java)
-                .block()
+                .body(String::class.java)
 
             val json = objectMapper.readTree(response)
 
@@ -425,16 +421,15 @@ class SlackTools(
         log.info("[Tool] sendMessage 호출: channelId=$channelId, text=$text")
 
         return try {
-            val response = webClient.post()
+            val response = restClient.post()
                 .uri("$baseUrl/chat.postMessage")
                 .header("Authorization", "Bearer $token")
-                .bodyValue(mapOf(
+                .body(mapOf(
                     "channel" to channelId,
                     "text" to text
                 ))
                 .retrieve()
-                .bodyToMono(String::class.java)
-                .block()
+                .body(String::class.java)
 
             val json = objectMapper.readTree(response)
 
@@ -513,21 +508,31 @@ class SlackTools(
 
         return try {
             // 1. DM 채널 열기
-            val openResponse = webClient.post()
+            val openResponse = restClient.post()
                 .uri("$baseUrl/conversations.open")
                 .header("Authorization", "Bearer $token")
-                .bodyValue(mapOf("users" to userId))
+                .header("Content-Type", "application/json")
+                .body(mapOf("users" to userId))
                 .retrieve()
-                .bodyToMono(String::class.java)
-                .block()
+                .body(String::class.java)
 
             val openJson = objectMapper.readTree(openResponse)
 
-            if (!openJson.get("ok").asBoolean()) {
-                return "DM 열기 실패: ${openJson.get("error").asText()}"
+            val okNode = openJson.get("ok")
+            if (okNode == null || !okNode.asBoolean()) {
+                val errorNode = openJson.get("error")
+                return "DM 열기 실패: ${errorNode?.asText() ?: "unknown"}"
             }
 
-            val channelId = openJson.get("channel").get("id").asText()
+            val channelNode = openJson.get("channel")
+            if (channelNode == null) {
+                return "DM 열기 실패: channel not found"
+            }
+            val idNode = channelNode.get("id")
+            if (idNode == null) {
+                return "DM 열기 실패: channel id not found"
+            }
+            val channelId = idNode.asText()
 
             // 2. 메시지 전송
             sendMessage(channelId, text)
@@ -547,12 +552,11 @@ class SlackTools(
             // # 제거
             val cleanName = channelName.removePrefix("#")
 
-            val response = webClient.get()
+            val response = restClient.get()
                 .uri("$baseUrl/conversations.list?types=public_channel,private_channel")
                 .header("Authorization", "Bearer $token")
                 .retrieve()
-                .bodyToMono(String::class.java)
-                .block()
+                .body(String::class.java)
 
             val json = objectMapper.readTree(response)
 
@@ -575,12 +579,11 @@ class SlackTools(
 
     private fun findDmChannelId(userId: String): String? {
         return try {
-            val response = webClient.get()
+            val response = restClient.get()
                 .uri("$baseUrl/conversations.list?types=im")
                 .header("Authorization", "Bearer $token")
                 .retrieve()
-                .bodyToMono(String::class.java)
-                .block()
+                .body(String::class.java)
 
             val json = objectMapper.readTree(response)
 

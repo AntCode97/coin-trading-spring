@@ -5,7 +5,7 @@ import com.ant.cointrading.order.OrderResult
 import org.slf4j.LoggerFactory
 import org.springframework.beans.factory.annotation.Value
 import org.springframework.stereotype.Component
-import org.springframework.web.reactive.function.client.WebClient
+import org.springframework.web.client.RestClient
 import java.time.Instant
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
@@ -15,7 +15,7 @@ import java.time.format.DateTimeFormatter
  */
 @Component
 class SlackNotifier(
-    private val webClient: WebClient
+    private val restClient: RestClient
 ) {
     private val log = LoggerFactory.getLogger(SlackNotifier::class.java)
 
@@ -121,23 +121,19 @@ class SlackNotifier(
 
     private fun sendMessage(text: String) {
         try {
-            webClient.post()
+            val response: Map<*, *>? = restClient.post()
                 .uri("https://slack.com/api/chat.postMessage")
                 .header("Authorization", "Bearer $token")
                 .header("Content-Type", "application/json")
-                .bodyValue(mapOf("channel" to channel, "text" to text))
+                .body(mapOf("channel" to channel, "text" to text))
                 .retrieve()
-                .bodyToMono(Map::class.java)
-                .subscribe(
-                    { response ->
-                        if (response["ok"] == true) {
-                            log.debug("Slack 알림 전송 완료")
-                        } else {
-                            log.error("Slack 알림 실패: ${response["error"]}")
-                        }
-                    },
-                    { error -> log.error("Slack 알림 전송 실패: ${error.message}") }
-                )
+                .body(Map::class.java)
+
+            if (response?.get("ok") == true) {
+                log.debug("Slack 알림 전송 완료")
+            } else {
+                log.error("Slack 알림 실패: ${response?.get("error")}")
+            }
         } catch (e: Exception) {
             log.error("Slack 알림 전송 중 오류: ${e.message}")
         }

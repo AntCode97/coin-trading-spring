@@ -95,4 +95,18 @@ class RestClientConfig {
             .requestFactory(requestFactory)
             .build()
     }
+
+    @Bean
+    fun slackRestClient(): RestClient {
+        val requestFactory: ClientHttpRequestFactory = SimpleClientHttpRequestFactory().apply {
+            setConnectTimeout(Duration.ofSeconds(10))
+            setReadTimeout(Duration.ofSeconds(10))
+        }
+
+        return RestClient.builder()
+            .baseUrl("https://slack.com/api")
+            .defaultHeader("Content-Type", "application/json")
+            .requestFactory(requestFactory)
+            .build()
+    }
 }
