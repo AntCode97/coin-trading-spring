@@ -67,6 +67,12 @@ tasks.withType<org.jetbrains.kotlin.gradle.tasks.KotlinCompile> {
 
 tasks.withType<Test> {
     useJUnitPlatform()
+
+    // CI 환경에서는 통합 테스트 제외 (빗썸 API IP 제한)
+    val isCI = System.getenv("CI")?.toBoolean() ?: false
+    if (isCI) {
+        systemProperty("junit.platform.tags.exclude", "integration")
+    }
 }
 
 // bootRun 시 루트 디렉토리에서 실행 (.env 파일 읽기 위함)

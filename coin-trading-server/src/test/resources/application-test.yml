@@ -1,0 +1,10 @@
+# 테스트용 설정
+
+# 빗썸 API 설정
+bithumb:
+  base-url: https://api.bithumb.com
+
+# 로깅 레벨 (테스트용)
+logging:
+  level:
+    com.ant.cointrading.api.bithumb: DEBUG
