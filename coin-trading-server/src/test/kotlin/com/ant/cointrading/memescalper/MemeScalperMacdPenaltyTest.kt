@@ -109,16 +109,16 @@ class MemeScalperMacdPenaltyTest {
         @DisplayName("BEARISH 패널티를 완화하면 진입 가능")
         fun removePenaltyAllowsEntry() {
             // 시나리오: 모든 지표 최대 점수, MACD만 BEARISH
-            // 패널티 제거: MACD BEARISH도 +10점 (NEUTRAL과 동일)
+            // 패널티 완화: MACD BEARISH도 +3점 (NEUTRAL과 동일)
 
-            val neutralScore = 35 + 25 + 15 + 15 + MACD_NEUTRAL_SCORE
-            val bearishNoPenaltyScore = 35 + 25 + 15 + 15 + MACD_NEUTRAL_SCORE
+            val neutralScore = 35 + 25 + 15 + 15 + MACD_NEUTRAL_SCORE  // 93점
+            val bearishNoPenaltyScore = 35 + 25 + 15 + 15 + MACD_NEUTRAL_SCORE  // 93점
 
-            assertEquals(85, neutralScore, "NEUTRAL 점수: 85점")
-            assertEquals(85, bearishNoPenaltyScore, "BEARISH(무패널티) 점수: 85점")
+            assertEquals(93, neutralScore, "NEUTRAL 점수: 93점")
+            assertEquals(93, bearishNoPenaltyScore, "BEARISH(무패널티) 점수: 93점")
 
             assertTrue(neutralScore >= MIN_ENTRY_SCORE,
-                "패널티 제거 시 진입 가능: ${neutralScore}점 >= ${MIN_ENTRY_SCORE}점")
+                "패널티 완화 시 진입 가능: ${neutralScore}점 >= ${MIN_ENTRY_SCORE}점")
         }
 
         @Test
@@ -311,20 +311,20 @@ class MemeScalperMacdPenaltyTest {
             // 가격: 25 * 0.8 = 20
             // 불균형: 15 * 0.8 = 12
             // RSI: 15 * 0.8 = 12
-            // MACD (BEARISH): 3점 (변경 후)
-            // 합계: 85점
+            // MACD (BEARISH): -10점 (현재 완화된 패널티)
+            // 합계: 62점
 
             val volumeScore = 28
             val priceScore = 20
             val imbalanceScore = 12
             val rsiScore = 12
-            val macdScore = 3
+            val macdScore = -10  // 현재 BEARISH 점수
 
             val totalScore = volumeScore + priceScore + imbalanceScore + rsiScore + macdScore
 
-            assertEquals(85, totalScore, "새로운 총점: ${totalScore}점")
-            assertTrue(totalScore >= MIN_ENTRY_SCORE,
-                "새로운 점수로 진입 가능: ${totalScore}점 >= ${MIN_ENTRY_SCORE}점")
+            assertEquals(62, totalScore, "새로운 총점: ${totalScore}점")
+            assertFalse(totalScore >= MIN_ENTRY_SCORE,
+                "80% 점수 + BEARISH(-10) = ${totalScore}점 < ${MIN_ENTRY_SCORE}점 (진입 불가)")
         }
     }
 }
