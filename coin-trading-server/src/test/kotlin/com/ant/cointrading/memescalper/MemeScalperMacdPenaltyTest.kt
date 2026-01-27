@@ -32,7 +32,7 @@ class MemeScalperMacdPenaltyTest {
         // MemeScalperDetector 점수 체계
         const val MACD_BULLISH_SCORE = 10
         const val MACD_NEUTRAL_SCORE = 3
-        const val MACD_BEARISH_CURRENT = -20  // 현재 패널티
+        const val MACD_BEARISH_CURRENT = -10  // 현재 패널티 (Iteration 5에서 -20 → -10으로 변경)
 
         const val MIN_ENTRY_SCORE = 70
     }
@@ -95,14 +95,14 @@ class MemeScalperMacdPenaltyTest {
     inner class CurrentPenaltyIssues {
 
         @Test
-        @DisplayName("-20점 패널티는 BEARISH 진입을 과도하게 차단")
-        fun penaltyBlocksBearishEntry() {
+        @DisplayName("-10점 패널티로도 진입 가능 (완화됨)")
+        fun penaltyAllowsBearishEntry() {
             // 시나리오: 모든 지표 최대 점수, MACD만 BEARISH
             val score = 35 + 25 + 15 + 15 + MACD_BEARISH_CURRENT
-            // 거래량 35 + 가격 25 + 불균형 15 + RSI 15 - 20 = 55점
+            // 거래량 35 + 가격 25 + 불균형 15 + RSI 15 - 10 = 80점
 
-            assertTrue(score < MIN_ENTRY_SCORE,
-                "-20점 패널티로 진입 차단: ${score}점 < ${MIN_ENTRY_SCORE}점")
+            assertTrue(score >= MIN_ENTRY_SCORE,
+                "-10점 패널티로도 진입 가능: ${score}점 >= ${MIN_ENTRY_SCORE}점")
         }
 
         @Test
@@ -188,10 +188,10 @@ class MemeScalperMacdPenaltyTest {
         @Test
         @DisplayName("제안1: BEARISH 패널티 완화")
         fun removeBearishPenalty() {
-            // 현재: BEARISH → -20점
+            // 현재: BEARISH → -10점 (Iteration 5에서 -20에서 -10으로 완화됨)
             // 제안: BEARISH → +3점 (NEUTRAL과 동일)
 
-            val currentPenalty = -20
+            val currentPenalty = -10
             val proposedScore = 3  // NEUTRAL과 동일
 
             assertEquals(3, proposedScore, "BEARISH 점수: ${proposedScore}점")
@@ -290,7 +290,7 @@ class MemeScalperMacdPenaltyTest {
         @Test
         @DisplayName("변경 시 위험도 평가")
         fun riskOfChange() {
-            val currentPenalty = -20
+            val currentPenalty = -10
             val proposedPenalty = 3
 
             val risk = when {

@@ -74,6 +74,10 @@ class OrderExecutorTest {
 
     @BeforeEach
     fun setup() {
+        // TradingProperties 기본 mock 설정
+        whenever(tradingProperties.feeRate).thenReturn(BigDecimal("0.0004"))
+        whenever(tradingProperties.enabled).thenReturn(false) // 기본 시뮬레이션 모드
+
         orderExecutor = OrderExecutor(
             bithumbPrivateApi,
             tradingProperties,

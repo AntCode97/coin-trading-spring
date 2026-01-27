@@ -4,8 +4,6 @@ import com.ant.cointrading.api.bithumb.BithumbPublicApi
 import com.ant.cointrading.api.bithumb.CandleResponse
 import com.ant.cointrading.repository.OhlcvHistoryEntity
 import com.ant.cointrading.repository.OhlcvHistoryRepository
-import kotlinx.coroutines.async
-import kotlinx.coroutines.coroutineScope
 import org.slf4j.LoggerFactory
 import org.springframework.scheduling.annotation.Scheduled
 import org.springframework.stereotype.Component

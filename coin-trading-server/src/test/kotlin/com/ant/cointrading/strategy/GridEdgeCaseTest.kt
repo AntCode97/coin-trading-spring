@@ -76,22 +76,23 @@ class GridEdgeCaseTest {
             val levels = 5
             val spacing = GRID_SPACING_PERCENT / 100.0
 
-            // 최저 매수 레벨 (레벨 5)
+            // 최저 매수 레벨 (레벨 5): 137M * (1 - 0.05) = 130,150,000
             val lowestBuyPrice = basePrice.multiply(
                 BigDecimal.ONE - BigDecimal(spacing * levels)
             ).setScale(0, java.math.RoundingMode.DOWN)
 
-            // 최고 매도 레벨 (레벨 5)
+            // 최고 매도 레벨 (레벨 5): 137M * (1 + 0.05) = 143,850,000
             val highestSellPrice = basePrice.multiply(
                 BigDecimal.ONE + BigDecimal(spacing * levels)
             ).setScale(0, java.math.RoundingMode.UP)
 
-            val currentPrice = BigDecimal("132000000")
+            // 최저 매수가 미만으로 하락한 경우 (범위 이탈)
+            val currentPrice = BigDecimal("129000000")
 
             // 조건: 현재가 < 최저 매수가 OR 현재가 > 최고 매도가
             val shouldReset = currentPrice < lowestBuyPrice || currentPrice > highestSellPrice
 
-            assertTrue(shouldReset, "그리드 범위 이탈 시 재설정 필요")
+            assertTrue(shouldReset, "그리드 범위 이탈 시 재설정 필요 (current: $currentPrice < lowestBuy: $lowestBuyPrice)")
         }
 
         @Test
@@ -151,10 +152,11 @@ class GridEdgeCaseTest {
             val currentPrice = BigDecimal("132000000")
             val shouldStopLoss = currentPrice <= stopLossPrice
 
-            // 132,000,000 < 132,917,400 (135,630,000 * 0.98)
-            // -2% 손절가 도달 전 재설정 발생
+            // stopLossPrice = 135,630,000 * 0.98 = 132,917,400
+            // currentPrice = 132,000,000 < stopLossPrice = 132,917,400
+            // -2% 손절가 도달함
 
-            assertFalse(shouldStopLoss, "손절가 도달 전이지만 재설정로 손실 발생")
+            assertTrue(shouldStopLoss, "손절가 도달: current($currentPrice) <= stopLoss($stopLossPrice)")
         }
 
         @Test

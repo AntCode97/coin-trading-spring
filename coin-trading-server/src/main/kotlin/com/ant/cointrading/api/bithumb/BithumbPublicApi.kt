@@ -120,7 +120,7 @@ class BithumbPublicApi(
         } catch (e: Exception) {
             log.error("Failed to get OHLCV for $market: ${e.message}", e)
             eventPublisher.publishEvent(TradingErrorEvent(
-                source = this,
+                eventSource = this,
                 component = "BithumbPublicApi",
                 operation = "getOhlcv",
                 market = market,
@@ -183,7 +183,7 @@ class BithumbPublicApi(
         } catch (e: Exception) {
             log.error("Failed to get current price for $markets: ${e.message}", e)
             eventPublisher.publishEvent(TradingErrorEvent(
-                source = this,
+                eventSource = this,
                 component = "BithumbPublicApi",
                 operation = "getCurrentPrice",
                 market = markets,
@@ -246,7 +246,7 @@ class BithumbPublicApi(
         } catch (e: Exception) {
             log.error("Failed to get orderbook for $markets: ${e.message}", e)
             eventPublisher.publishEvent(TradingErrorEvent(
-                source = this,
+                eventSource = this,
                 component = "BithumbPublicApi",
                 operation = "getOrderbook",
                 market = markets,
@@ -270,7 +270,7 @@ class BithumbPublicApi(
         } catch (e: Exception) {
             log.error("Failed to get market list: {}", e.message, e)
             eventPublisher.publishEvent(TradingErrorEvent(
-                source = this,
+                eventSource = this,
                 component = "BithumbPublicApi",
                 operation = "getMarketAll",
                 market = null,
@@ -340,7 +340,7 @@ class BithumbPublicApi(
         } catch (e: Exception) {
             log.error("Failed to get trades ticks for $market: ${e.message}", e)
             eventPublisher.publishEvent(TradingErrorEvent(
-                source = this,
+                eventSource = this,
                 component = "BithumbPublicApi",
                 operation = "getTradesTicks",
                 market = market,
@@ -370,7 +370,7 @@ class BithumbPublicApi(
         } catch (e: Exception) {
             log.error("Failed to get virtual asset warning: {}", e.message, e)
             eventPublisher.publishEvent(TradingErrorEvent(
-                source = this,
+                eventSource = this,
                 component = "BithumbPublicApi",
                 operation = "getVirtualAssetWarning",
                 market = null,

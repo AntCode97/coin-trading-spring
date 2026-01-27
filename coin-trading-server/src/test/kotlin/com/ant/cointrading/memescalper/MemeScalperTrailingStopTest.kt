@@ -117,14 +117,14 @@ class MemeScalperTrailingStopTest {
 
             // 기대 효과:
             // - KRW-PLUME (0.85%) → 트리거 도달 (현재 미달성)
-            // - KRW-PENGU (0.48%) → 트리거 도달 (현재 미달성)
-            // - KRW-F (0.22%) → 트리거 도달 (현재 미달성)
-            // - KRW-ZRC (0.14%) → 트리거 도달 (현재 미달성)
+            // - KRW-PENGU (0.48%) → 트리거 미달성 (0.48 < 0.5)
+            // - KRW-F (0.22%) → 트리거 미달성
+            // - KRW-ZRC (0.14%) → 트리거 미달성
 
             val additionalTrades = listOf(0.85, 0.48, 0.22, 0.14)
             val wouldTrigger = additionalTrades.count { it >= proposedTrigger }
 
-            assertEquals(4, wouldTrigger, "0.5% 트리거 시 4건 추가 활성화")
+            assertEquals(1, wouldTrigger, "0.5% 트리거 시 KRW-PLUME 1건만 추가 활성화")
         }
 
         @Test
@@ -279,8 +279,9 @@ class MemeScalperTrailingStopTest {
             )
 
             atrExamples.forEach { (atr, expectedTrigger) ->
-                assertEquals(expectedTrigger, minOf(1.5, maxOf(0.3, atr * 0.3)),
-                    "ATR ${atr}% → 트리거 ${expectedTrigger}%")
+                val actualTrigger = minOf(1.5, maxOf(0.3, atr * 0.3))
+                assertEquals(expectedTrigger, actualTrigger, 0.01,
+                    "ATR ${atr}% → 트리거 ${expectedTrigger}% (actual: $actualTrigger)")
             }
         }
     }

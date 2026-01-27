@@ -43,7 +43,7 @@ class ErrorEventHandler(
                     appendLine("**마켓**: `${event.market}`")
                 }
                 appendLine("**에러**: `${event.errorMessage}`")
-                appendLine("**시간**: `${event.timestamp.format(dateFormatter)}`")
+                appendLine("**시간**: `${dateFormatter.format(event.timestamp)}`")
                 appendLine()
                 appendLine("```")
                 appendLine(stackTrace)
