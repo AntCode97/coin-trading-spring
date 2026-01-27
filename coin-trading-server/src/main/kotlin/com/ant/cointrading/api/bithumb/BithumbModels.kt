@@ -20,7 +20,8 @@ data class TickerInfo(
     @JsonProperty("acc_trade_volume") val accTradeVolume: BigDecimal?,
     @JsonProperty("acc_trade_price") val accTradePrice: BigDecimal?,
     @JsonProperty("timestamp") val timestamp: Long?,
-    @JsonProperty("trade_date") val tradeDate: String?
+    @JsonProperty("trade_date") val tradeDate: String?,
+    @JsonProperty("trade_time") val tradeTime: String? = null
 )
 
 /**

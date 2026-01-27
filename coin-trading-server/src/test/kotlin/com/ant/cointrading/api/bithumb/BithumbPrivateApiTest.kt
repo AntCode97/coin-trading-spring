@@ -6,7 +6,7 @@ import org.junit.jupiter.api.DisplayName
 import org.junit.jupiter.api.Nested
 import org.junit.jupiter.api.Test
 import org.springframework.test.util.ReflectionTestUtils
-import org.springframework.web.reactive.function.client.WebClient
+import org.springframework.web.client.RestClient
 import org.mockito.kotlin.mock
 import java.math.BigDecimal
 import kotlin.test.assertEquals
@@ -26,14 +26,14 @@ import kotlin.test.assertTrue
 class BithumbPrivateApiTest {
 
     private lateinit var bithumbPrivateApi: BithumbPrivateApi
-    private lateinit var mockWebClient: WebClient
+    private lateinit var mockRestClient: RestClient
 
     private val testAccessKey = "test_access_key"
     private val testSecretKey = "test_secret_key_12345678"
 
     @BeforeEach
     fun setup() {
-        mockWebClient = mock<WebClient>()
+        mockRestClient = mock<RestClient>()
 
         val properties = BithumbProperties(
             baseUrl = "https://api.bithumb.com",
@@ -42,7 +42,7 @@ class BithumbPrivateApiTest {
         )
 
         bithumbPrivateApi = BithumbPrivateApi(
-            bithumbWebClient = mockWebClient,
+            bithumbRestClient = mockRestClient,
             properties = properties,
             objectMapper = com.fasterxml.jackson.databind.ObjectMapper()
         )

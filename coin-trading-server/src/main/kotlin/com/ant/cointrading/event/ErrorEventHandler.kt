@@ -6,6 +6,7 @@ import org.springframework.context.event.EventListener
 import org.springframework.scheduling.annotation.Async
 import org.springframework.stereotype.Component
 import java.io.StringWriter
+import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 
 /**
@@ -21,6 +22,7 @@ class ErrorEventHandler(
     private val log = LoggerFactory.getLogger(javaClass)
 
     private val dateFormatter = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss")
+        .withZone(ZoneId.of("Asia/Seoul"))
 
     @Async
     @EventListener
