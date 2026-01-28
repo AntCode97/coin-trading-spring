@@ -30,6 +30,7 @@ data class TickerInfo(
 /**
  * 마켓 정보
  */
+@JsonIgnoreProperties(ignoreUnknown = true)
 data class MarketInfo(
     @JsonProperty("market") val market: String,
     @JsonProperty("korean_name") val koreanName: String?,
@@ -40,6 +41,7 @@ data class MarketInfo(
 /**
  * 호가창 정보
  */
+@JsonIgnoreProperties(ignoreUnknown = true)
 data class OrderbookInfo(
     @JsonProperty("market") val market: String,
     @JsonProperty("timestamp") val timestamp: Long?,
@@ -51,6 +53,7 @@ data class OrderbookInfo(
 /**
  * 호가 단위
  */
+@JsonIgnoreProperties(ignoreUnknown = true)
 data class OrderbookUnit(
     @JsonProperty("ask_price") val askPrice: BigDecimal,
     @JsonProperty("bid_price") val bidPrice: BigDecimal,
@@ -61,6 +64,7 @@ data class OrderbookUnit(
 /**
  * 잔고 정보
  */
+@JsonIgnoreProperties(ignoreUnknown = true)
 data class Balance(
     @JsonProperty("currency") val currency: String,
     @JsonProperty("balance") val balance: BigDecimal,
@@ -73,6 +77,7 @@ data class Balance(
 /**
  * 주문 응답
  */
+@JsonIgnoreProperties(ignoreUnknown = true)
 data class OrderResponse(
     @JsonProperty("uuid") val uuid: String,
     @JsonProperty("side") val side: String,
@@ -112,6 +117,7 @@ data class CandleResponse(
 /**
  * 체결 내역 API 응답
  */
+@JsonIgnoreProperties(ignoreUnknown = true)
 data class TradeResponse(
     @JsonProperty("market") val market: String,
     @JsonProperty("trade_date_utc") val tradeDateUtc: String,
@@ -136,6 +142,7 @@ data class TradeResponse(
  * - DEPOSIT_AMOUNT_SUDDEN_FLUCTUATION: 입금량 급등
  * - PRICE_DIFFERENCE_HIGH: 해외 가격 괴리
  */
+@JsonIgnoreProperties(ignoreUnknown = true)
 data class VirtualAssetWarning(
     @JsonProperty("market") val market: String,
     @JsonProperty("warning_type") val warningType: String?,
@@ -145,9 +152,11 @@ data class VirtualAssetWarning(
 /**
  * API 에러 응답
  */
+@JsonIgnoreProperties(ignoreUnknown = true)
 data class BithumbError(
     @JsonProperty("error") val error: ErrorDetail?
 ) {
+    @JsonIgnoreProperties(ignoreUnknown = true)
     data class ErrorDetail(
         @JsonProperty("name") val name: String?,
         @JsonProperty("message") val message: String?
