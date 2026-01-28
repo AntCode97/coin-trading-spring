@@ -2,6 +2,7 @@ package com.ant.cointrading.volumesurge
 
 import com.ant.cointrading.api.bithumb.BithumbPrivateApi
 import com.ant.cointrading.api.bithumb.BithumbPublicApi
+import com.ant.cointrading.config.TradingConstants
 import com.ant.cointrading.config.VolumeSurgeProperties
 import com.ant.cointrading.engine.GlobalPositionManager
 import com.ant.cointrading.extension.isPositive
@@ -613,17 +614,6 @@ class VolumeSurgeEngine(
         }
     }
 
-    companion object {
-        // 빗썸 최소 주문 금액 (KRW) - 수수료(0.04%) 고려
-        private val MIN_ORDER_AMOUNT_KRW = BigDecimal("5100")
-
-        // 청산 재시도 백오프 (초)
-        private const val CLOSE_RETRY_BACKOFF_SECONDS = 10L
-
-        // 최대 청산 시도 횟수
-        private const val MAX_CLOSE_ATTEMPTS = 5
-    }
-
     /**
      * 포지션 청산
      *
@@ -646,15 +636,15 @@ class VolumeSurgeEngine(
         val lastAttempt = position.lastCloseAttempt
         if (lastAttempt != null) {
             val elapsed = java.time.Duration.between(lastAttempt, Instant.now()).seconds
-            if (elapsed < CLOSE_RETRY_BACKOFF_SECONDS) {
-                log.debug("[$market] 백오프 중 (${elapsed}s < ${CLOSE_RETRY_BACKOFF_SECONDS}s), 스킵")
+            if (elapsed < TradingConstants.CLOSE_RETRY_BACKOFF_SECONDS) {
+                log.debug("[$market] 백오프 중 (${elapsed}s < ${TradingConstants.CLOSE_RETRY_BACKOFF_SECONDS}s), 스킵")
                 return
             }
         }
 
         // 최대 시도 횟수 체크
-        if (position.closeAttemptCount >= MAX_CLOSE_ATTEMPTS) {
-            log.error("[$market] 청산 시도 ${MAX_CLOSE_ATTEMPTS}회 초과, ABANDONED 처리")
+        if (position.closeAttemptCount >= TradingConstants.MAX_CLOSE_ATTEMPTS) {
+            log.error("[$market] 청산 시도 ${TradingConstants.MAX_CLOSE_ATTEMPTS}회 초과, ABANDONED 처리")
             handleAbandonedPosition(position, exitPrice, "ABANDONED_MAX_ATTEMPTS")
             return
         }
@@ -682,10 +672,10 @@ class VolumeSurgeEngine(
         val positionAmount = BigDecimal(sellQuantity * exitPrice)
 
         // 최소 금액 미달 체크 (손절 포함 모든 케이스에 적용)
-        val isBelowMinAmount = positionAmount < MIN_ORDER_AMOUNT_KRW
+        val isBelowMinAmount = positionAmount < TradingConstants.MIN_ORDER_AMOUNT_KRW
 
         if (isBelowMinAmount) {
-            log.warn("[$market] 최소 주문 금액 미달 (${positionAmount.toPlainString()}원 < ${MIN_ORDER_AMOUNT_KRW}원), ABANDONED 처리")
+            log.warn("[$market] 최소 주문 금액 미달 (${positionAmount.toPlainString()}원 < ${TradingConstants.MIN_ORDER_AMOUNT_KRW}원), ABANDONED 처리")
             handleAbandonedPosition(position, exitPrice, "ABANDONED_MIN_AMOUNT")
             return
         }
@@ -752,7 +742,7 @@ class VolumeSurgeEngine(
         }
 
         // 재시도 가능한 에러: OPEN으로 되돌림 (백오프 후 재시도)
-        log.warn("[$market] 일시적 에러, 백오프 후 재시도 예정 (시도 ${position.closeAttemptCount}/${MAX_CLOSE_ATTEMPTS})")
+        log.warn("[$market] 일시적 에러, 백오프 후 재시도 예정 (시도 ${position.closeAttemptCount}/${TradingConstants.MAX_CLOSE_ATTEMPTS})")
         position.status = "OPEN"
         position.closeOrderId = null
         tradeRepository.save(position)

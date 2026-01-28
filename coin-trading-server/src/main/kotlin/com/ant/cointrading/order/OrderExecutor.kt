@@ -3,6 +3,7 @@ package com.ant.cointrading.order
 import com.ant.cointrading.api.bithumb.BithumbPrivateApi
 import com.ant.cointrading.api.bithumb.OrderResponse
 import com.ant.cointrading.config.TradingProperties
+import com.ant.cointrading.config.TradingConstants
 import com.ant.cointrading.model.*
 import com.ant.cointrading.notification.SlackNotifier
 import com.ant.cointrading.repository.TradeEntity
@@ -48,42 +49,14 @@ class OrderExecutor(
     private val log = LoggerFactory.getLogger(OrderExecutor::class.java)
 
     companion object {
-        // 주문 상태 확인 설정
+        // 주문 상태 확인 설정 (OrderExecutor 전용)
         const val MAX_STATUS_CHECK_RETRIES = 3
         const val STATUS_CHECK_INITIAL_DELAY_MS = 500L
         const val STATUS_CHECK_MAX_DELAY_MS = 2000L
 
-        // 지정가 주문 설정
+        // 지정가 주문 설정 (OrderExecutor 전용)
         const val QUICK_FILL_CHECK_MS = 500L            // 빠른 체결 확인 대기 시간
         const val QUICK_FILL_CHECK_RETRIES = 2          // 빠른 확인 재시도 횟수
-
-        // 슬리피지 경고 임계값
-        const val SLIPPAGE_WARNING_PERCENT = 0.5
-        const val SLIPPAGE_CRITICAL_PERCENT = 2.0
-
-        // 부분 체결 임계값 (90% 이상 체결이면 성공으로 간주)
-        const val PARTIAL_FILL_SUCCESS_THRESHOLD = 0.9
-
-        // 주문 상태
-        const val ORDER_STATE_DONE = "done"
-        const val ORDER_STATE_WAIT = "wait"
-        const val ORDER_STATE_CANCEL = "cancel"
-
-        // 시장가 주문 사용 조건 (퀀트 지식 기반)
-        const val HIGH_VOLATILITY_THRESHOLD = 1.5      // 1분 변동성 1.5% 초과 시 시장가
-        const val HIGH_CONFIDENCE_THRESHOLD = 85.0     // 신뢰도 85% 초과 시 시장가
-        const val THIN_LIQUIDITY_THRESHOLD = 5.0       // 유동성 배율 5 미만 시 시장가
-
-        // 시장가를 선호하는 전략들 (빠른 체결이 중요)
-        val MARKET_ORDER_STRATEGIES = setOf(
-            "ORDER_BOOK_IMBALANCE",  // 초단기 전략
-            "MOMENTUM",              // 모멘텀 전략
-            "BREAKOUT",              // 돌파 전략
-            "MEME_SCALPER"           // 세력 코인 초단타
-        )
-
-        // 빗썸 최소 주문 금액 (KRW) - 수수료(0.04%) 고려하여 여유 있게 설정
-        val MIN_ORDER_AMOUNT_KRW = BigDecimal("5100")
     }
 
     /**
@@ -93,13 +66,13 @@ class OrderExecutor(
         val side = if (signal.action == SignalAction.BUY) OrderSide.BUY else OrderSide.SELL
 
         // 0. 최소 주문 금액 검증 (빗썸 5000원)
-        if (positionSize < MIN_ORDER_AMOUNT_KRW) {
-            log.warn("[${signal.market}] 최소 주문 금액 미달: ${positionSize}원 < ${MIN_ORDER_AMOUNT_KRW}원")
+        if (positionSize < TradingConstants.MIN_ORDER_AMOUNT_KRW) {
+            log.warn("[${signal.market}] 최소 주문 금액 미달: ${positionSize}원 < ${TradingConstants.MIN_ORDER_AMOUNT_KRW}원")
             return OrderResult(
                 success = false,
                 market = signal.market,
                 side = side,
-                message = "최소 주문 금액(${MIN_ORDER_AMOUNT_KRW}원) 미달: ${positionSize}원",
+                message = "최소 주문 금액(${TradingConstants.MIN_ORDER_AMOUNT_KRW}원) 미달: ${positionSize}원",
                 rejectionReason = OrderRejectionReason.BELOW_MIN_ORDER_AMOUNT
             )
         }
@@ -318,7 +291,7 @@ class OrderExecutor(
         val reasons = mutableListOf<String>()
 
         // 1. 초단기/모멘텀 전략은 시장가 사용
-        if (signal.strategy.uppercase() in MARKET_ORDER_STRATEGIES) {
+        if (signal.strategy.uppercase() in TradingConstants.MARKET_ORDER_STRATEGIES) {
             reasons.add("전략(${signal.strategy})")
             log.info("[${signal.market}] 시장가 선택: ${reasons.joinToString(", ")}")
             return OrderType.MARKET
@@ -326,18 +299,18 @@ class OrderExecutor(
 
         // 2. 고변동성 시장 - 빠른 체결 필요
         val volatility = marketCondition.volatility1Min ?: 0.0
-        if (volatility > HIGH_VOLATILITY_THRESHOLD) {
+        if (volatility > TradingConstants.HIGH_VOLATILITY_THRESHOLD) {
             reasons.add("고변동성(${String.format("%.2f", volatility)}%)")
         }
 
         // 3. 강한 신뢰도 신호 - 기회를 놓치면 안 됨
-        if (signal.confidence > HIGH_CONFIDENCE_THRESHOLD) {
+        if (signal.confidence > TradingConstants.HIGH_CONFIDENCE_THRESHOLD) {
             reasons.add("고신뢰도(${String.format("%.1f", signal.confidence)}%)")
         }
 
         // 4. 얇은 호가창 - 지정가로 해도 슬리피지 발생
         val liquidity = marketCondition.liquidityRatio ?: Double.MAX_VALUE
-        if (liquidity < THIN_LIQUIDITY_THRESHOLD) {
+        if (liquidity < TradingConstants.THIN_LIQUIDITY_THRESHOLD) {
             reasons.add("얇은호가(${String.format("%.1f", liquidity)}x)")
         }
 
@@ -428,7 +401,7 @@ class OrderExecutor(
         // 2. 빠른 체결 확인 (500ms x 2회)
         val quickFillResult = checkQuickFill(signal.market, orderResponse.uuid)
 
-        if (quickFillResult != null && quickFillResult.state == ORDER_STATE_DONE) {
+        if (quickFillResult != null && quickFillResult.state == TradingConstants.ORDER_STATE_DONE) {
             log.info("[${signal.market}] 지정가 주문 즉시 체결됨")
             return OrderSubmitResult(quickFillResult, OrderType.LIMIT, limitPrice, quantity)
         }
@@ -478,11 +451,11 @@ class OrderExecutor(
                 val fillRate = calculateFillRate(response)
 
                 when {
-                    response.state == ORDER_STATE_DONE -> {
+                    response.state == TradingConstants.ORDER_STATE_DONE -> {
                         log.info("[$market] 빠른 체결 확인: 완전 체결")
                         return response
                     }
-                    fillRate >= PARTIAL_FILL_SUCCESS_THRESHOLD -> {
+                    fillRate >= TradingConstants.PARTIAL_FILL_SUCCESS_THRESHOLD -> {
                         log.info("[$market] 빠른 체결 확인: ${String.format("%.1f", fillRate * 100)}% 체결 (충분)")
                         return response
                     }
@@ -611,15 +584,15 @@ class OrderExecutor(
                 val state = response.state
 
                 when (state) {
-                    ORDER_STATE_DONE -> {
+                    TradingConstants.ORDER_STATE_DONE -> {
                         log.info("[$market] 주문 완료 확인: orderId=$orderId")
                         return response
                     }
-                    ORDER_STATE_CANCEL -> {
+                    TradingConstants.ORDER_STATE_CANCEL -> {
                         log.warn("[$market] 주문 취소됨: orderId=$orderId")
                         return response
                     }
-                    ORDER_STATE_WAIT -> {
+                    TradingConstants.ORDER_STATE_WAIT -> {
                         // 대기 중 - 부분 체결 가능성
                         val executedVolume = response.executedVolume ?: BigDecimal.ZERO
                         val totalVolume = response.volume ?: BigDecimal.ONE
@@ -629,7 +602,7 @@ class OrderExecutor(
                             log.info("[$market] 부분 체결 중: ${fillRate.multiply(BigDecimal(100))}% (시도 $attempt/$MAX_STATUS_CHECK_RETRIES)")
 
                             // 90% 이상 체결이면 성공으로 간주
-                            if (fillRate.toDouble() >= PARTIAL_FILL_SUCCESS_THRESHOLD) {
+                            if (fillRate.toDouble() >= TradingConstants.PARTIAL_FILL_SUCCESS_THRESHOLD) {
                                 log.info("[$market] 부분 체결 임계값 초과 - 성공으로 처리")
                                 return response
                             }
@@ -724,7 +697,7 @@ class OrderExecutor(
         }
 
         // 슬리피지 경고
-        if (slippagePercent > SLIPPAGE_CRITICAL_PERCENT) {
+        if (slippagePercent > TradingConstants.SLIPPAGE_CRITICAL_PERCENT) {
             log.error("[$market] 크리티컬 슬리피지: ${String.format("%.3f", slippagePercent)}%")
             slackNotifier.sendError(market, """
                 슬리피지 경고 (CRITICAL)
@@ -735,7 +708,7 @@ class OrderExecutor(
 
                 시장 유동성 확인 필요
             """.trimIndent())
-        } else if (slippagePercent > SLIPPAGE_WARNING_PERCENT) {
+        } else if (slippagePercent > TradingConstants.SLIPPAGE_WARNING_PERCENT) {
             log.warn("[$market] 슬리피지 경고: ${String.format("%.3f", slippagePercent)}%")
         }
 
@@ -749,7 +722,7 @@ class OrderExecutor(
             if (isPartialFill) {
                 append(" (부분: ${String.format("%.1f", fillRatePercent)}%)")
             }
-            if (slippagePercent > SLIPPAGE_WARNING_PERCENT) {
+            if (slippagePercent > TradingConstants.SLIPPAGE_WARNING_PERCENT) {
                 append(" [슬리피지: ${String.format("%.2f", slippagePercent)}%]")
             }
         }

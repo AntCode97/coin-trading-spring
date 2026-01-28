@@ -3,6 +3,7 @@ package com.ant.cointrading.memescalper
 import com.ant.cointrading.api.bithumb.BithumbPrivateApi
 import com.ant.cointrading.api.bithumb.BithumbPublicApi
 import com.ant.cointrading.config.MemeScalperProperties
+import com.ant.cointrading.config.TradingConstants
 import com.ant.cointrading.engine.GlobalPositionManager
 import com.ant.cointrading.model.SignalAction
 import com.ant.cointrading.model.TradingSignal
@@ -72,13 +73,9 @@ class MemeScalperEngine(
     private var lastResetDate = LocalDate.now()
 
     companion object {
-        private val MIN_ORDER_AMOUNT = BigDecimal("5100")
-        private const val CLOSE_RETRY_BACKOFF_SECONDS = 5L
-        private const val MAX_CLOSE_ATTEMPTS = 3
-
-        // 스캘핑 최소 보유 시간 (초) - 수수료 0.08% 고려
-        // 너무 빠른 청산은 수수료만 날림
-        private const val MIN_HOLDING_SECONDS = 10L
+        // MemeScalper 전용 상수 (초단타 전략)
+        private const val CLOSE_RETRY_BACKOFF_SECONDS = 5L    // 더 빠른 재시도
+        private const val MAX_CLOSE_ATTEMPTS = 3               // 더 적은 시도
 
         // 최소 수익률 (%) - 수수료 0.08% × 2 = 0.16% 이상이어야 실익
         private const val MIN_PROFIT_PERCENT = 0.1
@@ -354,8 +351,8 @@ class MemeScalperEngine(
 
         // 체결 금액 검증 - 최소 금액 이하면 의미 없음
         val executedAmount = BigDecimal(executedPrice * executedQuantity)
-        if (executedAmount < MIN_ORDER_AMOUNT) {
-            log.warn("[$market] 체결 금액 미달 (${executedAmount}원 < ${MIN_ORDER_AMOUNT}원)")
+        if (executedAmount < TradingConstants.MIN_ORDER_AMOUNT_KRW) {
+            log.warn("[$market] 체결 금액 미달 (${executedAmount}원 < ${TradingConstants.MIN_ORDER_AMOUNT_KRW}원)")
             // 이미 체결되었으므로 포지션은 생성하되 경고
         }
 
@@ -452,7 +449,7 @@ class MemeScalperEngine(
 
         // 1. 최소 보유 시간 체크 - 수수료(0.08%) 고려 최소 10초 보유
         val holdingSeconds = ChronoUnit.SECONDS.between(position.entryTime, Instant.now())
-        if (holdingSeconds < MIN_HOLDING_SECONDS) {
+        if (holdingSeconds < TradingConstants.MIN_HOLDING_SECONDS) {
             return  // 아직 판단하지 않음 - 너무 빠른 청산은 수수료 손실
         }
 
@@ -635,7 +632,7 @@ class MemeScalperEngine(
         val positionAmount = BigDecimal(sellQuantity * exitPrice)
 
         // 최소 금액 미달 체크 (손절 포함 모든 케이스에 적용)
-        if (positionAmount < MIN_ORDER_AMOUNT) {
+        if (positionAmount < TradingConstants.MIN_ORDER_AMOUNT_KRW) {
             log.warn("[$market] 최소 주문 금액 미달 (${positionAmount.toPlainString()}원)")
             handleAbandonedPosition(position, exitPrice, "MIN_AMOUNT")
             return
