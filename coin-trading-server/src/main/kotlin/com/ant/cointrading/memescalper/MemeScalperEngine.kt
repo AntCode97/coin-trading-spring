@@ -552,21 +552,13 @@ class MemeScalperEngine(
     private fun closePosition(position: MemeScalperTradeEntity, exitPrice: Double, reason: String) {
         val market = position.market
 
-        if (position.status == "CLOSING") {
+        // PositionHelper로 체크 (전략별 상수 사용)
+        if (!PositionHelper.canClosePosition(position.status, position.lastCloseAttempt, CLOSE_RETRY_BACKOFF_SECONDS)) {
             return
         }
 
-        // 백오프 체크
-        val lastAttempt = position.lastCloseAttempt
-        if (lastAttempt != null) {
-            val elapsed = java.time.Duration.between(lastAttempt, Instant.now()).seconds
-            if (elapsed < CLOSE_RETRY_BACKOFF_SECONDS) {
-                return
-            }
-        }
-
-        // 최대 시도 횟수 체크
-        if (position.closeAttemptCount >= MAX_CLOSE_ATTEMPTS) {
+        if (PositionHelper.isMaxAttemptsExceeded(position.closeAttemptCount, MAX_CLOSE_ATTEMPTS)) {
+            log.error("[$market] 청산 시도 ${MAX_CLOSE_ATTEMPTS}회 초과, ABANDONED 처리")
             handleAbandonedPosition(position, exitPrice, "MAX_ATTEMPTS")
             return
         }
