@@ -5,6 +5,8 @@ import com.ant.cointrading.api.bithumb.BithumbPublicApi
 import com.ant.cointrading.config.MemeScalperProperties
 import com.ant.cointrading.config.TradingConstants
 import com.ant.cointrading.engine.GlobalPositionManager
+import com.ant.cointrading.engine.PositionHelper
+import com.ant.cointrading.engine.PositionStates
 import com.ant.cointrading.model.SignalAction
 import com.ant.cointrading.model.TradingSignal
 import com.ant.cointrading.notification.SlackNotifier
@@ -611,8 +613,8 @@ class MemeScalperEngine(
 
         log.info("[$market] 청산 시도 #${position.closeAttemptCount + 1}: $reason")
 
-        // [BUG FIX] 실제 잔고 확인
-        val coinSymbol = market.removePrefix("KRW-")
+        // 실제 잔고 확인
+        val coinSymbol = PositionHelper.extractCoinSymbol(market)
         val actualBalance = try {
             bithumbPrivateApi.getBalances()?.find { it.currency == coinSymbol }?.balance ?: BigDecimal.ZERO
         } catch (e: Exception) {
@@ -631,9 +633,9 @@ class MemeScalperEngine(
         val sellQuantity = actualBalance.toDouble().coerceAtMost(position.quantity)
         val positionAmount = BigDecimal(sellQuantity * exitPrice)
 
-        // 최소 금액 미달 체크 (손절 포함 모든 케이스에 적용)
-        if (positionAmount < TradingConstants.MIN_ORDER_AMOUNT_KRW) {
-            log.warn("[$market] 최소 주문 금액 미달 (${positionAmount.toPlainString()}원)")
+        // 최소 금액 미달 체크
+        if (PositionHelper.isBelowMinAmount(positionAmount)) {
+            log.warn("[$market] 최소 주문 금액 미달 - ABANDONED 처리")
             handleAbandonedPosition(position, exitPrice, "MIN_AMOUNT")
             return
         }

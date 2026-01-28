@@ -5,6 +5,8 @@ import com.ant.cointrading.api.bithumb.BithumbPublicApi
 import com.ant.cointrading.config.TradingConstants
 import com.ant.cointrading.config.VolumeSurgeProperties
 import com.ant.cointrading.engine.GlobalPositionManager
+import com.ant.cointrading.engine.PositionHelper
+import com.ant.cointrading.engine.PositionStates
 import com.ant.cointrading.extension.isPositive
 import com.ant.cointrading.extension.orDefault
 import com.ant.cointrading.extension.orZero
@@ -626,33 +628,22 @@ class VolumeSurgeEngine(
     private fun closePosition(position: VolumeSurgeTradeEntity, exitPrice: Double, reason: String) {
         val market = position.market
 
-        // 이미 CLOSING 상태면 중복 청산 방지
-        if (position.status == "CLOSING") {
-            log.debug("[$market] 이미 청산 진행 중 (CLOSING), 스킵")
+        // 중복 청산 방지
+        if (!PositionHelper.canClosePosition(position.status, position.lastCloseAttempt, TradingConstants.CLOSE_RETRY_BACKOFF_SECONDS)) {
             return
         }
 
-        // 백오프 체크: 마지막 시도 후 일정 시간 경과 확인
-        val lastAttempt = position.lastCloseAttempt
-        if (lastAttempt != null) {
-            val elapsed = java.time.Duration.between(lastAttempt, Instant.now()).seconds
-            if (elapsed < TradingConstants.CLOSE_RETRY_BACKOFF_SECONDS) {
-                log.debug("[$market] 백오프 중 (${elapsed}s < ${TradingConstants.CLOSE_RETRY_BACKOFF_SECONDS}s), 스킵")
-                return
-            }
-        }
-
         // 최대 시도 횟수 체크
-        if (position.closeAttemptCount >= TradingConstants.MAX_CLOSE_ATTEMPTS) {
+        if (PositionHelper.isMaxAttemptsExceeded(position.closeAttemptCount, TradingConstants.MAX_CLOSE_ATTEMPTS)) {
             log.error("[$market] 청산 시도 ${TradingConstants.MAX_CLOSE_ATTEMPTS}회 초과, ABANDONED 처리")
-            handleAbandonedPosition(position, exitPrice, "ABANDONED_MAX_ATTEMPTS")
+            handleAbandonedPosition(position, exitPrice, "MAX_ATTEMPTS")
             return
         }
 
         log.info("[$market] 포지션 청산 시도 #${position.closeAttemptCount + 1}: $reason, 가격=$exitPrice")
 
-        // [BUG FIX] 실제 잔고 확인 - DB 수량과 실제 잔고가 다를 수 있음
-        val coinSymbol = market.removePrefix("KRW-")
+        // 실제 잔고 확인
+        val coinSymbol = PositionHelper.extractCoinSymbol(market)
         val actualBalance = try {
             bithumbPrivateApi.getBalances()?.find { it.currency == coinSymbol }?.balance ?: BigDecimal.ZERO
         } catch (e: Exception) {
@@ -662,21 +653,19 @@ class VolumeSurgeEngine(
 
         // 실제 잔고가 없으면 이미 청산된 것으로 판단
         if (actualBalance <= BigDecimal.ZERO) {
-            log.warn("[$market] 실제 잔고 없음 (DB: ${position.quantity}, 실제: 0) - ABANDONED 처리")
-            handleAbandonedPosition(position, exitPrice, "ABANDONED_NO_BALANCE")
+            log.warn("[$market] 실제 잔고 없음 - ABANDONED 처리")
+            handleAbandonedPosition(position, exitPrice, "NO_BALANCE")
             return
         }
 
-        // 실제 매도 수량 결정 (DB 수량과 실제 잔고 중 작은 값)
+        // 실제 매도 수량 결정
         val sellQuantity = actualBalance.toDouble().coerceAtMost(position.quantity)
         val positionAmount = BigDecimal(sellQuantity * exitPrice)
 
-        // 최소 금액 미달 체크 (손절 포함 모든 케이스에 적용)
-        val isBelowMinAmount = positionAmount < TradingConstants.MIN_ORDER_AMOUNT_KRW
-
-        if (isBelowMinAmount) {
-            log.warn("[$market] 최소 주문 금액 미달 (${positionAmount.toPlainString()}원 < ${TradingConstants.MIN_ORDER_AMOUNT_KRW}원), ABANDONED 처리")
-            handleAbandonedPosition(position, exitPrice, "ABANDONED_MIN_AMOUNT")
+        // 최소 금액 미달 체크
+        if (PositionHelper.isBelowMinAmount(positionAmount)) {
+            log.warn("[$market] 최소 주문 금액 미달 - ABANDONED 처리")
+            handleAbandonedPosition(position, exitPrice, "MIN_AMOUNT")
             return
         }
 
