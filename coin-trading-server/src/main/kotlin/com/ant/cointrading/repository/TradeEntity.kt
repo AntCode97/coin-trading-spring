@@ -1,5 +1,6 @@
 package com.ant.cointrading.repository
 
+import com.ant.cointrading.config.TradingConstants
 import jakarta.persistence.*
 import java.math.BigDecimal
 import java.time.Instant
@@ -22,7 +23,7 @@ data class TradeRecord(
     val isSimulated: Boolean,
     val realizedPnl: BigDecimal? = null
 ) {
-    fun toEntity(): TradeEntity {
+    fun toEntity(feeRate: BigDecimal = TradingConstants.BITHUMB_FEE_RATE): TradeEntity {
         return TradeEntity(
             orderId = orderId,
             market = market,
@@ -31,7 +32,7 @@ data class TradeRecord(
             price = price.toDouble(),
             quantity = quantity.toDouble(),
             totalAmount = amount.toDouble(),
-            fee = amount.multiply(BigDecimal("0.0004")).toDouble(),  // 빗썸 수수료 0.04%
+            fee = amount.multiply(feeRate).toDouble(),
             pnl = realizedPnl?.toDouble(),
             pnlPercent = null,
             strategy = strategy,

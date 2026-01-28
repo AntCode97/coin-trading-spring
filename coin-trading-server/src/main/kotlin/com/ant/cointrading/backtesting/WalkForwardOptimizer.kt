@@ -184,7 +184,7 @@ class WalkForwardOptimizer(
                     strategy = strategy,
                     historicalData = candles,
                     initialCapital = 1_000_000.0,
-                    commissionRate = 0.0004
+                    commissionRate = tradingProperties.feeRate.toDouble()
                 )
 
                 log.debug(
