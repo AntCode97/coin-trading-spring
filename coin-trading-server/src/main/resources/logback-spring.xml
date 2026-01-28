@@ -3,16 +3,12 @@
     <!-- Spring Boot 기본 설정 포함 -->
     <include resource="org/springframework/boot/logging/logback/defaults.xml"/>
 
-    <!-- Slack Appender -->
+    <!-- Slack Appender (필터 없음 - ERROR 전용 logger에서만 사용) -->
     <appender name="SLACK" class="com.github.maricn.logback.SlackAppender">
-        <webhookUri>${SLACK_WEBHOOK_URL}</webhookUri>
+        <webhookUri>${SLACK_WEBHOOK_URL:-}</webhookUri>
         <layout class="ch.qos.logback.classic.PatternLayout">
             <pattern>%d{yyyy-MM-dd HH:mm:ss} [%thread] %-5level %logger{36} - %msg%n</pattern>
         </layout>
-        <!-- 에러 레벨 이상만 전송 -->
-        <filter class="ch.qos.logback.classic.ThresholdFilter">
-            <level>ERROR</level>
-        </filter>
     </appender>
 
     <!-- Console Appender -->
@@ -22,22 +18,21 @@
         </encoder>
     </appender>
 
-    <!-- File Appender -->
-    <appender name="FILE" class="ch.qos.logback.core.rolling.RollingFileAppender">
-        <file>logs/coin-trading.log</file>
-        <rollingPolicy class="ch.qos.logback.core.rolling.TimeBasedRollingPolicy">
-            <fileNamePattern>logs/coin-trading.%d{yyyy-MM-dd}.log</fileNamePattern>
-            <maxHistory>30</maxHistory>
-        </rollingPolicy>
+    <!-- File Appender (STDOUT으로 대체 - Docker 표준 출력) -->
+    <appender name="FILE" class="ch.qos.logback.core.ConsoleAppender">
         <encoder>
             <pattern>%d{yyyy-MM-dd HH:mm:ss.SSS} [%thread] %-5level %logger{36} - %msg%n</pattern>
         </encoder>
     </appender>
 
+    <!-- ERROR 전용 Logger (Slack으로만 전송) -->
+    <logger name="ERROR_LOGGER" level="ERROR" additivity="false">
+        <appender-ref ref="SLACK"/>
+    </logger>
+
     <!-- Logger 설정 -->
     <root level="INFO">
         <appender-ref ref="CONSOLE"/>
-        <appender-ref ref="SLACK"/>
         <appender-ref ref="FILE"/>
     </root>
 

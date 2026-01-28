@@ -12,7 +12,13 @@ services:
       - .env
     environment:
       - TZ=Asia/Seoul
+      - SLACK_WEBHOOK_URL=${SLACK_WEBHOOK_URL:-}
     restart: unless-stopped
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
     healthcheck:
       test: ["CMD", "wget", "-q", "--spider", "http://localhost:8080/actuator/health"]
       interval: 30s
