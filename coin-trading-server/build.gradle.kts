@@ -46,6 +46,9 @@ dependencies {
     // Environment Variables (.env 파일 로드)
     implementation("me.paulschwarz:spring-dotenv:4.0.0")
 
+    // Slack Logging (logback-slack-appender)
+    implementation("com.github.maricn:logback-slack-appender:1.4.0")
+
     // Configuration Processor
     annotationProcessor("org.springframework.boot:spring-boot-configuration-processor")
 

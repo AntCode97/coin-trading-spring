@@ -1,11 +1,13 @@
 package com.ant.cointrading.api.bithumb
 
+import com.fasterxml.jackson.annotation.JsonIgnoreProperties
 import com.fasterxml.jackson.annotation.JsonProperty
 import java.math.BigDecimal
 
 /**
  * 현재가 정보
  */
+@JsonIgnoreProperties(ignoreUnknown = true)
 data class TickerInfo(
     @JsonProperty("market") val market: String,
     @JsonProperty("trade_price") val tradePrice: BigDecimal,
@@ -21,6 +23,7 @@ data class TickerInfo(
     @JsonProperty("acc_trade_price") val accTradePrice: BigDecimal?,
     @JsonProperty("timestamp") val timestamp: Long?,
     @JsonProperty("trade_date") val tradeDate: String?,
+    @JsonProperty("trade_date_kst") val tradeDateKst: String? = null,
     @JsonProperty("trade_time") val tradeTime: String? = null
 )
 

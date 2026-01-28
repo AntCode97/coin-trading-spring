@@ -1,0 +1,53 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<configuration>
+    <!-- Spring Boot 기본 설정 포함 -->
+    <include resource="org/springframework/boot/logging/logback/defaults.xml"/>
+
+    <!-- Slack Appender -->
+    <appender name="SLACK" class="com.github.maricn.logback.SlackAppender">
+        <webhookUri>${SLACK_WEBHOOK_URL}</webhookUri>
+        <layout class="ch.qos.logback.classic.PatternLayout">
+            <pattern>%d{yyyy-MM-dd HH:mm:ss} [%thread] %-5level %logger{36} - %msg%n</pattern>
+        </layout>
+        <!-- 에러 레벨 이상만 전송 -->
+        <filter class="ch.qos.logback.classic.ThresholdFilter">
+            <level>ERROR</level>
+        </filter>
+    </appender>
+
+    <!-- Console Appender -->
+    <appender name="CONSOLE" class="ch.qos.logback.core.ConsoleAppender">
+        <encoder>
+            <pattern>%d{HH:mm:ss.SSS} [%thread] %-5level %logger{36} - %msg%n</pattern>
+        </encoder>
+    </appender>
+
+    <!-- File Appender -->
+    <appender name="FILE" class="ch.qos.logback.core.rolling.RollingFileAppender">
+        <file>logs/coin-trading.log</file>
+        <rollingPolicy class="ch.qos.logback.core.rolling.TimeBasedRollingPolicy">
+            <fileNamePattern>logs/coin-trading.%d{yyyy-MM-dd}.log</fileNamePattern>
+            <maxHistory>30</maxHistory>
+        </rollingPolicy>
+        <encoder>
+            <pattern>%d{yyyy-MM-dd HH:mm:ss.SSS} [%thread] %-5level %logger{36} - %msg%n</pattern>
+        </encoder>
+    </appender>
+
+    <!-- Logger 설정 -->
+    <root level="INFO">
+        <appender-ref ref="CONSOLE"/>
+        <appender-ref ref="SLACK"/>
+        <appender-ref ref="FILE"/>
+    </root>
+
+    <!-- 특정 패키지의 로그 레벨 조정 -->
+    <!-- BithumbPublicApi 에러는 WARN으로 (Jackson 역직렬화 에러 등) -->
+    <logger name="com.ant.cointrading.api.bithumb.BithumbPublicApi" level="WARN"/>
+
+    <!-- MarketConditionChecker 에러는 WARN으로 -->
+    <logger name="com.ant.cointrading.risk.MarketConditionChecker" level="WARN"/>
+
+    <!-- OrderExecutor 관련 에러는 WARN으로 -->
+    <logger name="com.ant.cointrading.order.OrderExecutor" level="WARN"/>
+</configuration>

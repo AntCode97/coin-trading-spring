@@ -80,11 +80,12 @@ class MarketConditionChecker(
             bithumbPublicApi.getOrderbook(apiMarket)?.firstOrNull()
         } catch (e: Exception) {
             recordApiError(market)
-            log.error("[$market] 호가창 조회 실패: ${e.message}")
+            // 스택트레이스 없이 간단 로그만 (Slack으로 전송되지 않음)
+            // log.error는 사용하지 않음
             return MarketConditionResult(
                 canTrade = false,
                 severity = ConditionSeverity.CRITICAL,
-                issues = listOf("호가창 조회 실패: ${e.message}"),
+                issues = listOf("호가창 조회 실패"),
                 spread = null,
                 liquidityRatio = null,
                 volatility1Min = null
