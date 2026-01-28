@@ -14,6 +14,7 @@ import com.ant.cointrading.order.OrderExecutor
 import com.ant.cointrading.regime.RegimeDetector
 import com.ant.cointrading.repository.*
 import com.ant.cointrading.risk.DynamicRiskRewardCalculator
+import com.ant.cointrading.risk.PnlCalculator
 import com.ant.cointrading.risk.StopLossCalculator
 import jakarta.annotation.PostConstruct
 import org.slf4j.LoggerFactory
@@ -765,27 +766,18 @@ class VolumeSurgeEngine(
     private fun finalizeClose(position: VolumeSurgeTradeEntity, actualExitPrice: Double, reason: String) {
         val market = position.market
 
-        // 손익 계산
-        val pnlAmount = if (position.entryPrice > 0 && position.quantity > 0) {
-            (actualExitPrice - position.entryPrice) * position.quantity
-        } else {
-            0.0
-        }
-        val pnlPercent = if (position.entryPrice > 0) {
-            ((actualExitPrice - position.entryPrice) / position.entryPrice) * 100
-        } else {
-            0.0
-        }
-
-        // NaN/Infinity 방지
-        val safePnlAmount = if (pnlAmount.isNaN() || pnlAmount.isInfinite()) 0.0 else pnlAmount
-        val safePnlPercent = if (pnlPercent.isNaN() || pnlPercent.isInfinite()) 0.0 else pnlPercent
+        // PnL 계산 (수수료 미포함 - 수수료는 OrderExecutor에서 계산)
+        val pnlResult = PnlCalculator.calculateWithoutFee(
+            entryPrice = position.entryPrice,
+            exitPrice = actualExitPrice,
+            quantity = position.quantity
+        )
 
         position.exitPrice = actualExitPrice
         position.exitTime = Instant.now()
         position.exitReason = reason
-        position.pnlAmount = safePnlAmount
-        position.pnlPercent = safePnlPercent
+        position.pnlAmount = pnlResult.pnlAmount
+        position.pnlPercent = pnlResult.pnlPercent
         position.status = "CLOSED"
 
         tradeRepository.save(position)
@@ -794,10 +786,10 @@ class VolumeSurgeEngine(
         highestPrices.remove(position.id)
 
         // 서킷 브레이커 업데이트
-        updateCircuitBreaker(safePnlAmount)
+        updateCircuitBreaker(pnlResult.pnlAmount)
 
         // Slack 알림
-        val emoji = if (safePnlAmount >= 0) "+" else ""
+        val emoji = if (pnlResult.pnlAmount >= 0) "+" else ""
         slackNotifier.sendSystemNotification(
             "Volume Surge 청산",
             """
@@ -805,14 +797,14 @@ class VolumeSurgeEngine(
             사유: $reason
             진입가: ${position.entryPrice}원
             청산가: ${actualExitPrice}원
-            손익: $emoji${String.format("%.0f", safePnlAmount)}원 (${String.format("%.2f", safePnlPercent)}%)
+            손익: $emoji${String.format("%.0f", pnlResult.pnlAmount)}원 (${String.format("%.2f", pnlResult.pnlPercent)}%)
             보유시간: ${ChronoUnit.MINUTES.between(position.entryTime, Instant.now())}분
             주문상태: 체결완료
             주문ID: ${position.closeOrderId ?: "N/A"}
             """.trimIndent()
         )
 
-        log.info("[$market] 청산 완료: 손익=${safePnlAmount}원 (${safePnlPercent}%)")
+        log.info("[$market] 청산 완료: 손익=${pnlResult.pnlAmount}원 (${pnlResult.pnlPercent}%)")
     }
 
     /**

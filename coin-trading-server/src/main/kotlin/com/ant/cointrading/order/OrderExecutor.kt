@@ -10,6 +10,7 @@ import com.ant.cointrading.repository.TradeRepository
 import com.ant.cointrading.risk.CircuitBreaker
 import com.ant.cointrading.risk.MarketConditionChecker
 import com.ant.cointrading.risk.MarketConditionResult
+import com.ant.cointrading.risk.PnlCalculator
 import org.slf4j.LoggerFactory
 import org.springframework.stereotype.Component
 import java.math.BigDecimal
@@ -836,11 +837,17 @@ class OrderExecutor(
                     val buyPrice = lastBuy.price
                     val buyFee = lastBuy.fee
 
-                    // PnL = (매도가 - 매수가) * 수량 - 매수수수료 - 매도수수료
-                    pnl = (tradePrice - buyPrice) * sellQuantity - buyFee - sellFee
+                    // PnL 계산 (수수료 포함)
+                    val pnlResult = PnlCalculator.calculate(
+                        entryPrice = buyPrice,
+                        exitPrice = tradePrice,
+                        quantity = sellQuantity,
+                        entryFee = buyFee,
+                        exitFee = sellFee
+                    )
 
-                    // PnL% = ((매도가 - 매수가) / 매수가) * 100
-                    pnlPercent = ((tradePrice - buyPrice) / buyPrice) * 100
+                    pnl = pnlResult.pnlAmount
+                    pnlPercent = pnlResult.pnlPercent
 
                     log.info("[${signal.market}] PnL 계산 완료: 매수가=${buyPrice}, 매도가=${tradePrice}, " +
                             "PnL=${String.format("%.0f", pnl)}원 (${String.format("%.2f", pnlPercent)}%)")
