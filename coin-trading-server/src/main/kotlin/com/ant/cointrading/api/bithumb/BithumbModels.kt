@@ -93,6 +93,7 @@ data class OrderResponse(
 /**
  * 캔들 (OHLCV) API 응답
  */
+@JsonIgnoreProperties(ignoreUnknown = true)
 data class CandleResponse(
     @JsonProperty("market") val market: String,
     @JsonProperty("candle_date_time_utc") val candleDateTimeUtc: String,
@@ -104,7 +105,8 @@ data class CandleResponse(
     @JsonProperty("timestamp") val timestamp: Long,
     @JsonProperty("candle_acc_trade_price") val candleAccTradePrice: BigDecimal,
     @JsonProperty("candle_acc_trade_volume") val candleAccTradeVolume: BigDecimal,
-    @JsonProperty("unit") val unit: Int? = null
+    @JsonProperty("unit") val unit: Int? = null,
+    @JsonProperty("prev_closing_price") val prevClosingPrice: BigDecimal? = null
 )
 
 /**

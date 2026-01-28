@@ -1,6 +1,7 @@
 package com.ant.cointrading.event
 
 import com.ant.cointrading.notification.SlackNotifier
+import com.fasterxml.jackson.core.JsonProcessingException
 import org.slf4j.LoggerFactory
 import org.springframework.context.event.EventListener
 import org.springframework.scheduling.annotation.Async
@@ -18,6 +19,10 @@ import java.time.Instant
  * @Async로 비동기 처리하여 메인 로직 방지
  *
  * 중복 에러 방지: 동일 컴포넌트/작업에 대해 5분 이내 재발생 시 알림 스킵
+ *
+ * Slack 알림 제외 대상:
+ * - Jackson 역직렬화 에러 (Bithumb API 응답 필드 변경 등 일시적 이슈)
+ * - BithumbPublicApi 데이터 조회 (getOhlcv, getCurrentPrice, getOrderbook, getTrades)
  */
 @Component
 class ErrorEventHandler(
@@ -32,14 +37,35 @@ class ErrorEventHandler(
     private val lastAlertTime = ConcurrentHashMap<String, Instant>()
     private val ALERT_COOLDOWN_MINUTES = 5L
 
+    // Slack 알림 제외 컴포넌트/작업 조합
+    private val SLACK_EXCLUDED = setOf(
+        "BithumbPublicApi:getOhlcv",
+        "BithumbPublicApi:getCurrentPrice",
+        "BithumbPublicApi:getOrderbook",
+        "BithumbPublicApi:getTrades",
+    )
+
     @Async
     @EventListener
     fun handleTradingError(event: TradingErrorEvent) {
         try {
+            // Jackson 역직렬화 에러는 Slack 알림 제외 (일시적 API 응답 변경 등)
+            if (event.exception is JsonProcessingException) {
+                log.debug("[${event.component}] Jackson 에러로 Slack 알림 스킵: ${event.operation}")
+                return
+            }
+
+            // BithumbPublicApi 데이터 조회 에러는 Slack 알림 제외
+            val key = "${event.component}:${event.operation}"
+            if (key in SLACK_EXCLUDED) {
+                log.debug("[${event.component}] Slack 알림 제외 대상: ${event.operation}")
+                return
+            }
+
             // 중복 체크
-            val key = buildAlertKey(event)
+            val alertKey = buildAlertKey(event)
             val now = Instant.now()
-            val lastTime = lastAlertTime[key]
+            val lastTime = lastAlertTime[alertKey]
 
             if (lastTime != null) {
                 val elapsedMinutes = java.time.Duration.between(lastTime, now).toMinutes()
@@ -78,7 +104,7 @@ class ErrorEventHandler(
                 message
             )
 
-            lastAlertTime[key] = now
+            lastAlertTime[alertKey] = now
             log.warn("[${event.component}] 에러 Slack 알림 전송: ${event.operation}")
         } catch (e: Exception) {
             log.error("에러 알림 전송 실패: ${e.message}")
