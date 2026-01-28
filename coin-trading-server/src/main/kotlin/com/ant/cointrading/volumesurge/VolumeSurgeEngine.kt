@@ -558,7 +558,7 @@ class VolumeSurgeEngine(
         val ticker = bithumbPublicApi.getCurrentPrice(market)?.firstOrNull() ?: return
         val currentPrice = ticker.tradePrice.toDouble()
         val entryPrice = position.entryPrice
-        val pnlPercent = ((currentPrice - entryPrice) / entryPrice) * 100
+        val pnlPercent = safePnlPercent(entryPrice, currentPrice)
 
         // 1. 손절 체크 (저장된 손절 비율 사용, 없으면 기본값)
         val appliedStopLoss = position.appliedStopLossPercent

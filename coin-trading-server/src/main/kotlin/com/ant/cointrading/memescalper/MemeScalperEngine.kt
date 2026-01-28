@@ -13,6 +13,7 @@ import com.ant.cointrading.repository.MemeScalperDailyStatsEntity
 import com.ant.cointrading.repository.MemeScalperDailyStatsRepository
 import com.ant.cointrading.repository.MemeScalperTradeEntity
 import com.ant.cointrading.repository.MemeScalperTradeRepository
+import com.ant.cointrading.repository.*
 import jakarta.annotation.PostConstruct
 import org.slf4j.LoggerFactory
 import org.springframework.scheduling.annotation.Scheduled
@@ -460,7 +461,7 @@ class MemeScalperEngine(
         val currentPrice = ticker.tradePrice.toDouble()
 
         // 3. 안전한 손익률 계산 - NaN/Infinity 방지
-        val pnlPercent = calculateSafePnlPercent(currentPrice, position.entryPrice)
+        val pnlPercent = safePnlPercent(position.entryPrice, currentPrice)
 
         // 4. 피크 업데이트
         val peakPrice = peakPrices.getOrDefault(position.id!!, position.entryPrice)
@@ -518,16 +519,6 @@ class MemeScalperEngine(
                 return
             }
         }
-    }
-
-    /**
-     * 안전한 손익률 계산
-     * 0으로 나누기 방지, NaN/Infinity 처리
-     */
-    private fun calculateSafePnlPercent(currentPrice: Double, entryPrice: Double): Double {
-        if (entryPrice <= 0) return 0.0
-        val pnl = ((currentPrice - entryPrice) / entryPrice) * 100
-        return if (pnl.isNaN() || pnl.isInfinite()) 0.0 else pnl
     }
 
     /**
@@ -703,11 +694,8 @@ class MemeScalperEngine(
     private fun finalizeClose(position: MemeScalperTradeEntity, actualPrice: Double, reason: String) {
         val market = position.market
 
-        val pnlAmount = (actualPrice - position.entryPrice) * position.quantity
-        val pnlPercent = ((actualPrice - position.entryPrice) / position.entryPrice) * 100
-
-        val safePnlAmount = if (pnlAmount.isNaN() || pnlAmount.isInfinite()) 0.0 else pnlAmount
-        val safePnlPercent = if (pnlPercent.isNaN() || pnlPercent.isInfinite()) 0.0 else pnlPercent
+        val safePnlAmount = safePnlAmount(position.entryPrice, actualPrice, position.quantity)
+        val safePnlPercent = safePnlPercent(position.entryPrice, actualPrice)
 
         position.exitPrice = actualPrice
         position.exitTime = Instant.now()
@@ -763,11 +751,8 @@ class MemeScalperEngine(
         val market = position.market
 
         // 실제 손익 계산 (현재가 기준)
-        val pnlAmount = (exitPrice - position.entryPrice) * position.quantity
-        val pnlPercent = ((exitPrice - position.entryPrice) / position.entryPrice) * 100
-
-        val safePnlAmount = if (pnlAmount.isNaN() || pnlAmount.isInfinite()) 0.0 else pnlAmount
-        val safePnlPercent = if (pnlPercent.isNaN() || pnlPercent.isInfinite()) 0.0 else pnlPercent
+        val safePnlAmount = safePnlAmount(position.entryPrice, exitPrice, position.quantity)
+        val safePnlPercent = safePnlPercent(position.entryPrice, exitPrice)
 
         position.exitPrice = exitPrice
         position.exitTime = Instant.now()
