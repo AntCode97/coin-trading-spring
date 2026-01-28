@@ -36,6 +36,41 @@ object PositionHelper {
     private val log = LoggerFactory.getLogger(PositionHelper::class.java)
 
     /**
+     * 진입가 무결성 검증
+     */
+    fun isInvalidEntryPrice(entryPrice: Double): Boolean = entryPrice <= 0
+
+    /**
+     * 최소 보유 시간 경과 여부
+     */
+    fun hasMinHoldingPeriodElapsed(entryTime: Instant, minSeconds: Long): Boolean {
+        val holdingSeconds = java.time.Duration.between(entryTime, Instant.now()).seconds
+        return holdingSeconds >= minSeconds
+    }
+
+    /**
+     * 손절 도달 여부
+     */
+    fun isStopLossTriggered(pnlPercent: Double, stopLossPercent: Double): Boolean {
+        return pnlPercent <= stopLossPercent
+    }
+
+    /**
+     * 익절 도달 여부
+     */
+    fun isTakeProfitTriggered(pnlPercent: Double, takeProfitPercent: Double): Boolean {
+        return pnlPercent >= takeProfitPercent
+    }
+
+    /**
+     * 타임아웃 도달 여부
+     */
+    fun isTimeout(entryTime: Instant, timeoutMinutes: Int): Boolean {
+        val holdingMinutes = java.time.Duration.between(entryTime, Instant.now()).toMinutes()
+        return holdingMinutes >= timeoutMinutes
+    }
+
+    /**
      * ABANDONED 사유 생성
      */
     fun abandonedReason(reason: String): String = "ABANDONED_$reason"
