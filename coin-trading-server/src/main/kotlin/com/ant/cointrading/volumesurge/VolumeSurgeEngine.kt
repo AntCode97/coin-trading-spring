@@ -4,6 +4,9 @@ import com.ant.cointrading.api.bithumb.BithumbPrivateApi
 import com.ant.cointrading.api.bithumb.BithumbPublicApi
 import com.ant.cointrading.config.VolumeSurgeProperties
 import com.ant.cointrading.engine.GlobalPositionManager
+import com.ant.cointrading.extension.isPositive
+import com.ant.cointrading.extension.orDefault
+import com.ant.cointrading.extension.orZero
 import com.ant.cointrading.model.SignalAction
 import com.ant.cointrading.model.TradingSignal
 import com.ant.cointrading.notification.SlackNotifier
@@ -310,10 +313,9 @@ class VolumeSurgeEngine(
             }
 
             // 체결가 처리: null 또는 0이면 currentPrice 사용
-            val executedPrice = orderResult.price?.takeIf { it > BigDecimal.ZERO } ?: currentPrice
-            val executedQuantity = orderResult.executedQuantity?.takeIf { it > BigDecimal.ZERO }
-                ?: orderResult.quantity?.takeIf { it > BigDecimal.ZERO }
-                ?: BigDecimal.ZERO
+            val executedPrice = orderResult.price.orDefault(currentPrice)
+            val executedQuantity = orderResult.executedQuantity.orZero()
+                .let { if (it.isPositive()) it else orderResult.quantity.orZero() }
 
             // 체결가 또는 수량이 0이면 진입 실패 처리 (0으로 나누기 방지)
             if (executedPrice <= BigDecimal.ZERO || executedQuantity <= BigDecimal.ZERO) {
