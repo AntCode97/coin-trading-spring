@@ -755,23 +755,51 @@ class MemeScalperEngine(
 
     /**
      * ABANDONED 처리
+     *
+     * 청산 실패 시에도 실제 손익을 계산하여 기록한다.
+     * ABANDONED = 시스템 청산 실패지만 실제로는 포지션 종료 상태
      */
     private fun handleAbandonedPosition(position: MemeScalperTradeEntity, exitPrice: Double, reason: String) {
         val market = position.market
 
+        // 실제 손익 계산 (현재가 기준)
+        val pnlAmount = (exitPrice - position.entryPrice) * position.quantity
+        val pnlPercent = ((exitPrice - position.entryPrice) / position.entryPrice) * 100
+
+        val safePnlAmount = if (pnlAmount.isNaN() || pnlAmount.isInfinite()) 0.0 else pnlAmount
+        val safePnlPercent = if (pnlPercent.isNaN() || pnlPercent.isInfinite()) 0.0 else pnlPercent
+
         position.exitPrice = exitPrice
         position.exitTime = Instant.now()
         position.exitReason = "ABANDONED_$reason"
-        position.pnlAmount = 0.0
-        position.pnlPercent = 0.0
+        position.pnlAmount = safePnlAmount
+        position.pnlPercent = safePnlPercent
         position.status = "ABANDONED"
 
         tradeRepository.save(position)
         peakPrices.remove(position.id)
         peakVolumes.remove(position.id)
 
-        slackNotifier.sendWarning(market, "Meme Scalper 포지션 ABANDONED: $reason")
-        log.warn("[$market] ABANDONED 처리: $reason")
+        // 일일 통계 업데이트 (ABANDONED도 실제 손익 반영)
+        dailyPnl += safePnlAmount
+        if (safePnlAmount < 0) {
+            consecutiveLosses++
+        } else {
+            consecutiveLosses = 0
+        }
+        saveCircuitBreakerState()
+
+        val emoji = if (safePnlAmount >= 0) "+" else ""
+        slackNotifier.sendWarning(
+            market,
+            """
+            Meme Scalper 포지션 ABANDONED: $reason
+            진입가: ${position.entryPrice}원 → 현재가: ${exitPrice}원
+            추정 손익: $emoji${String.format("%.0f", safePnlAmount)}원 (${String.format("%.2f", safePnlPercent)}%)
+            수동 확인 필요
+            """.trimIndent()
+        )
+        log.warn("[$market] ABANDONED 처리: $reason, 추정 손익=${safePnlAmount}원 (${safePnlPercent}%)")
     }
 
     /**
@@ -820,39 +848,43 @@ class MemeScalperEngine(
 
     /**
      * 일일 통계 저장
+     *
+     * CLOSED + ABANDONED 모두 포함하여 저장
      */
     private fun saveDailyStats(date: LocalDate) {
         try {
             val startOfDay = date.atStartOfDay(ZoneId.systemDefault()).toInstant()
-            val trades = tradeRepository.findTodayClosedTrades(startOfDay)
+            // CLOSED + ABANDONED 모두 포함
+            val allTrades = tradeRepository.findByCreatedAtAfter(startOfDay)
+                .filter { it.status == "CLOSED" || it.status == "ABANDONED" }
 
-            if (trades.isEmpty()) return
+            if (allTrades.isEmpty()) return
 
-            val winningTrades = trades.count { (it.pnlAmount ?: 0.0) > 0 }
-            val losingTrades = trades.count { (it.pnlAmount ?: 0.0) < 0 }
-            val totalPnl = trades.sumOf { it.pnlAmount ?: 0.0 }
-            val winRate = if (trades.isNotEmpty()) winningTrades.toDouble() / trades.size else 0.0
+            val winningTrades = allTrades.count { (it.pnlAmount ?: 0.0) > 0 }
+            val losingTrades = allTrades.count { (it.pnlAmount ?: 0.0) < 0 }
+            val totalPnl = allTrades.sumOf { it.pnlAmount ?: 0.0 }
+            val winRate = if (allTrades.isNotEmpty()) winningTrades.toDouble() / allTrades.size else 0.0
 
-            val avgHolding = trades
+            val avgHolding = allTrades
                 .mapNotNull { trade ->
                     trade.exitTime?.let { ChronoUnit.SECONDS.between(trade.entryTime, it).toDouble() }
                 }
                 .average()
 
             val stats = statsRepository.findByDate(date) ?: MemeScalperDailyStatsEntity(date = date)
-            stats.totalTrades = trades.size
+            stats.totalTrades = allTrades.size
             stats.winningTrades = winningTrades
             stats.losingTrades = losingTrades
             stats.totalPnl = totalPnl
             stats.winRate = winRate
             stats.avgHoldingSeconds = avgHolding
-            stats.maxSingleLoss = trades.mapNotNull { it.pnlAmount }.minOrNull()
-            stats.maxSingleProfit = trades.mapNotNull { it.pnlAmount }.maxOrNull()
+            stats.maxSingleLoss = allTrades.mapNotNull { it.pnlAmount }.minOrNull()
+            stats.maxSingleProfit = allTrades.mapNotNull { it.pnlAmount }.maxOrNull()
             stats.consecutiveLosses = consecutiveLosses
             stats.circuitBreakerUpdatedAt = Instant.now()
 
             statsRepository.save(stats)
-            log.info("일일 통계 저장: $date, 거래=${trades.size}, 승률=${String.format("%.1f", winRate * 100)}%, 손익=$totalPnl, 연속손실=$consecutiveLosses")
+            log.info("일일 통계 저장: $date, 거래=${allTrades.size}, 승률=${String.format("%.1f", winRate * 100)}%, 손익=$totalPnl, 연속손실=$consecutiveLosses")
         } catch (e: Exception) {
             log.error("일일 통계 저장 실패: ${e.message}")
         }

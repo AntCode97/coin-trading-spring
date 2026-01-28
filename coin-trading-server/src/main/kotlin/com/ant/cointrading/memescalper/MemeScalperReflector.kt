@@ -186,25 +186,28 @@ class MemeScalperReflector(
 
     /**
      * 일일 통계 계산
+     *
+     * CLOSED + ABANDONED 모두 포함 (ABANDONED도 실제 청산 시도했던 거래)
      */
     private fun calculateDailyStats(
         date: LocalDate,
         startOfDay: Instant,
         trades: List<MemeScalperTradeEntity>
     ): MemeScalperDailyStats {
-        val closedTrades = trades.filter { it.status == "CLOSED" }
+        // CLOSED와 ABANDONED 모두 포함 (둘 다 청산 완료로 간주)
+        val completedTrades = trades.filter { it.status == "CLOSED" || it.status == "ABANDONED" }
 
-        val totalTrades = closedTrades.size
-        val winningTrades = closedTrades.count { (it.pnlAmount ?: 0.0) > 0 }
-        val losingTrades = closedTrades.count { (it.pnlAmount ?: 0.0) <= 0 }
-        val totalPnl = closedTrades.sumOf { it.pnlAmount ?: 0.0 }
+        val totalTrades = completedTrades.size
+        val winningTrades = completedTrades.count { (it.pnlAmount ?: 0.0) > 0 }
+        val losingTrades = completedTrades.count { (it.pnlAmount ?: 0.0) <= 0 }
+        val totalPnl = completedTrades.sumOf { it.pnlAmount ?: 0.0 }
         val winRate = if (totalTrades > 0) winningTrades.toDouble() / totalTrades else 0.0
 
         // 청산 사유별 통계
-        val exitReasonStats = closedTrades.groupBy { it.exitReason ?: "UNKNOWN" }
+        val exitReasonStats = completedTrades.groupBy { it.exitReason ?: "UNKNOWN" }
             .mapValues { it.value.size }
 
-        val avgHoldingSeconds = closedTrades
+        val avgHoldingSeconds = completedTrades
             .filter { it.exitTime != null }
             .map { ChronoUnit.SECONDS.between(it.entryTime, it.exitTime) }
             .average()
@@ -332,8 +335,9 @@ class MemeScalperReflectorTools(
         val today = LocalDate.now(ZoneId.of("Asia/Seoul"))
         val startOfDay = today.atStartOfDay(ZoneId.of("Asia/Seoul")).toInstant()
 
+        // CLOSED + ABANDONED 모두 포함
         val trades = tradeRepository.findByCreatedAtAfter(startOfDay)
-            .filter { it.status == "CLOSED" }
+            .filter { it.status == "CLOSED" || it.status == "ABANDONED" }
 
         val totalPnl = trades.sumOf { it.pnlAmount ?: 0.0 }
         val winCount = trades.count { (it.pnlAmount ?: 0.0) > 0 }
@@ -399,9 +403,9 @@ class MemeScalperReflectorTools(
         val today = LocalDate.now(ZoneId.of("Asia/Seoul"))
         val startOfDay = today.atStartOfDay(ZoneId.of("Asia/Seoul")).toInstant()
 
-        // 오늘 통계 계산
+        // 오늘 통계 계산 (CLOSED + ABANDONED)
         val trades = tradeRepository.findByCreatedAtAfter(startOfDay)
-            .filter { it.status == "CLOSED" }
+            .filter { it.status == "CLOSED" || it.status == "ABANDONED" }
 
         val stats = statsRepository.findByDate(today) ?: MemeScalperDailyStatsEntity(date = today)
         stats.totalTrades = trades.size
@@ -549,7 +553,7 @@ class MemeScalperReflectorTools(
 
         val startOfPeriod = Instant.now().minus(historicalDays.toLong(), ChronoUnit.DAYS)
         val trades = tradeRepository.findByCreatedAtAfter(startOfPeriod)
-            .filter { it.status == "CLOSED" }
+            .filter { it.status == "CLOSED" || it.status == "ABANDONED" }
 
         if (trades.isEmpty()) {
             return "백테스트 기간($historicalDays 일) 내 트레이드가 없습니다."
@@ -648,7 +652,7 @@ class MemeScalperReflectorTools(
 
         val startOfPeriod = Instant.now().minus(days.toLong(), ChronoUnit.DAYS)
         val trades = tradeRepository.findByCreatedAtAfter(startOfPeriod)
-            .filter { it.status == "CLOSED" }
+            .filter { it.status == "CLOSED" || it.status == "ABANDONED" }
 
         if (trades.isEmpty()) {
             return "분석 기간($days 일) 내 트레이드가 없습니다."
