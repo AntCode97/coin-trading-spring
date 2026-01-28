@@ -521,65 +521,25 @@ class MemeScalperEngine(
     }
 
     /**
-     * CLOSING 포지션 모니터링
+     * CLOSING 포지션 모니터링 (PositionHelper 위임)
      */
     private fun monitorClosingPosition(position: MemeScalperTradeEntity) {
-        val market = position.market
-        val closeOrderId = position.closeOrderId
-
-        if (closeOrderId.isNullOrBlank()) {
-            position.status = "OPEN"
-            position.closeAttemptCount = 0
-            tradeRepository.save(position)
-            return
-        }
-
-        try {
-            val orderStatus = bithumbPrivateApi.getOrder(closeOrderId)
-
-            when (orderStatus?.state) {
-                "done" -> {
-                    val actualPrice = orderStatus.price?.toDouble() ?: position.exitPrice ?: 0.0
-                    finalizeClose(position, actualPrice, position.exitReason ?: "UNKNOWN")
-                }
-                "cancel" -> {
-                    position.status = "OPEN"
-                    position.closeOrderId = null
-                    position.closeAttemptCount = 0
-                    tradeRepository.save(position)
-                }
-                "wait" -> {
-                    val elapsed = java.time.Duration.between(
-                        position.lastCloseAttempt ?: Instant.now(),
-                        Instant.now()
-                    ).seconds
-
-                    if (elapsed > 15) {  // 15초 대기 후 취소
-                        try {
-                            bithumbPrivateApi.cancelOrder(closeOrderId)
-                        } catch (e: Exception) {
-                            log.warn("[$market] 주문 취소 실패: ${e.message}")
-                        }
-                        position.status = "OPEN"
-                        position.closeOrderId = null
-                        tradeRepository.save(position)
-                    }
-                }
-            }
-        } catch (e: Exception) {
-            log.error("[$market] 청산 상태 조회 실패: ${e.message}")
-            val elapsed = java.time.Duration.between(
-                position.lastCloseAttempt ?: Instant.now(),
-                Instant.now()
-            ).toMinutes()
-
-            if (elapsed >= 2) {
+        PositionHelper.monitorClosingPosition(
+            bithumbPrivateApi = bithumbPrivateApi,
+            position = position,
+            waitTimeoutSeconds = 15L,
+            errorTimeoutMinutes = 2L,
+            onOrderDone = { actualPrice ->
+                finalizeClose(position, actualPrice, position.exitReason ?: "UNKNOWN")
+            },
+            onOrderCancelled = {
+                log.warn("[${position.market}] 청산 주문 취소됨 또는 복원 필요")
                 position.status = "OPEN"
                 position.closeOrderId = null
                 position.closeAttemptCount = 0
                 tradeRepository.save(position)
             }
-        }
+        )
     }
 
     /**

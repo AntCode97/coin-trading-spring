@@ -446,85 +446,26 @@ class VolumeSurgeEngine(
     }
 
     /**
-     * 청산 중인 포지션 모니터링
-     *
-     * - 청산 주문 상태 확인 (Private API 사용)
-     * - 일정 시간 후 미체결이면 취소 후 재시도
+     * 청산 중인 포지션 모니터링 (PositionHelper 위임)
      */
     private fun monitorClosingPosition(position: VolumeSurgeTradeEntity) {
-        val market = position.market
-        val closeOrderId = position.closeOrderId
-
-        // 청산 주문 ID가 없으면 OPEN으로 되돌리고 다시 시도
-        if (closeOrderId.isNullOrBlank()) {
-            log.warn("[$market] 청산 주문 ID 없음, OPEN으로 복원")
-            position.status = "OPEN"
-            position.closeAttemptCount = 0
-            tradeRepository.save(position)
-            return
-        }
-
-        // 주문 상태 조회 (Private API)
-        try {
-            val orderStatus = bithumbPrivateApi.getOrder(closeOrderId)
-
-            when (orderStatus?.state) {
-                "done" -> {
-                    // 체결 완료
-                    val actualExitPrice = orderStatus.price?.toDouble() ?: position.exitPrice ?: 0.0
-                    finalizeClose(position, actualExitPrice, position.exitReason ?: "UNKNOWN")
-                    log.info("[$market] 청산 주문 체결 확인: $closeOrderId")
-                }
-                "cancel" -> {
-                    // 주문 취소됨 - OPEN으로 되돌림
-                    log.warn("[$market] 청산 주문 취소됨: $closeOrderId")
-                    position.status = "OPEN"
-                    position.closeOrderId = null
-                    position.closeAttemptCount = 0
-                    tradeRepository.save(position)
-                }
-                "wait" -> {
-                    // 대기 중 - 30초 이상이면 취소 후 재시도
-                    val elapsed = java.time.Duration.between(
-                        position.lastCloseAttempt ?: Instant.now(),
-                        Instant.now()
-                    ).seconds
-
-                    if (elapsed > 30) {
-                        log.warn("[$market] 청산 주문 30초 미체결, 취소 시도: $closeOrderId")
-                        // 주문 취소 시도
-                        try {
-                            bithumbPrivateApi.cancelOrder(closeOrderId)
-                            log.info("[$market] 청산 주문 취소 완료: $closeOrderId")
-                        } catch (e: Exception) {
-                            log.warn("[$market] 주문 취소 실패 (이미 체결되었을 수 있음): ${e.message}")
-                        }
-                        position.status = "OPEN"
-                        position.closeOrderId = null
-                        tradeRepository.save(position)
-                    }
-                }
-                else -> {
-                    // 알 수 없는 상태 또는 조회 실패
-                    log.debug("[$market] 청산 주문 상태: ${orderStatus?.state}")
-                }
-            }
-        } catch (e: Exception) {
-            log.error("[$market] 청산 주문 상태 조회 실패: ${e.message}")
-            // 5분 이상 CLOSING 상태면 OPEN으로 복원
-            val elapsed = java.time.Duration.between(
-                position.lastCloseAttempt ?: Instant.now(),
-                Instant.now()
-            ).toMinutes()
-
-            if (elapsed >= 5) {
-                log.warn("[$market] 5분 이상 CLOSING 상태, OPEN으로 복원")
+        PositionHelper.monitorClosingPosition(
+            bithumbPrivateApi = bithumbPrivateApi,
+            position = position,
+            waitTimeoutSeconds = 30L,
+            errorTimeoutMinutes = 5L,
+            onOrderDone = { actualPrice ->
+                finalizeClose(position, actualPrice, position.exitReason ?: "UNKNOWN")
+                log.info("[${position.market}] 청산 주문 체결 확인: ${position.closeOrderId}")
+            },
+            onOrderCancelled = {
+                log.warn("[${position.market}] 청산 주문 취소됨 또는 복원 필요")
                 position.status = "OPEN"
                 position.closeOrderId = null
                 position.closeAttemptCount = 0
                 tradeRepository.save(position)
             }
-        }
+        )
     }
 
     /**

@@ -1,5 +1,6 @@
 package com.ant.cointrading.repository
 
+import com.ant.cointrading.engine.PositionEntity
 import jakarta.persistence.*
 import java.time.Instant
 import java.time.LocalDate
@@ -74,7 +75,7 @@ class VolumeSurgeAlertEntity(
 class VolumeSurgeTradeEntity(
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)
-    var id: Long? = null,
+    override var id: Long? = null,
 
     /** 관련 경보 ID (FK) */
     @Column
@@ -82,27 +83,27 @@ class VolumeSurgeTradeEntity(
 
     /** 마켓 코드 */
     @Column(nullable = false, length = 20)
-    var market: String = "",
+    override var market: String = "",
 
     /** 진입 가격 */
     @Column(nullable = false)
-    var entryPrice: Double = 0.0,
+    override var entryPrice: Double = 0.0,
 
     /** 청산 가격 */
     @Column
-    var exitPrice: Double? = null,
+    override var exitPrice: Double? = null,
 
     /** 수량 */
     @Column(nullable = false)
-    var quantity: Double = 0.0,
+    override var quantity: Double = 0.0,
 
     /** 진입 시각 */
     @Column(nullable = false)
-    var entryTime: Instant = Instant.now(),
+    override var entryTime: Instant = Instant.now(),
 
     /** 청산 시각 */
     @Column
-    var exitTime: Instant? = null,
+    override var exitTime: Instant? = null,
 
     /** 청산 사유 (STOP_LOSS/TAKE_PROFIT/TRAILING/TIMEOUT/MANUAL) */
     @Column(length = 30)
@@ -110,11 +111,11 @@ class VolumeSurgeTradeEntity(
 
     /** 손익 금액 (KRW) */
     @Column
-    var pnlAmount: Double? = null,
+    override var pnlAmount: Double? = null,
 
     /** 손익률 (%) */
     @Column
-    var pnlPercent: Double? = null,
+    override var pnlPercent: Double? = null,
 
     // === 진입 시점 분석 데이터 (회고용) ===
 
@@ -194,7 +195,7 @@ class VolumeSurgeTradeEntity(
 
     /** 포지션 상태 (OPEN/CLOSING/CLOSED/ABANDONED) */
     @Column(nullable = false, length = 20)
-    var status: String = "OPEN",
+    override var status: String = "OPEN",
 
     /** 시장 레짐 (BULL_TREND/BEAR_TREND/SIDEWAYS/HIGH_VOLATILITY) */
     @Column(length = 30)
@@ -202,15 +203,15 @@ class VolumeSurgeTradeEntity(
 
     /** 청산 주문 ID (미체결 청산 추적용) */
     @Column(length = 50)
-    var closeOrderId: String? = null,
+    override var closeOrderId: String? = null,
 
     /** 마지막 청산 시도 시각 (재시도 백오프용) */
     @Column
-    var lastCloseAttempt: Instant? = null,
+    override var lastCloseAttempt: Instant? = null,
 
     /** 청산 시도 횟수 */
     @Column(nullable = false)
-    var closeAttemptCount: Int = 0,
+    override var closeAttemptCount: Int = 0,
 
     /** 생성 시각 */
     @Column(nullable = false)
@@ -219,7 +220,7 @@ class VolumeSurgeTradeEntity(
     /** 수정 시각 */
     @Column(nullable = false)
     var updatedAt: Instant = Instant.now()
-) {
+) : PositionEntity {
     @PreUpdate
     fun preUpdate() {
         updatedAt = Instant.now()

@@ -1,7 +1,10 @@
 package com.ant.cointrading.engine
 
+import com.ant.cointrading.api.bithumb.BithumbPrivateApi
+import org.slf4j.LoggerFactory
 import java.math.BigDecimal
 import java.time.Instant
+import java.time.Duration
 
 /**
  * 포지션 엔티티 공통 인터페이스 (켄트백 스타일)
@@ -25,11 +28,12 @@ interface PositionEntity {
 }
 
 /**
- * 포지션 청산 관련 헬퍼 함수
+ * 포지션 청산 관련 헬퍼 함수 (켄트백 스타일)
  *
  * 중복 제거를 위한 유틸리티 함수들
  */
 object PositionHelper {
+    private val log = LoggerFactory.getLogger(PositionHelper::class.java)
 
     /**
      * ABANDONED 사유 생성
@@ -47,7 +51,7 @@ object PositionHelper {
         if (status == "CLOSING") return false
 
         if (lastCloseAttempt != null) {
-            val elapsed = java.time.Duration.between(lastCloseAttempt, Instant.now()).seconds
+            val elapsed = Duration.between(lastCloseAttempt, Instant.now()).seconds
             if (elapsed < backoffSeconds) return false
         }
 
@@ -72,6 +76,82 @@ object PositionHelper {
      * 코인 심볼 추출
      */
     fun extractCoinSymbol(market: String): String = market.removePrefix("KRW-")
+
+    /**
+     * CLOSING 포지션 모니터링 (공통 로직)
+     *
+     * @return 청산 완료(true), 계속 대기 필요(false)
+     */
+    fun monitorClosingPosition(
+        bithumbPrivateApi: BithumbPrivateApi,
+        position: PositionEntity,
+        waitTimeoutSeconds: Long = 30L,
+        errorTimeoutMinutes: Long = 5L,
+        onOrderDone: (actualPrice: Double) -> Unit,
+        onOrderCancelled: () -> Unit
+    ): Boolean {
+        val market = position.market
+        val closeOrderId = position.closeOrderId
+
+        // 주문 ID가 없으면 OPEN으로 복원
+        if (closeOrderId.isNullOrBlank()) {
+            log.warn("[$market] 청산 주문 ID 없음, OPEN으로 복원")
+            onOrderCancelled()
+            return false
+        }
+
+        // 주문 상태 조회
+        return try {
+            val orderStatus = bithumbPrivateApi.getOrder(closeOrderId)
+
+            when (orderStatus?.state) {
+                "done" -> {
+                    val actualPrice = orderStatus.price?.toDouble() ?: position.exitPrice ?: 0.0
+                    onOrderDone(actualPrice)
+                    true
+                }
+                "cancel" -> {
+                    log.warn("[$market] 청산 주문 취소됨: $closeOrderId")
+                    onOrderCancelled()
+                    false
+                }
+                "wait" -> {
+                    val elapsed = Duration.between(
+                        position.lastCloseAttempt ?: Instant.now(),
+                        Instant.now()
+                    ).seconds
+
+                    if (elapsed > waitTimeoutSeconds) {
+                        log.warn("[$market] 청산 주문 ${waitTimeoutSeconds}초 미체결, 취소 시도: $closeOrderId")
+                        try {
+                            bithumbPrivateApi.cancelOrder(closeOrderId)
+                            log.info("[$market] 청산 주문 취소 완료: $closeOrderId")
+                        } catch (e: Exception) {
+                            log.warn("[$market] 주문 취소 실패: ${e.message}")
+                        }
+                        onOrderCancelled()
+                    }
+                    false
+                }
+                else -> {
+                    log.debug("[$market] 청산 주문 상태: ${orderStatus?.state}")
+                    false
+                }
+            }
+        } catch (e: Exception) {
+            log.error("[$market] 청산 주문 상태 조회 실패: ${e.message}")
+            val elapsed = Duration.between(
+                position.lastCloseAttempt ?: Instant.now(),
+                Instant.now()
+            ).toMinutes()
+
+            if (elapsed >= errorTimeoutMinutes) {
+                log.warn("[$market] ${errorTimeoutMinutes}분 이상 CLOSING 상태, OPEN으로 복원")
+                onOrderCancelled()
+            }
+            false
+        }
+    }
 }
 
 /**
