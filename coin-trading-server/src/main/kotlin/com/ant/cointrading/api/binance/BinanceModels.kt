@@ -1,5 +1,6 @@
 package com.ant.cointrading.api.binance
 
+import com.fasterxml.jackson.annotation.JsonIgnoreProperties
 import com.fasterxml.jackson.annotation.JsonProperty
 import java.math.BigDecimal
 
@@ -7,6 +8,7 @@ import java.math.BigDecimal
  * 바이낸스 티커 정보
  * https://api.binance.com/api/v3/ticker/24hr
  */
+@JsonIgnoreProperties(ignoreUnknown = true)
 data class BinanceTickerInfo(
     @JsonProperty("symbol") val symbol: String,
     @JsonProperty("lastPrice") val lastPrice: BigDecimal,
@@ -22,6 +24,7 @@ data class BinanceTickerInfo(
  * 바이낸스 심플 티커 (현재가만)
  * https://api.binance.com/api/v3/ticker/price
  */
+@JsonIgnoreProperties(ignoreUnknown = true)
 data class BinanceSimpleTicker(
     @JsonProperty("symbol") val symbol: String,
     @JsonProperty("price") val price: BigDecimal
@@ -30,6 +33,7 @@ data class BinanceSimpleTicker(
 /**
  * 김치 프리미엄 정보
  */
+@JsonIgnoreProperties(ignoreUnknown = true)
 data class KimchiPremiumInfo(
     val symbol: String,               // 예: BTC
     val domesticPrice: BigDecimal,    // 빗썸 가격 (KRW)

@@ -1,5 +1,6 @@
 package com.ant.cointrading.api.binance
 
+import com.fasterxml.jackson.annotation.JsonIgnoreProperties
 import com.fasterxml.jackson.annotation.JsonProperty
 import java.math.BigDecimal
 import java.time.Instant
@@ -8,6 +9,7 @@ import java.time.Instant
  * 바이낸스 Futures 프리미엄 인덱스
  * https://fapi.binance.com/fapi/v1/premiumIndex
  */
+@JsonIgnoreProperties(ignoreUnknown = true)
 data class BinancePremiumIndex(
     @JsonProperty("symbol") val symbol: String,
     @JsonProperty("markPrice") val markPrice: BigDecimal,
@@ -23,6 +25,7 @@ data class BinancePremiumIndex(
  * 바이낸스 Futures 펀딩 비율 히스토리
  * https://fapi.binance.com/fapi/v1/fundingRate
  */
+@JsonIgnoreProperties(ignoreUnknown = true)
 data class BinanceFundingRate(
     @JsonProperty("symbol") val symbol: String,
     @JsonProperty("fundingRate") val fundingRate: BigDecimal,
@@ -33,6 +36,7 @@ data class BinanceFundingRate(
 /**
  * 바이낸스 Futures 마크 가격
  */
+@JsonIgnoreProperties(ignoreUnknown = true)
 data class BinanceMarkPrice(
     @JsonProperty("symbol") val symbol: String,
     @JsonProperty("markPrice") val markPrice: BigDecimal,
@@ -45,6 +49,7 @@ data class BinanceMarkPrice(
 /**
  * 펀딩 기회 정보
  */
+@JsonIgnoreProperties(ignoreUnknown = true)
 data class FundingOpportunity(
     val exchange: String,           // "BINANCE" or "BYBIT"
     val symbol: String,             // "BTCUSDT"
@@ -88,6 +93,7 @@ data class FundingOpportunity(
 /**
  * 펀딩 상세 정보
  */
+@JsonIgnoreProperties(ignoreUnknown = true)
 data class FundingInfo(
     val symbol: String,
     val currentFundingRate: Double,
@@ -113,6 +119,7 @@ data class FundingInfo(
 /**
  * 펀딩 히스토리 항목
  */
+@JsonIgnoreProperties(ignoreUnknown = true)
 data class FundingHistoryItem(
     val fundingRate: Double,
     val fundingTime: Instant
