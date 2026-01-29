@@ -340,6 +340,8 @@ class OrderExecutor(
 
     /**
      * 주문 제출 (시장가/지정가 분기)
+     *
+     * 급등 시장 방어: 시장가 실패 시 지정가로 폴백
      */
     private fun submitOrder(
         signal: TradingSignal,
@@ -350,7 +352,16 @@ class OrderExecutor(
     ): OrderSubmitResult {
         return when (orderType) {
             OrderType.LIMIT -> submitLimitOrder(signal, apiMarket, positionSize, marketCondition)
-            OrderType.MARKET -> submitMarketOrder(signal, apiMarket, positionSize)
+            OrderType.MARKET -> {
+                val result = submitMarketOrder(signal, apiMarket, positionSize)
+                // 시장가 실패 시 지정가로 폴백 (급등 시장 API 타임아웃 대응)
+                if (result.orderResponse == null && signal.action == SignalAction.SELL) {
+                    log.warn("[${signal.market}] 시장가 매도 실패, 지정가로 폴백")
+                    submitLimitOrder(signal, apiMarket, positionSize, marketCondition)
+                } else {
+                    result
+                }
+            }
         }
     }
 
