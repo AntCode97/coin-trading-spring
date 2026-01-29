@@ -197,18 +197,3 @@ object PositionHelper {
         }
     }
 }
-
-/**
- * 포지션 상태 확인 헬퍼
- */
-object PositionStates {
-    const val OPEN = "OPEN"
-    const val CLOSING = "CLOSING"
-    const val CLOSED = "CLOSED"
-    const val ABANDONED = "ABANDONED"
-
-    fun isOpen(status: String?) = status == OPEN
-    fun isClosing(status: String?) = status == CLOSING
-    fun isClosed(status: String?) = status == CLOSED || status == ABANDONED
-    fun isTerminal(status: String?) = isClosed(status)
-}

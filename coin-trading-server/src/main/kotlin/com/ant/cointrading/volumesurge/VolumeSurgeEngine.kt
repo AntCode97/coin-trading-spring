@@ -7,7 +7,6 @@ import com.ant.cointrading.config.VolumeSurgeProperties
 import com.ant.cointrading.engine.GlobalPositionManager
 import com.ant.cointrading.engine.PositionCloser
 import com.ant.cointrading.engine.PositionHelper
-import com.ant.cointrading.engine.PositionStates
 import com.ant.cointrading.extension.isPositive
 import com.ant.cointrading.extension.orDefault
 import com.ant.cointrading.extension.orZero

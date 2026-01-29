@@ -7,7 +7,6 @@ import com.ant.cointrading.config.TradingConstants
 import com.ant.cointrading.engine.GlobalPositionManager
 import com.ant.cointrading.engine.PositionCloser
 import com.ant.cointrading.engine.PositionHelper
-import com.ant.cointrading.engine.PositionStates
 import com.ant.cointrading.model.SignalAction
 import com.ant.cointrading.model.TradingSignal
 import com.ant.cointrading.notification.SlackNotifier
