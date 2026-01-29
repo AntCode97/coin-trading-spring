@@ -246,6 +246,8 @@ class VolumeSurgeEngine(
 
     /**
      * 포지션 진입
+     *
+     * 켄트백: 각 하위 작업을 명확한 메서드로 분리 (Compose Method 패턴)
      */
     private fun enterPosition(
         alert: VolumeSurgeAlertEntity,
@@ -255,150 +257,237 @@ class VolumeSurgeEngine(
         val market = alert.market
 
         try {
-            // 현재가 조회
-            val ticker = bithumbPublicApi.getCurrentPrice(market)?.firstOrNull()
-            if (ticker == null) {
-                log.error("[$market] 현재가 조회 실패")
-                markAlertProcessed(alert, "ERROR", "현재가 조회 실패")
-                return
-            }
+            val currentPrice = fetchCurrentPriceWithValidation(market, alert) ?: return
+            val regime = detectMarketRegime(market)
+            val executionResult = executeBuyOrderWithValidation(
+                market, currentPrice, filterResult, regime, alert
+            ) ?: return
 
-            val currentPrice = ticker.tradePrice
-            val positionSize = BigDecimal(properties.positionSizeKrw)
-
-            // 시장 레짐 감지 (RegimeDetector 통합)
-            val regime = try {
-                val candles = bithumbPublicApi.getOhlcv(market, "minute60", 100)
-                if (!candles.isNullOrEmpty() && candles.size >= 15) {
-                    val regimeAnalysis = regimeDetector.detectFromBithumb(candles)
-                    regimeAnalysis.regime.name
-                } else {
-                    log.debug("[$market] 캔들 데이터 부족으로 레짐 감지 스킵")
-                    null
-                }
-            } catch (e: Exception) {
-                log.warn("[$market] 레짐 감지 실패: ${e.message}")
-                null
-            }
-
-            // 실제 매수 주문 실행
-            log.info("[$market] 시장가 매수 시도: 금액=${positionSize}원")
-
-            val buySignal = TradingSignal(
-                market = market,
-                action = SignalAction.BUY,
-                confidence = filterResult.confidence * 100,
-                price = currentPrice,
-                reason = "Volume Surge 진입: ${filterResult.reason}${regime?.let { ", 레짐: $it" } ?: ""}",
-                strategy = "VOLUME_SURGE",
-                regime = regime
+            val riskParams = calculateRiskManagementParams(market, executionResult.price, filterResult)
+            val savedTrade = createAndSaveTradeEntity(
+                alert, analysis, executionResult, riskParams, regime
             )
-
-            val orderResult = orderExecutor.execute(buySignal, positionSize)
-
-            if (!orderResult.success) {
-                log.error("[$market] 매수 주문 실패: ${orderResult.message}")
-                markAlertProcessed(alert, "ERROR", "매수 주문 실패: ${orderResult.message}")
-                return
-            }
-
-            // 체결가 처리: null 또는 0이면 currentPrice 사용
-            val executedPrice = orderResult.price.orDefault(currentPrice)
-            val executedQuantity = orderResult.executedQuantity.orZero()
-                .let { if (it.isPositive()) it else orderResult.quantity.orZero() }
-
-            // 체결가 또는 수량이 0이면 진입 실패 처리 (0으로 나누기 방지)
-            if (executedPrice <= BigDecimal.ZERO || executedQuantity <= BigDecimal.ZERO) {
-                log.error("[$market] 유효하지 않은 체결 데이터: 가격=${executedPrice}, 수량=${executedQuantity}")
-                log.error("[$market] orderResult: price=${orderResult.price}, executedQty=${orderResult.executedQuantity}, qty=${orderResult.quantity}")
-                markAlertProcessed(alert, "ERROR", "유효하지 않은 체결 데이터")
-
-                slackNotifier.sendWarning(
-                    market,
-                    """
-                    체결 데이터 오류로 진입 실패
-                    orderResult.price: ${orderResult.price}
-                    orderResult.executedQuantity: ${orderResult.executedQuantity}
-                    orderResult.quantity: ${orderResult.quantity}
-                    currentPrice: $currentPrice
-
-                    주문은 실행되었을 수 있음. 빗썸에서 확인 필요.
-                    """.trimIndent()
-                )
-                return
-            }
-
-            log.info("[$market] 매수 체결: 가격=${executedPrice}, 수량=${executedQuantity}")
-
-            // ATR 기반 동적 손절 계산 (활성화된 경우)
-            val stopLossResult = if (properties.useDynamicStopLoss) {
-                stopLossCalculator.calculate(market, executedPrice.toDouble())
-            } else {
-                null
-            }
-
-            val appliedStopLossPercent = stopLossResult?.stopLossPercent
-                ?: kotlin.math.abs(properties.stopLossPercent)
-
-            // 동적 익절 계산 (quant-trading 스킬 기반 신뢰도별 R:R)
-            val confidence = filterResult.confidence * 100  // 0~100
-            val rrResult = dynamicRiskRewardCalculator.calculate(confidence, appliedStopLossPercent)
-            val appliedTakeProfitPercent = if (properties.useDynamicTakeProfit) {
-                rrResult.takeProfitPercent
-            } else {
-                properties.takeProfitPercent
-            }
-
-            log.info("[$market] 리스크 관리 설정: 신뢰도=${String.format("%.0f", confidence)}%, 손절=${String.format("%.2f", appliedStopLossPercent)}%, 익절=${String.format("%.2f", appliedTakeProfitPercent)}% (R:R=${String.format("%.1f", rrResult.riskReward)}:1, ${rrResult.reason})")
-
-            // 트레이드 엔티티 생성
-            val trade = VolumeSurgeTradeEntity(
-                alertId = alert.id,
-                market = market,
-                entryPrice = executedPrice.toDouble(),
-                quantity = executedQuantity.toDouble(),
-                entryTime = Instant.now(),
-                entryRsi = analysis.rsi,
-                entryMacdSignal = analysis.macdSignal,
-                entryBollingerPosition = analysis.bollingerPosition,
-                entryVolumeRatio = analysis.volumeRatio,
-                confluenceScore = analysis.confluenceScore,
-                entryAtr = stopLossResult?.atr,
-                entryAtrPercent = stopLossResult?.atrPercent,
-                appliedStopLossPercent = appliedStopLossPercent,
-                appliedTakeProfitPercent = appliedTakeProfitPercent,
-                stopLossMethod = stopLossResult?.method?.name ?: "FIXED",
-                llmEntryReason = filterResult.reason,
-                llmConfidence = filterResult.confidence,
-                status = "OPEN",
-                regime = regime  // 레짐 저장
-            )
-
-            val savedTrade = tradeRepository.save(trade)
 
             markAlertProcessed(alert, "APPROVED", "포지션 진입 완료")
+            sendEntryNotification(market, analysis, filterResult, executionResult, savedTrade)
 
-            // Slack 알림
-            slackNotifier.sendSystemNotification(
-                "Volume Surge 진입",
-                """
-                마켓: $market
-                체결가: ${executedPrice.toPlainString()}원
-                수량: $executedQuantity
-                RSI: ${analysis.rsi}
-                컨플루언스: ${analysis.confluenceScore}
-                LLM 사유: ${filterResult.reason}
-                주문ID: ${orderResult.orderId ?: "N/A"}
-                """.trimIndent()
-            )
-
-            log.info("[$market] 포지션 진입 완료: id=${savedTrade.id}, orderId=${orderResult.orderId}")
+            log.info("[$market] 포지션 진입 완료: id=${savedTrade.id}, orderId=${executionResult.orderId}")
 
         } catch (e: Exception) {
             log.error("[$market] 포지션 진입 실패: ${e.message}", e)
             markAlertProcessed(alert, "ERROR", "주문 실행 실패: ${e.message}")
         }
     }
+
+    /**
+     * 현재가 조회 및 검증
+     */
+    private fun fetchCurrentPriceWithValidation(
+        market: String,
+        alert: VolumeSurgeAlertEntity
+    ): BigDecimal? {
+        val ticker = bithumbPublicApi.getCurrentPrice(market)?.firstOrNull()
+        if (ticker == null) {
+            log.error("[$market] 현재가 조회 실패")
+            markAlertProcessed(alert, "ERROR", "현재가 조회 실패")
+            return null
+        }
+        return ticker.tradePrice
+    }
+
+    /**
+     * 시장 레짐 감지
+     */
+    private fun detectMarketRegime(market: String): String? {
+        return try {
+            val candles = bithumbPublicApi.getOhlcv(market, "minute60", 100)
+            if (!candles.isNullOrEmpty() && candles.size >= 15) {
+                regimeDetector.detectFromBithumb(candles).regime.name
+            } else {
+                log.debug("[$market] 캔들 데이터 부족으로 레짐 감지 스킵")
+                null
+            }
+        } catch (e: Exception) {
+            log.warn("[$market] 레짐 감지 실패: ${e.message}")
+            null
+        }
+    }
+
+    /**
+     * 매수 주문 실행 및 검증
+     */
+    private fun executeBuyOrderWithValidation(
+        market: String,
+        currentPrice: BigDecimal,
+        filterResult: FilterResult,
+        regime: String?,
+        alert: VolumeSurgeAlertEntity
+    ): OrderExecutionResult? {
+        val positionSize = BigDecimal(properties.positionSizeKrw)
+        log.info("[$market] 시장가 매수 시도: 금액=${positionSize}원")
+
+        val buySignal = TradingSignal(
+            market = market,
+            action = SignalAction.BUY,
+            confidence = filterResult.confidence * 100,
+            price = currentPrice,
+            reason = "Volume Surge 진입: ${filterResult.reason}${regime?.let { ", 레짐: $it" } ?: ""}",
+            strategy = "VOLUME_SURGE",
+            regime = regime
+        )
+
+        val orderResult = orderExecutor.execute(buySignal, positionSize)
+
+        if (!orderResult.success) {
+            log.error("[$market] 매수 주문 실패: ${orderResult.message}")
+            markAlertProcessed(alert, "ERROR", "매수 주문 실패: ${orderResult.message}")
+            return null
+        }
+
+        val executedPrice = orderResult.price.orDefault(currentPrice)
+        val executedQuantity = orderResult.executedQuantity.orZero()
+            .let { if (it.isPositive()) it else orderResult.quantity.orZero() }
+
+        if (executedPrice <= BigDecimal.ZERO || executedQuantity <= BigDecimal.ZERO) {
+            log.error("[$market] 유효하지 않은 체결 데이터: 가격=$executedPrice, 수량=$executedQuantity")
+            markAlertProcessed(alert, "ERROR", "유효하지 않은 체결 데이터")
+            slackNotifier.sendWarning(market, """
+                체결 데이터 오류로 진입 실패
+                orderResult.price: ${orderResult.price}
+                orderResult.executedQuantity: ${orderResult.executedQuantity}
+                orderResult.quantity: ${orderResult.quantity}
+                currentPrice: $currentPrice
+                주문은 실행되었을 수 있음. 빗썸에서 확인 필요.
+            """.trimIndent())
+            return null
+        }
+
+        log.info("[$market] 매수 체결: 가격=$executedPrice, 수량=$executedQuantity")
+
+        return OrderExecutionResult(
+            price = executedPrice,
+            quantity = executedQuantity,
+            orderId = orderResult.orderId
+        )
+    }
+
+    /**
+     * 리스크 관리 파라미터 계산 (손절/익절)
+     */
+    private fun calculateRiskManagementParams(
+        market: String,
+        executedPrice: BigDecimal,
+        filterResult: FilterResult
+    ): RiskManagementParams {
+        val stopLossResult = if (properties.useDynamicStopLoss) {
+            stopLossCalculator.calculate(market, executedPrice.toDouble())
+        } else null
+
+        val appliedStopLossPercent = stopLossResult?.stopLossPercent
+            ?: kotlin.math.abs(properties.stopLossPercent)
+
+        val confidence = filterResult.confidence * 100
+        val rrResult = dynamicRiskRewardCalculator.calculate(confidence, appliedStopLossPercent)
+        val appliedTakeProfitPercent = if (properties.useDynamicTakeProfit) {
+            rrResult.takeProfitPercent
+        } else {
+            properties.takeProfitPercent
+        }
+
+        log.info("[$market] 리스크 관리: 신뢰도=${String.format("%.0f", confidence)}%, " +
+                "손절=${String.format("%.2f", appliedStopLossPercent)}%, " +
+                "익절=${String.format("%.2f", appliedTakeProfitPercent)}% " +
+                "(R:R=${String.format("%.1f", rrResult.riskReward)}:1, ${rrResult.reason})")
+
+        return RiskManagementParams(
+            stopLossPercent = appliedStopLossPercent,
+            takeProfitPercent = appliedTakeProfitPercent,
+            atr = stopLossResult?.atr,
+            atrPercent = stopLossResult?.atrPercent,
+            method = stopLossResult?.method?.name ?: "FIXED"
+        )
+    }
+
+    /**
+     * 트레이드 엔티티 생성 및 저장
+     */
+    private fun createAndSaveTradeEntity(
+        alert: VolumeSurgeAlertEntity,
+        analysis: VolumeSurgeAnalysis,
+        executionResult: OrderExecutionResult,
+        riskParams: RiskManagementParams,
+        regime: String?
+    ): VolumeSurgeTradeEntity {
+        val trade = VolumeSurgeTradeEntity(
+            alertId = alert.id,
+            market = alert.market,
+            entryPrice = executionResult.price.toDouble(),
+            quantity = executionResult.quantity.toDouble(),
+            entryTime = Instant.now(),
+            entryRsi = analysis.rsi,
+            entryMacdSignal = analysis.macdSignal,
+            entryBollingerPosition = analysis.bollingerPosition,
+            entryVolumeRatio = analysis.volumeRatio,
+            confluenceScore = analysis.confluenceScore,
+            entryAtr = riskParams.atr,
+            entryAtrPercent = riskParams.atrPercent,
+            appliedStopLossPercent = riskParams.stopLossPercent,
+            appliedTakeProfitPercent = riskParams.takeProfitPercent,
+            stopLossMethod = riskParams.method,
+            llmEntryReason = executionResult.filterReason,
+            llmConfidence = executionResult.confidence,
+            status = "OPEN",
+            regime = regime
+        )
+
+        return tradeRepository.save(trade)
+    }
+
+    /**
+     * 진입 알림 발송
+     */
+    private fun sendEntryNotification(
+        market: String,
+        analysis: VolumeSurgeAnalysis,
+        filterResult: FilterResult,
+        executionResult: OrderExecutionResult,
+        savedTrade: VolumeSurgeTradeEntity
+    ) {
+        slackNotifier.sendSystemNotification(
+            "Volume Surge 진입",
+            """
+            마켓: $market
+            체결가: ${executionResult.price.toPlainString()}원
+            수량: ${executionResult.quantity}
+            RSI: ${analysis.rsi}
+            컨플루언스: ${analysis.confluenceScore}
+            LLM 사유: ${filterResult.reason}
+            주문ID: ${executionResult.orderId ?: "N/A"}
+            """.trimIndent()
+        )
+    }
+
+    /**
+     * 주문 실행 결과
+     */
+    private data class OrderExecutionResult(
+        val price: BigDecimal,
+        val quantity: BigDecimal,
+        val orderId: String?,
+        val filterReason: String = "",
+        val confidence: Double = 0.0
+    )
+
+    /**
+     * 리스크 관리 파라미터
+     */
+    private data class RiskManagementParams(
+        val stopLossPercent: Double,
+        val takeProfitPercent: Double,
+        val atr: Double?,
+        val atrPercent: Double?,
+        val method: String
+    )
 
     /**
      * 포지션 모니터링 (1초마다)
