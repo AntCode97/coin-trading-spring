@@ -90,8 +90,8 @@ class MemeScalperEngine(
 
     companion object {
         // MemeScalper 전용 상수 (초단타 전략)
-        private const val CLOSE_RETRY_BACKOFF_SECONDS = 5L    // 더 빠른 재시도
-        private const val MAX_CLOSE_ATTEMPTS = 5               // 급등 시장에서의 API 타임아웃 대응
+        private const val CLOSE_RETRY_BACKOFF_SECONDS = 5L    // 더 빠른 재시도 (TradingConstants.CLOSE_RETRY_BACKOFF_SECONDS=10L보다 빠름)
+        // MAX_CLOSE_ATTEMPTS는 TradingConstants.MAX_CLOSE_ATTEMPTS 사용
 
         // 최소 수익률 (%) - 수수료 0.08% × 2 = 0.16% 이상이어야 실익
         private const val MIN_PROFIT_PERCENT = 0.1
@@ -633,7 +633,7 @@ class MemeScalperEngine(
             exitPrice = exitPrice,
             reason = reason,
             strategyName = "Meme Scalper",
-            maxAttempts = MAX_CLOSE_ATTEMPTS,
+            maxAttempts = TradingConstants.MAX_CLOSE_ATTEMPTS,
             backoffSeconds = CLOSE_RETRY_BACKOFF_SECONDS,
             updatePosition = { pos, status, price, qty, orderId ->
                 pos.status = status
