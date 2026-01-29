@@ -161,7 +161,7 @@ class OrderExecutor(
         marketCondition: MarketConditionResult
     ): OrderResult {
         val market = signal.market
-        val apiMarket = convertToApiMarket(market)
+        val apiMarket = PositionHelper.convertToApiMarket(market)
         val midPrice = marketCondition.midPrice
         val side = if (signal.action == SignalAction.BUY) OrderSide.BUY else OrderSide.SELL
 
@@ -869,14 +869,6 @@ class OrderExecutor(
         }
     }
 
-    /**
-     * 마켓 형식 변환 (BTC_KRW -> KRW-BTC)
-     */
-    private fun convertToApiMarket(market: String): String {
-        return market.split("_").let { parts ->
-            if (parts.size == 2) "${parts[1]}-${parts[0]}" else market
-        }
-    }
 }
 
 /**

@@ -113,6 +113,15 @@ object PositionHelper {
     fun extractCoinSymbol(market: String): String = market.removePrefix("KRW-")
 
     /**
+     * 마켓 형식 변환 (BTC_KRW -> KRW-BTC)
+     */
+    fun convertToApiMarket(market: String): String {
+        return market.split("_").let { parts ->
+            if (parts.size == 2) "${parts[1]}-${parts[0]}" else market
+        }
+    }
+
+    /**
      * CLOSING 포지션 모니터링 (공통 로직)
      *
      * @return 청산 완료(true), 계속 대기 필요(false)

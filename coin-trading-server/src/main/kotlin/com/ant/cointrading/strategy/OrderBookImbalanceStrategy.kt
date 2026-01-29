@@ -2,6 +2,7 @@ package com.ant.cointrading.strategy
 
 import com.ant.cointrading.api.bithumb.BithumbPublicApi
 import com.ant.cointrading.config.TradingProperties
+import com.ant.cointrading.engine.PositionHelper
 import com.ant.cointrading.model.*
 import com.ant.cointrading.risk.MarketConditionChecker
 import org.slf4j.LoggerFactory
@@ -72,7 +73,7 @@ class OrderBookImbalanceStrategy(
         regime: RegimeAnalysis
     ): TradingSignal {
         // 1. 호가창 조회
-        val apiMarket = convertToApiMarket(market)
+        val apiMarket = PositionHelper.convertToApiMarket(market)
         val orderbook = try {
             bithumbPublicApi.getOrderbook(apiMarket)?.firstOrNull()
         } catch (e: Exception) {
@@ -305,15 +306,6 @@ class OrderBookImbalanceStrategy(
             시간대: 초~분 단위 (매우 단기)
             위험: 수수료/슬리피지가 수익보다 클 수 있음
         """.trimIndent()
-    }
-
-    /**
-     * 마켓 형식 변환 (BTC_KRW -> KRW-BTC)
-     */
-    private fun convertToApiMarket(market: String): String {
-        return market.split("_").let { parts ->
-            if (parts.size == 2) "${parts[1]}-${parts[0]}" else market
-        }
     }
 
     /**

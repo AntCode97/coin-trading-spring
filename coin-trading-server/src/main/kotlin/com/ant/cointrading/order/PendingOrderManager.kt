@@ -4,6 +4,7 @@ import com.ant.cointrading.api.bithumb.BithumbPrivateApi
 import com.ant.cointrading.api.bithumb.BithumbPublicApi
 import com.ant.cointrading.api.bithumb.OrderResponse
 import com.ant.cointrading.config.TradingProperties
+import com.ant.cointrading.engine.PositionHelper
 import com.ant.cointrading.model.SignalAction
 import com.ant.cointrading.model.TradingSignal
 import com.ant.cointrading.notification.SlackNotifier
@@ -323,7 +324,7 @@ class PendingOrderManager(
         }
 
         // 현재 중간가 저장 (분석용)
-        val apiMarket = convertToApiMarket(order.market)
+        val apiMarket = PositionHelper.convertToApiMarket(order.market)
         try {
             val orderbook = bithumbPublicApi.getOrderbook(apiMarket)?.firstOrNull()
             if (orderbook?.orderbookUnits?.isNotEmpty() == true) {
@@ -613,14 +614,6 @@ class PendingOrderManager(
         )
     }
 
-    /**
-     * 마켓 형식 변환
-     */
-    private fun convertToApiMarket(market: String): String {
-        return market.split("_").let { parts ->
-            if (parts.size == 2) "${parts[1]}-${parts[0]}" else market
-        }
-    }
 }
 
 /**

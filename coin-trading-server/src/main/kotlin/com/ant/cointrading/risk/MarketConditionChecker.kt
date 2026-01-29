@@ -3,6 +3,7 @@ package com.ant.cointrading.risk
 import com.ant.cointrading.api.bithumb.BithumbPublicApi
 import com.ant.cointrading.api.bithumb.OrderbookInfo
 import com.ant.cointrading.config.TradingConstants
+import com.ant.cointrading.engine.PositionHelper
 import org.slf4j.LoggerFactory
 import org.springframework.stereotype.Component
 import java.math.BigDecimal
@@ -56,7 +57,7 @@ class MarketConditionChecker(
      * 종합 시장 상태 검사
      */
     fun checkMarketCondition(market: String, orderAmountKrw: BigDecimal): MarketConditionResult {
-        val apiMarket = convertToApiMarket(market)
+        val apiMarket = PositionHelper.convertToApiMarket(market)
         val issues = mutableListOf<String>()
         var canTrade = true
         var severity = ConditionSeverity.NORMAL
@@ -313,15 +314,6 @@ class MarketConditionChecker(
     fun recordApiSuccess(market: String) {
         apiErrorCounts[market] = 0
         lastApiSuccess[market] = Instant.now()
-    }
-
-    /**
-     * 마켓 형식 변환 (BTC_KRW -> KRW-BTC)
-     */
-    private fun convertToApiMarket(market: String): String {
-        return market.split("_").let { parts ->
-            if (parts.size == 2) "${parts[1]}-${parts[0]}" else market
-        }
     }
 
     /**
