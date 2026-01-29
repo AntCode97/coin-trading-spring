@@ -19,7 +19,13 @@ import com.ant.cointrading.regime.RegimeDetector
 import com.ant.cointrading.repository.*
 import com.ant.cointrading.risk.DynamicRiskRewardCalculator
 import com.ant.cointrading.risk.PnlCalculator
+import com.ant.cointrading.risk.SimpleCircuitBreaker
+import com.ant.cointrading.risk.SimpleCircuitBreakerFactory
+import com.ant.cointrading.risk.SimpleCircuitBreakerState
+import com.ant.cointrading.risk.SimpleCircuitBreakerStatePersistence
 import com.ant.cointrading.risk.StopLossCalculator
+import org.springframework.core.io.ClassPathResource
+import org.springframework.core.io.Resource
 import jakarta.annotation.PostConstruct
 import org.slf4j.LoggerFactory
 import org.springframework.scheduling.annotation.Scheduled
@@ -58,17 +64,20 @@ class VolumeSurgeEngine(
     private val stopLossCalculator: StopLossCalculator,
     private val dynamicRiskRewardCalculator: DynamicRiskRewardCalculator,
     private val globalPositionManager: GlobalPositionManager,
-    private val regimeDetector: RegimeDetector
+    private val regimeDetector: RegimeDetector,
+    circuitBreakerFactory: SimpleCircuitBreakerFactory
 ) {
     private val log = LoggerFactory.getLogger(javaClass)
 
     // 공통 청산 로직 (PositionCloser 사용)
     private val positionCloser = PositionCloser(bithumbPrivateApi, orderExecutor, slackNotifier)
 
-    // 서킷 브레이커 상태 (재시작 시 DB에서 복원)
-    @Volatile private var consecutiveLosses = 0
-    @Volatile private var dailyPnl = 0.0
-    @Volatile private var lastResetDate = Instant.now()
+    // 서킷브레이커 (공통 컴포넌트)
+    private val circuitBreaker = circuitBreakerFactory.create(
+        maxConsecutiveLosses = properties.maxConsecutiveLosses,
+        dailyMaxLossKrw = properties.dailyMaxLossKrw.toDouble(),
+        statePersistence = VolumeSurgeCircuitBreakerStatePersistence(dailySummaryRepository)
+    )
 
     // 트레일링 스탑 고점 추적
     private val highestPrices = ConcurrentHashMap<Long, Double>()
@@ -79,7 +88,8 @@ class VolumeSurgeEngine(
             log.info("=== Volume Surge Engine 시작 (Virtual Thread 모드) ===")
             log.info("설정: $properties")
 
-            // 열린 포지션 복원 (트레일링 스탑 고점 등)
+            // 상태 복원
+            circuitBreaker.restoreState()
             restoreOpenPositions()
         }
     }
@@ -88,13 +98,8 @@ class VolumeSurgeEngine(
      * 서버 재시작 시 상태 복원
      *
      * - 트레일링 스탑 고점을 메모리 맵에 로드
-     * - 서킷 브레이커 상태 DB에서 복원 (연속손실, 일일손익)
      */
     private fun restoreOpenPositions() {
-        // 1. 서킷 브레이커 상태 복원
-        restoreCircuitBreakerState()
-
-        // 2. 열린 포지션 복원
         val openPositions = tradeRepository.findByStatus("OPEN")
         if (openPositions.isEmpty()) {
             log.info("복원할 열린 포지션 없음")
@@ -114,29 +119,6 @@ class VolumeSurgeEngine(
         }
 
         log.info("=== ${openPositions.size}건 포지션 복원 완료, 모니터링 재개 ===")
-    }
-
-    /**
-     * 서킷 브레이커 상태 DB에서 복원
-     */
-    private fun restoreCircuitBreakerState() {
-        val today = LocalDate.now()
-        val todaySummary = dailySummaryRepository.findByDate(today)
-
-        if (todaySummary != null) {
-            // 오늘 요약이 있으면 서킷브레이커 상태 복원
-            consecutiveLosses = todaySummary.consecutiveLosses
-            dailyPnl = todaySummary.totalPnl
-            lastResetDate = todaySummary.circuitBreakerUpdatedAt ?: Instant.now()
-
-            log.info("=== 서킷브레이커 상태 복원 ===")
-            log.info("연속 손실: $consecutiveLosses")
-            log.info("일일 손익: $dailyPnl")
-            log.info("마지막 업데이트: $lastResetDate")
-        } else {
-            // 오늘 요약이 없으면 초기화 상태 유지
-            log.info("오늘의 서킷브레이커 상태 없음, 초기화 상태로 시작")
-        }
     }
 
     /**
@@ -625,7 +607,7 @@ class VolumeSurgeEngine(
         highestPrices.remove(position.id)
 
         // 서킷 브레이커 업데이트
-        updateCircuitBreaker(pnlResult.pnlAmount)
+        circuitBreaker.recordPnl(pnlResult.pnlAmount)
 
         // Slack 알림
         val emoji = if (pnlResult.pnlAmount >= 0) "+" else ""
@@ -647,64 +629,9 @@ class VolumeSurgeEngine(
     }
 
     /**
-     * 서킷 브레이커 업데이트 및 DB 저장
-     */
-    private fun updateCircuitBreaker(pnl: Double) {
-        val now = Instant.now()
-        val today = LocalDate.now()
-
-        // 일일 리셋 체크
-        if (ChronoUnit.DAYS.between(lastResetDate, now) >= 1) {
-            dailyPnl = 0.0
-            consecutiveLosses = 0
-            lastResetDate = now
-        }
-
-        dailyPnl += pnl
-
-        if (pnl < 0) {
-            consecutiveLosses++
-        } else {
-            consecutiveLosses = 0
-        }
-
-        // DB에 서킷브레이커 상태 저장 (재시작 시 복원용)
-        saveCircuitBreakerState(today)
-    }
-
-    /**
-     * 서킷 브레이커 상태 DB에 저장
-     */
-    private fun saveCircuitBreakerState(date: LocalDate) {
-        try {
-            val summary = dailySummaryRepository.findByDate(date)
-                ?: VolumeSurgeDailySummaryEntity(date = date)
-
-            summary.consecutiveLosses = consecutiveLosses
-            summary.totalPnl = dailyPnl
-            summary.circuitBreakerUpdatedAt = Instant.now()
-
-            dailySummaryRepository.save(summary)
-            log.debug("서킷브레이커 상태 저장: 연속손실=$consecutiveLosses, 일일손익=$dailyPnl")
-        } catch (e: Exception) {
-            log.error("서킷브레이커 상태 저장 실패: ${e.message}")
-        }
-    }
-
-    /**
      * 거래 가능 여부 체크
      */
-    private fun canTrade(): Boolean {
-        if (consecutiveLosses >= properties.maxConsecutiveLosses) {
-            log.warn("연속 손실 ${consecutiveLosses}회 - 거래 중지")
-            return false
-        }
-        if (dailyPnl <= -properties.dailyMaxLossKrw) {
-            log.warn("일일 손실 ${dailyPnl}원 - 거래 중지")
-            return false
-        }
-        return true
-    }
+    private fun canTrade(): Boolean = circuitBreaker.canTrade()
 
     /**
      * 경보 처리 완료 마킹
@@ -725,11 +652,12 @@ class VolumeSurgeEngine(
      */
     fun getStatus(): Map<String, Any> {
         val openPositions = tradeRepository.findByStatus("OPEN")
+        val cbState = circuitBreaker.getState()
         return mapOf(
             "enabled" to properties.enabled,
             "openPositions" to openPositions.size,
-            "consecutiveLosses" to consecutiveLosses,
-            "dailyPnl" to dailyPnl,
+            "consecutiveLosses" to cbState.consecutiveLosses,
+            "dailyPnl" to cbState.dailyPnl,
             "canTrade" to canTrade()
         )
     }
@@ -747,12 +675,14 @@ class VolumeSurgeEngine(
     fun manualTrigger(market: String, skipLlmFilter: Boolean = false): Map<String, Any?> {
         log.info("[$market] 수동 트리거 시작 (skipLlmFilter=$skipLlmFilter)")
 
+        val cbState = circuitBreaker.getState()
+
         // 서킷 브레이커 체크
         if (!canTrade()) {
             return mapOf(
                 "success" to false,
                 "market" to market,
-                "error" to "서킷 브레이커 발동 (연속손실: $consecutiveLosses, 일일손익: $dailyPnl)"
+                "error" to "서킷 브레이커 발동 (연속손실: ${cbState.consecutiveLosses}, 일일손익: ${cbState.dailyPnl})"
             )
         }
 
@@ -938,14 +868,48 @@ class VolumeSurgeEngine(
      * 서킷 브레이커 리셋 (테스트용)
      */
     fun resetCircuitBreaker(): Map<String, Any> {
-        consecutiveLosses = 0
-        dailyPnl = 0.0
-        lastResetDate = Instant.now()
-        log.info("서킷 브레이커 리셋")
+        circuitBreaker.reset()
+        val cbState = circuitBreaker.getState()
         return mapOf(
             "success" to true,
-            "consecutiveLosses" to consecutiveLosses,
-            "dailyPnl" to dailyPnl
+            "consecutiveLosses" to cbState.consecutiveLosses,
+            "dailyPnl" to cbState.dailyPnl
         )
+    }
+}
+
+/**
+ * VolumeSurge 서킷브레이커 상태 저장소 구현체
+ */
+private class VolumeSurgeCircuitBreakerStatePersistence(
+    private val dailySummaryRepository: VolumeSurgeDailySummaryRepository
+) : SimpleCircuitBreakerStatePersistence {
+
+    override fun load(): SimpleCircuitBreakerState? {
+        val today = LocalDate.now()
+        val todaySummary = dailySummaryRepository.findByDate(today)
+        return todaySummary?.let {
+            SimpleCircuitBreakerState(
+                consecutiveLosses = it.consecutiveLosses,
+                dailyPnl = it.totalPnl,
+                lastResetDate = it.circuitBreakerUpdatedAt ?: Instant.now()
+            )
+        }
+    }
+
+    override fun save(state: SimpleCircuitBreakerState) {
+        try {
+            val today = LocalDate.now()
+            val summary = dailySummaryRepository.findByDate(today)
+                ?: VolumeSurgeDailySummaryEntity(date = today)
+
+            summary.consecutiveLosses = state.consecutiveLosses
+            summary.totalPnl = state.dailyPnl
+            summary.circuitBreakerUpdatedAt = state.lastResetDate
+
+            dailySummaryRepository.save(summary)
+        } catch (e: Exception) {
+            // State persistence 실패는 로그만 남기고 무시
+        }
     }
 }
