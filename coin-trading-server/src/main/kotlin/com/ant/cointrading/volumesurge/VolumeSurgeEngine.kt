@@ -5,6 +5,7 @@ import com.ant.cointrading.api.bithumb.BithumbPublicApi
 import com.ant.cointrading.config.TradingConstants
 import com.ant.cointrading.config.VolumeSurgeProperties
 import com.ant.cointrading.engine.GlobalPositionManager
+import com.ant.cointrading.engine.PositionCloser
 import com.ant.cointrading.engine.PositionHelper
 import com.ant.cointrading.engine.PositionStates
 import com.ant.cointrading.extension.isPositive
@@ -60,6 +61,9 @@ class VolumeSurgeEngine(
     private val regimeDetector: RegimeDetector
 ) {
     private val log = LoggerFactory.getLogger(javaClass)
+
+    // 공통 청산 로직 (PositionCloser 사용)
+    private val positionCloser = PositionCloser(bithumbPrivateApi, orderExecutor, slackNotifier)
 
     // 서킷 브레이커 상태 (재시작 시 DB에서 복원)
     @Volatile private var consecutiveLosses = 0
@@ -558,124 +562,38 @@ class VolumeSurgeEngine(
     }
 
     /**
-     * 포지션 청산
-     *
-     * 중복 주문 방지 로직:
-     * 1. 이미 CLOSING 상태면 스킵 (기존 주문 대기)
-     * 2. 백오프 시간 내 재시도 방지
-     * 3. 최대 시도 횟수 초과 시 ABANDONED 처리
-     * 4. 실제 잔고 확인 후 매도 (버그 수정)
+     * 포지션 청산 (PositionCloser 위임)
      */
     private fun closePosition(position: VolumeSurgeTradeEntity, exitPrice: Double, reason: String) {
         val market = position.market
 
-        // 중복 청산 방지
-        if (!PositionHelper.canClosePosition(position.status, position.lastCloseAttempt, TradingConstants.CLOSE_RETRY_BACKOFF_SECONDS)) {
-            return
-        }
-
-        // 최대 시도 횟수 체크
-        if (PositionHelper.isMaxAttemptsExceeded(position.closeAttemptCount, TradingConstants.MAX_CLOSE_ATTEMPTS)) {
-            log.error("[$market] 청산 시도 ${TradingConstants.MAX_CLOSE_ATTEMPTS}회 초과, ABANDONED 처리")
-            handleAbandonedPosition(position, exitPrice, "MAX_ATTEMPTS")
-            return
-        }
-
-        log.info("[$market] 포지션 청산 시도 #${position.closeAttemptCount + 1}: $reason, 가격=$exitPrice")
-
-        // 실제 잔고 확인
-        val coinSymbol = PositionHelper.extractCoinSymbol(market)
-        val actualBalance = try {
-            bithumbPrivateApi.getBalances()?.find { it.currency == coinSymbol }?.balance ?: BigDecimal.ZERO
-        } catch (e: Exception) {
-            log.warn("[$market] 잔고 조회 실패, DB 수량 사용: ${e.message}")
-            BigDecimal(position.quantity)
-        }
-
-        // 실제 잔고가 없으면 이미 청산된 것으로 판단
-        if (actualBalance <= BigDecimal.ZERO) {
-            log.warn("[$market] 실제 잔고 없음 - ABANDONED 처리")
-            handleAbandonedPosition(position, exitPrice, "NO_BALANCE")
-            return
-        }
-
-        // 실제 매도 수량 결정
-        val sellQuantity = actualBalance.toDouble().coerceAtMost(position.quantity)
-        val positionAmount = BigDecimal(sellQuantity * exitPrice)
-
-        // 최소 금액 미달 체크
-        if (PositionHelper.isBelowMinAmount(positionAmount)) {
-            log.warn("[$market] 최소 주문 금액 미달 - ABANDONED 처리")
-            handleAbandonedPosition(position, exitPrice, "MIN_AMOUNT")
-            return
-        }
-
-        // 상태를 CLOSING으로 변경 (중복 청산 방지)
-        position.status = "CLOSING"
-        position.exitReason = reason
-        position.exitPrice = exitPrice
-        position.lastCloseAttempt = Instant.now()
-        position.closeAttemptCount++
-        // 실제 잔고로 수량 업데이트
-        if (sellQuantity != position.quantity) {
-            log.info("[$market] 매도 수량 조정: ${position.quantity} -> $sellQuantity")
-            position.quantity = sellQuantity
-        }
-        tradeRepository.save(position)
-
-        log.info("[$market] 매도 주문 실행: ${positionAmount.toPlainString()}원")
-
-        // 매도 주문 실행
-        val sellSignal = TradingSignal(
-            market = market,
-            action = SignalAction.SELL,
-            confidence = 100.0,
-            price = BigDecimal(exitPrice),
-            reason = "Volume Surge 청산: $reason",
-            strategy = "VOLUME_SURGE"
-        )
-
-        val orderResult = orderExecutor.execute(sellSignal, positionAmount)
-
-        // 주문 성공
-        if (orderResult.success) {
-            val actualExitPrice = orderResult.price?.toDouble() ?: exitPrice
-            position.closeOrderId = orderResult.orderId
-
-            // 즉시 체결 확인
-            if (orderResult.executedQuantity != null && orderResult.executedQuantity > BigDecimal.ZERO) {
-                // 체결됨 - 바로 종료 처리
-                finalizeClose(position, actualExitPrice, reason)
-            } else {
-                // 미체결 - CLOSING 상태로 유지, monitorClosingPosition에서 확인
-                position.closeOrderId = orderResult.orderId
-                tradeRepository.save(position)
-                log.info("[$market] 청산 주문 접수됨, 체결 대기: ${orderResult.orderId}")
+        // PositionCloser에 공통 로직 위임
+        positionCloser.executeClose(
+            position = position,
+            exitPrice = exitPrice,
+            reason = reason,
+            strategyName = "Volume Surge",
+            maxAttempts = TradingConstants.MAX_CLOSE_ATTEMPTS,
+            backoffSeconds = TradingConstants.CLOSE_RETRY_BACKOFF_SECONDS,
+            updatePosition = { pos, status, price, qty, orderId ->
+                pos.status = status
+                pos.exitReason = reason
+                pos.exitPrice = price
+                pos.lastCloseAttempt = Instant.now()
+                pos.closeAttemptCount++
+                pos.closeOrderId = orderId  // orderId 설정
+                if (qty != pos.quantity) {
+                    log.info("[$market] 매도 수량 조정: ${pos.quantity} -> $qty")
+                    pos.quantity = qty
+                }
+                tradeRepository.save(pos)
+            },
+            onComplete = { pos, actualPrice, exitReason, orderResult ->
+                // VolumeSurgeEngine 특화 로직
+                pos.closeOrderId = orderResult.orderId  // orderId 설정
+                finalizeClose(pos, actualPrice, exitReason)
             }
-            return
-        }
-
-        // 주문 실패 처리
-        val errorMessage = orderResult.message ?: ""
-        log.error("[$market] 매도 주문 실패: $errorMessage")
-
-        // 복구 불가능한 에러: ABANDONED 처리
-        if (errorMessage.contains("insufficient_funds") ||
-            errorMessage.contains("주문가능한 금액") ||
-            errorMessage.contains("부족") ||
-            errorMessage.contains("최소") ||
-            errorMessage.contains("minimum")
-        ) {
-            log.error("[$market] 복구 불가능한 에러, ABANDONED 처리")
-            handleAbandonedPosition(position, exitPrice, "ABANDONED_${orderResult.rejectionReason ?: "API_ERROR"}")
-            return
-        }
-
-        // 재시도 가능한 에러: OPEN으로 되돌림 (백오프 후 재시도)
-        log.warn("[$market] 일시적 에러, 백오프 후 재시도 예정 (시도 ${position.closeAttemptCount}/${TradingConstants.MAX_CLOSE_ATTEMPTS})")
-        position.status = "OPEN"
-        position.closeOrderId = null
-        tradeRepository.save(position)
+        )
     }
 
     /**
@@ -725,41 +643,6 @@ class VolumeSurgeEngine(
         )
 
         log.info("[$market] 청산 완료: 손익=${pnlResult.pnlAmount}원 (${pnlResult.pnlPercent}%)")
-    }
-
-    /**
-     * ABANDONED 포지션 처리 헬퍼
-     */
-    private fun handleAbandonedPosition(position: VolumeSurgeTradeEntity, exitPrice: Double, reason: String) {
-        val market = position.market
-        val positionAmount = BigDecimal(position.quantity * exitPrice)
-
-        position.exitPrice = exitPrice
-        position.exitTime = Instant.now()
-        position.exitReason = reason
-        position.pnlAmount = 0.0  // 실제 청산 안 됨
-        position.pnlPercent = 0.0
-        position.status = "ABANDONED"
-
-        tradeRepository.save(position)
-        highestPrices.remove(position.id)
-
-        // Slack 경고 알림
-        slackNotifier.sendWarning(
-            market,
-            """
-            포지션 청산 불가 ($reason)
-            금액: ${positionAmount.toPlainString()}원 (최소 5000원)
-            수량: ${position.quantity}
-            진입가: ${position.entryPrice}원
-            현재가: ${exitPrice}원
-
-            해당 포지션은 ABANDONED 상태로 변경됨.
-            수동으로 빗썸에서 확인/처리 필요.
-            """.trimIndent()
-        )
-
-        log.info("[$market] 포지션 ABANDONED 처리 완료 ($reason)")
     }
 
     /**
