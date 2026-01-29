@@ -3,15 +3,6 @@
     <!-- Spring Boot 기본 설정 포함 -->
     <include resource="org/springframework/boot/logging/logback/defaults.xml"/>
 
-    <!-- Slack Appender (모든 로그 전송) -->
-    <!-- 환경변수 SLACK_WEBHOOK_URL을 직접 읽음 -->
-    <appender name="SLACK" class="com.github.maricn.logback.SlackAppender">
-        <webhookUri>${SLACK_WEBHOOK_URL}</webhookUri>
-        <layout class="ch.qos.logback.classic.PatternLayout">
-            <pattern>%d{yyyy-MM-dd HH:mm:ss} [%thread] %-5level %logger{36} - %msg%n</pattern>
-        </layout>
-    </appender>
-
     <!-- Console Appender -->
     <appender name="CONSOLE" class="ch.qos.logback.core.ConsoleAppender">
         <encoder>
@@ -26,11 +17,10 @@
         </encoder>
     </appender>
 
-    <!-- Logger 설정 (ERROR는 Slack으로도 전송) -->
+    <!-- Logger 설정 -->
     <root level="INFO">
         <appender-ref ref="CONSOLE"/>
         <appender-ref ref="FILE"/>
-        <appender-ref ref="SLACK"/>
     </root>
 
     <!-- 특정 패키지의 로그 레벨 조정 -->
