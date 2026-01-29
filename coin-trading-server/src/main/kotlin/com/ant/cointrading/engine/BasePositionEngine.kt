@@ -9,6 +9,7 @@ import com.ant.cointrading.notification.SlackNotifier
 import com.ant.cointrading.order.OrderExecutor
 import com.ant.cointrading.regime.RegimeDetector
 import com.ant.cointrading.repository.PositionEntity
+import com.ant.cointrading.repository.safePnlPercent
 import org.slf4j.LoggerFactory
 import java.math.BigDecimal
 import java.math.RoundingMode
@@ -318,10 +319,5 @@ abstract class BasePositionEngine(
             return true
         }
         return position.status == PositionEntity.STATUS_OPEN
-    }
-
-    protected fun safePnlPercent(entryPrice: Double, exitPrice: Double): Double {
-        if (entryPrice <= 0) return 0.0
-        return ((exitPrice - entryPrice) / entryPrice) * 100
     }
 }
