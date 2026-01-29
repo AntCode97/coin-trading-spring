@@ -5,6 +5,7 @@ import com.ant.cointrading.api.bithumb.BithumbPublicApi
 import com.ant.cointrading.config.MemeScalperProperties
 import com.ant.cointrading.config.TradingConstants
 import com.ant.cointrading.engine.GlobalPositionManager
+import com.ant.cointrading.engine.PositionCloser
 import com.ant.cointrading.engine.PositionHelper
 import com.ant.cointrading.engine.PositionStates
 import com.ant.cointrading.model.SignalAction
@@ -57,6 +58,9 @@ class MemeScalperEngine(
     private val regimeDetector: RegimeDetector
 ) {
     private val log = LoggerFactory.getLogger(javaClass)
+
+    // 공통 청산 로직 (PositionCloser 사용)
+    private val positionCloser = PositionCloser(bithumbPrivateApi, orderExecutor, slackNotifier)
 
     // 마켓별 쿨다운 추적
     private val cooldowns = ConcurrentHashMap<String, Instant>()
@@ -543,100 +547,39 @@ class MemeScalperEngine(
     }
 
     /**
-     * 포지션 청산
-     *
-     * 버그 수정:
-     * 1. 실제 잔고 확인 후 매도
-     * 2. 손절 포함 모든 케이스에 최소 금액 검증
+     * 포지션 청산 (PositionCloser 위임)
      */
     private fun closePosition(position: MemeScalperTradeEntity, exitPrice: Double, reason: String) {
         val market = position.market
 
-        // PositionHelper로 체크 (전략별 상수 사용)
-        if (!PositionHelper.canClosePosition(position.status, position.lastCloseAttempt, CLOSE_RETRY_BACKOFF_SECONDS)) {
-            return
-        }
-
-        if (PositionHelper.isMaxAttemptsExceeded(position.closeAttemptCount, MAX_CLOSE_ATTEMPTS)) {
-            log.error("[$market] 청산 시도 ${MAX_CLOSE_ATTEMPTS}회 초과, ABANDONED 처리")
-            handleAbandonedPosition(position, exitPrice, "MAX_ATTEMPTS")
-            return
-        }
-
-        log.info("[$market] 청산 시도 #${position.closeAttemptCount + 1}: $reason")
-
-        // 실제 잔고 확인
-        val coinSymbol = PositionHelper.extractCoinSymbol(market)
-        val actualBalance = try {
-            bithumbPrivateApi.getBalances()?.find { it.currency == coinSymbol }?.balance ?: BigDecimal.ZERO
-        } catch (e: Exception) {
-            log.warn("[$market] 잔고 조회 실패, DB 수량 사용: ${e.message}")
-            BigDecimal(position.quantity)
-        }
-
-        // 실제 잔고 없으면 이미 청산됨
-        if (actualBalance <= BigDecimal.ZERO) {
-            log.warn("[$market] 실제 잔고 없음 - ABANDONED 처리")
-            handleAbandonedPosition(position, exitPrice, "NO_BALANCE")
-            return
-        }
-
-        // 실제 매도 수량 결정
-        val sellQuantity = actualBalance.toDouble().coerceAtMost(position.quantity)
-        val positionAmount = BigDecimal(sellQuantity * exitPrice)
-
-        // 최소 금액 미달 체크
-        if (PositionHelper.isBelowMinAmount(positionAmount)) {
-            log.warn("[$market] 최소 주문 금액 미달 - ABANDONED 처리")
-            handleAbandonedPosition(position, exitPrice, "MIN_AMOUNT")
-            return
-        }
-
-        position.status = "CLOSING"
-        position.exitReason = reason
-        position.exitPrice = exitPrice
-        position.lastCloseAttempt = Instant.now()
-        position.closeAttemptCount++
-        // 실제 잔고로 수량 업데이트
-        if (sellQuantity != position.quantity) {
-            log.info("[$market] 매도 수량 조정: ${position.quantity} -> $sellQuantity")
-            position.quantity = sellQuantity
-        }
-        tradeRepository.save(position)
-
-        val sellSignal = TradingSignal(
-            market = market,
-            action = SignalAction.SELL,
-            confidence = 100.0,
-            price = BigDecimal(exitPrice),
-            reason = "Meme Scalper 청산: $reason",
-            strategy = "MEME_SCALPER"
+        // PositionCloser에 공통 로직 위임
+        positionCloser.executeClose(
+            position = position,
+            exitPrice = exitPrice,
+            reason = reason,
+            strategyName = "Meme Scalper",
+            maxAttempts = MAX_CLOSE_ATTEMPTS,
+            backoffSeconds = CLOSE_RETRY_BACKOFF_SECONDS,
+            updatePosition = { pos, status, price, qty, orderId ->
+                pos.status = status
+                pos.exitReason = reason
+                pos.exitPrice = price
+                pos.lastCloseAttempt = Instant.now()
+                pos.closeAttemptCount++
+                pos.closeOrderId = orderId
+                if (qty != pos.quantity) {
+                    log.info("[$market] 매도 수량 조정: ${pos.quantity} -> $qty")
+                    pos.quantity = qty
+                }
+                tradeRepository.save(pos)
+            },
+            onComplete = { pos, actualPrice, exitReason, _ ->
+                finalizeClose(pos, actualPrice, exitReason)
+            },
+            onAbandoned = { pos, abandonedPrice, abandonReason ->
+                handleAbandonedPosition(pos, abandonedPrice, abandonReason)
+            }
         )
-
-        val orderResult = orderExecutor.execute(sellSignal, positionAmount)
-
-        if (orderResult.success) {
-            val actualPrice = orderResult.price?.toDouble() ?: exitPrice
-
-            if (orderResult.executedQuantity != null && orderResult.executedQuantity > BigDecimal.ZERO) {
-                finalizeClose(position, actualPrice, reason)
-            } else {
-                position.closeOrderId = orderResult.orderId
-                tradeRepository.save(position)
-            }
-        } else {
-            val errorMessage = orderResult.message ?: ""
-
-            if (errorMessage.contains("insufficient") ||
-                errorMessage.contains("부족") ||
-                errorMessage.contains("최소")) {
-                handleAbandonedPosition(position, exitPrice, "API_ERROR")
-            } else {
-                position.status = "OPEN"
-                position.closeOrderId = null
-                tradeRepository.save(position)
-            }
-        }
     }
 
     /**

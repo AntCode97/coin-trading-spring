@@ -593,6 +593,7 @@ class VolumeSurgeEngine(
                 pos.closeOrderId = orderResult.orderId  // orderId 설정
                 finalizeClose(pos, actualPrice, exitReason)
             }
+            // onAbandoned는 null (기본 ABANDONED 처리 사용)
         )
     }
 

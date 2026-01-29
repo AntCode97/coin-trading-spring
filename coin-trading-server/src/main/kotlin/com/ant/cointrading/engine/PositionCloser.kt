@@ -38,7 +38,8 @@ class PositionCloser(
         maxAttempts: Int,
         backoffSeconds: Long,
         updatePosition: (T, String, Double, Double, String?) -> Unit,
-        onComplete: (T, Double, String, OrderResult) -> Unit
+        onComplete: (T, Double, String, OrderResult) -> Unit,
+        onAbandoned: ((T, Double, String) -> Unit)? = null
     ) {
         val market = position.market
 
@@ -50,7 +51,11 @@ class PositionCloser(
         // 최대 시도 횟수 초과 체크
         if (position.closeAttemptCount >= maxAttempts) {
             log.error("[$market] 청산 시도 ${maxAttempts}회 초과, ABANDONED 처리")
-            handleAbandoned(position, exitPrice, "MAX_ATTEMPTS", updatePosition)
+            if (onAbandoned != null) {
+                onAbandoned(position, exitPrice, "MAX_ATTEMPTS")
+            } else {
+                handleAbandoned(position, exitPrice, "MAX_ATTEMPTS", updatePosition)
+            }
             return
         }
 
@@ -68,7 +73,11 @@ class PositionCloser(
         // 실제 잔고 없으면 이미 청산됨
         if (actualBalance <= BigDecimal.ZERO) {
             log.warn("[$market] 실제 잔고 없음 - ABANDONED 처리")
-            handleAbandoned(position, exitPrice, "NO_BALANCE", updatePosition)
+            if (onAbandoned != null) {
+                onAbandoned(position, exitPrice, "NO_BALANCE")
+            } else {
+                handleAbandoned(position, exitPrice, "NO_BALANCE", updatePosition)
+            }
             return
         }
 
@@ -79,7 +88,11 @@ class PositionCloser(
         // 최소 금액 미달 체크
         if (positionAmount < TradingConstants.MIN_ORDER_AMOUNT_KRW) {
             log.warn("[$market] 최소 주문 금액 미달 - ABANDONED 처리")
-            handleAbandoned(position, exitPrice, "MIN_AMOUNT", updatePosition)
+            if (onAbandoned != null) {
+                onAbandoned(position, exitPrice, "MIN_AMOUNT")
+            } else {
+                handleAbandoned(position, exitPrice, "MIN_AMOUNT", updatePosition)
+            }
             return
         }
 
@@ -115,7 +128,11 @@ class PositionCloser(
                 errorMessage.contains("insufficient", ignoreCase = true) ||
                 errorMessage.contains("부족") ||
                 errorMessage.contains("최소") -> {
-                    handleAbandoned(position, exitPrice, "API_ERROR", updatePosition)
+                    if (onAbandoned != null) {
+                        onAbandoned(position, exitPrice, "API_ERROR")
+                    } else {
+                        handleAbandoned(position, exitPrice, "API_ERROR", updatePosition)
+                    }
                 }
                 else -> {
                     updatePosition(position, "OPEN", exitPrice, position.quantity, null)
