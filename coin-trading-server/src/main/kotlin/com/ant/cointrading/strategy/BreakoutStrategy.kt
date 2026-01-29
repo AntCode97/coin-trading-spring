@@ -4,6 +4,8 @@ import com.ant.cointrading.backtesting.BacktestAction
 import com.ant.cointrading.backtesting.BacktestSignal
 import com.ant.cointrading.backtesting.BacktestableStrategy
 import com.ant.cointrading.config.BreakoutProperties
+import com.ant.cointrading.indicator.calculateBollingerBands
+import com.ant.cointrading.indicator.calculateVolumeRatio
 import com.ant.cointrading.model.Candle
 import com.ant.cointrading.model.RegimeAnalysis
 import com.ant.cointrading.model.SignalAction
@@ -57,7 +59,7 @@ class BreakoutStrategy(
         }
 
         // 볼린저 밴드 계산
-        val (upperBand, lowerBand, middleBand) = calculateBollingerBands(candles)
+        val (upperBand, lowerBand, middleBand) = calculateBollingerBands(candles, properties.bollingerPeriod, properties.bollingerStdDev)
         val currentPriceDouble = currentPrice.toDouble()
 
         // 돌파 조건 확인
@@ -134,7 +136,7 @@ class BreakoutStrategy(
         }
 
         val availableCandles = candles.subList(0, currentIndex + 1)
-        val (upperBand, lowerBand, _) = calculateBollingerBands(availableCandles)
+        val (upperBand, lowerBand, _) = calculateBollingerBands(availableCandles, properties.bollingerPeriod, properties.bollingerStdDev)
         val currentPriceDouble = currentPrice.toDouble()
         val volumeRatio = calculateVolumeRatio(availableCandles)
 
@@ -163,32 +165,6 @@ class BreakoutStrategy(
     }
 
     // ==================== Private Methods ====================
-
-    private fun calculateBollingerBands(candles: List<Candle>): Triple<Double, Double, Double> {
-        val closes = candles.map { it.close.toDouble() }
-        val period = minOf(properties.bollingerPeriod, closes.size)
-
-        val recentCloses = closes.takeLast(period)
-        val sma = recentCloses.average()
-        val variance = recentCloses.map { val diff = it - sma; diff * diff }.average()
-        val stdDev = sqrt(variance)
-
-        val upperBand = sma + (properties.bollingerStdDev * stdDev)
-        val lowerBand = sma - (properties.bollingerStdDev * stdDev)
-
-        return Triple(upperBand, lowerBand, sma)
-    }
-
-    private fun calculateVolumeRatio(candles: List<Candle>): Double {
-        if (candles.size < 21) return 1.0
-
-        val currentVolume = candles.last().volume.toDouble()
-        val avgVolume = candles.takeLast(21).dropLast(1).map { it.volume.toDouble() }.average()
-
-        return if (avgVolume > 0) {
-            currentVolume / avgVolume
-        } else 1.0
-    }
 
     private fun isCooldownActive(market: String): Boolean {
         val cooldown = signalCooldowns[market] ?: return false

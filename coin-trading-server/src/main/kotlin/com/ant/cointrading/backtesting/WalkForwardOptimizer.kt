@@ -2,6 +2,8 @@ package com.ant.cointrading.backtesting
 
 import com.ant.cointrading.config.BreakoutProperties
 import com.ant.cointrading.config.TradingProperties
+import com.ant.cointrading.indicator.calculateBollingerBands
+import com.ant.cointrading.indicator.calculateVolumeRatio
 import com.ant.cointrading.model.Candle
 import com.ant.cointrading.repository.BacktestResultEntity
 import com.ant.cointrading.repository.BacktestResultRepository
@@ -293,7 +295,7 @@ class WalkForwardOptimizer(
             }
 
             val availableCandles = candles.subList(0, currentIndex + 1)
-            val (upperBand, lowerBand, _) = calculateBollingerBands(availableCandles)
+            val (upperBand, lowerBand, _) = calculateBollingerBands(availableCandles, bollingerPeriod, bollingerStdDev)
             val currentPriceDouble = currentPrice.toDouble()
             val volumeRatio = calculateVolumeRatio(availableCandles)
 
@@ -317,32 +319,6 @@ class WalkForwardOptimizer(
                 }
                 else -> BacktestSignal(BacktestAction.HOLD)
             }
-        }
-
-        private fun calculateBollingerBands(candles: List<Candle>): Triple<Double, Double, Double> {
-            val closes = candles.map { it.close.toDouble() }
-            val period = minOf(bollingerPeriod, closes.size)
-
-            val recentCloses = closes.takeLast(period)
-            val sma = recentCloses.average()
-            val variance = recentCloses.map { (it - sma).let { diff -> diff * diff } }.average()
-            val stdDev = kotlin.math.sqrt(variance)
-
-            val upperBand = sma + (bollingerStdDev * stdDev)
-            val lowerBand = sma - (bollingerStdDev * stdDev)
-
-            return Triple(upperBand, lowerBand, sma)
-        }
-
-        private fun calculateVolumeRatio(candles: List<Candle>): Double {
-            if (candles.size < 21) return 1.0
-
-            val currentVolume = candles.last().volume.toDouble()
-            val avgVolume = candles.takeLast(21).dropLast(1).map { it.volume.toDouble() }.average()
-
-            return if (avgVolume > 0) {
-                currentVolume / avgVolume
-            } else 1.0
         }
     }
 }
