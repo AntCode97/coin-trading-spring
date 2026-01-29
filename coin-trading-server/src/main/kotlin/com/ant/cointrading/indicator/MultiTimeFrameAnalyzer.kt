@@ -7,6 +7,9 @@ import org.springframework.stereotype.Component
 import java.math.BigDecimal
 import java.time.Instant
 
+// Reuse common EMA calculator
+private fun calculateEma(data: List<Double>, period: Int) = EmaCalculator.calculate(data, period)
+
 /**
  * 멀티 타임프레임 분석 결과
  */
@@ -243,26 +246,6 @@ class MultiTimeFrameAnalyzer(
             alignment.alignedCount == 0 -> "대기: 타임프레임이 정렬되지 않음"
             else -> "관찰: 혼조 상태, 추가 확인 필요"
         }
-    }
-
-    /**
-     * EMA 계산
-     */
-    private fun calculateEma(data: List<Double>, period: Int): List<Double> {
-        if (data.size < period) return emptyList()
-
-        val multiplier = 2.0 / (period + 1)
-        val emaList = mutableListOf<Double>()
-
-        var ema = data.take(period).average()
-        emaList.add(ema)
-
-        for (i in period until data.size) {
-            ema = (data[i] - ema) * multiplier + ema
-            emaList.add(ema)
-        }
-
-        return emaList
     }
 
     /**

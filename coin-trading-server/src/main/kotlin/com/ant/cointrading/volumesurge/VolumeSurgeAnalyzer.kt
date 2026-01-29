@@ -6,6 +6,7 @@ import com.ant.cointrading.config.VolumeSurgeProperties
 import com.ant.cointrading.indicator.DivergenceDetector
 import com.ant.cointrading.indicator.DivergenceStrength
 import com.ant.cointrading.indicator.DivergenceType
+import com.ant.cointrading.indicator.EmaCalculator
 import com.ant.cointrading.indicator.MultiTimeFrameAnalyzer
 import com.ant.cointrading.indicator.RsiCalculator
 import org.slf4j.LoggerFactory
@@ -182,15 +183,14 @@ class VolumeSurgeAnalyzer(
             return MacdResult("NEUTRAL", false)
         }
 
-        val emaFast = calculateEma(closes, MACD_FAST)
-        val emaSlow = calculateEma(closes, MACD_SLOW)
+        val (emaFast, emaSlow) = EmaCalculator.calculateMacdEmas(closes, MACD_FAST, MACD_SLOW)
 
         val macdLine = emaFast.zip(emaSlow) { f, s -> f - s }
         if (macdLine.size < MACD_SIGNAL) {
             return MacdResult("NEUTRAL", false)
         }
 
-        val signalLine = calculateEma(macdLine, MACD_SIGNAL)
+        val signalLine = EmaCalculator.calculate(macdLine, MACD_SIGNAL)
 
         val currentMacd = macdLine.last()
         val currentSignal = signalLine.last()
@@ -226,27 +226,6 @@ class VolumeSurgeAnalyzer(
         }
 
         return MacdResult(signal, histogramReversal)
-    }
-
-    /**
-     * EMA 계산
-     */
-    private fun calculateEma(data: List<Double>, period: Int): List<Double> {
-        if (data.size < period) return emptyList()
-
-        val multiplier = 2.0 / (period + 1)
-        val emaList = mutableListOf<Double>()
-
-        // 첫 EMA는 SMA
-        var ema = data.take(period).average()
-        emaList.add(ema)
-
-        for (i in period until data.size) {
-            ema = (data[i] - ema) * multiplier + ema
-            emaList.add(ema)
-        }
-
-        return emaList
     }
 
     /**

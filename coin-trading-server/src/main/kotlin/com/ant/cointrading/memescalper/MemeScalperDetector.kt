@@ -2,6 +2,7 @@ package com.ant.cointrading.memescalper
 
 import com.ant.cointrading.api.bithumb.BithumbPublicApi
 import com.ant.cointrading.config.MemeScalperProperties
+import com.ant.cointrading.indicator.EmaCalculator
 import com.ant.cointrading.indicator.RsiCalculator
 import org.slf4j.LoggerFactory
 import org.springframework.stereotype.Component
@@ -246,15 +247,14 @@ class MemeScalperDetector(
         if (closes.size < MACD_SLOW + MACD_SIGNAL) return "NEUTRAL"
 
         // EMA 계산
-        val fastEma = calculateEma(closes, MACD_FAST)
-        val slowEma = calculateEma(closes, MACD_SLOW)
+        val (fastEma, slowEma) = EmaCalculator.calculateMacdEmas(closes, MACD_FAST, MACD_SLOW)
 
         // MACD 라인
         val macdLine = fastEma.zip(slowEma) { f, s -> f - s }
         if (macdLine.size < MACD_SIGNAL + 1) return "NEUTRAL"
 
         // 시그널 라인 (MACD의 EMA)
-        val signalLine = calculateEma(macdLine, MACD_SIGNAL)
+        val signalLine = EmaCalculator.calculate(macdLine, MACD_SIGNAL)
 
         // 최근 2개 값으로 크로스오버 판단
         val currentMacd = macdLine.lastOrNull() ?: 0.0
@@ -273,28 +273,6 @@ class MemeScalperDetector(
             currentMacd < currentSignal && currentMacd < previousMacd -> "BEARISH"
             else -> "NEUTRAL"
         }
-    }
-
-    /**
-     * EMA (지수이동평균) 계산
-     */
-    private fun calculateEma(data: List<Double>, period: Int): List<Double> {
-        if (data.size < period) return emptyList()
-
-        val multiplier = 2.0 / (period + 1)
-        val result = mutableListOf<Double>()
-
-        // 첫 번째 EMA는 SMA
-        var ema = data.take(period).average()
-        result.add(ema)
-
-        // 이후 EMA 계산
-        for (i in period until data.size) {
-            ema = (data[i] - ema) * multiplier + ema
-            result.add(ema)
-        }
-
-        return result
     }
 
     /**

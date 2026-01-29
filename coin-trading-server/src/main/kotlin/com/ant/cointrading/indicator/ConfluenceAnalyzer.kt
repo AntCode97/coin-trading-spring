@@ -5,6 +5,9 @@ import java.math.BigDecimal
 import kotlin.math.abs
 import kotlin.math.sqrt
 
+// Reuse common EMA calculator
+private fun calculateEma(data: List<Double>, period: Int) = EmaCalculator.calculate(data, period)
+
 /**
  * 컨플루언스 분석기 (4지표 복합, 85% 승률 목표)
  *
@@ -222,24 +225,6 @@ class ConfluenceAnalyzer(
         }
 
         return rsiValues
-    }
-
-    private fun calculateEma(data: List<Double>, period: Int): List<Double> {
-        if (data.size < period) return emptyList()
-
-        val ema = mutableListOf<Double>()
-        val multiplier = 2.0 / (period + 1)
-
-        // 첫 EMA는 SMA
-        val firstSma = data.take(period).average()
-        ema.add(firstSma)
-
-        for (i in period until data.size) {
-            val currentEma = (data[i] - ema.last()) * multiplier + ema.last()
-            ema.add(currentEma)
-        }
-
-        return ema
     }
 
     private fun calculateMacdData(candles: List<Candle>): Triple<List<Double>, List<Double>, List<Double>>? {
