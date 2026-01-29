@@ -6,6 +6,7 @@ import com.ant.cointrading.notification.SlackNotifier
 import com.ant.cointrading.repository.*
 import com.ant.cointrading.service.KeyValueService
 import com.ant.cointrading.service.ModelSelector
+import com.ant.cointrading.stats.TradeStatsCalculator
 import jakarta.annotation.PostConstruct
 import org.slf4j.LoggerFactory
 import org.springframework.scheduling.annotation.Scheduled
@@ -14,7 +15,6 @@ import org.springframework.stereotype.Component
 import java.time.Instant
 import java.time.LocalDate
 import java.time.ZoneId
-import java.time.temporal.ChronoUnit
 
 /**
  * Volume Surge 전략 회고 시스템
@@ -158,28 +158,18 @@ class VolumeSurgeReflector(
         val closedTrades = tradeRepository.findByCreatedAtBetweenOrderByCreatedAtDesc(startOfDay, endOfDay)
             .filter { it.status == "CLOSED" }
 
-        val totalTrades = closedTrades.size
-        val winningTrades = closedTrades.count { (it.pnlAmount ?: 0.0) > 0 }
-        val losingTrades = closedTrades.count { (it.pnlAmount ?: 0.0) <= 0 }
-        val totalPnl = closedTrades.sumOf { it.pnlAmount ?: 0.0 }
-        val winRate = if (totalTrades > 0) winningTrades.toDouble() / totalTrades else 0.0
-
-        val avgHoldingMinutes = closedTrades
-            .filter { it.exitTime != null }
-            .map { ChronoUnit.MINUTES.between(it.entryTime, it.exitTime) }
-            .average()
-            .takeIf { !it.isNaN() }
+        val tradeStats = TradeStatsCalculator.calculateVolumeSurge(closedTrades)
 
         return DailyStats(
             date = date,
             totalAlerts = totalAlerts,
             approvedAlerts = approvedAlerts,
-            totalTrades = totalTrades,
-            winningTrades = winningTrades,
-            losingTrades = losingTrades,
-            totalPnl = totalPnl,
-            winRate = winRate,
-            avgHoldingMinutes = avgHoldingMinutes
+            totalTrades = tradeStats.totalTrades,
+            winningTrades = tradeStats.winningTrades,
+            losingTrades = tradeStats.losingTrades,
+            totalPnl = tradeStats.totalPnl,
+            winRate = tradeStats.winRate,
+            avgHoldingMinutes = tradeStats.avgHoldingMinutes
         )
     }
 

@@ -9,6 +9,7 @@ import com.ant.cointrading.repository.MemeScalperTradeEntity
 import com.ant.cointrading.repository.MemeScalperTradeRepository
 import com.ant.cointrading.service.KeyValueService
 import com.ant.cointrading.service.ModelSelector
+import com.ant.cointrading.stats.TradeStatsCalculator
 import com.fasterxml.jackson.databind.ObjectMapper
 import jakarta.annotation.PostConstruct
 import org.slf4j.LoggerFactory
@@ -194,34 +195,17 @@ class MemeScalperReflector(
         startOfDay: Instant,
         trades: List<MemeScalperTradeEntity>
     ): MemeScalperDailyStats {
-        // CLOSED와 ABANDONED 모두 포함 (둘 다 청산 완료로 간주)
-        val completedTrades = trades.filter { it.status == "CLOSED" || it.status == "ABANDONED" }
-
-        val totalTrades = completedTrades.size
-        val winningTrades = completedTrades.count { (it.pnlAmount ?: 0.0) > 0 }
-        val losingTrades = completedTrades.count { (it.pnlAmount ?: 0.0) <= 0 }
-        val totalPnl = completedTrades.sumOf { it.pnlAmount ?: 0.0 }
-        val winRate = if (totalTrades > 0) winningTrades.toDouble() / totalTrades else 0.0
-
-        // 청산 사유별 통계
-        val exitReasonStats = completedTrades.groupBy { it.exitReason ?: "UNKNOWN" }
-            .mapValues { it.value.size }
-
-        val avgHoldingSeconds = completedTrades
-            .filter { it.exitTime != null }
-            .map { ChronoUnit.SECONDS.between(it.entryTime, it.exitTime) }
-            .average()
-            .takeIf { !it.isNaN() }
+        val tradeStats = TradeStatsCalculator.calculateMemeScalper(trades)
 
         return MemeScalperDailyStats(
             date = date,
-            totalTrades = totalTrades,
-            winningTrades = winningTrades,
-            losingTrades = losingTrades,
-            totalPnl = totalPnl,
-            winRate = winRate,
-            exitReasonStats = exitReasonStats,
-            avgHoldingSeconds = avgHoldingSeconds
+            totalTrades = tradeStats.totalTrades,
+            winningTrades = tradeStats.winningTrades,
+            losingTrades = tradeStats.losingTrades,
+            totalPnl = tradeStats.totalPnl,
+            winRate = tradeStats.winRate,
+            exitReasonStats = tradeStats.exitReasonStats,
+            avgHoldingSeconds = tradeStats.avgHoldingSeconds
         )
     }
 
