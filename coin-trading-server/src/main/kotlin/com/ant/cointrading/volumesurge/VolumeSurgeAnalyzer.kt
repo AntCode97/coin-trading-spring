@@ -314,22 +314,7 @@ class VolumeSurgeAnalyzer(
     }
 
     /**
-     * 컨플루언스 점수 계산 (0~100) - quant-trading 스킬 기반 재조정 + MTF 보너스
-     *
-     * 4중 컨플루언스 기본 배점 + 보너스:
-     *
-     * 기본 배점 (80점 만점):
-     * - 거래량: 20점 (핵심 지표)
-     * - MACD: 15점 (추세 확인)
-     * - RSI: 20점 (모멘텀 확인)
-     * - 볼린저: 25점 (돌파 확인)
-     *
-     * 보너스 (35점):
-     * - MACD 히스토그램 반전: +10점 (조기 진입 신호)
-     * - RSI 강세 다이버전스: +15점 (반전 신호, STRONG/MODERATE)
-     * - MTF 정렬 보너스: +15점 (3개 정렬), +5점 (2개 정렬), -5점 (역방향)
-     *
-     * 최대: 115점 (실제 100점 coerceln), 권장 진입 기준: 60점 이상
+     * 컨플루언스 점수 계산 (ConfluenceScoreCalculator 위임)
      */
     private fun calculateConfluenceScore(
         rsi: Double,
@@ -341,71 +326,16 @@ class VolumeSurgeAnalyzer(
         divergenceStrength: com.ant.cointrading.indicator.DivergenceStrength?,
         mtfAlignmentBonus: Int = 0
     ): Int {
-        var score = 0
-
-        // 1. 거래량 점수 (Volume Surge의 핵심 - 20점)
-        score += when {
-            volumeRatio >= 5.0 -> 20  // 500% 이상 = 폭발적 급등
-            volumeRatio >= 3.0 -> 17  // 300% 이상 = 강한 급등
-            volumeRatio >= 2.0 -> 14  // 200% 이상 = 급등
-            volumeRatio >= 1.5 -> 10  // 150% 이상 = 상승
-            volumeRatio >= 1.2 -> 5   // 120% 이상
-            else -> 0
-        }
-
-        // 2. MACD 점수 (추세 방향 확인 - 15점)
-        // MACD BEARISH 시 강력한 패널티 적용 (MemeScalper, VolumeSurge 통일)
-        score += when (macdSignal) {
-            "BULLISH" -> 15           // 상승 신호
-            "NEUTRAL" -> 8            // 중립
-            "BEARISH" -> -20          // BEARISH = 강력한 패널티 (-5점 → -20점)
-            else -> 0
-        }
-
-        // 3. MACD 히스토그램 반전 보너스 (+10점)
-        // quant-trading: 히스토그램 반전 = 조기 진입 신호
-        if (macdHistogramReversal && macdSignal == "BULLISH") {
-            score += 10
-        }
-
-        // 4. RSI 점수 (모멘텀 확인 - 20점)
-        // Volume Surge는 상승 모멘텀 전략: RSI가 너무 낮으면 덤프 중일 수 있음
-        score += when {
-            rsi in 55.0..70.0 -> 20   // 최적 모멘텀 (상승 중 but 과매수 아님)
-            rsi in 45.0..75.0 -> 15   // 양호한 구간
-            rsi in 40.0..80.0 -> 10   // 허용 구간
-            rsi in 30.0..85.0 -> 5    // 넓은 허용
-            rsi > 85.0 -> 0            // 과매수 진입 회피 (덤프 끝)
-            rsi < 30.0 -> -15           // 과매도 진입 회피 (하락 중)
-            else -> 0
-        }
-
-        // 5. RSI 강세 다이버전스 보너스 (+15점)
-        // quant-trading: 다이버전스 = 반전 신호
-        if (rsiDivergence == com.ant.cointrading.indicator.DivergenceType.BULLISH) {
-            val divergenceBonus = when (divergenceStrength) {
-                com.ant.cointrading.indicator.DivergenceStrength.STRONG -> 15
-                com.ant.cointrading.indicator.DivergenceStrength.MODERATE -> 10
-                com.ant.cointrading.indicator.DivergenceStrength.WEAK -> 5
-                else -> 0
-            }
-            score += divergenceBonus
-        }
-
-        // 6. 볼린저밴드 점수 (돌파/위치 확인 - 25점)
-        // Volume Surge는 상승 돌파를 원함: LOWER는 역추세 신호일 수 있음
-        score += when (bollingerPosition) {
-            "UPPER" -> 25             // 상단 돌파 = 강한 모멘텀 (진입 신호 확인됨)
-            "MIDDLE" -> 22            // 중앙 = 안정적 상승 (추세 따름)
-            "LOWER" -> 5              // 하단 = 역추교차 헷갈림 (회피 또는 재평가 기대)
-            else -> 10
-        }
-
-        // 7. MTF 정렬 보너스 (+15점, +5점, -5점)
-        // quant-trading 스킬: 3개 정렬 = +15점, 2개 = +5점, 역방향 = -5점
-        score += mtfAlignmentBonus
-
-        return score.coerceIn(0, 100)
+        return ConfluenceScoreCalculator.calculate(
+            rsi = rsi,
+            macdSignal = macdSignal,
+            macdHistogramReversal = macdHistogramReversal,
+            bollingerPosition = bollingerPosition,
+            volumeRatio = volumeRatio,
+            rsiDivergence = rsiDivergence,
+            divergenceStrength = divergenceStrength,
+            mtfAlignmentBonus = mtfAlignmentBonus
+        )
     }
 
     /**
