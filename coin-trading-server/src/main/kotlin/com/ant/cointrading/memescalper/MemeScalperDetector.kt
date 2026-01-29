@@ -2,6 +2,7 @@ package com.ant.cointrading.memescalper
 
 import com.ant.cointrading.api.bithumb.BithumbPublicApi
 import com.ant.cointrading.config.MemeScalperProperties
+import com.ant.cointrading.indicator.RsiCalculator
 import org.slf4j.LoggerFactory
 import org.springframework.stereotype.Component
 import java.math.BigDecimal
@@ -180,7 +181,7 @@ class MemeScalperDetector(
 
         // RSI 계산
         val closes = sortedCandles.map { it.tradePrice.toDouble() }
-        val rsi = calculateRsi(closes)
+        val rsi = RsiCalculator.calculate(closes, RSI_PERIOD)
 
         // MACD 계산
         val macdSignal = calculateMacdSignal(closes)
@@ -234,32 +235,6 @@ class MemeScalperDetector(
     private fun calculateImbalance(market: String): Double {
         val orderbook = bithumbPublicApi.getOrderbook(market)?.firstOrNull() ?: return 0.0
         return calculateImbalanceFromOrderbook(orderbook)
-    }
-
-    /**
-     * 빠른 RSI 계산 (9기간)
-     */
-    private fun calculateRsi(closes: List<Double>): Double {
-        if (closes.size < RSI_PERIOD + 1) return 50.0
-
-        val changes = closes.zipWithNext { prev, curr -> curr - prev }
-
-        var avgGain = changes.take(RSI_PERIOD).filter { it > 0 }.sum() / RSI_PERIOD
-        var avgLoss = abs(changes.take(RSI_PERIOD).filter { it < 0 }.sum()) / RSI_PERIOD
-
-        for (i in RSI_PERIOD until changes.size) {
-            val change = changes[i]
-            val gain = if (change > 0) change else 0.0
-            val loss = if (change < 0) abs(change) else 0.0
-
-            avgGain = (avgGain * (RSI_PERIOD - 1) + gain) / RSI_PERIOD
-            avgLoss = (avgLoss * (RSI_PERIOD - 1) + loss) / RSI_PERIOD
-        }
-
-        if (avgLoss == 0.0) return 100.0
-
-        val rs = avgGain / avgLoss
-        return 100 - (100 / (1 + rs))
     }
 
     /**

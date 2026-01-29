@@ -7,6 +7,7 @@ import com.ant.cointrading.indicator.DivergenceDetector
 import com.ant.cointrading.indicator.DivergenceStrength
 import com.ant.cointrading.indicator.DivergenceType
 import com.ant.cointrading.indicator.MultiTimeFrameAnalyzer
+import com.ant.cointrading.indicator.RsiCalculator
 import org.slf4j.LoggerFactory
 import org.springframework.stereotype.Component
 import java.math.BigDecimal
@@ -77,10 +78,10 @@ class VolumeSurgeAnalyzer(
         val volumes = sortedCandles.map { it.candleAccTradeVolume.toDouble() }
 
         // RSI 계산
-        val rsi = calculateRsi(closes, RSI_PERIOD)
+        val rsi = RsiCalculator.calculate(closes, RSI_PERIOD)
 
         // RSI 다이버전스 탐지 (quant-trading 스킬: 다이버전스 = 반전 신호)
-        val divergenceResult = divergenceDetector.detectRsiDivergence(closes, closes.map { calculateRsiForValue(it, closes) })
+        val divergenceResult = divergenceDetector.detectRsiDivergence(closes, closes.map { RsiCalculator.calculate(closes) })
 
         // MACD 계산 (시그널 + 히스토그램 반전)
         val macdResult = calculateMacdWithHistogram(closes)
@@ -170,32 +171,6 @@ class VolumeSurgeAnalyzer(
         val signal: String,           // BULLISH/BEARISH/NEUTRAL
         val histogramReversal: Boolean  // 히스토그램 반전 여부
     )
-
-    /**
-     * RSI 계산 (Wilder's Smoothing)
-     */
-    private fun calculateRsi(closes: List<Double>, period: Int): Double {
-        if (closes.size < period + 1) return 50.0
-
-        val changes = closes.zipWithNext { a, b -> b - a }
-
-        var avgGain = changes.take(period).filter { it > 0 }.sum() / period
-        var avgLoss = abs(changes.take(period).filter { it < 0 }.sum()) / period
-
-        for (i in period until changes.size) {
-            val change = changes[i]
-            val gain = if (change > 0) change else 0.0
-            val loss = if (change < 0) abs(change) else 0.0
-
-            avgGain = (avgGain * (period - 1) + gain) / period
-            avgLoss = (avgLoss * (period - 1) + loss) / period
-        }
-
-        if (avgLoss == 0.0) return 100.0
-
-        val rs = avgGain / avgLoss
-        return 100 - (100 / (1 + rs))
-    }
 
     /**
      * MACD 신호 + 히스토그램 반전 계산
@@ -336,14 +311,5 @@ class VolumeSurgeAnalyzer(
             divergenceStrength = divergenceStrength,
             mtfAlignmentBonus = mtfAlignmentBonus
         )
-    }
-
-    /**
-     * RSI 계산 헬퍼 (개별 값용)
-     */
-    private fun calculateRsiForValue(value: Double, closes: List<Double>): Double {
-        // 간단히 전체 RSI 계산 후 해당 인덱스 값 반환
-        // 실제로는 더 효율적으로 구현 가능하지만 여기서는 간단화
-        return calculateRsi(closes, RSI_PERIOD)
     }
 }
