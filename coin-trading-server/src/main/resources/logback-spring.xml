@@ -3,12 +3,10 @@
     <!-- Spring Boot 기본 설정 포함 -->
     <include resource="org/springframework/boot/logging/logback/defaults.xml"/>
 
-    <!-- Spring 환경변수 읽기 -->
-    <springProperty name="SLACK_WEBHOOK_URL" source="slack.webhook-url"/>
-
     <!-- Slack Appender (ERROR 레벨만 전송) -->
+    <!-- 환경변수 SLACK_WEBHOOK_URL을 직접 읽음 -->
     <appender name="SLACK" class="com.github.maricn.logback.SlackAppender">
-        <webhookUri>${SLACK_WEBHOOK_URL:-}</webhookUri>
+        <webhookUri>${SLACK_WEBHOOK_URL}</webhookUri>
         <filter class="ch.qos.logback.classic.filter.ThresholdFilter">
             <level>ERROR</level>
         </filter>
