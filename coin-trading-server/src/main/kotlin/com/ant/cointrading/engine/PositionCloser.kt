@@ -43,12 +43,7 @@ class PositionCloser(
     ) {
         val market = position.market
 
-        // 중복 청산 방지
-        if (!canClosePosition(position.status, position.lastCloseAttempt, backoffSeconds, maxAttempts, position.closeAttemptCount)) {
-            return
-        }
-
-        // 최대 시도 횟수 초과 체크
+        // 최대 시도 횟수 초과 체크 (먼저 체크해야 canClosePosition 무한 루프 방지)
         if (position.closeAttemptCount >= maxAttempts) {
             log.error("[$market] 청산 시도 ${maxAttempts}회 초과, ABANDONED 처리")
             if (onAbandoned != null) {
@@ -56,6 +51,11 @@ class PositionCloser(
             } else {
                 handleAbandoned(position, exitPrice, "MAX_ATTEMPTS", updatePosition)
             }
+            return
+        }
+
+        // 중복 청산 방지 (최대 시도 횟수 체크 이후에 실행)
+        if (!canClosePosition(position.status, position.lastCloseAttempt, backoffSeconds)) {
             return
         }
 
@@ -179,22 +179,20 @@ class PositionCloser(
 
         /**
          * 중복 청산 방지 체크
+         *
+         * @return true면 청산 가능, false면 대기 필요
          */
         fun canClosePosition(
             status: String,
             lastAttempt: Instant?,
-            backoffSeconds: Long,
-            maxAttempts: Int,
-            closeAttemptCount: Int
+            backoffSeconds: Long
         ): Boolean {
             if (status == "CLOSING") {
                 val lastAttempt = lastAttempt ?: return false
                 val elapsed = ChronoUnit.SECONDS.between(lastAttempt, Instant.now())
-                if (elapsed < backoffSeconds) {
-                    return false
-                }
+                return elapsed >= backoffSeconds
             }
-            return closeAttemptCount < maxAttempts
+            return true
         }
     }
 }
