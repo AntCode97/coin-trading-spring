@@ -4,6 +4,7 @@ import com.ant.cointrading.api.bithumb.BithumbPrivateApi
 import com.ant.cointrading.api.bithumb.BithumbPublicApi
 import com.ant.cointrading.api.bithumb.CandleResponse
 import com.ant.cointrading.api.bithumb.TickerInfo
+import com.ant.cointrading.config.TradingConstants
 import com.ant.cointrading.config.TradingProperties
 import com.ant.cointrading.model.Candle
 import com.ant.cointrading.model.MarketRegime
@@ -60,7 +61,7 @@ class DcaEngine(
     companion object {
         private const val SCAN_INTERVAL_MS = 60_000L  // 1분
         private const val MONITOR_INTERVAL_MS = 5_000L // 5초
-        private const val MIN_ORDER_AMOUNT_KRW = 5100 // 빗썸 최소 주문 금액
+        // MIN_ORDER_AMOUNT_KRW는 TradingConstants.MIN_ORDER_AMOUNT_KRW 사용
     }
 
     @PostConstruct
@@ -353,7 +354,7 @@ class DcaEngine(
         val sellAmount = BigDecimal(sellQuantity * exitPrice)
 
         // 최소 주문 금액 체크
-        if (sellAmount < BigDecimal(MIN_ORDER_AMOUNT_KRW)) {
+        if (sellAmount < TradingConstants.MIN_ORDER_AMOUNT_KRW) {
             log.warn("[$market] 매도 금액 미달 (${sellAmount}원)")
             position.status = "CLOSED"
             position.exitReason = "ABANDONED_MIN_AMOUNT"
