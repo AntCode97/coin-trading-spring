@@ -69,6 +69,72 @@ class VolumeSurgeReflector(
     }
 
     /**
+     * 파라미터 접근자 (전략 패턴)
+     * when문 중복 제거
+     */
+    private interface ParamAccessor {
+        fun get(): Double
+        fun set(value: Double)
+    }
+
+    private val paramMap by lazy {
+        mapOf(
+            "minVolumeRatio" to object : ParamAccessor {
+                override fun get() = volumeSurgeProperties.minVolumeRatio
+                override fun set(value: Double) { volumeSurgeProperties.minVolumeRatio = value }
+            },
+            "maxRsi" to object : ParamAccessor {
+                override fun get() = volumeSurgeProperties.maxRsi
+                override fun set(value: Double) { volumeSurgeProperties.maxRsi = value }
+            },
+            "minConfluenceScore" to object : ParamAccessor {
+                override fun get() = volumeSurgeProperties.minConfluenceScore.toDouble()
+                override fun set(value: Double) { volumeSurgeProperties.minConfluenceScore = value.toInt() }
+            },
+            "stopLossPercent" to object : ParamAccessor {
+                override fun get() = volumeSurgeProperties.stopLossPercent
+                override fun set(value: Double) { volumeSurgeProperties.stopLossPercent = value }
+            },
+            "takeProfitPercent" to object : ParamAccessor {
+                override fun get() = volumeSurgeProperties.takeProfitPercent
+                override fun set(value: Double) { volumeSurgeProperties.takeProfitPercent = value }
+            },
+            "trailingStopTrigger" to object : ParamAccessor {
+                override fun get() = volumeSurgeProperties.trailingStopTrigger
+                override fun set(value: Double) { volumeSurgeProperties.trailingStopTrigger = value }
+            },
+            "trailingStopOffset" to object : ParamAccessor {
+                override fun get() = volumeSurgeProperties.trailingStopOffset
+                override fun set(value: Double) { volumeSurgeProperties.trailingStopOffset = value }
+            },
+            "positionTimeoutMin" to object : ParamAccessor {
+                override fun get() = volumeSurgeProperties.positionTimeoutMin.toDouble()
+                override fun set(value: Double) { volumeSurgeProperties.positionTimeoutMin = value.toInt() }
+            },
+            "cooldownMin" to object : ParamAccessor {
+                override fun get() = volumeSurgeProperties.cooldownMin.toDouble()
+                override fun set(value: Double) { volumeSurgeProperties.cooldownMin = value.toInt() }
+            },
+            "maxConsecutiveLosses" to object : ParamAccessor {
+                override fun get() = volumeSurgeProperties.maxConsecutiveLosses.toDouble()
+                override fun set(value: Double) { volumeSurgeProperties.maxConsecutiveLosses = value.toInt() }
+            },
+            "dailyMaxLossKrw" to object : ParamAccessor {
+                override fun get() = volumeSurgeProperties.dailyMaxLossKrw.toDouble()
+                override fun set(value: Double) { volumeSurgeProperties.dailyMaxLossKrw = value.toInt() }
+            },
+            "positionSizeKrw" to object : ParamAccessor {
+                override fun get() = volumeSurgeProperties.positionSizeKrw.toDouble()
+                override fun set(value: Double) { volumeSurgeProperties.positionSizeKrw = value.toInt() }
+            },
+            "alertFreshnessMin" to object : ParamAccessor {
+                override fun get() = volumeSurgeProperties.alertFreshnessMin.toDouble()
+                override fun set(value: Double) { volumeSurgeProperties.alertFreshnessMin = value.toInt() }
+            }
+        )
+    }
+
+    /**
      * 일일 회고 실행 (매일 새벽 1시)
      */
     @Scheduled(cron = "\${volumesurge.reflection-cron:0 0 1 * * *}")
@@ -502,46 +568,17 @@ class VolumeSurgeReflectorTools(
     }
 
     /**
-     * 현재 파라미터 값 조회
+     * 현재 파라미터 값 조회 (전략 패턴 사용)
      */
     private fun getCurrentParamValue(paramName: String): Double {
-        return when (paramName) {
-            "minVolumeRatio" -> volumeSurgeProperties.minVolumeRatio
-            "maxRsi" -> volumeSurgeProperties.maxRsi
-            "minConfluenceScore" -> volumeSurgeProperties.minConfluenceScore.toDouble()
-            "stopLossPercent" -> volumeSurgeProperties.stopLossPercent
-            "takeProfitPercent" -> volumeSurgeProperties.takeProfitPercent
-            "trailingStopTrigger" -> volumeSurgeProperties.trailingStopTrigger
-            "trailingStopOffset" -> volumeSurgeProperties.trailingStopOffset
-            "positionTimeoutMin" -> volumeSurgeProperties.positionTimeoutMin.toDouble()
-            "cooldownMin" -> volumeSurgeProperties.cooldownMin.toDouble()
-            "maxConsecutiveLosses" -> volumeSurgeProperties.maxConsecutiveLosses.toDouble()
-            "dailyMaxLossKrw" -> volumeSurgeProperties.dailyMaxLossKrw.toDouble()
-            "positionSizeKrw" -> volumeSurgeProperties.positionSizeKrw.toDouble()
-            "alertFreshnessMin" -> volumeSurgeProperties.alertFreshnessMin.toDouble()
-            else -> 0.0
-        }
+        return paramMap[paramName]?.get() ?: 0.0
     }
 
     /**
-     * VolumeSurgeProperties에 파라미터 값 적용
+     * VolumeSurgeProperties에 파라미터 값 적용 (전략 패턴 사용)
      */
     private fun applyParamToProperties(paramName: String, value: Double) {
-        when (paramName) {
-            "minVolumeRatio" -> volumeSurgeProperties.minVolumeRatio = value
-            "maxRsi" -> volumeSurgeProperties.maxRsi = value
-            "minConfluenceScore" -> volumeSurgeProperties.minConfluenceScore = value.toInt()
-            "stopLossPercent" -> volumeSurgeProperties.stopLossPercent = value
-            "takeProfitPercent" -> volumeSurgeProperties.takeProfitPercent = value
-            "trailingStopTrigger" -> volumeSurgeProperties.trailingStopTrigger = value
-            "trailingStopOffset" -> volumeSurgeProperties.trailingStopOffset = value
-            "positionTimeoutMin" -> volumeSurgeProperties.positionTimeoutMin = value.toInt()
-            "cooldownMin" -> volumeSurgeProperties.cooldownMin = value.toInt()
-            "maxConsecutiveLosses" -> volumeSurgeProperties.maxConsecutiveLosses = value.toInt()
-            "dailyMaxLossKrw" -> volumeSurgeProperties.dailyMaxLossKrw = value.toInt()
-            "positionSizeKrw" -> volumeSurgeProperties.positionSizeKrw = value.toInt()
-            "alertFreshnessMin" -> volumeSurgeProperties.alertFreshnessMin = value.toInt()
-        }
+        paramMap[paramName]?.set(value)
     }
 
     @Tool(description = """
