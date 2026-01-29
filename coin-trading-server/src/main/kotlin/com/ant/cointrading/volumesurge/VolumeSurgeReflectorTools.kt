@@ -4,14 +4,15 @@ import com.ant.cointrading.config.VolumeSurgeProperties
 import com.ant.cointrading.repository.*
 import com.ant.cointrading.service.KeyValueService
 import com.ant.cointrading.notification.SlackNotifier
+import com.ant.cointrading.util.DateTimeUtils.SEOUL_ZONE
+import com.ant.cointrading.util.DateTimeUtils.today
+import com.ant.cointrading.util.DateTimeUtils.todayRange
 import com.fasterxml.jackson.databind.ObjectMapper
 import org.slf4j.LoggerFactory
 import org.springframework.ai.tool.annotation.Tool
 import org.springframework.ai.tool.annotation.ToolParam
 import org.springframework.stereotype.Component
 import java.time.Instant
-import java.time.LocalDate
-import java.time.ZoneId
 import java.time.temporal.ChronoUnit
 
 /**
@@ -118,9 +119,8 @@ class VolumeSurgeReflectorTools(
     fun getTodayStats(): String {
         log.info("[Tool] getTodayStats")
 
-        val today = LocalDate.now(ZoneId.of("Asia/Seoul"))
-        val startOfDay = today.atStartOfDay(ZoneId.of("Asia/Seoul")).toInstant()
-        val endOfDay = today.plusDays(1).atStartOfDay(ZoneId.of("Asia/Seoul")).toInstant()
+        val today = today()
+        val (startOfDay, endOfDay) = todayRange()
 
         val totalAlerts = alertRepository.countByDetectedAtBetween(startOfDay, endOfDay)
         val approvedAlerts = alertRepository.countApprovedBetween(startOfDay, endOfDay)
@@ -145,9 +145,8 @@ class VolumeSurgeReflectorTools(
     ): String {
         log.info("[Tool] getTodayTrades: limit=$limit")
 
-        val today = LocalDate.now(ZoneId.of("Asia/Seoul"))
-        val startOfDay = today.atStartOfDay(ZoneId.of("Asia/Seoul")).toInstant()
-        val endOfDay = today.plusDays(1).atStartOfDay(ZoneId.of("Asia/Seoul")).toInstant()
+        val today = today()
+        val (startOfDay, endOfDay) = todayRange()
 
         val trades = tradeRepository.findByCreatedAtBetweenOrderByCreatedAtDesc(startOfDay, endOfDay)
             .take(limit)
@@ -180,7 +179,7 @@ class VolumeSurgeReflectorTools(
     ): String {
         log.info("[Tool] saveReflection")
 
-        val today = LocalDate.now(ZoneId.of("Asia/Seoul"))
+        val today = today()
 
         // 기존 요약이 있으면 업데이트, 없으면 생성
         val existingSummary = summaryRepository.findByDate(today)
@@ -263,7 +262,7 @@ class VolumeSurgeReflectorTools(
             paramMap[paramName]?.set(newValue)
 
             // 3. DB 요약에 변경 기록 저장
-            val today = LocalDate.now(ZoneId.of("Asia/Seoul"))
+            val today = today()
             val existingSummary = summaryRepository.findByDate(today)
                 ?: VolumeSurgeDailySummaryEntity(date = today)
 
@@ -341,7 +340,7 @@ class VolumeSurgeReflectorTools(
     ): String {
         log.info("[Tool] suggestSystemImprovement: $title ($priority)")
 
-        val today = LocalDate.now(ZoneId.of("Asia/Seoul"))
+        val today = today()
 
         // DB에 제안 기록 저장
         val existingSummary = summaryRepository.findByDate(today)
@@ -680,7 +679,7 @@ class VolumeSurgeReflectorTools(
 
         // 시간대별 분석 (KST 기준)
         val hourlyStats = trades.groupBy { trade ->
-            trade.entryTime.atZone(ZoneId.of("Asia/Seoul")).hour
+            trade.entryTime.atZone(SEOUL_ZONE).hour
         }.mapValues { (_, hourTrades) ->
             val wins = hourTrades.count { (it.pnlAmount ?: 0.0) > 0 }
             val totalPnl = hourTrades.sumOf { it.pnlAmount ?: 0.0 }
@@ -694,7 +693,7 @@ class VolumeSurgeReflectorTools(
 
         // 요일별 분석
         val dayOfWeekStats = trades.groupBy { trade ->
-            trade.entryTime.atZone(ZoneId.of("Asia/Seoul")).dayOfWeek.name
+            trade.entryTime.atZone(SEOUL_ZONE).dayOfWeek.name
         }.mapValues { (_, dayTrades) ->
             val wins = dayTrades.count { (it.pnlAmount ?: 0.0) > 0 }
             val totalPnl = dayTrades.sumOf { it.pnlAmount ?: 0.0 }

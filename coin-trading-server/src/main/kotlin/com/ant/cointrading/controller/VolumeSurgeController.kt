@@ -5,12 +5,12 @@ import com.ant.cointrading.config.VolumeSurgeProperties
 import com.ant.cointrading.repository.VolumeSurgeAlertRepository
 import com.ant.cointrading.repository.VolumeSurgeDailySummaryRepository
 import com.ant.cointrading.repository.VolumeSurgeTradeRepository
+import com.ant.cointrading.util.DateTimeUtils.today
+import com.ant.cointrading.util.DateTimeUtils.todayRange
 import com.ant.cointrading.volumesurge.VolumeSurgeEngine
 import com.ant.cointrading.volumesurge.VolumeSurgeReflector
 import org.springframework.web.bind.annotation.*
 import java.time.Instant
-import java.time.LocalDate
-import java.time.ZoneId
 import java.time.temporal.ChronoUnit
 
 /**
@@ -65,9 +65,8 @@ class VolumeSurgeController(
      */
     @GetMapping("/stats/today")
     fun getTodayStats(): Map<String, Any?> {
-        val today = LocalDate.now(ZoneId.of("Asia/Seoul"))
-        val startOfDay = today.atStartOfDay(ZoneId.of("Asia/Seoul")).toInstant()
-        val endOfDay = today.plusDays(1).atStartOfDay(ZoneId.of("Asia/Seoul")).toInstant()
+        val (startOfDay, endOfDay) = todayRange()
+        val today = today()
 
         val totalAlerts = alertRepository.countByDetectedAtBetween(startOfDay, endOfDay)
         val approvedAlerts = alertRepository.countApprovedBetween(startOfDay, endOfDay)
@@ -104,9 +103,7 @@ class VolumeSurgeController(
     fun getAlerts(
         @RequestParam(defaultValue = "20") limit: Int
     ): List<Map<String, Any?>> {
-        val today = LocalDate.now(ZoneId.of("Asia/Seoul"))
-        val startOfDay = today.atStartOfDay(ZoneId.of("Asia/Seoul")).toInstant()
-        val endOfDay = today.plusDays(1).atStartOfDay(ZoneId.of("Asia/Seoul")).toInstant()
+        val (startOfDay, endOfDay) = todayRange()
 
         return alertRepository.findByDetectedAtBetweenOrderByDetectedAtDesc(startOfDay, endOfDay)
             .take(limit)

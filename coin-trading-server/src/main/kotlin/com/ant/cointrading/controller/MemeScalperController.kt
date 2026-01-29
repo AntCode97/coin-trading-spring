@@ -6,10 +6,10 @@ import com.ant.cointrading.memescalper.MemeScalperEngine
 import com.ant.cointrading.memescalper.MemeScalperReflector
 import com.ant.cointrading.repository.MemeScalperDailyStatsRepository
 import com.ant.cointrading.repository.MemeScalperTradeRepository
+import com.ant.cointrading.util.DateTimeUtils.today
+import com.ant.cointrading.util.DateTimeUtils.todayRange
 import org.springframework.web.bind.annotation.*
 import java.time.Instant
-import java.time.LocalDate
-import java.time.ZoneId
 import java.time.temporal.ChronoUnit
 
 /**
@@ -68,8 +68,8 @@ class MemeScalperController(
      */
     @GetMapping("/stats/today")
     fun getTodayStats(): Map<String, Any?> {
-        val today = LocalDate.now(ZoneId.of("Asia/Seoul"))
-        val startOfDay = today.atStartOfDay(ZoneId.of("Asia/Seoul")).toInstant()
+        val (startOfDay) = todayRange()
+        val today = today()
 
         val todayTrades = tradeRepository.findTodayClosedTrades(startOfDay)
         val totalPnl = tradeRepository.sumTodayPnl(startOfDay)
@@ -110,8 +110,7 @@ class MemeScalperController(
     fun getTrades(
         @RequestParam(defaultValue = "20") limit: Int
     ): List<Map<String, Any?>> {
-        val today = LocalDate.now(ZoneId.of("Asia/Seoul"))
-        val startOfDay = today.atStartOfDay(ZoneId.of("Asia/Seoul")).toInstant()
+        val (startOfDay) = todayRange()
 
         return tradeRepository.findByCreatedAtAfter(startOfDay)
             .sortedByDescending { it.createdAt }
