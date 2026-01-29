@@ -68,6 +68,16 @@ object TradingConstants {
     const val DEFAULT_MAX_CONSECUTIVE_LOSSES = 3
     const val DEFAULT_DAILY_MAX_LOSS_KRW = 20000
 
+    // === 기술적 지표 상수 ===
+    // 표준 MACD (12/26/9)
+    const val MACD_FAST_STANDARD = 12
+    const val MACD_SLOW_STANDARD = 26
+    const val MACD_SIGNAL_STANDARD = 9
+
+    // RSI 기간
+    const val RSI_PERIOD_STANDARD = 14
+    const val RSI_PERIOD_FAST = 9  // 스캘핑용
+
     // === 시장 체크 임계값 ===
     const val MAX_SPREAD_PERCENT = 0.5       // 최대 스프레드 0.5%
     const val MAX_VOLATILITY_1MIN = 2.0      // 1분 내 최대 변동률 2%

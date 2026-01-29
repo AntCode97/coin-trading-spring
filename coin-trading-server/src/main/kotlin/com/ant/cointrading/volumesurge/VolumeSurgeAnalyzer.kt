@@ -2,6 +2,7 @@ package com.ant.cointrading.volumesurge
 
 import com.ant.cointrading.api.bithumb.BithumbPublicApi
 import com.ant.cointrading.api.bithumb.CandleResponse
+import com.ant.cointrading.config.TradingConstants
 import com.ant.cointrading.config.VolumeSurgeProperties
 import com.ant.cointrading.indicator.DivergenceDetector
 import com.ant.cointrading.indicator.DivergenceStrength
@@ -49,10 +50,11 @@ class VolumeSurgeAnalyzer(
     private val log = LoggerFactory.getLogger(javaClass)
 
     companion object {
-        const val RSI_PERIOD = 14
-        const val MACD_FAST = 12
-        const val MACD_SLOW = 26
-        const val MACD_SIGNAL = 9
+        // 기술적 지표 상수 (표준값은 TradingConstants 사용)
+        const val RSI_PERIOD = TradingConstants.RSI_PERIOD_STANDARD
+        const val MACD_FAST = TradingConstants.MACD_FAST_STANDARD
+        const val MACD_SLOW = TradingConstants.MACD_SLOW_STANDARD
+        const val MACD_SIGNAL = TradingConstants.MACD_SIGNAL_STANDARD
         const val BOLLINGER_PERIOD = 20
         const val BOLLINGER_STD = 2.0
         const val VOLUME_MA_PERIOD = 20

@@ -1,5 +1,6 @@
 package com.ant.cointrading.indicator
 
+import com.ant.cointrading.config.TradingConstants
 import java.math.BigDecimal
 import java.math.RoundingMode
 
@@ -102,10 +103,10 @@ object EmaCalculator {
         return fastEma to slowEma
     }
 
-    // 일반적으로 사용하는 EMA 기간 상수
+    // 일반적으로 사용하는 EMA 기간 상수 (표준값은 TradingConstants 사용)
     object Periods {
-        const val MACD_FAST = 12
-        const val MACD_SLOW = 26
-        const val MACD_SIGNAL = 9
+        const val MACD_FAST = TradingConstants.MACD_FAST_STANDARD
+        const val MACD_SLOW = TradingConstants.MACD_SLOW_STANDARD
+        const val MACD_SIGNAL = TradingConstants.MACD_SIGNAL_STANDARD
     }
 }
