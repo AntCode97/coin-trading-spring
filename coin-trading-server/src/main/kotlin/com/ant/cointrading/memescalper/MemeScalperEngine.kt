@@ -291,20 +291,33 @@ class MemeScalperEngine(
 
     /**
      * 포지션 진입
+     *
+     * 켄트백: 각 하위 작업을 명확한 메서드로 분리 (Compose Method 패턴)
      */
     private fun enterPosition(signal: PumpSignal) {
         val market = signal.market
-
         log.info("[$market] 포지션 진입 시도 - 점수=${signal.score}, 거래량=${signal.volumeSpikeRatio}x")
 
-        val positionSize = BigDecimal(properties.positionSizeKrw)
+        val regime = detectMarketRegime(market)
+        val executionResult = executeBuyOrderWithValidation(market, signal, regime) ?: return
 
-        // 시장 레짐 감지 (RegimeDetector 통합)
-        val regime = try {
+        if (!checkRaceCondition(market)) return
+
+        val savedTrade = createAndSaveTradeEntity(signal, executionResult, regime)
+        setupPostEntryState(market, savedTrade, signal)
+        sendEntryNotification(market, signal, executionResult)
+
+        log.info("[$market] 진입 완료: 가격=${executionResult.price}, 수량=${executionResult.quantity}")
+    }
+
+    /**
+     * 시장 레짐 감지
+     */
+    private fun detectMarketRegime(market: String): String? {
+        return try {
             val candles = bithumbPublicApi.getOhlcv(market, "minute60", 100)
             if (!candles.isNullOrEmpty() && candles.size >= 15) {
-                val regimeAnalysis = regimeDetector.detectFromBithumb(candles)
-                regimeAnalysis.regime.name
+                regimeDetector.detectFromBithumb(candles).regime.name
             } else {
                 log.debug("[$market] 캔들 데이터 부족으로 레짐 감지 스킵")
                 null
@@ -313,8 +326,18 @@ class MemeScalperEngine(
             log.warn("[$market] 레짐 감지 실패: ${e.message}")
             null
         }
+    }
 
-        // 매수 주문 실행
+    /**
+     * 매수 주문 실행 및 검증
+     */
+    private fun executeBuyOrderWithValidation(
+        market: String,
+        signal: PumpSignal,
+        regime: String?
+    ): OrderExecutionResult? {
+        val positionSize = BigDecimal(properties.positionSizeKrw)
+
         val buySignal = TradingSignal(
             market = market,
             action = SignalAction.BUY,
@@ -330,15 +353,15 @@ class MemeScalperEngine(
         if (!orderResult.success) {
             log.error("[$market] 매수 주문 실패: ${orderResult.message}")
             cooldowns[market] = Instant.now().plus(30, ChronoUnit.SECONDS)
-            return
+            return null
         }
 
-        // 체결 수량 검증 - 0이면 실패로 간주
+        // 체결 수량 검증
         val executedQuantity = orderResult.executedQuantity?.toDouble() ?: 0.0
         if (executedQuantity <= 0) {
             log.error("[$market] 체결 수량 0 - 주문 실패로 간주")
             cooldowns[market] = Instant.now().plus(30, ChronoUnit.SECONDS)
-            return
+            return null
         }
 
         // 체결가 결정 - 우선순위: orderResult > API 현재가 > signal
@@ -346,46 +369,59 @@ class MemeScalperEngine(
             ?: bithumbPublicApi.getCurrentPrice(market)?.firstOrNull()?.tradePrice?.toDouble()
             ?: signal.currentPrice.toDouble()
 
-        // 진입가 검증 - 0이면 포지션 생성 불가
+        // 진입가 검증
         if (executedPrice <= 0) {
             log.error("[$market] 유효하지 않은 진입가: $executedPrice - 포지션 생성 취소")
-            // 체결되었지만 가격을 모르면 위험 - 수동 확인 필요
             slackNotifier.sendWarning(market, "매수 체결되었으나 체결가 확인 불가 - 수동 확인 필요")
             cooldowns[market] = Instant.now().plus(60, ChronoUnit.SECONDS)
-            return
+            return null
         }
 
-        // 체결 금액 검증 - 최소 금액 이하면 의미 없음
+        // 체결 금액 검증
         val executedAmount = BigDecimal(executedPrice * executedQuantity)
         if (executedAmount < TradingConstants.MIN_ORDER_AMOUNT_KRW) {
             log.warn("[$market] 체결 금액 미달 (${executedAmount}원 < ${TradingConstants.MIN_ORDER_AMOUNT_KRW}원)")
-            // 이미 체결되었으므로 포지션은 생성하되 경고
         }
 
-        // 슬리피지 경고 - 예상가 대비 2% 이상 차이나면 경고
+        // 슬리피지 경고
         val expectedPrice = signal.currentPrice.toDouble()
         if (expectedPrice > 0) {
             val slippagePercent = ((executedPrice - expectedPrice) / expectedPrice) * 100
             if (kotlin.math.abs(slippagePercent) > 2.0) {
-                log.warn("[$market] 슬리피지 경고: ${String.format("%.2f", slippagePercent)}% (예상=${expectedPrice}, 체결=${executedPrice})")
+                log.warn("[$market] 슬리피지 경고: ${String.format("%.2f", slippagePercent)}% (예상=$expectedPrice, 체결=$executedPrice)")
                 slackNotifier.sendWarning(market, "슬리피지 ${String.format("%.2f", slippagePercent)}% 발생")
             }
         }
 
-        // 최종 동시 포지션 수 체크 (Race Condition 방지용 2차 검증)
+        return OrderExecutionResult(executedPrice, executedQuantity)
+    }
+
+    /**
+     * Race Condition 방지용 포지션 수 체크
+     */
+    private fun checkRaceCondition(market: String): Boolean {
         val currentOpenCount = tradeRepository.countByStatus("OPEN")
         if (currentOpenCount >= properties.maxPositions) {
             log.warn("[$market] 최대 포지션 초과 (Race Condition 발생) - 포지션 생성 취소")
             slackNotifier.sendWarning(market, "매수 체결되었으나 최대 포지션 초과 - 수동 매도 필요")
             cooldowns[market] = Instant.now().plus(60, ChronoUnit.SECONDS)
-            return
+            return false
         }
+        return true
+    }
 
-        // 트레이드 엔티티 생성
+    /**
+     * 트레이드 엔티티 생성 및 저장
+     */
+    private fun createAndSaveTradeEntity(
+        signal: PumpSignal,
+        executionResult: OrderExecutionResult,
+        regime: String?
+    ): MemeScalperTradeEntity {
         val trade = MemeScalperTradeEntity(
-            market = market,
-            entryPrice = executedPrice,
-            quantity = executedQuantity,
+            market = signal.market,
+            entryPrice = executionResult.price,
+            quantity = executionResult.quantity,
             entryTime = Instant.now(),
             entryVolumeSpikeRatio = signal.volumeSpikeRatio,
             entryPriceSpikePercent = signal.priceSpikePercent,
@@ -393,30 +429,53 @@ class MemeScalperEngine(
             entryRsi = signal.rsi,
             entryMacdSignal = signal.macdSignal,
             entrySpread = signal.spreadPercent,
-            peakPrice = executedPrice,
+            peakPrice = executionResult.price,
             trailingActive = false,
             peakVolume = signal.volumeSpikeRatio,
             status = "OPEN",
-            regime = regime  // 레짐 저장
+            regime = regime
         )
 
         val savedTrade = tradeRepository.save(trade)
-        peakPrices[savedTrade.id!!] = executedPrice
+        peakPrices[savedTrade.id!!] = executionResult.price
         peakVolumes[savedTrade.id!!] = signal.volumeSpikeRatio
 
+        return savedTrade
+    }
+
+    /**
+     * 진입 후 상태 설정 (쿨다운, 카운트)
+     */
+    private fun setupPostEntryState(
+        market: String,
+        savedTrade: MemeScalperTradeEntity,
+        signal: PumpSignal
+    ) {
         // 쿨다운 설정
         cooldowns[market] = Instant.now().plus(properties.cooldownSec.toLong(), ChronoUnit.SECONDS)
 
         // 일일 카운트 증가
         dailyTradeCount++
 
-        // Slack 알림
+        // 피크 가격/거래량 초기화
+        peakPrices[savedTrade.id!!] = signal.currentPrice.toDouble()
+        peakVolumes[savedTrade.id!!] = signal.volumeSpikeRatio
+    }
+
+    /**
+     * 진입 알림 발송
+     */
+    private fun sendEntryNotification(
+        market: String,
+        signal: PumpSignal,
+        executionResult: OrderExecutionResult
+    ) {
         slackNotifier.sendSystemNotification(
             "Meme Scalper 진입",
             """
             마켓: $market
-            체결가: ${executedPrice}원
-            수량: $executedQuantity
+            체결가: ${executionResult.price}원
+            수량: ${executionResult.quantity}
             점수: ${signal.score}
             거래량 스파이크: ${String.format("%.1f", signal.volumeSpikeRatio)}x
             가격 스파이크: ${String.format("%.1f", signal.priceSpikePercent)}%
@@ -424,9 +483,15 @@ class MemeScalperEngine(
             RSI: ${String.format("%.1f", signal.rsi)}
             """.trimIndent()
         )
-
-        log.info("[$market] 진입 완료: 가격=$executedPrice, 수량=$executedQuantity")
     }
+
+    /**
+     * 주문 실행 결과
+     */
+    private data class OrderExecutionResult(
+        val price: Double,
+        val quantity: Double
+    )
 
     /**
      * 단일 포지션 모니터링
