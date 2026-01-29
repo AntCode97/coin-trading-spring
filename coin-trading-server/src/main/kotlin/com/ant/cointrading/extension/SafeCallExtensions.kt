@@ -1,12 +1,34 @@
 package com.ant.cointrading.extension
 
 import java.math.BigDecimal
+import java.math.RoundingMode
 
 /**
  * 안전한 호출 헬퍼 함수 (켄트백 스타일)
  *
  * null 체크와 기본값 처리를 간결하게 수행한다.
  */
+
+/**
+ * BigDecimal을 한국어 돈 단위로 포맷 (조/억/만)
+ */
+fun formatKrw(amount: BigDecimal): String {
+    return when {
+        amount >= BigDecimal("1000000000000") -> {
+            val trillion = amount.divide(BigDecimal("1000000000000"), 2, RoundingMode.HALF_UP)
+            "${trillion}조"
+        }
+        amount >= BigDecimal("100000000") -> {
+            val billion = amount.divide(BigDecimal("100000000"), 2, RoundingMode.HALF_UP)
+            "${billion}억"
+        }
+        amount >= BigDecimal("10000") -> {
+            val tenThousand = amount.divide(BigDecimal("10000"), 0, RoundingMode.HALF_UP)
+            "${tenThousand}만"
+        }
+        else -> amount.setScale(0, RoundingMode.HALF_UP).toString()
+    }
+}
 
 /**
  * BigDecimal이 null이거나 0 이하인 경우 기본값 반환

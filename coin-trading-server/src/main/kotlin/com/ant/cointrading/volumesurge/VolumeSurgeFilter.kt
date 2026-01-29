@@ -4,6 +4,7 @@ import com.ant.cointrading.api.bithumb.BithumbPublicApi
 import com.ant.cointrading.api.brave.BraveSearchApi
 import com.ant.cointrading.api.cryptocompare.CryptoCompareApi
 import com.ant.cointrading.config.VolumeSurgeProperties
+import com.ant.cointrading.extension.formatKrw
 import com.ant.cointrading.repository.VolumeSurgeAlertEntity
 import com.ant.cointrading.repository.VolumeSurgeAlertRepository
 import com.ant.cointrading.service.ModelSelector
@@ -212,27 +213,6 @@ class VolumeSurgeFilter(
                 confidence = 0.0,
                 reason = "필터 오류: ${e.message}"
             )
-        }
-    }
-
-    /**
-     * 금액 포맷팅
-     */
-    private fun formatKrw(amount: BigDecimal): String {
-        return when {
-            amount >= BigDecimal("1000000000000") -> {
-                val trillion = amount.divide(BigDecimal("1000000000000"), 2, java.math.RoundingMode.HALF_UP)
-                "${trillion}조"
-            }
-            amount >= BigDecimal("100000000") -> {
-                val billion = amount.divide(BigDecimal("100000000"), 2, java.math.RoundingMode.HALF_UP)
-                "${billion}억"
-            }
-            amount >= BigDecimal("10000") -> {
-                val tenThousand = amount.divide(BigDecimal("10000"), 0, java.math.RoundingMode.HALF_UP)
-                "${tenThousand}만"
-            }
-            else -> amount.setScale(0, java.math.RoundingMode.HALF_UP).toString()
         }
     }
 
@@ -500,24 +480,6 @@ class VolumeSurgeFilterTools(
 
                 주의: 거래량 확인 불가 시 투자 거부 권장
             """.trimIndent()
-        }
-    }
-
-    private fun formatKrw(amount: BigDecimal): String {
-        return when {
-            amount >= BigDecimal("1000000000000") -> {
-                val trillion = amount.divide(BigDecimal("1000000000000"), 2, RoundingMode.HALF_UP)
-                "${trillion}조"
-            }
-            amount >= BigDecimal("100000000") -> {
-                val billion = amount.divide(BigDecimal("100000000"), 2, RoundingMode.HALF_UP)
-                "${billion}억"
-            }
-            amount >= BigDecimal("10000") -> {
-                val tenThousand = amount.divide(BigDecimal("10000"), 0, RoundingMode.HALF_UP)
-                "${tenThousand}만"
-            }
-            else -> amount.setScale(0, RoundingMode.HALF_UP).toString()
         }
     }
 
