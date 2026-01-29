@@ -1,5 +1,6 @@
 package com.ant.cointrading.mcp.tool
 
+import com.ant.cointrading.api.bithumb.BithumbPublicApi
 import com.ant.cointrading.memescalper.MemeScalperEngine
 import com.ant.cointrading.repository.MemeScalperTradeRepository
 import com.ant.cointrading.repository.VolumeSurgeTradeRepository
@@ -16,10 +17,22 @@ import java.time.temporal.ChronoUnit
  */
 @Component
 class SystemTools(
+    private val bithumbPublicApi: BithumbPublicApi,
     private val memeScalperEngine: MemeScalperEngine,
     private val memeScalperRepository: MemeScalperTradeRepository,
     private val volumeSurgeRepository: VolumeSurgeTradeRepository
 ) {
+
+    /**
+     * 현재가 조회 (공통 유틸리티)
+     */
+    private fun getCurrentPrice(market: String): Double? {
+        return try {
+            bithumbPublicApi.getCurrentPrice(market)?.firstOrNull()?.tradePrice?.toDouble()
+        } catch (e: Exception) {
+            null
+        }
+    }
 
     // ========================================
     // 응답 Data Classes
@@ -129,13 +142,17 @@ class SystemTools(
 
         // MemeScalper 열린 포지션
         memeScalperRepository.findByStatus("OPEN").forEach { trade ->
-            // 현재가는 DB에 없으므로 진입가 사용 (실제로는 API 호출 필요)
+            val currentPrice = getCurrentPrice(trade.market) ?: trade.entryPrice
+            val pnlPercent = if (trade.entryPrice > 0) {
+                ((currentPrice - trade.entryPrice) / trade.entryPrice) * 100
+            } else 0.0
+
             positions.add(OpenPositionDetail(
                 strategy = "MEME_SCALPER",
                 market = trade.market,
                 entryPrice = trade.entryPrice,
-                currentPrice = trade.entryPrice,  // TODO: API로 현재가 조회
-                pnlPercent = 0.0,
+                currentPrice = currentPrice,
+                pnlPercent = pnlPercent,
                 holdingMinutes = ChronoUnit.MINUTES.between(trade.entryTime, now),
                 entryTime = trade.entryTime.toString()
             ))
@@ -143,12 +160,17 @@ class SystemTools(
 
         // VolumeSurge 열린 포지션
         volumeSurgeRepository.findByStatus("OPEN").forEach { trade ->
+            val currentPrice = getCurrentPrice(trade.market) ?: trade.entryPrice
+            val pnlPercent = if (trade.entryPrice > 0) {
+                ((currentPrice - trade.entryPrice) / trade.entryPrice) * 100
+            } else 0.0
+
             positions.add(OpenPositionDetail(
                 strategy = "VOLUME_SURGE",
                 market = trade.market,
                 entryPrice = trade.entryPrice,
-                currentPrice = trade.entryPrice,  // TODO: API로 현재가 조회
-                pnlPercent = 0.0,
+                currentPrice = currentPrice,
+                pnlPercent = pnlPercent,
                 holdingMinutes = ChronoUnit.MINUTES.between(trade.entryTime, now),
                 entryTime = trade.entryTime.toString()
             ))
