@@ -4,6 +4,7 @@ import com.ant.cointrading.api.bithumb.BithumbPrivateApi
 import com.ant.cointrading.api.bithumb.OrderResponse
 import com.ant.cointrading.config.TradingProperties
 import com.ant.cointrading.config.TradingConstants
+import com.ant.cointrading.engine.PositionHelper
 import com.ant.cointrading.model.*
 import com.ant.cointrading.notification.SlackNotifier
 import com.ant.cointrading.repository.TradeEntity
@@ -535,7 +536,7 @@ class OrderExecutor(
      */
     private fun getActualSellQuantity(market: String, requestedQuantity: BigDecimal): BigDecimal {
         return try {
-            val coinSymbol = extractCoinSymbol(market)
+            val coinSymbol = PositionHelper.extractCoinSymbol(market)
             val balances = bithumbPrivateApi.getBalances() ?: return requestedQuantity
 
             val coinBalance = balances.find { it.currency == coinSymbol }?.balance ?: BigDecimal.ZERO
@@ -554,21 +555,6 @@ class OrderExecutor(
         } catch (e: Exception) {
             log.warn("[$market] 잔고 조회 실패, 요청 수량 그대로 사용: ${e.message}")
             requestedQuantity
-        }
-    }
-
-    /**
-     * 마켓 문자열에서 코인 심볼 추출
-     *
-     * 마켓 형식 지원:
-     * - "KRW-BTC" → "BTC"
-     * - "BTC_KRW" → "BTC"
-     */
-    private fun extractCoinSymbol(market: String): String {
-        return when {
-            market.contains("-") -> market.split("-").lastOrNull() ?: market
-            market.contains("_") -> market.split("_").firstOrNull() ?: market
-            else -> market
         }
     }
 
