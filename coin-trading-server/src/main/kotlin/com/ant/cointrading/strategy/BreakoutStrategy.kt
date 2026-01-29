@@ -156,20 +156,8 @@ class BreakoutStrategy(
                     reason = "Breakout 하락 (거래량 ${String.format("%.1f", volumeRatio)}x)"
                 )
             }
-            currentPosition > 0 && isInProfit(currentPriceDouble, currentPosition) -> {
-                BacktestSignal(
-                    BacktestAction.SELL,
-                    confidence = 70.0,
-                    reason = "익절 목표 도달"
-                )
-            }
-            currentPosition > 0 && isInLoss(currentPriceDouble, currentPosition) -> {
-                BacktestSignal(
-                    BacktestAction.SELL,
-                    confidence = 90.0,
-                    reason = "손절 기준 도달"
-                )
-            }
+            // 백테스팅에서는 진입 가격 추적이 어려우므로 익절/손절 로직 제외
+            // 실제 운영에서는 포지션 엔진에서 손절/익절 처리
             else -> BacktestSignal(BacktestAction.HOLD)
         }
     }
@@ -200,16 +188,6 @@ class BreakoutStrategy(
         return if (avgVolume > 0) {
             currentVolume / avgVolume
         } else 1.0
-    }
-
-    private fun isInProfit(price: Double, position: Double): Boolean {
-        // TODO: 진입 가격 추적 필요
-        return false
-    }
-
-    private fun isInLoss(price: Double, position: Double): Boolean {
-        // TODO: 진입 가격 추적 필요
-        return false
     }
 
     private fun isCooldownActive(market: String): Boolean {

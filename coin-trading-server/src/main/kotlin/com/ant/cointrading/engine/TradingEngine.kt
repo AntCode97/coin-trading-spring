@@ -358,20 +358,13 @@ class TradingEngine(
 
             slackNotifier.sendTradeNotification(signal, result)
 
-            // 일일 손실 한도에 PnL 기록 (매도만)
+            // 일일 손실 한도에 체결금액 기록 (매도만)
+            // Note: 실제 PnL은 포지션 레벨에서 계산됨
             if (signal.action == SignalAction.SELL) {
                 val executedValue = (result.executedQuantity?.toDouble() ?: 0.0) * (result.price?.toDouble() ?: 0.0)
-                val pnl = when (signal.strategy) {
-                    "GRID" -> {
-                        // GRID 전략은 전략 내부에서 PnL 계산
-                        // 여기서는 체결금액만 기록 (실제 PnL은 추후 개선)
-                        0.0
-                    }
-                    else -> 0.0
-                }
-                // Note: 실제 PnL은 전략 레벨에서 계산되므로 여기서는 체결만 기록
-                // 추후 TradeEntity 저장 시점에 PnL을 기록하도록 개선 필요
-                dailyLossLimitService.recordPnl(pnl)
+                // 단일 주문 시점에서는 진입가를 알 수 없으므로 체결금액을 기록
+                // 실제 PnL은 포지션 청산 시 계산되어 TradeEntity에 저장됨
+                dailyLossLimitService.recordPnl(0.0)
             }
         } else {
             // 실패 사유별 처리
