@@ -1,5 +1,6 @@
 package com.ant.cointrading.risk
 
+import com.ant.cointrading.notification.SlackNotifier
 import com.ant.cointrading.service.KeyValueService
 import jakarta.annotation.PostConstruct
 import org.slf4j.LoggerFactory
@@ -20,7 +21,8 @@ import java.time.format.DateTimeFormatter
  */
 @Component
 class DailyLossLimitService(
-    private val keyValueService: KeyValueService
+    private val keyValueService: KeyValueService,
+    private val slackNotifier: SlackNotifier
 ) {
     private val log = LoggerFactory.getLogger(javaClass)
 
@@ -210,10 +212,16 @@ class DailyLossLimitService(
      * Slack 알림 (트레이딩 중지 시)
      */
     private fun slackNotifyHalted() {
-        // TODO: SlackNotifier 연동
-        log.error("===== 트레이딩 중지 알림 =====")
-        log.error("사유: $tradingHaltedReason")
-        log.error("조치: 관리자가 수동 해제 전까지 트레이딩 중지")
-        log.error("============================")
+        slackNotifier.sendError(
+            "TRADING HALTED",
+            """
+            ===== 트레이딩 중지 알림 =====
+            사유: $tradingHaltedReason
+            조치: 관리자가 수동 해제 전까지 트레이딩 중지
+            일일 손실: ${String.format("%.0f", currentDailyLoss)}원
+            손실률: ${String.format("%.2f", (currentDailyLoss / initialCapital) * 100)}%
+            =============================
+            """.trimIndent()
+        )
     }
 }
