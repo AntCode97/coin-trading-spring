@@ -10,6 +10,8 @@ import com.ant.cointrading.repository.MemeScalperTradeRepository
 import com.ant.cointrading.service.KeyValueService
 import com.ant.cointrading.service.ModelSelector
 import com.ant.cointrading.stats.TradeStatsCalculator
+import com.ant.cointrading.util.DateTimeUtils.today
+import com.ant.cointrading.util.DateTimeUtils.todayRange
 import com.fasterxml.jackson.databind.ObjectMapper
 import jakarta.annotation.PostConstruct
 import org.slf4j.LoggerFactory
@@ -19,7 +21,6 @@ import org.springframework.scheduling.annotation.Scheduled
 import org.springframework.stereotype.Component
 import java.time.Instant
 import java.time.LocalDate
-import java.time.ZoneId
 import java.time.temporal.ChronoUnit
 
 /**
@@ -145,9 +146,8 @@ class MemeScalperReflector(
      * 회고 실행
      */
     private fun reflect(): String {
-        val today = LocalDate.now(ZoneId.of("Asia/Seoul"))
-        val startOfDay = today.atStartOfDay(ZoneId.of("Asia/Seoul")).toInstant()
-        val endOfDay = today.plusDays(1).atStartOfDay(ZoneId.of("Asia/Seoul")).toInstant()
+        val (startOfDay) = todayRange()
+        val today = today()
 
         val todayTrades = tradeRepository.findByCreatedAtAfter(startOfDay)
             .filter { it.status == "CLOSED" || it.status == "ABANDONED" }
@@ -316,8 +316,8 @@ class MemeScalperReflectorTools(
     fun getTodayStats(): String {
         log.info("[Tool] getTodayStats")
 
-        val today = LocalDate.now(ZoneId.of("Asia/Seoul"))
-        val startOfDay = today.atStartOfDay(ZoneId.of("Asia/Seoul")).toInstant()
+        val (startOfDay) = todayRange()
+        val today = today()
 
         // CLOSED + ABANDONED 모두 포함
         val trades = tradeRepository.findByCreatedAtAfter(startOfDay)
@@ -351,8 +351,8 @@ class MemeScalperReflectorTools(
     ): String {
         log.info("[Tool] getTodayTrades: limit=$limit")
 
-        val today = LocalDate.now(ZoneId.of("Asia/Seoul"))
-        val startOfDay = today.atStartOfDay(ZoneId.of("Asia/Seoul")).toInstant()
+        val (startOfDay) = todayRange()
+        val today = today()
 
         val trades = tradeRepository.findByCreatedAtAfter(startOfDay)
             .filter { it.status == "CLOSED" || it.status == "ABANDONED" }
@@ -384,8 +384,8 @@ class MemeScalperReflectorTools(
     ): String {
         log.info("[Tool] saveReflection")
 
-        val today = LocalDate.now(ZoneId.of("Asia/Seoul"))
-        val startOfDay = today.atStartOfDay(ZoneId.of("Asia/Seoul")).toInstant()
+        val (startOfDay) = todayRange()
+        val today = today()
 
         // 오늘 통계 계산 (CLOSED + ABANDONED)
         val trades = tradeRepository.findByCreatedAtAfter(startOfDay)

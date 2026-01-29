@@ -2,6 +2,8 @@ package com.ant.cointrading.risk
 
 import com.ant.cointrading.notification.SlackNotifier
 import com.ant.cointrading.service.KeyValueService
+import com.ant.cointrading.util.DateTimeUtils.SEOUL_ZONE
+import com.ant.cointrading.util.DateTimeUtils.todayString
 import jakarta.annotation.PostConstruct
 import org.slf4j.LoggerFactory
 import org.springframework.scheduling.annotation.Scheduled
@@ -69,7 +71,7 @@ class DailyLossLimitService(
         val savedHalted = keyValueService.get(KEY_TRADING_HALTED)
         val savedReason = keyValueService.get(KEY_TRADING_HALTED_REASON)
 
-        val today = LocalDate.now(ZoneId.of("Asia/Seoul")).toString()
+        val today = todayString()
 
         if (savedDate == today) {
             // 오늘 데이터면 복원
@@ -89,7 +91,7 @@ class DailyLossLimitService(
      */
     @Scheduled(cron = "0 0 0 * * *", zone = "Asia/Seoul")
     fun resetDailyLoss() {
-        val today = LocalDate.now(ZoneId.of("Asia/Seoul")).toString()
+        val today = todayString()
         todayDate = today
         currentDailyLoss = 0.0
         isTradingHalted = false
@@ -172,7 +174,7 @@ class DailyLossLimitService(
      * 상태 저장
      */
     private fun saveState() {
-        val today = todayDate ?: LocalDate.now(ZoneId.of("Asia/Seoul")).toString()
+        val today = todayDate ?: todayString()
         keyValueService.set(KEY_DAILY_LOSS_DATE, today, "risk", "일일 손실 날짜")
         keyValueService.set(KEY_DAILY_LOSS, currentDailyLoss.toString(), "risk", "일일 손실액")
     }
