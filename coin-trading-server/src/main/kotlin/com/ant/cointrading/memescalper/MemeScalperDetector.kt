@@ -2,6 +2,7 @@ package com.ant.cointrading.memescalper
 
 import com.ant.cointrading.api.bithumb.BithumbPublicApi
 import com.ant.cointrading.config.MemeScalperProperties
+import com.ant.cointrading.config.TradingConstants
 import com.ant.cointrading.indicator.EmaCalculator
 import com.ant.cointrading.indicator.RsiCalculator
 import org.slf4j.LoggerFactory
@@ -49,7 +50,7 @@ class MemeScalperDetector(
         const val RSI_PERIOD = 9  // 빠른 RSI
         const val MIN_ENTRY_SCORE = 70  // 진입 최소 점수
         const val MIN_PRICE_SPIKE_PERCENT = 1.0  // 최소 가격 스파이크 1% 필수
-        const val MAX_SPREAD_PERCENT = 0.5  // 최대 스프레드 0.5%
+        // 최대 스프레드: TradingConstants.MAX_SPREAD_PERCENT 사용
 
         // MACD 설정 (스캘핑용 빠른 설정)
         const val MACD_FAST = 5
@@ -175,7 +176,7 @@ class MemeScalperDetector(
         val spreadPercent = calculateSpread(orderbook)
 
         // 스프레드 필터 (0.5% 초과 시 제외 - 슬리피지 위험)
-        if (spreadPercent > MAX_SPREAD_PERCENT) {
+        if (spreadPercent > TradingConstants.MAX_SPREAD_PERCENT) {
             log.debug("[$market] 스프레드 과다: ${String.format("%.2f", spreadPercent)}%")
             return null
         }

@@ -2,6 +2,7 @@ package com.ant.cointrading.risk
 
 import com.ant.cointrading.api.bithumb.BithumbPublicApi
 import com.ant.cointrading.api.bithumb.OrderbookInfo
+import com.ant.cointrading.config.TradingConstants
 import org.slf4j.LoggerFactory
 import org.springframework.stereotype.Component
 import java.math.BigDecimal
@@ -45,12 +46,10 @@ class MarketConditionChecker(
 
     companion object {
         // 리스크 한도 (QUANT_RESEARCH.md 기반)
-        const val MAX_SPREAD_PERCENT = 0.5       // 최대 스프레드 0.5%
+        // MAX_SPREAD_PERCENT, MAX_VOLATILITY_1MIN, MAX_API_ERRORS는 TradingConstants 사용
         const val MIN_LIQUIDITY_RATIO = 3.0      // 주문량 대비 호가 깊이 최소 3배
-        const val MAX_VOLATILITY_1MIN = 2.0      // 1분 내 최대 변동률 2%
-        const val MAX_API_ERRORS = 5             // 연속 API 에러 허용 횟수
         const val PRICE_HISTORY_SIZE = 60        // 최근 60개 가격 저장 (1분)
-        const val ERROR_RESET_MINUTES = 5L        // 에러 카운터 리셋 대기 시간 (분)
+        const val ERROR_RESET_MINUTES = 5L       // 에러 카운터 리셋 대기 시간 (분)
     }
 
     /**
@@ -108,10 +107,10 @@ class MarketConditionChecker(
 
         // 3. 스프레드 계산
         val spreadCheck = calculateSpread(orderbook)
-        if (spreadCheck.spreadPercent > MAX_SPREAD_PERCENT) {
+        if (spreadCheck.spreadPercent > TradingConstants.MAX_SPREAD_PERCENT) {
             canTrade = false
             severity = ConditionSeverity.HIGH
-            issues.add("스프레드 과다: ${String.format("%.3f", spreadCheck.spreadPercent)}% (한도: ${MAX_SPREAD_PERCENT}%)")
+            issues.add("스프레드 과다: ${String.format("%.3f", spreadCheck.spreadPercent)}% (한도: ${TradingConstants.MAX_SPREAD_PERCENT}%)")
         }
 
         // 4. 유동성 확인
@@ -126,12 +125,12 @@ class MarketConditionChecker(
 
         // 5. 변동성 확인
         val volatilityCheck = checkVolatility(market, spreadCheck.midPrice)
-        if (volatilityCheck.volatility1Min > MAX_VOLATILITY_1MIN) {
+        if (volatilityCheck.volatility1Min > TradingConstants.MAX_VOLATILITY_1MIN) {
             // 변동성은 경고만, 거래 금지는 안 함 (하지만 기록)
             if (severity == ConditionSeverity.NORMAL) {
                 severity = ConditionSeverity.WARNING
             }
-            issues.add("고변동성 경고: 1분 ${String.format("%.2f", volatilityCheck.volatility1Min)}% (한도: ${MAX_VOLATILITY_1MIN}%)")
+            issues.add("고변동성 경고: 1분 ${String.format("%.2f", volatilityCheck.volatility1Min)}% (한도: ${TradingConstants.MAX_VOLATILITY_1MIN}%)")
         }
 
         // 결과 로깅
@@ -289,7 +288,7 @@ class MarketConditionChecker(
             }
         }
 
-        if (errorCount >= MAX_API_ERRORS) {
+        if (errorCount >= TradingConstants.MAX_API_ERRORS) {
             return ApiHealthCheck(
                 healthy = false,
                 reason = "API 연속 에러 ${errorCount}회 - 안정화 대기 필요"

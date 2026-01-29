@@ -67,4 +67,9 @@ object TradingConstants {
     // === 서킷 브레이커 ===
     const val DEFAULT_MAX_CONSECUTIVE_LOSSES = 3
     const val DEFAULT_DAILY_MAX_LOSS_KRW = 20000
+
+    // === 시장 체크 임계값 ===
+    const val MAX_SPREAD_PERCENT = 0.5       // 최대 스프레드 0.5%
+    const val MAX_VOLATILITY_1MIN = 2.0      // 1분 내 최대 변동률 2%
+    const val MAX_API_ERRORS = 5             // 연속 API 에러 허용 횟수
 }
