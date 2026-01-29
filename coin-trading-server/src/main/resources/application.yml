@@ -95,6 +95,7 @@ bithumb:
 slack:
   token: ${SLACK_TOKEN:}
   channel: ${SLACK_CHANNEL:coin-bot-alert}
+  webhook-url: ${SLACK_WEBHOOK_URL:}
 
 # 자동 거래 설정
 trading:
