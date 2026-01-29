@@ -47,15 +47,15 @@ class MemeScalperDetector(
     private val failedMarkets = mutableMapOf<String, Instant>()
 
     companion object {
-        const val RSI_PERIOD = 9  // 빠른 RSI
+        // 기술적 지표 상수 (스캘핑용 빠른 설정은 TradingConstants 사용)
+        const val RSI_PERIOD = TradingConstants.RSI_PERIOD_FAST
+        const val MACD_FAST = TradingConstants.MACD_FAST_SCALPING
+        const val MACD_SLOW = TradingConstants.MACD_SLOW_SCALPING
+        const val MACD_SIGNAL = TradingConstants.MACD_SIGNAL_SCALPING
+
         const val MIN_ENTRY_SCORE = 70  // 진입 최소 점수
         const val MIN_PRICE_SPIKE_PERCENT = 1.0  // 최소 가격 스파이크 1% 필수
         // 최대 스프레드: TradingConstants.MAX_SPREAD_PERCENT 사용
-
-        // MACD 설정 (스캘핑용 빠른 설정)
-        const val MACD_FAST = 5
-        const val MACD_SLOW = 13
-        const val MACD_SIGNAL = 6
 
         // 실패 마켓 캐시 TTL (1시간)
         private val FAILURE_TTL_MINUTES = 60L

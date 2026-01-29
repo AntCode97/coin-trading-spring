@@ -74,6 +74,11 @@ object TradingConstants {
     const val MACD_SLOW_STANDARD = 26
     const val MACD_SIGNAL_STANDARD = 9
 
+    // 스캘핑용 빠른 MACD (5/13/6)
+    const val MACD_FAST_SCALPING = 5
+    const val MACD_SLOW_SCALPING = 13
+    const val MACD_SIGNAL_SCALPING = 6
+
     // RSI 기간
     const val RSI_PERIOD_STANDARD = 14
     const val RSI_PERIOD_FAST = 9  // 스캘핑용
