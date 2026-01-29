@@ -224,13 +224,12 @@ class TradingEngine(
             bithumbPrivateApi.getBalances()
         } catch (e: Exception) {
             log.error("[$market] 잔고 조회 실패: ${e.message}")
-            circuitBreaker.recordApiError(market)
+            // API 에러는 OrderExecutor를 통해 주문 단계에서 기록됨
             return
         }
 
         if (balances == null) {
             log.error("[$market] 잔고 응답 null")
-            circuitBreaker.recordApiError(market)
             return
         }
 
@@ -452,7 +451,6 @@ class TradingEngine(
 
             if (response == null) {
                 // API 에러 기록
-                circuitBreaker.recordApiError(market)
                 marketConditionChecker.recordApiError(market)
                 log.warn("[$market] 캔들 API 응답 null")
                 return emptyList()
@@ -470,7 +468,6 @@ class TradingEngine(
             }.reversed()  // 최신 데이터가 앞에 오므로 역순 정렬
         } catch (e: Exception) {
             log.error("[$market] 캔들 조회 실패: ${e.message}")
-            circuitBreaker.recordApiError(market)
             marketConditionChecker.recordApiError(market)
             emptyList()
         }
