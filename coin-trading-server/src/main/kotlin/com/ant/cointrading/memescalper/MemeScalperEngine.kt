@@ -18,6 +18,10 @@ import com.ant.cointrading.repository.MemeScalperDailyStatsRepository
 import com.ant.cointrading.repository.MemeScalperTradeEntity
 import com.ant.cointrading.repository.MemeScalperTradeRepository
 import com.ant.cointrading.repository.*
+import com.ant.cointrading.risk.SimpleCircuitBreaker
+import com.ant.cointrading.risk.SimpleCircuitBreakerFactory
+import com.ant.cointrading.risk.SimpleCircuitBreakerState
+import com.ant.cointrading.risk.SimpleCircuitBreakerStatePersistence
 import jakarta.annotation.PostConstruct
 import org.slf4j.LoggerFactory
 import org.springframework.scheduling.annotation.Scheduled
@@ -55,12 +59,20 @@ class MemeScalperEngine(
     private val statsRepository: MemeScalperDailyStatsRepository,
     private val slackNotifier: SlackNotifier,
     private val globalPositionManager: GlobalPositionManager,
-    private val regimeDetector: RegimeDetector
+    private val regimeDetector: RegimeDetector,
+    circuitBreakerFactory: SimpleCircuitBreakerFactory
 ) {
     private val log = LoggerFactory.getLogger(javaClass)
 
     // 공통 청산 로직 (PositionCloser 사용)
     private val positionCloser = PositionCloser(bithumbPrivateApi, orderExecutor, slackNotifier)
+
+    // 서킷브레이커 (공통 컴포넌트)
+    private val circuitBreaker = circuitBreakerFactory.create(
+        maxConsecutiveLosses = properties.maxConsecutiveLosses,
+        dailyMaxLossKrw = properties.dailyMaxLossKrw.toDouble(),
+        statePersistence = MemeScalperCircuitBreakerStatePersistence(statsRepository)
+    )
 
     // 마켓별 쿨다운 추적
     private val cooldowns = ConcurrentHashMap<String, Instant>()
@@ -72,10 +84,8 @@ class MemeScalperEngine(
     private val peakVolumes = ConcurrentHashMap<Long, Double>()
     private val peakPrices = ConcurrentHashMap<Long, Double>()
 
-    // 일일 통계
+    // 일일 통계 (서킷브레이커 제외)
     private var dailyTradeCount = 0
-    private var dailyPnl = 0.0
-    private var consecutiveLosses = 0
     private var lastResetDate = LocalDate.now()
 
     companion object {
@@ -128,16 +138,16 @@ class MemeScalperEngine(
         val startOfDay = today.atStartOfDay(ZoneId.systemDefault()).toInstant()
 
         dailyTradeCount = tradeRepository.countTodayTrades(startOfDay)
-        dailyPnl = tradeRepository.sumTodayPnl(startOfDay)
 
-        // 서킷브레이커 상태 복원 (연속 손실)
-        val todayStats = statsRepository.findByDate(today)
-        if (todayStats != null) {
-            consecutiveLosses = todayStats.consecutiveLosses
-            log.info("서킷브레이커 상태 복원: 연속손실=${consecutiveLosses}회")
-        }
+        // 서킷브레이커 상태 복원 (SimpleCircuitBreaker 사용)
+        circuitBreaker.restoreState()
+        val cbState = circuitBreaker.getState()
+        log.info("서킷브레이커 상태 복원: 연속손실=${cbState.consecutiveLosses}회, 일일손익=${cbState.dailyPnl}원")
 
-        log.info("일일 통계 초기화: 거래=${dailyTradeCount}회, 손익=${dailyPnl}원, 연속손실=${consecutiveLosses}회")
+        // MemeScalperEngine의 lastResetDate는 독립적 관리 (LocalDate)
+        // 서킷브레이커의 lastResetDate는 Instant이므로 별도 관리
+
+        log.info("일일 통계 초기화: 거래=${dailyTradeCount}회")
     }
 
     /**
@@ -669,20 +679,13 @@ class MemeScalperEngine(
         peakPrices.remove(position.id)
         peakVolumes.remove(position.id)
 
-        // 일일 통계 업데이트
-        dailyPnl += safePnlAmount
-        if (safePnlAmount < 0) {
-            consecutiveLosses++
-        } else {
-            consecutiveLosses = 0
-        }
-
-        // 서킷브레이커 상태 DB 저장 (재시작 시 복원용)
-        saveCircuitBreakerState()
+        // 서킷브레이커에 손익 기록
+        circuitBreaker.recordPnl(safePnlAmount)
 
         // Slack 알림
         val emoji = if (safePnlAmount >= 0) "+" else ""
         val holdingSeconds = ChronoUnit.SECONDS.between(position.entryTime, Instant.now())
+        val cbState = circuitBreaker.getState()
         slackNotifier.sendSystemNotification(
             "Meme Scalper 청산",
             """
@@ -692,8 +695,8 @@ class MemeScalperEngine(
             청산가: ${actualPrice}원
             손익: $emoji${String.format("%.0f", safePnlAmount)}원 (${String.format("%.2f", safePnlPercent)}%)
             보유시간: ${holdingSeconds}초
-            일일 손익: ${String.format("%.0f", dailyPnl)}원
-            연속 손실: ${consecutiveLosses}회
+            일일 손익: ${String.format("%.0f", cbState.dailyPnl)}원
+            연속 손실: ${cbState.consecutiveLosses}회
             """.trimIndent()
         )
 
@@ -724,14 +727,8 @@ class MemeScalperEngine(
         peakPrices.remove(position.id)
         peakVolumes.remove(position.id)
 
-        // 일일 통계 업데이트 (ABANDONED도 실제 손익 반영)
-        dailyPnl += safePnlAmount
-        if (safePnlAmount < 0) {
-            consecutiveLosses++
-        } else {
-            consecutiveLosses = 0
-        }
-        saveCircuitBreakerState()
+        // 서킷브레이커에 손익 기록 (ABANDONED도 실제 손익 반영)
+        circuitBreaker.recordPnl(safePnlAmount)
 
         val emoji = if (safePnlAmount >= 0) "+" else ""
         slackNotifier.sendWarning(
@@ -750,25 +747,14 @@ class MemeScalperEngine(
      * 거래 가능 여부 체크
      */
     private fun canTrade(): Boolean {
-        // 일일 거래 횟수 한도
+        // 일일 거래 횟수 한도 (MemeScalper 전용)
         if (dailyTradeCount >= properties.dailyMaxTrades) {
             log.debug("일일 거래 한도 도달 ($dailyTradeCount/${properties.dailyMaxTrades})")
             return false
         }
 
-        // 일일 손실 한도
-        if (dailyPnl <= -properties.dailyMaxLossKrw) {
-            log.debug("일일 손실 한도 도달 (${dailyPnl}원)")
-            return false
-        }
-
-        // 연속 손실 한도
-        if (consecutiveLosses >= properties.maxConsecutiveLosses) {
-            log.debug("연속 손실 한도 도달 (${consecutiveLosses}회)")
-            return false
-        }
-
-        return true
+        // 서킷브레이커 체크 (연속 손실, 일일 손실)
+        return circuitBreaker.canTrade()
     }
 
     /**
@@ -782,8 +768,7 @@ class MemeScalperEngine(
 
             // 리셋
             dailyTradeCount = 0
-            dailyPnl = 0.0
-            consecutiveLosses = 0
+            circuitBreaker.reset()
             lastResetDate = today
 
             log.info("=== Meme Scalper 일일 리셋 ===")
@@ -824,11 +809,13 @@ class MemeScalperEngine(
             stats.avgHoldingSeconds = avgHolding
             stats.maxSingleLoss = allTrades.mapNotNull { it.pnlAmount }.minOrNull()
             stats.maxSingleProfit = allTrades.mapNotNull { it.pnlAmount }.maxOrNull()
-            stats.consecutiveLosses = consecutiveLosses
+
+            val cbState = circuitBreaker.getState()
+            stats.consecutiveLosses = cbState.consecutiveLosses
             stats.circuitBreakerUpdatedAt = Instant.now()
 
             statsRepository.save(stats)
-            log.info("일일 통계 저장: $date, 거래=${allTrades.size}, 승률=${String.format("%.1f", winRate * 100)}%, 손익=$totalPnl, 연속손실=$consecutiveLosses")
+            log.info("일일 통계 저장: $date, 거래=${allTrades.size}, 승률=${String.format("%.1f", winRate * 100)}%, 손익=$totalPnl, 연속손실=${cbState.consecutiveLosses}")
         } catch (e: Exception) {
             log.error("일일 통계 저장 실패: ${e.message}")
         }
@@ -839,12 +826,13 @@ class MemeScalperEngine(
      */
     fun getStatus(): Map<String, Any> {
         val openPositions = tradeRepository.findByStatus("OPEN")
+        val cbState = circuitBreaker.getState()
         return mapOf(
             "enabled" to properties.enabled,
             "openPositions" to openPositions.size,
             "dailyTradeCount" to dailyTradeCount,
-            "dailyPnl" to dailyPnl,
-            "consecutiveLosses" to consecutiveLosses,
+            "dailyPnl" to cbState.dailyPnl,
+            "consecutiveLosses" to cbState.consecutiveLosses,
             "canTrade" to canTrade()
         )
     }
@@ -853,9 +841,10 @@ class MemeScalperEngine(
      * 서킷 브레이커 리셋
      */
     fun resetCircuitBreaker(): Map<String, Any> {
-        consecutiveLosses = 0
+        circuitBreaker.reset()
         log.info("서킷 브레이커 리셋")
-        return mapOf("success" to true, "consecutiveLosses" to 0)
+        val cbState = circuitBreaker.getState()
+        return mapOf("success" to true, "consecutiveLosses" to cbState.consecutiveLosses)
     }
 
     /**
@@ -878,19 +867,37 @@ class MemeScalperEngine(
 
         return mapOf("success" to true, "closedPositions" to results)
     }
+}
 
-    /**
-     * 서킷브레이커 상태 DB 저장 (재시작 시 복원용)
-     */
-    private fun saveCircuitBreakerState() {
+/**
+ * MemeScalper 전용 서킷브레이커 상태 지속성
+ */
+private class MemeScalperCircuitBreakerStatePersistence(
+    private val statsRepository: MemeScalperDailyStatsRepository
+) : SimpleCircuitBreakerStatePersistence {
+
+    override fun load(): SimpleCircuitBreakerState? {
+        val today = LocalDate.now()
+        val todayStats = statsRepository.findByDate(today)
+        return todayStats?.let {
+            SimpleCircuitBreakerState(
+                consecutiveLosses = it.consecutiveLosses,
+                dailyPnl = it.totalPnl,
+                lastResetDate = it.circuitBreakerUpdatedAt ?: Instant.now()
+            )
+        }
+    }
+
+    override fun save(state: SimpleCircuitBreakerState) {
         try {
             val today = LocalDate.now()
-            val stats = statsRepository.findByDate(today) ?: MemeScalperDailyStatsEntity(date = today)
-            stats.consecutiveLosses = consecutiveLosses
-            stats.circuitBreakerUpdatedAt = Instant.now()
+            val stats = statsRepository.findByDate(today)
+                ?: MemeScalperDailyStatsEntity(date = today)
+            stats.consecutiveLosses = state.consecutiveLosses
+            stats.circuitBreakerUpdatedAt = state.lastResetDate
             statsRepository.save(stats)
         } catch (e: Exception) {
-            log.error("서킷브레이커 상태 저장 실패: ${e.message}")
+            // 로그는 SimpleCircuitBreaker에서 출력
         }
     }
 }
