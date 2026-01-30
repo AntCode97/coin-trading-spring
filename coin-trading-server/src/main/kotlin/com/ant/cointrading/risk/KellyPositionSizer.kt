@@ -27,13 +27,16 @@ class KellyPositionSizer {
 
     companion object {
         // Jim Simons: 최소 샘플 수 (통계적 유의성)
-        const val MIN_TRADES_FOR_KELLY = 30
+        // Renaissance 표준: 100건 이상 (30건 → 100건으로 증가)
+        const val MIN_TRADES_FOR_KELLY = 100
 
         // Half-Kelly (실무 표준, Simons도 사용)
         const val KELLY_FRACTION = 0.5
 
-        // 최대/최소 포지션 비율
-        const val MAX_POSITION_RATIO = 0.02  // 최대 2% (리스크 관리)
+        // 최대 포지션 비율 (리스크 관리)
+        const val MAX_POSITION_RATIO = 0.02  // 최대 2%
+
+        // 최소 포지션 비율 (Kelly f* > 0 일 때만 적용)
         const val MIN_POSITION_RATIO = 0.005 // 최소 0.5%
     }
 
@@ -59,16 +62,22 @@ class KellyPositionSizer {
 
         val kellyFraction = (b * p - q) / b
 
-        // 승률 50% 미만이면 최소 포지션 (Simons: "패배를 인정하고 물러나라")
+        // Jim Simons: 승률 50% 미만이면 베팅 중단 (Kelly f* < 0)
         if (winRate < 0.5) {
-            log.warn("승률 ${String.format("%.1f", winRate * 100)}% < 50%, 최소 포지션 사용")
-            return capital * MIN_POSITION_RATIO
+            log.error("승률 ${String.format("%.1f", winRate * 100)}% < 50%, Kelly f* 음수, Jim Simons: '베팅 중단'")
+            return 0.0  // 포지션 0 = 거래 중지
+        }
+
+        // Kelly f*가 음수면 추가 체크 (이론적으로 winRate < 0.5일 때 음수)
+        if (kellyFraction <= 0) {
+            log.warn("Kelly f* ${String.format("%.2f", kellyFraction * 100)}% <= 0%, 거래 중지")
+            return 0.0
         }
 
         // Half-Kelly (실무 표준)
         val halfKelly = kellyFraction * KELLY_FRACTION
 
-        // 최대/최한 제한
+        // 최대/최소 제한
         val clampedKelly = halfKelly.coerceIn(MIN_POSITION_RATIO, MAX_POSITION_RATIO)
 
         val positionSize = capital * clampedKelly
