@@ -124,9 +124,16 @@ class VolumeSurgeEngine(
 
         openPositions.forEach { position ->
             // 트레일링 스탑 고점 복원
-            if (position.trailingActive && position.highestPrice != null) {
-                highestPrices[position.id!!] = position.highestPrice!!
-                log.info("[${position.market}] 트레일링 고점 복원: ${position.highestPrice}")
+            if (position.trailingActive) {
+                val highestPriceValue = position.highestPrice
+                if (highestPriceValue != null) {
+                    val positionId = position.id ?: run {
+                        log.warn("[${position.market}] 포지션 ID 없음 - 트레일링 고점 복원 스킵")
+                        return@forEach
+                    }
+                    highestPrices[positionId] = highestPriceValue
+                    log.info("[${position.market}] 트레일링 고점 복원: $highestPriceValue")
+                }
             }
 
             log.info("[${position.market}] 포지션 복원 완료 - 진입가: ${position.entryPrice}, 트레일링: ${position.trailingActive}")
@@ -545,6 +552,13 @@ class VolumeSurgeEngine(
     private fun monitorSinglePosition(position: VolumeSurgeTradeEntity) {
         val market = position.market
 
+        // ID 필수 체크 - ID 없으면 ABANDONED 처리
+        val positionId = position.id
+        if (positionId == null) {
+            log.error("[$market] 포지션 ID 없음 - ABANDONED 처리")
+            return
+        }
+
         // 잘못된 데이터 방어: entryPrice가 0 이하면 ABANDONED 처리
         if (position.entryPrice <= 0) {
             log.error("[$market] 유효하지 않은 진입가격 (${position.entryPrice}) - ABANDONED 처리")
@@ -554,7 +568,7 @@ class VolumeSurgeEngine(
             position.pnlAmount = 0.0
             position.pnlPercent = 0.0
             tradeRepository.save(position)
-            highestPrices.remove(position.id)
+            highestPrices.remove(positionId)
 
             slackNotifier.sendWarning(
                 market,
@@ -603,13 +617,13 @@ class VolumeSurgeEngine(
             if (!position.trailingActive) {
                 position.trailingActive = true
                 position.highestPrice = currentPrice
-                highestPrices[position.id!!] = currentPrice
+                highestPrices[positionId] = currentPrice
                 tradeRepository.save(position)
                 log.info("[$market] 트레일링 스탑 활성화 (익절 도달 후 수익률: ${String.format("%.2f", pnlPercent)}%)")
             } else {
-                val highestPrice = highestPrices.getOrDefault(position.id!!, currentPrice)
+                val highestPrice = highestPrices.getOrDefault(positionId, currentPrice)
                 if (currentPrice > highestPrice) {
-                    highestPrices[position.id!!] = currentPrice
+                    highestPrices[positionId] = currentPrice
                     position.highestPrice = currentPrice
                     tradeRepository.save(position)
                 }
@@ -673,6 +687,10 @@ class VolumeSurgeEngine(
      */
     private fun finalizeClose(position: VolumeSurgeTradeEntity, actualExitPrice: Double, reason: String) {
         val market = position.market
+        val positionId = position.id ?: run {
+            log.error("[$market] 포지션 ID 없음 - 트레일링 추적 제거 불가")
+            // ID 없으면 트레일링 추적만 스킵하고 청산은 진행
+        }
 
         // PnL 계산 (수수료 미포함 - 수수료는 OrderExecutor에서 계산)
         val pnlResult = PnlCalculator.calculateWithoutFee(
@@ -691,7 +709,9 @@ class VolumeSurgeEngine(
         tradeRepository.save(position)
 
         // 트레일링 추적 제거
-        highestPrices.remove(position.id)
+        if (positionId != null) {
+            highestPrices.remove(positionId)
+        }
 
         // 서킷 브레이커 업데이트
         circuitBreaker.recordPnl(pnlResult.pnlAmount)

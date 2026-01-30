@@ -137,8 +137,12 @@ class MemeScalperEngine(
 
         log.info("열린 포지션 ${openPositions.size}건 복원")
         openPositions.forEach { position ->
-            peakPrices[position.id!!] = position.peakPrice ?: position.entryPrice
-            peakVolumes[position.id!!] = position.peakVolume ?: 0.0
+            val positionId = position.id ?: run {
+                log.warn("[${position.market}] 포지션 ID 없음 - 복원 스킵")
+                return@forEach
+            }
+            peakPrices[positionId] = position.peakPrice ?: position.entryPrice
+            peakVolumes[positionId] = position.peakVolume ?: 0.0
             log.info("[${position.market}] 포지션 복원 완료")
         }
     }
@@ -442,8 +446,12 @@ class MemeScalperEngine(
         )
 
         val savedTrade = tradeRepository.save(trade)
-        peakPrices[savedTrade.id!!] = executionResult.price
-        peakVolumes[savedTrade.id!!] = signal.volumeSpikeRatio
+        val tradeId = savedTrade.id ?: run {
+            log.error("[${signal.market}] DB 저장 후 ID 없음 - 포지션 추적 불가")
+            throw IllegalStateException("포지션 저장 실패: ID가 생성되지 않음")
+        }
+        peakPrices[tradeId] = executionResult.price
+        peakVolumes[tradeId] = signal.volumeSpikeRatio
 
         return savedTrade
     }
@@ -509,6 +517,12 @@ class MemeScalperEngine(
     private fun monitorSinglePosition(position: MemeScalperTradeEntity) {
         val market = position.market
 
+        // ID 필수 체크
+        val positionId = position.id ?: run {
+            log.error("[$market] 포지션 ID 없음 - 모니터링 스킵")
+            return
+        }
+
         // 0. 진입가 무결성 검증 - 진입가가 0이면 거래 불가능
         if (position.entryPrice <= 0) {
             log.error("[$market] 진입가 무효(${position.entryPrice}) - 포지션 정리 필요")
@@ -537,9 +551,9 @@ class MemeScalperEngine(
         val pnlPercent = safePnlPercent(position.entryPrice, currentPrice)
 
         // 4. 피크 업데이트
-        val peakPrice = peakPrices.getOrDefault(position.id!!, position.entryPrice)
+        val peakPrice = peakPrices.getOrDefault(positionId, position.entryPrice)
         if (currentPrice > peakPrice) {
-            peakPrices[position.id!!] = currentPrice
+            peakPrices[positionId] = currentPrice
             position.peakPrice = currentPrice
             tradeRepository.save(position)
         }
@@ -562,7 +576,7 @@ class MemeScalperEngine(
 
         // 트레일링 중: 고점 대비 offset% 하락 시 청산
         if (position.trailingActive) {
-            val peakPriceVal = peakPrices.getOrDefault(position.id!!, position.entryPrice)
+            val peakPriceVal = peakPrices.getOrDefault(positionId, position.entryPrice)
             val drawdownPercent = ((peakPriceVal - currentPrice) / peakPriceVal) * 100
 
             if (drawdownPercent >= offsetPercent) {
@@ -586,7 +600,7 @@ class MemeScalperEngine(
 
         // 9. 청산 신호 체크 (거래량 급감, 호가창 반전) - 30초 이후에만
         if (holdingSeconds >= 30) {
-            val peakVol = peakVolumes.getOrDefault(position.id!!, 1.0)
+            val peakVol = peakVolumes.getOrDefault(positionId, 1.0)
             val exitSignal = detector.detectExitSignal(market, peakVol)
             if (exitSignal != null) {
                 closePosition(position, currentPrice, exitSignal.reason)
@@ -672,8 +686,11 @@ class MemeScalperEngine(
         tradeRepository.save(position)
 
         // 피크 데이터 정리
-        peakPrices.remove(position.id)
-        peakVolumes.remove(position.id)
+        val positionId = position.id
+        if (positionId != null) {
+            peakPrices.remove(positionId)
+            peakVolumes.remove(positionId)
+        }
 
         // 서킷브레이커에 손익 기록
         circuitBreaker.recordPnl(safePnlAmount)
@@ -720,8 +737,12 @@ class MemeScalperEngine(
         position.status = "ABANDONED"
 
         tradeRepository.save(position)
-        peakPrices.remove(position.id)
-        peakVolumes.remove(position.id)
+
+        val positionId = position.id
+        if (positionId != null) {
+            peakPrices.remove(positionId)
+            peakVolumes.remove(positionId)
+        }
 
         // 서킷브레이커에 손익 기록 (ABANDONED도 실제 손익 반영)
         circuitBreaker.recordPnl(safePnlAmount)
