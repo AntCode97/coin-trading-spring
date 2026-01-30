@@ -163,6 +163,12 @@ class PortfolioRiskManager(
 
     /**
      * 최대 낙폭(Max Drawdown) 계산
+     *
+     * Jim Simons: "최대 낙폭은 포트폴리오 리스크의 핵심 지표다"
+     *
+     * MDD = (Peak - Trough) / Peak
+     * - Peak: 역대 최고 자산
+     * - Trough: Peak 이후 최저 자산
      */
     fun calculateMaxDrawdown(): DrawdownMetrics {
         val allTrades = (memeRepository.findByStatus("CLOSED") + volumeRepository.findByStatus("CLOSED"))
@@ -172,23 +178,47 @@ class PortfolioRiskManager(
             return DrawdownMetrics(0.0, 0.0, 0)
         }
 
-        var peak = 0.0
+        var currentEquity = 0.0
+        var peakEquity = 0.0
         var maxDrawdown = 0.0
+
+        // 일별 집계 (drawdownDays 계산용)
+        val dailyEquity = mutableMapOf<LocalDate, Double>()
+
+        for (trade in allTrades) {
+            currentEquity += getPnlAmount(trade)
+            peakEquity = maxOf(peakEquity, currentEquity)
+
+            val drawdown = if (peakEquity > 0) {
+                (peakEquity - currentEquity) / peakEquity
+            } else {
+                .0
+            }
+
+            maxDrawdown = maxOf(maxDrawdown, drawdown)
+
+            // 날짜 기준 집계
+            val date = getExitTime(trade)?.atZone(java.time.ZoneId.systemDefault())?.toLocalDate()
+            if (date != null) {
+                dailyEquity[date] = currentEquity
+            }
+        }
+
+        // 최대 drawdown 기간 계산 (날짜 기준)
         var drawdownDays = 0
         var currentDrawdownDays = 0
         var inDrawdown = false
 
-        for (trade in allTrades) {
-            val pnl = getPnlAmount(trade)
-            peak += pnl
+        val sortedDates = dailyEquity.keys.sorted()
+        var datePeak = 0.0
 
-            val drawdown = if (peak > 0) (peak - (peak + pnl)) / peak else 0.0
+        for (date in sortedDates) {
+            val equity = dailyEquity[date] ?: 0.0
+            datePeak = maxOf(datePeak, equity)
 
-            if (drawdown < 0) {
-                val absDrawdown = abs(drawdown)
-                if (absDrawdown > maxDrawdown) {
-                    maxDrawdown = absDrawdown
-                }
+            val dd = if (datePeak > 0) (datePeak - equity) / datePeak else 0.0
+
+            if (dd > 0.001) {  // 0.1% 이상 하락 시 drawdown으로 간주
                 if (!inDrawdown) {
                     inDrawdown = true
                     currentDrawdownDays = 0
@@ -202,9 +232,15 @@ class PortfolioRiskManager(
             }
         }
 
+        val currentDrawdown = if (peakEquity > 0) {
+            (peakEquity - currentEquity) / peakEquity
+        } else {
+            .0
+        }.coerceAtLeast(0.0)
+
         return DrawdownMetrics(
             maxDrawdown = maxDrawdown,
-            currentDrawdown = if (peak < 0) abs(peak) else 0.0,
+            currentDrawdown = currentDrawdown,
             drawdownDays = drawdownDays
         )
     }
