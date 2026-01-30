@@ -12,6 +12,23 @@ object TradingConstants {
 
     // === 수수료 ===
     val BITHUMB_FEE_RATE = BigDecimal("0.0004")  // 0.04% (VIP 등급에 따라 변경 가능)
+    val BITHUMB_ROUND_TRIP_FEE_RATE = BigDecimal("0.0008")  // 왕복 수수료 0.08% (Jim Simons: 수수료는 숨겨진 비용)
+
+    // === 손익비 계산 (수수료 포함, Cliff Asness 스타일) ===
+    /**
+     * 수수료 포함 실제 손익률 계산
+     *
+     * 예: 익절 +1.8% 설정 시
+     * - 명목 손익률: +1.8%
+     * - 수수료 차감: +1.8% - 0.08% = +1.72%
+     *
+     * R:R 계산:
+     * - 리스크: 1.38% (손절 -1.3% - 수수료 0.08%)
+     * - 리워드: 1.72% (익절 +1.8% - 수수료 0.08%)
+     * - R:R = 1.72 / 1.38 = 1.25
+     */
+    const val FEE_ADJUSTED_STOP_LOSS = -1.3    // 명목 손절 (실제 -1.38%)
+    const val FEE_ADJUSTED_TAKE_PROFIT = 1.8   // 명목 익절 (실제 +1.72%)
 
     // === 주문 관련 ===
     val MIN_ORDER_AMOUNT_KRW = BigDecimal("5100")  // 빗썸 최소 주문 금액 (수수료 0.08% 완화 고려)
