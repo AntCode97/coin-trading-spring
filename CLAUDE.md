@@ -563,18 +563,12 @@ AI 에이전트가 MySQL 데이터베이스에 직접 접속하여 쿼리를 실
 
 ### 접속 정보
 
-**보안 중요:** DB 비밀번호는 `.mysql_info` 파일에 별도 관리하며 **이 파일은 절대 커밋하지 않습니다.**
+**보안 중요:** DB 접속 정보는 `.mysql_info` 파일에 별도 관리하며 **이 파일은 절대 커밋하지 않습니다.**
 
 ```bash
 # .mysql_info 파일에서 환경 변수 로드
 source .mysql_info
-
-# 또는 직접 지정
-MYSQL_HOST=183.101.185.112
-MYSQL_PORT=1005
-MYSQL_USER=yunjun
-MYSQL_PASSWORD=YOUR_PASSWORD  # .mysql_info 파일에서 확인
-MYSQL_DATABASE=coin_trading
+mysql -h $MYSQL_HOST -P $MYSQL_PORT -u $MYSQL_USER -p$MYSQL_PASSWORD $MYSQL_DATABASE
 ```
 
 ### Bash 명령어로 직접 조회
@@ -585,19 +579,19 @@ source .mysql_info
 mysql -h $MYSQL_HOST -P $MYSQL_PORT -u $MYSQL_USER -p$MYSQL_PASSWORD $MYSQL_DATABASE -e "SHOW TABLES;"
 
 # 테이블 목록 조회
-mysql -h 183.101.185.112 -P 1005 -u yunjun -pYOUR_PASSWORD coin_trading -e "SHOW TABLES;"
+mysql -h $MYSQL_HOST -P $MYSQL_PORT -u $MYSQL_USER -p$MYSQL_PASSWORD $MYSQL_DATABASE -e "SHOW TABLES;"
 
 # 트레이딩 기록 조회
-mysql -h 183.101.185.112 -P 1005 -u yunjun -pYOUR_PASSWORD coin_trading -e "SELECT * FROM trades ORDER BY created_at DESC LIMIT 10;"
+mysql -h $MYSQL_HOST -P $MYSQL_PORT -u $MYSQL_USER -p$MYSQL_PASSWORD $MYSQL_DATABASE -e "SELECT * FROM trades ORDER BY created_at DESC LIMIT 10;"
 
 # Volume Surge 포지션 조회
-mysql -h 183.101.185.112 -P 1005 -u yunjun -pYOUR_PASSWORD coin_trading -e "SELECT * FROM volume_surge_trades WHERE status = 'OPEN';"
+mysql -h $MYSQL_HOST -P $MYSQL_PORT -u $MYSQL_USER -p$MYSQL_PASSWORD $MYSQL_DATABASE -e "SELECT * FROM volume_surge_trades WHERE status = 'OPEN';"
 
 # Meme Scalper 포지션 조회
-mysql -h 183.101.185.112 -P 1005 -u yunjun -pYOUR_PASSWORD coin_trading -e "SELECT * FROM meme_scalper_trades WHERE status = 'OPEN';"
+mysql -h $MYSQL_HOST -P $MYSQL_PORT -u $MYSQL_USER -p$MYSQL_PASSWORD $MYSQL_DATABASE -e "SELECT * FROM meme_scalper_trades WHERE status = 'OPEN';"
 
 # 일일 성과 조회
-mysql -h 183.101.185.112 -P 1005 -u yunjun -pYOUR_PASSWORD coin_trading -e "SELECT DATE(created_at) as date, COUNT(*) as trades, SUM(CASE WHEN pnl_amount > 0 THEN 1 ELSE 0 END) as wins FROM volume_surge_trades WHERE status = 'CLOSED' GROUP BY DATE(created_at) ORDER BY date DESC LIMIT 7;"
+mysql -h $MYSQL_HOST -P $MYSQL_PORT -u $MYSQL_USER -p$MYSQL_PASSWORD $MYSQL_DATABASE -e "SELECT DATE(created_at) as date, COUNT(*) as trades, SUM(CASE WHEN pnl_amount > 0 THEN 1 ELSE 0 END) as wins FROM volume_surge_trades WHERE status = 'CLOSED' GROUP BY DATE(created_at) ORDER BY date DESC LIMIT 7;"
 ```
 
 ### 주요 테이블 구조
@@ -673,7 +667,9 @@ claude mcp add coin-trading-spring --transport stdio
 
 ```bash
 # 원격 MCP 서버 연결 (Live 배포된 서버)
-claude mcp add coin-trading-spring --transport http http://183.101.185.112:1104/mcp
+# IP와 PORT는 .mysql_info 또는 배포 환경 설정을 참조
+source .mysql_info
+claude mcp add coin-trading-spring --transport http http://$MYSQL_HOST:$MCP_PORT/mcp
 ```
 
 ### MCP Tool 어노테이션
