@@ -3,6 +3,7 @@ package com.ant.cointrading.risk
 import org.slf4j.LoggerFactory
 import org.springframework.stereotype.Component
 import java.time.Instant
+import java.time.LocalDate
 import java.time.temporal.ChronoUnit
 
 /**
@@ -135,4 +136,68 @@ class SimpleCircuitBreakerFactory {
     ): SimpleCircuitBreaker {
         return SimpleCircuitBreaker(maxConsecutiveLosses, dailyMaxLossKrw, statePersistence)
     }
+}
+
+/**
+ * 제네릭 서킷브레이커 상태 저장소 구현체
+ *
+ * DailyStats/DailySummary 엔티티를 사용하는 모든 엔진에서 재사용.
+ *
+ * @param T 엔티티 타입 (MemeScalperDailyStatsEntity, VolumeSurgeDailySummaryEntity 등)
+ * @param repository 해당 날짜의 엔티티를 조회/저장하는 Repository
+ */
+class GenericCircuitBreakerStatePersistence<T>(
+    private val repository: DailyStatsRepository<T>,
+    private val entityFactory: (LocalDate) -> T,
+    private val stateGetter: (T) -> CircuitBreakerState,
+    private val stateSetter: (T, CircuitBreakerState) -> Unit
+) : SimpleCircuitBreakerStatePersistence {
+
+    override fun load(): SimpleCircuitBreakerState? {
+        val today = LocalDate.now()
+        val todayEntity = repository.findByDate(today)
+        return todayEntity?.let { stateGetter(it).toSimpleState() }
+    }
+
+    override fun save(state: SimpleCircuitBreakerState) {
+        try {
+            val today = LocalDate.now()
+            val entity = repository.findByDate(today) ?: entityFactory(today)
+            stateSetter(entity, CircuitBreakerState.fromSimpleState(state))
+            repository.save(entity)
+        } catch (e: Exception) {
+            // 로그는 SimpleCircuitBreaker에서 출력
+        }
+    }
+}
+
+/**
+ * 서킷브레이커 상태 (제네릭 구현체용)
+ */
+data class CircuitBreakerState(
+    val consecutiveLosses: Int,
+    val totalPnl: Double,
+    val circuitBreakerUpdatedAt: Instant?
+) {
+    fun toSimpleState() = SimpleCircuitBreakerState(
+        consecutiveLosses = consecutiveLosses,
+        dailyPnl = totalPnl,
+        lastResetDate = circuitBreakerUpdatedAt ?: Instant.now()
+    )
+
+    companion object {
+        fun fromSimpleState(state: SimpleCircuitBreakerState) = CircuitBreakerState(
+            consecutiveLosses = state.consecutiveLosses,
+            totalPnl = state.dailyPnl,
+            circuitBreakerUpdatedAt = state.lastResetDate
+        )
+    }
+}
+
+/**
+ * 일일 통계 Repository 인터페이스 (제네릭)
+ */
+interface DailyStatsRepository<T> {
+    fun findByDate(date: LocalDate): T?
+    fun save(entity: T): T
 }

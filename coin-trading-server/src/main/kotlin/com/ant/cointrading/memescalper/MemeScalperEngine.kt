@@ -20,7 +20,9 @@ import com.ant.cointrading.repository.*
 import com.ant.cointrading.risk.SimpleCircuitBreaker
 import com.ant.cointrading.risk.SimpleCircuitBreakerFactory
 import com.ant.cointrading.risk.SimpleCircuitBreakerState
-import com.ant.cointrading.risk.SimpleCircuitBreakerStatePersistence
+import com.ant.cointrading.risk.GenericCircuitBreakerStatePersistence
+import com.ant.cointrading.risk.DailyStatsRepository
+import com.ant.cointrading.risk.CircuitBreakerState
 import jakarta.annotation.PostConstruct
 import org.slf4j.LoggerFactory
 import org.springframework.scheduling.annotation.Scheduled
@@ -66,11 +68,22 @@ class MemeScalperEngine(
     // 공통 청산 로직 (PositionCloser 사용)
     private val positionCloser = PositionCloser(bithumbPrivateApi, orderExecutor, slackNotifier)
 
-    // 서킷브레이커 (공통 컴포넌트)
+    // 서킷브레이커 (공통 컴포넌트 - 제네릭 구현체 사용)
     private val circuitBreaker = circuitBreakerFactory.create(
         maxConsecutiveLosses = properties.maxConsecutiveLosses,
         dailyMaxLossKrw = properties.dailyMaxLossKrw.toDouble(),
-        statePersistence = MemeScalperCircuitBreakerStatePersistence(statsRepository)
+        statePersistence = GenericCircuitBreakerStatePersistence(
+            repository = object : DailyStatsRepository<MemeScalperDailyStatsEntity> {
+                override fun findByDate(date: LocalDate) = statsRepository.findByDate(date)
+                override fun save(entity: MemeScalperDailyStatsEntity) = statsRepository.save(entity)
+            },
+            entityFactory = { MemeScalperDailyStatsEntity(date = it) },
+            stateGetter = { com.ant.cointrading.risk.CircuitBreakerState(it.consecutiveLosses, it.totalPnl, it.circuitBreakerUpdatedAt) },
+            stateSetter = { entity, state ->
+                entity.consecutiveLosses = state.consecutiveLosses
+                entity.circuitBreakerUpdatedAt = state.circuitBreakerUpdatedAt
+            }
+        )
     )
 
     // 마켓별 쿨다운 추적
@@ -866,38 +879,5 @@ class MemeScalperEngine(
         }
 
         return mapOf("success" to true, "closedPositions" to results)
-    }
-}
-
-/**
- * MemeScalper 전용 서킷브레이커 상태 지속성
- */
-private class MemeScalperCircuitBreakerStatePersistence(
-    private val statsRepository: MemeScalperDailyStatsRepository
-) : SimpleCircuitBreakerStatePersistence {
-
-    override fun load(): SimpleCircuitBreakerState? {
-        val today = LocalDate.now()
-        val todayStats = statsRepository.findByDate(today)
-        return todayStats?.let {
-            SimpleCircuitBreakerState(
-                consecutiveLosses = it.consecutiveLosses,
-                dailyPnl = it.totalPnl,
-                lastResetDate = it.circuitBreakerUpdatedAt ?: Instant.now()
-            )
-        }
-    }
-
-    override fun save(state: SimpleCircuitBreakerState) {
-        try {
-            val today = LocalDate.now()
-            val stats = statsRepository.findByDate(today)
-                ?: MemeScalperDailyStatsEntity(date = today)
-            stats.consecutiveLosses = state.consecutiveLosses
-            stats.circuitBreakerUpdatedAt = state.lastResetDate
-            statsRepository.save(stats)
-        } catch (e: Exception) {
-            // 로그는 SimpleCircuitBreaker에서 출력
-        }
     }
 }

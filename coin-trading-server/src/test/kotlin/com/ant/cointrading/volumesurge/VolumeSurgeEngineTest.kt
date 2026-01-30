@@ -16,6 +16,10 @@ import com.ant.cointrading.repository.VolumeSurgeTradeEntity
 import com.ant.cointrading.repository.VolumeSurgeTradeRepository
 import com.ant.cointrading.regime.RegimeDetector
 import com.ant.cointrading.risk.DynamicRiskRewardCalculator
+import com.ant.cointrading.risk.SimpleCircuitBreaker
+import com.ant.cointrading.risk.SimpleCircuitBreakerFactory
+import com.ant.cointrading.risk.SimpleCircuitBreakerState
+import com.ant.cointrading.risk.SimpleCircuitBreakerStatePersistence
 import com.ant.cointrading.risk.StopLossCalculator
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.DisplayName
@@ -86,10 +90,21 @@ class VolumeSurgeEngineTest {
     @Mock
     private lateinit var regimeDetector: RegimeDetector
 
+    @Mock
+    private lateinit var circuitBreakerFactory: SimpleCircuitBreakerFactory
+
     private lateinit var engine: VolumeSurgeEngine
 
     @BeforeEach
     fun setup() {
+        // CircuitBreakerFactory mock 설정
+        whenever(circuitBreakerFactory.create(any(), any(), any())).thenReturn(
+            SimpleCircuitBreaker(3, 10000.0, object : SimpleCircuitBreakerStatePersistence {
+                override fun load() = null
+                override fun save(state: SimpleCircuitBreakerState) {}
+            })
+        )
+
         engine = VolumeSurgeEngine(
             properties,
             bithumbPublicApi,
@@ -104,7 +119,8 @@ class VolumeSurgeEngineTest {
             stopLossCalculator,
             dynamicRiskRewardCalculator,
             globalPositionManager,
-            regimeDetector
+            regimeDetector,
+            circuitBreakerFactory
         )
     }
 

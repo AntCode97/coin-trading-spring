@@ -9,6 +9,10 @@ import com.ant.cointrading.engine.GlobalPositionManager
 import com.ant.cointrading.notification.SlackNotifier
 import com.ant.cointrading.order.OrderExecutor
 import com.ant.cointrading.regime.RegimeDetector
+import com.ant.cointrading.risk.SimpleCircuitBreaker
+import com.ant.cointrading.risk.SimpleCircuitBreakerFactory
+import com.ant.cointrading.risk.SimpleCircuitBreakerState
+import com.ant.cointrading.risk.SimpleCircuitBreakerStatePersistence
 import com.ant.cointrading.repository.MemeScalperDailyStatsRepository
 import com.ant.cointrading.repository.MemeScalperTradeEntity
 import com.ant.cointrading.repository.MemeScalperTradeRepository
@@ -72,10 +76,21 @@ class MemeScalperEngineTest {
     @Mock
     private lateinit var regimeDetector: RegimeDetector
 
+    @Mock
+    private lateinit var circuitBreakerFactory: SimpleCircuitBreakerFactory
+
     private lateinit var engine: MemeScalperEngine
 
     @BeforeEach
     fun setup() {
+        // CircuitBreakerFactory mock 설정
+        whenever(circuitBreakerFactory.create(any(), any(), any())).thenReturn(
+            SimpleCircuitBreaker(3, 20000.0, object : SimpleCircuitBreakerStatePersistence {
+                override fun load() = null
+                override fun save(state: SimpleCircuitBreakerState) {}
+            })
+        )
+
         engine = MemeScalperEngine(
             properties,
             bithumbPublicApi,
@@ -86,7 +101,8 @@ class MemeScalperEngineTest {
             statsRepository,
             slackNotifier,
             globalPositionManager,
-            regimeDetector
+            regimeDetector,
+            circuitBreakerFactory
         )
 
         // 기본 설정

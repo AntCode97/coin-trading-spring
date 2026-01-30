@@ -21,7 +21,9 @@ import com.ant.cointrading.risk.PnlCalculator
 import com.ant.cointrading.risk.SimpleCircuitBreaker
 import com.ant.cointrading.risk.SimpleCircuitBreakerFactory
 import com.ant.cointrading.risk.SimpleCircuitBreakerState
-import com.ant.cointrading.risk.SimpleCircuitBreakerStatePersistence
+import com.ant.cointrading.risk.GenericCircuitBreakerStatePersistence
+import com.ant.cointrading.risk.DailyStatsRepository
+import com.ant.cointrading.risk.CircuitBreakerState
 import com.ant.cointrading.risk.StopLossCalculator
 import org.springframework.core.io.ClassPathResource
 import org.springframework.core.io.Resource
@@ -71,11 +73,23 @@ class VolumeSurgeEngine(
     // 공통 청산 로직 (PositionCloser 사용)
     private val positionCloser = PositionCloser(bithumbPrivateApi, orderExecutor, slackNotifier)
 
-    // 서킷브레이커 (공통 컴포넌트)
+    // 서킷브레이커 (공통 컴포넌트 - 제네릭 구현체 사용)
     private val circuitBreaker = circuitBreakerFactory.create(
         maxConsecutiveLosses = properties.maxConsecutiveLosses,
         dailyMaxLossKrw = properties.dailyMaxLossKrw.toDouble(),
-        statePersistence = VolumeSurgeCircuitBreakerStatePersistence(dailySummaryRepository)
+        statePersistence = GenericCircuitBreakerStatePersistence(
+            repository = object : DailyStatsRepository<VolumeSurgeDailySummaryEntity> {
+                override fun findByDate(date: LocalDate) = dailySummaryRepository.findByDate(date)
+                override fun save(entity: VolumeSurgeDailySummaryEntity) = dailySummaryRepository.save(entity)
+            },
+            entityFactory = { VolumeSurgeDailySummaryEntity(date = it) },
+            stateGetter = { CircuitBreakerState(it.consecutiveLosses, it.totalPnl, it.circuitBreakerUpdatedAt) },
+            stateSetter = { entity, state ->
+                entity.consecutiveLosses = state.consecutiveLosses
+                entity.totalPnl = state.totalPnl
+                entity.circuitBreakerUpdatedAt = state.circuitBreakerUpdatedAt
+            }
+        )
     )
 
     // 트레일링 스탑 고점 추적
@@ -965,41 +979,5 @@ class VolumeSurgeEngine(
             "consecutiveLosses" to cbState.consecutiveLosses,
             "dailyPnl" to cbState.dailyPnl
         )
-    }
-}
-
-/**
- * VolumeSurge 서킷브레이커 상태 저장소 구현체
- */
-private class VolumeSurgeCircuitBreakerStatePersistence(
-    private val dailySummaryRepository: VolumeSurgeDailySummaryRepository
-) : SimpleCircuitBreakerStatePersistence {
-
-    override fun load(): SimpleCircuitBreakerState? {
-        val today = LocalDate.now()
-        val todaySummary = dailySummaryRepository.findByDate(today)
-        return todaySummary?.let {
-            SimpleCircuitBreakerState(
-                consecutiveLosses = it.consecutiveLosses,
-                dailyPnl = it.totalPnl,
-                lastResetDate = it.circuitBreakerUpdatedAt ?: Instant.now()
-            )
-        }
-    }
-
-    override fun save(state: SimpleCircuitBreakerState) {
-        try {
-            val today = LocalDate.now()
-            val summary = dailySummaryRepository.findByDate(today)
-                ?: VolumeSurgeDailySummaryEntity(date = today)
-
-            summary.consecutiveLosses = state.consecutiveLosses
-            summary.totalPnl = state.dailyPnl
-            summary.circuitBreakerUpdatedAt = state.lastResetDate
-
-            dailySummaryRepository.save(summary)
-        } catch (e: Exception) {
-            // State persistence 실패는 로그만 남기고 무시
-        }
     }
 }
