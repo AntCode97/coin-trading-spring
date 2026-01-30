@@ -306,12 +306,14 @@ class ConfluenceAnalyzer(
     private fun isBullishCross(macdLine: List<Double>, signalLine: List<Double>): Boolean {
         if (macdLine.size < 2 || signalLine.size < 2) return false
 
-        // 최근 2개 값 확인
-        val idx = macdLine.size - signalLine.size
-        if (idx < 1) return false
+        // signalLine은 macdLine보다 길이가 짧음 (offset만큼)
+        val offset = macdLine.size - signalLine.size
 
-        val prevMacd = macdLine[idx - 1]
-        val currMacd = macdLine[idx]
+        // macdLine에서 offset 위치의 값들이 signalLine의 현재/이전 값과 대응됨
+        if (offset < 1) return false
+
+        val prevMacd = macdLine[offset - 1]     // signalLine[last-2]와 대응
+        val currMacd = macdLine[offset]         // signalLine[last-1]와 대응
         val prevSignal = signalLine[signalLine.size - 2]
         val currSignal = signalLine.last()
 

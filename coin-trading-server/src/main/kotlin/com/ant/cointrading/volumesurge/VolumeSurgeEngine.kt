@@ -687,7 +687,7 @@ class VolumeSurgeEngine(
         // 2. 익절 체크 (저장된 익절 비율 사용, 없으면 계산)
         val takeProfitPercent = position.appliedTakeProfitPercent
             ?: if (properties.useDynamicTakeProfit) {
-                appliedStopLoss * properties.takeProfitMultiplier
+                kotlin.math.abs(appliedStopLoss) * properties.takeProfitMultiplier
             } else {
                 properties.takeProfitPercent
             }
