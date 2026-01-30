@@ -1,5 +1,6 @@
 package com.ant.cointrading.backtesting
 
+import com.ant.cointrading.config.TradingConstants
 import com.ant.cointrading.model.Candle
 import java.math.BigDecimal
 
@@ -14,14 +15,14 @@ interface Simulator {
      * @param strategy 테스트할 전략
      * @param historicalData 과거 캔들 데이터
      * @param initialCapital 초기 자본
-     * @param commissionRate 수수료율 (기본값: 0.04%)
+     * @param commissionRate 수수료율 (기본값: 빗썸 0.04%)
      * @return 백테스트 결과
      */
     fun simulate(
         strategy: BacktestableStrategy,
         historicalData: List<Candle>,
         initialCapital: Double,
-        commissionRate: Double = 0.0004
+        commissionRate: Double = TradingConstants.BITHUMB_FEE_RATE.toDouble()
     ): BacktestResult
 }
 
