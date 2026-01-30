@@ -136,13 +136,13 @@ class RegimeModel(
 
         for (iter in 0 until maxIterations) {
             // E-step: Forward-Backward 알고리즘
-            val (alpha, beta, gamma, xi) = forwardBackward(observations, T)
+            val (alpha, beta, gamma, xi, c) = forwardBackward(observations, T)
 
             // M-step: 파라미터 업데이트
             updateParameters(gamma, xi, observations, T)
 
-            // 로그 우도 계산
-            val logLikelihood = calculateLogLikelihood(alpha, T)
+            // 로그 우도 계산 (스케일링 계수 포함)
+            val logLikelihood = calculateLogLikelihood(alpha, c, T)
 
             // 수렴 확인
             val improvement = abs(logLikelihood - oldLogLikelihood)
@@ -191,15 +191,12 @@ class RegimeModel(
         }
         scaleAlpha(alpha, c, 0)
 
-        // Forward 재귀
+        // Forward 재귀 (log-sum-exp로 확률 합 계산)
         for (t in 1 until T) {
             for (j in 0 until NUM_REGIMES) {
-                var maxVal = LOG_EPSILON
-                for (i in 0 until NUM_REGIMES) {
-                    val val_ = alpha[t - 1][i] + logA[i][j]
-                    if (val_ > maxVal) maxVal = val_
-                }
-                alpha[t][j] = maxVal + logB[j][observations[t]]
+                // alpha[t-1][i] + logA[i][j]의 합을 log-space에서 계산
+                val logProb = DoubleArray(NUM_REGIMES) { alpha[t - 1][it] + logA[it][j] }
+                alpha[t][j] = logB[j][observations[t]] + logSumExp(logProb)
             }
             scaleAlpha(alpha, c, t)
         }
@@ -213,15 +210,14 @@ class RegimeModel(
         }
         scaleBeta(beta, c, T - 1)
 
-        // Backward 재귀
+        // Backward 재귀 (log-sum-exp로 확률 합 계산)
         for (t in T - 2 downTo 0) {
             for (i in 0 until NUM_REGIMES) {
-                var maxVal = LOG_EPSILON
-                for (j in 0 until NUM_REGIMES) {
-                    val val_ = logA[i][j] + logB[j][observations[t + 1]] + beta[t + 1][j]
-                    if (val_ > maxVal) maxVal = val_
+                // logA[i][j] + logB[j][obs[t+1]] + beta[t+1][j]의 합을 log-space에서 계산
+                val logProb = DoubleArray(NUM_REGIMES) {
+                    logA[i][it] + logB[it][observations[t + 1]] + beta[t + 1][it]
                 }
-                beta[t][i] = maxVal
+                beta[t][i] = logSumExp(logProb)
             }
             scaleBeta(beta, c, t)
         }
@@ -246,7 +242,7 @@ class RegimeModel(
             }
         }
 
-        return ForwardBackwardResult(alpha, beta, gamma, xi)
+        return ForwardBackwardResult(alpha, beta, gamma, xi, c)
     }
 
     /**
@@ -327,20 +323,16 @@ class RegimeModel(
     }
 
     /**
-     * 로그 우도 계산
+     * 로그 우도 계산 (스케일링 계수 포함)
      */
-    private fun calculateLogLikelihood(alpha: Array<DoubleArray>, T: Int): Double {
-        var logLikelihood = LOG_EPSILON
-        for (i in 0 until NUM_REGIMES) {
-            if (alpha[T - 1][i] > logLikelihood) {
-                logLikelihood = alpha[T - 1][i]
-            }
-        }
+    private fun calculateLogLikelihood(alpha: Array<DoubleArray>, c: DoubleArray, T: Int): Double {
+        // 마지막 시점의 alpha (이미 스케일링됨)
+        val logLikelihood = logSumExp(alpha[T - 1])
 
-        // 스케일링 보정
+        // 스케일링 보정: sum(ln(c[t]))
         var sumC = 0.0
         for (t in 0 until T) {
-            sumC += ln(1.0)  // c[t]는 항상 1.0으로 스케일링됨
+            sumC += if (c[t] > 0) ln(c[t]) else 0.0
         }
 
         return logLikelihood + sumC
@@ -493,7 +485,21 @@ class RegimeModel(
     }
 
     /**
-     * Log Sum Exp (수치적 안정성)
+     * Log Sum Exp (수치적 안정성) - 단일 배열
+     * ln(sum(exp(x_i))) 계산
+     */
+    private fun logSumExp(xs: DoubleArray): Double {
+        val max = xs.maxOrNull() ?: LOG_EPSILON
+        var sum = 0.0
+        for (x in xs) {
+            sum += exp(x - max)
+        }
+        return max + ln(sum)
+    }
+
+    /**
+     * Log Sum Exp (수치적 안정성) - 두 배열 합침
+     * logSumExp(alpha) + logSumExp(beta) 계산용
      */
     private fun logSumExp(a: DoubleArray, b: DoubleArray): Double {
         var maxVal = LOG_EPSILON
@@ -517,7 +523,8 @@ class RegimeModel(
         val alpha: Array<DoubleArray>,
         val beta: Array<DoubleArray>,
         val gamma: Array<DoubleArray>,
-        val xi: Array<Array<DoubleArray>>
+        val xi: Array<Array<DoubleArray>>,
+        val c: DoubleArray  // 스케일링 계수
     )
 }
 
