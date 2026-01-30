@@ -59,13 +59,14 @@ object SharpeRatioCalculator {
     }
 
     /**
-     * 자기상관 보정 표준편차 (간이 Newey-West 스타일)
+     * 자기상관 보정 표준오차 (간이 Newey-West 스타일)
      *
      * 암호화폐 수익률은 자기상관이 존재합니다:
      * - 변동성 군집 (큰 변동이 연속 발생)
      * - 수익률이 양/음으로 군집화
      *
-     * 간이 보정: 자기상관 계수를 고려한 표준오차
+     * HAC (Heteroskedasticity and Autocorrelation Consistent) 표준오차:
+     * SE = (sample_std / sqrt(n)) * sqrt(1 + 2*|rho|)
      */
     private fun calculateAutocorrelationAdjustedStd(returns: List<Double>): Double {
         if (returns.size < 2) return 0.0
@@ -82,14 +83,14 @@ object SharpeRatioCalculator {
         // 1기 후 자기상관 계수 (lag-1 autocorrelation)
         val autocorr = calculateLag1Autocorrelation(returns, mean, basicStd)
 
-        // 자기상관 보정 계수
-        // Newey-West 근사: sqrt((1 + 2*sum(autocorr)) / n)
-        val adjustmentFactor = sqrt((1.0 + 2.0 * abs(autocorr)) / n)
+        // 평균의 표준오차 (Standard Error)
+        val se = basicStd / sqrt(n.toDouble())
 
-        // 보정된 표준오차
-        val adjustedStd = basicStd * adjustmentFactor * sqrt(n.toDouble())
+        // HAC 보정: Newey-West 간이 근사
+        // 양의 자기상관이 있으면 표준오차를 증가시킴
+        val hacSe = se * sqrt(1.0 + 2.0 * abs(autocorr))
 
-        return if (adjustedStd > 0) adjustedStd else basicStd
+        return if (hacSe > 0) hacSe else basicStd
     }
 
     /**
