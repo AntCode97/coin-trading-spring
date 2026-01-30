@@ -15,6 +15,7 @@ import com.ant.cointrading.model.TradingSignal
 import com.ant.cointrading.notification.SlackNotifier
 import com.ant.cointrading.order.OrderExecutor
 import com.ant.cointrading.regime.RegimeDetector
+import com.ant.cointrading.regime.detectMarketRegime
 import com.ant.cointrading.repository.*
 import com.ant.cointrading.risk.DynamicRiskRewardCalculator
 import com.ant.cointrading.risk.PnlCalculator
@@ -271,7 +272,7 @@ class VolumeSurgeEngine(
 
         try {
             val currentPrice = fetchCurrentPriceWithValidation(market, alert) ?: return
-            val regime = detectMarketRegime(market)
+            val regime = detectMarketRegime(bithumbPublicApi, regimeDetector, market, log)
             val executionResult = executeBuyOrderWithValidation(
                 market, currentPrice, filterResult, regime, alert
             ) ?: return
@@ -306,24 +307,6 @@ class VolumeSurgeEngine(
             return null
         }
         return ticker.tradePrice
-    }
-
-    /**
-     * 시장 레짐 감지
-     */
-    private fun detectMarketRegime(market: String): String? {
-        return try {
-            val candles = bithumbPublicApi.getOhlcv(market, "minute60", 100)
-            if (!candles.isNullOrEmpty() && candles.size >= 15) {
-                regimeDetector.detectFromBithumb(candles).regime.name
-            } else {
-                log.debug("[$market] 캔들 데이터 부족으로 레짐 감지 스킵")
-                null
-            }
-        } catch (e: Exception) {
-            log.warn("[$market] 레짐 감지 실패: ${e.message}")
-            null
-        }
     }
 
     /**

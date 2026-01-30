@@ -220,3 +220,28 @@ class RegimeDetector {
         return detect(candles)
     }
 }
+
+/**
+ * 엔진용 레짐 감지 유틸리티 (공통)
+ *
+ * MemeScalperEngine, VolumeSurgeEngine에서 사용하는 레짐 감지 로직.
+ */
+fun detectMarketRegime(
+    bithumbPublicApi: com.ant.cointrading.api.bithumb.BithumbPublicApi,
+    regimeDetector: RegimeDetector,
+    market: String,
+    log: org.slf4j.Logger
+): String? {
+    return try {
+        val candles = bithumbPublicApi.getOhlcv(market, "minute60", 100)
+        if (!candles.isNullOrEmpty() && candles.size >= 15) {
+            regimeDetector.detectFromBithumb(candles).regime.name
+        } else {
+            log.debug("[$market] 캔들 데이터 부족으로 레짐 감지 스킵")
+            null
+        }
+    } catch (e: Exception) {
+        log.warn("[$market] 레짐 감지 실패: ${e.message}")
+        null
+    }
+}

@@ -12,6 +12,7 @@ import com.ant.cointrading.model.TradingSignal
 import com.ant.cointrading.notification.SlackNotifier
 import com.ant.cointrading.order.OrderExecutor
 import com.ant.cointrading.regime.RegimeDetector
+import com.ant.cointrading.regime.detectMarketRegime
 import com.ant.cointrading.repository.MemeScalperDailyStatsEntity
 import com.ant.cointrading.repository.MemeScalperDailyStatsRepository
 import com.ant.cointrading.repository.MemeScalperTradeEntity
@@ -320,7 +321,7 @@ class MemeScalperEngine(
         val market = signal.market
         log.info("[$market] 포지션 진입 시도 - 점수=${signal.score}, 거래량=${signal.volumeSpikeRatio}x")
 
-        val regime = detectMarketRegime(market)
+        val regime = detectMarketRegime(bithumbPublicApi, regimeDetector, market, log)
         val executionResult = executeBuyOrderWithValidation(market, signal, regime) ?: return
 
         if (!checkRaceCondition(market)) return
@@ -330,24 +331,6 @@ class MemeScalperEngine(
         sendEntryNotification(market, signal, executionResult)
 
         log.info("[$market] 진입 완료: 가격=${executionResult.price}, 수량=${executionResult.quantity}")
-    }
-
-    /**
-     * 시장 레짐 감지
-     */
-    private fun detectMarketRegime(market: String): String? {
-        return try {
-            val candles = bithumbPublicApi.getOhlcv(market, "minute60", 100)
-            if (!candles.isNullOrEmpty() && candles.size >= 15) {
-                regimeDetector.detectFromBithumb(candles).regime.name
-            } else {
-                log.debug("[$market] 캔들 데이터 부족으로 레짐 감지 스킵")
-                null
-            }
-        } catch (e: Exception) {
-            log.warn("[$market] 레짐 감지 실패: ${e.message}")
-            null
-        }
     }
 
     /**
