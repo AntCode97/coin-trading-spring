@@ -46,6 +46,9 @@ bin/
 .env
 .env.local
 .env.*.local
+.mysql_info
+
+# DB 비밀번호 파일 (커밋 금지)
 
 ### IntelliJ HTTP Client ###
 .idea/httpClient/
