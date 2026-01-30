@@ -14,12 +14,22 @@ import org.slf4j.LoggerFactory
 import org.springframework.scheduling.annotation.Scheduled
 import org.springframework.stereotype.Component
 import java.time.LocalDate
+import kotlin.math.sqrt
 
 /**
- * Walk-Forward 파라미터 최적화 엔진
+ * Walk-Forward 파라미터 최적화 엔진 (Jim Simons / Cliff Asness 스타일)
  *
- * 과거 데이터를 사용하여 전략 파라미터를 최적화합니다.
- * Walk-Forward 분석: 학습 기간 → 테스트 기간 → 슬라이딩 윈도우
+ * Renaissance Technologies 표준:
+ * 1. In-sample vs Out-of-sample 철저한 분리
+ * 2. Rolling Window 방식으로 파라미터 갱신
+ * 3. Out-of-sample 성능만으로 전략 평가
+ * 4. 과적합(Overfitting) 방지가 핵심
+ *
+ * Walk-Forward 절차:
+ * Window 1: Train[1~6월] → Test[7월] → Out-of-Sample Result 1
+ * Window 2: Train[2~7월] → Test[8월] → Out-of-Sample Result 2
+ * ...
+ * Average(Out-of-Sample Results) = 진짜 성능 (Look-ahead bias 없음)
  */
 @Component
 class WalkForwardOptimizer(
@@ -33,7 +43,10 @@ class WalkForwardOptimizer(
     private val log = LoggerFactory.getLogger(javaClass)
 
     companion object {
-        const val MIN_DATA_POINTS = 100  // 최소 데이터 포인트 수
+        const val MIN_DATA_POINTS = 100
+        const val TRAIN_PERIOD_MONTHS = 6  // 학습 기간: 6개월
+        const val TEST_PERIOD_DAYS = 7      // 테스트 기간: 7일
+        const val STEP_DAYS = 7             // 스텝: 7일
     }
 
     /**
@@ -321,4 +334,317 @@ class WalkForwardOptimizer(
             }
         }
     }
+
+    // ============================================================
+    // Jim Simons Walk-Forward Analysis (진짜 Walk-Forward)
+    // ============================================================
+
+    /**
+     * 진짜 Walk-Forward 분석 실행 (Cliff Asnes / Renaissance 스타일)
+     *
+     * In-sample(학습)과 Out-of-sample(테스트)을 철저히 분리하여
+     * Look-ahead bias를 완전히 제거합니다.
+     *
+     * @param market 마켓 (예: "KRW-BTC")
+     * @param strategyName 전략 이름
+     * @param parameterGrid 파라미터 그리드
+     * @return Walk-Forward 결과
+     */
+    fun runWalkForwardAnalysis(
+        market: String = "KRW-BTC",
+        strategyName: String = "BREAKOUT",
+        parameterGrid: Map<String, List<*>>? = null
+    ): WalkForwardAnalysisResult {
+        log.info("=== Walk-Forward Analysis 시작 ($market) ===")
+
+        // 1. 전체 데이터 로드
+        val endDate = LocalDate.now()
+        val startDate = endDate.minusMonths(12)  // 12개월 데이터
+
+        val startTimestamp = startDate.atStartOfDay(java.time.ZoneId.systemDefault()).toInstant().toEpochMilli()
+        val endTimestamp = endDate.atTime(23, 59).atZone(java.time.ZoneId.systemDefault()).toInstant().toEpochMilli()
+
+        val historyEntities = ohlcvHistoryRepository.findByMarketAndIntervalAndTimestampBetweenOrderByTimestampAsc(
+            market = market,
+            interval = "day",
+            startTimestamp = startTimestamp,
+            endTimestamp = endTimestamp
+        )
+
+        if (historyEntities.size < MIN_DATA_POINTS) {
+            throw IllegalStateException("데이터 부족: ${historyEntities.size}개 (최소 ${MIN_DATA_POINTS}개 필요)")
+        }
+
+        val candles = historyEntities.map { it.toCandle() }
+
+        // 2. 파라미터 그리드 설정 (기본값)
+        val grid = parameterGrid ?: mapOf(
+            "bollingerPeriod" to listOf(20, 30, 50),
+            "bollingerStdDev" to listOf(1.5, 2.0, 2.5),
+            "minBreakoutVolumeRatio" to listOf(1.2, 1.5, 2.0)
+        )
+
+        // 3. Walk-Forward 윈도우 생성
+        val windows = createWalkForwardWindows(candles)
+        log.info("생성된 윈도우: ${windows.size}개")
+
+        val windowResults = mutableListOf<WalkForwardWindowResult>()
+        var inSampleSharpeSum = 0.0
+        var outOfSampleSharpeSum = 0.0
+
+        // 4. 각 윈도우 분석
+        for ((index, window) in windows.withIndex()) {
+            log.info("--- Window ${index + 1}/${windows.size} ---")
+            log.info("학습: ${window.trainStartDate} ~ ${window.trainEndDate} (${window.trainCandles.size}개)")
+            log.info("테스트: ${window.testStartDate} ~ ${window.testEndDate} (${window.testCandles.size}개)")
+
+            try {
+                // In-sample 최적화
+                val inSampleResult = optimizeInSample(
+                    trainCandles = window.trainCandles,
+                    parameterGrid = grid
+                )
+
+                // Out-of-sample 테스트
+                val outOfSampleResult = testOutOfSample(
+                    testCandles = window.testCandles,
+                    bestParams = inSampleResult.bestParams
+                )
+
+                inSampleSharpeSum += inSampleResult.sharpeRatio
+                outOfSampleSharpeSum += outOfSampleResult.sharpeRatio
+
+                windowResults.add(
+                    WalkForwardWindowResult(
+                        windowIndex = index,
+                        trainPeriod = Pair(window.trainStartDate, window.trainEndDate),
+                        testPeriod = Pair(window.testStartDate, window.testEndDate),
+                        inSampleSharpe = inSampleResult.sharpeRatio,
+                        outOfSampleSharpe = outOfSampleResult.sharpeRatio,
+                        bestParams = inSampleResult.bestParams
+                    )
+                )
+
+                log.info("In-Sample Sharpe: ${String.format("%.3f", inSampleResult.sharpeRatio)}")
+                log.info("Out-of-Sample Sharpe: ${String.format("%.3f", outOfSampleResult.sharpeRatio)}")
+                log.info("최적 파라미터: ${inSampleResult.bestParams}")
+
+            } catch (e: Exception) {
+                log.warn("Window ${index + 1} 분석 실패: ${e.message}")
+            }
+        }
+
+        // 5. 종합 결과
+        val validWindows = windowResults.size
+        val avgInSampleSharpe = if (validWindows > 0) inSampleSharpeSum / validWindows else 0.0
+        val avgOutOfSampleSharpe = if (validWindows > 0) outOfSampleSharpeSum / validWindows else 0.0
+
+        // Sharpe Decay (과적합 지표)
+        val sharpeDecay = avgInSampleSharpe - avgOutOfSampleSharpe
+        val decayPercent = if (avgInSampleSharpe > 0) {
+            (sharpeDecay / avgInSampleSharpe) * 100
+        } else {
+            0.0
+        }
+
+        val result = WalkForwardAnalysisResult(
+            market = market,
+            strategyName = strategyName,
+            totalWindows = windows.size,
+            validWindows = validWindows,
+            avgInSampleSharpe = avgInSampleSharpe,
+            avgOutOfSampleSharpe = avgOutOfSampleSharpe,
+            sharpeDecay = sharpeDecay,
+            decayPercent = decayPercent,
+            isOverfitted = decayPercent > 30.0,  // 30% 이상 decay = 과적합
+            windowResults = windowResults
+        )
+
+        log.info("""
+            === Walk-Forward 결과 ===
+            유효 윈도우: ${validWindows}/${windows.size}
+            In-Sample 평균 Sharpe: ${String.format("%.3f", avgInSampleSharpe)}
+            Out-of-Sample 평균 Sharpe: ${String.format("%.3f", avgOutOfSampleSharpe)}
+            Sharpe Decay: ${String.format("%.3f", sharpeDecay)} (${String.format("%.1f", decayPercent)}%)
+            과적합 여부: ${if (result.isOverfitted) "⚠️ YES (30%+ decay)" else "✓ NO"}
+            ========================
+        """.trimIndent())
+
+        return result
+    }
+
+    /**
+     * Walk-Forward 윈도우 생성
+     */
+    private fun createWalkForwardWindows(candles: List<Candle>): List<SimpleWalkForwardWindow> {
+        if (candles.isEmpty()) return emptyList()
+
+        val windows = mutableListOf<SimpleWalkForwardWindow>()
+        val dates = candles.map { it.timestamp.toLocalDate() }.sorted()
+        val firstDate = dates.first()
+        val lastDate = dates.last()
+
+        var currentTestStart = firstDate.plusMonths(TRAIN_PERIOD_MONTHS.toLong())
+
+        while (currentTestStart.plusDays(TEST_PERIOD_DAYS.toLong()) <= lastDate) {
+            val trainStart = currentTestStart.minusMonths(TRAIN_PERIOD_MONTHS.toLong())
+            val trainEnd = currentTestStart.minusDays(1)
+            val testEnd = currentTestStart.plusDays((TEST_PERIOD_DAYS - 1).toLong())
+
+            // 필터링
+            val trainCandles = candles.filter {
+                val date = it.timestamp.toLocalDate()
+                date >= trainStart && date <= trainEnd
+            }
+            val testCandles = candles.filter {
+                val date = it.timestamp.toLocalDate()
+                date >= currentTestStart && date <= testEnd
+            }
+
+            if (trainCandles.size >= MIN_DATA_POINTS && testCandles.size >= 5) {
+                windows.add(
+                    SimpleWalkForwardWindow(
+                        trainStartDate = trainStart,
+                        trainEndDate = trainEnd,
+                        testStartDate = currentTestStart,
+                        testEndDate = testEnd,
+                        trainCandles = trainCandles,
+                        testCandles = testCandles
+                    )
+                )
+            }
+
+            currentTestStart = currentTestStart.plusDays(STEP_DAYS.toLong())
+        }
+
+        return windows
+    }
+
+    /**
+     * In-sample 최적화
+     */
+    private fun optimizeInSample(
+        trainCandles: List<Candle>,
+        parameterGrid: Map<String, List<*>>
+    ): InSampleOptimizationResult {
+        val combinations = generateCombinations(parameterGrid)
+
+        var bestSharpe = Double.NEGATIVE_INFINITY
+        var bestParams: Map<String, Any> = emptyMap()
+
+        for (params in combinations) {
+            try {
+                val strategy = DynamicBreakoutStrategy(
+                    bollingerPeriod = params["bollingerPeriod"] as Int,
+                    bollingerStdDev = params["bollingerStdDev"] as Double,
+                    minBreakoutVolumeRatio = params["minBreakoutVolumeRatio"] as Double,
+                    positionSizeKrw = tradingProperties.orderAmountKrw.toDouble()
+                )
+
+                val result = simulator.simulate(
+                    strategy = strategy,
+                    historicalData = trainCandles,
+                    initialCapital = 1_000_000.0,
+                    commissionRate = tradingProperties.feeRate.toDouble()
+                )
+
+                if (result.sharpeRatio > bestSharpe) {
+                    bestSharpe = result.sharpeRatio
+                    bestParams = params
+                }
+            } catch (e: Exception) {
+                // 파라미터 조합 실패 시 스킵
+            }
+        }
+
+        return InSampleOptimizationResult(
+            bestParams = bestParams,
+            sharpeRatio = bestSharpe
+        )
+    }
+
+    /**
+     * Out-of-sample 테스트
+     */
+    private fun testOutOfSample(
+        testCandles: List<Candle>,
+        bestParams: Map<String, Any>
+    ): OutOfSampleTestResult {
+        val strategy = DynamicBreakoutStrategy(
+            bollingerPeriod = bestParams["bollingerPeriod"] as Int,
+            bollingerStdDev = bestParams["bollingerStdDev"] as Double,
+            minBreakoutVolumeRatio = bestParams["minBreakoutVolumeRatio"] as Double,
+            positionSizeKrw = tradingProperties.orderAmountKrw.toDouble()
+        )
+
+        val result = simulator.simulate(
+            strategy = strategy,
+            historicalData = testCandles,
+            initialCapital = 1_000_000.0,
+            commissionRate = tradingProperties.feeRate.toDouble()
+        )
+
+        return OutOfSampleTestResult(
+            sharpeRatio = result.sharpeRatio,
+            totalReturn = result.totalReturn,
+            totalTrades = result.totalTrades
+        )
+    }
+
+    /**
+     * Walk-Forward 윈도우 (간이)
+     */
+    private data class SimpleWalkForwardWindow(
+        val trainStartDate: LocalDate,
+        val trainEndDate: LocalDate,
+        val testStartDate: LocalDate,
+        val testEndDate: LocalDate,
+        val trainCandles: List<Candle>,
+        val testCandles: List<Candle>
+    )
 }
+
+/**
+ * Walk-Forward 분석 결과
+ */
+data class WalkForwardAnalysisResult(
+    val market: String,
+    val strategyName: String,
+    val totalWindows: Int,
+    val validWindows: Int,
+    val avgInSampleSharpe: Double,
+    val avgOutOfSampleSharpe: Double,
+    val sharpeDecay: Double,
+    val decayPercent: Double,
+    val isOverfitted: Boolean,
+    val windowResults: List<WalkForwardWindowResult>
+)
+
+/**
+ * Walk-Forward 윈도우 결과
+ */
+data class WalkForwardWindowResult(
+    val windowIndex: Int,
+    val trainPeriod: Pair<LocalDate, LocalDate>,
+    val testPeriod: Pair<LocalDate, LocalDate>,
+    val inSampleSharpe: Double,
+    val outOfSampleSharpe: Double,
+    val bestParams: Map<String, Any>
+)
+
+/**
+ * In-sample 최적화 결과
+ */
+data class InSampleOptimizationResult(
+    val bestParams: Map<String, Any>,
+    val sharpeRatio: Double
+)
+
+/**
+ * Out-of-sample 테스트 결과
+ */
+data class OutOfSampleTestResult(
+    val sharpeRatio: Double,
+    val totalReturn: Double,
+    val totalTrades: Int
+)
