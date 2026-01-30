@@ -77,13 +77,21 @@ object PositionHelper {
 
     /**
      * 청산 가능 여부 체크 (중복 청산 방지)
+     *
+     * [버그 수정] CLOSING 상태에서도 백오프 경과 후 재시도 허용
+     * 기존: CLOSING 상태면 항상 false 반환 (재시도 불가능)
+     * 수정: 백오프 시간 경과 시 true 반환 (재시도 가능)
      */
     fun canClosePosition(
         status: String,
         lastCloseAttempt: Instant?,
         backoffSeconds: Long
     ): Boolean {
-        if (status == "CLOSING") return false
+        if (status == "CLOSING") {
+            val lastAttempt = lastCloseAttempt ?: return false
+            val elapsed = Duration.between(lastAttempt, Instant.now()).seconds
+            return elapsed >= backoffSeconds
+        }
 
         if (lastCloseAttempt != null) {
             val elapsed = Duration.between(lastCloseAttempt, Instant.now()).seconds
