@@ -599,14 +599,16 @@ class VolumeSurgeEngine(
             return
         }
 
-        // 3. 트레일링 스탑 체크
-        if (pnlPercent >= properties.trailingStopTrigger) {
+        // 3. 트레일링 스탑 체크 (익절 도달 이후에만 활성화)
+        // NOTE: 익절 도달 후에만 트레일링으로 보호
+        if (pnlPercent >= properties.trailingStopTrigger && pnlPercent >= takeProfitPercent) {
+            // 익절 도달: 트레일링으로 보호
             if (!position.trailingActive) {
                 position.trailingActive = true
                 position.highestPrice = currentPrice
                 highestPrices[position.id!!] = currentPrice
                 tradeRepository.save(position)
-                log.info("[$market] 트레일링 스탑 활성화 (수익률: ${String.format("%.2f", pnlPercent)}%)")
+                log.info("[$market] 트레일링 스탑 활성화 (익절 도달 후 수익률: ${String.format("%.2f", pnlPercent)}%)")
             } else {
                 val highestPrice = highestPrices.getOrDefault(position.id!!, currentPrice)
                 if (currentPrice > highestPrice) {
@@ -617,7 +619,7 @@ class VolumeSurgeEngine(
 
                 val trailingStopPrice = highestPrice * (1 - properties.trailingStopOffset / 100)
                 if (currentPrice <= trailingStopPrice) {
-                    closePosition(position, currentPrice, "TRAILING")
+                    closePosition(position, currentPrice, "TRAILING_PROFIT")
                     return
                 }
             }

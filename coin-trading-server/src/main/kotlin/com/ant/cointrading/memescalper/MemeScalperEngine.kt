@@ -576,6 +576,7 @@ class MemeScalperEngine(
         }
 
         // 7. 익절 체크 (수수료 0.08% 고려 - 최소 0.1% 이상 수익 시에만)
+        // NOTE: 익절 체크가 트레일링보다 우선되어야 함
         if (pnlPercent >= properties.takeProfitPercent && pnlPercent > MIN_PROFIT_PERCENT) {
             closePosition(position, currentPrice, "TAKE_PROFIT")
             return
