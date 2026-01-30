@@ -349,8 +349,15 @@ class PendingOrderManager(
         // CircuitBreaker에 성공 기록
         circuitBreaker.recordExecutionSuccess(order.market)
 
-        if ((order.slippage ?: 0.0) > 0) {
-            circuitBreaker.recordSlippage(order.market, order.slippage!!)
+        // 슬리피지 기록 (BUY: 양수, SELL: 음수가 불리한 슬리피지)
+        val slippage = order.slippage ?: 0.0
+        val isBadSlippage = when (order.side) {
+            "BUY" -> slippage > 0      // 매수: 예상가보다 비싸게 체결
+            "SELL" -> slippage < 0     // 매도: 예상가보다 싸게 체결
+            else -> false
+        }
+        if (isBadSlippage) {
+            circuitBreaker.recordSlippage(order.market, kotlin.math.abs(slippage))
         }
     }
 
