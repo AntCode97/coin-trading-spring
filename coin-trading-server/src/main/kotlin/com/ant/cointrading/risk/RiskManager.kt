@@ -221,12 +221,13 @@ class RiskManager(
             stats.totalProfit / BigDecimal(stats.winCount)
         } else BigDecimal.ZERO
 
+        // [버그 수정] totalLoss는 음수이므로 절댈값 처리 필요
         val avgLoss = if (stats.lossCount > 0) {
-            stats.totalLoss / BigDecimal(stats.lossCount)
+            stats.totalLoss.abs() / BigDecimal(stats.lossCount)
         } else BigDecimal.ZERO
 
-        val profitFactor = if (stats.totalLoss > BigDecimal.ZERO) {
-            (stats.totalProfit / stats.totalLoss).toDouble()
+        val profitFactor = if (avgLoss > BigDecimal.ZERO) {
+            (avgWin / avgLoss).toDouble()
         } else if (stats.totalProfit > BigDecimal.ZERO) {
             Double.MAX_VALUE
         } else {
