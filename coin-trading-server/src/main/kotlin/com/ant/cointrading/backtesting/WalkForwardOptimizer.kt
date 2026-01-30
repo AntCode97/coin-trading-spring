@@ -200,7 +200,7 @@ class WalkForwardOptimizer(
                 val result = simulator.simulate(
                     strategy = strategy,
                     historicalData = candles,
-                    initialCapital = 1_000_000.0,
+                    initialCapital = 100_000.0,  // 실전 1만원의 10배 (백테스트 합리적 크기)
                     commissionRate = tradingProperties.feeRate.toDouble()
                 )
 
@@ -458,7 +458,7 @@ class WalkForwardOptimizer(
             avgOutOfSampleSharpe = avgOutOfSampleSharpe,
             sharpeDecay = sharpeDecay,
             decayPercent = decayPercent,
-            isOverfitted = decayPercent > 30.0,  // 30% 이상 decay = 과적합
+            isOverfitted = decayPercent > 20.0,  // Renaissance 기준: 20% 이상 decay = 과적합
             windowResults = windowResults
         )
 
@@ -468,7 +468,7 @@ class WalkForwardOptimizer(
             In-Sample 평균 Sharpe: ${String.format("%.3f", avgInSampleSharpe)}
             Out-of-Sample 평균 Sharpe: ${String.format("%.3f", avgOutOfSampleSharpe)}
             Sharpe Decay: ${String.format("%.3f", sharpeDecay)} (${String.format("%.1f", decayPercent)}%)
-            과적합 여부: ${if (result.isOverfitted) "⚠️ YES (30%+ decay)" else "✓ NO"}
+            과적합 여부: ${if (result.isOverfitted) "⚠️ YES (20%+ decay, Renaissance 기준)" else "✓ NO"}
             ========================
         """.trimIndent())
 
@@ -505,7 +505,9 @@ class WalkForwardOptimizer(
                 date >= currentTestStart && date <= testEnd
             }
 
-            if (trainCandles.size >= MIN_DATA_POINTS && testCandles.size >= 5) {
+            // Jim Simons 기준: 테스트 기간에 충분한 데이터 필요
+            // 7일 테스트 = 최소 7개 캔들 (하루에 1개 이상)
+            if (trainCandles.size >= MIN_DATA_POINTS && testCandles.size >= TEST_PERIOD_DAYS) {
                 windows.add(
                     SimpleWalkForwardWindow(
                         trainStartDate = trainStart,
@@ -548,7 +550,7 @@ class WalkForwardOptimizer(
                 val result = simulator.simulate(
                     strategy = strategy,
                     historicalData = trainCandles,
-                    initialCapital = 1_000_000.0,
+                    initialCapital = 100_000.0,  // 실전 1만원의 10배 (백테스트 합리적 크기)
                     commissionRate = tradingProperties.feeRate.toDouble()
                 )
 
@@ -584,7 +586,7 @@ class WalkForwardOptimizer(
         val result = simulator.simulate(
             strategy = strategy,
             historicalData = testCandles,
-            initialCapital = 1_000_000.0,
+            initialCapital = 100_000.0,  // 실전 1만원의 10배 (백테스트 합리적 크기)
             commissionRate = tradingProperties.feeRate.toDouble()
         )
 
