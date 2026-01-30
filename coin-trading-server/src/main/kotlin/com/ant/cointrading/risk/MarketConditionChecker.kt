@@ -275,14 +275,15 @@ class MarketConditionChecker(
 
     /**
      * API 상태 확인 (시간 기반 에러 카운터 리셋)
+     * [버그 수정] 변수명 혼동 수정 (lastErrorTime → lastSuccessTime)
      */
     private fun checkApiHealth(market: String): ApiHealthCheck {
         val errorCount = apiErrorCounts[market] ?: 0
-        val lastErrorTime = lastApiSuccess[market]
+        val lastSuccessTime = lastApiSuccess[market]
 
         // 마지막 성공 후 ERROR_RESET_MINUTES 경과 시 에러 카운터 리셋
-        if (errorCount > 0 && lastErrorTime != null) {
-            val minutesSinceLastSuccess = ChronoUnit.MINUTES.between(lastErrorTime, Instant.now())
+        if (errorCount > 0 && lastSuccessTime != null) {
+            val minutesSinceLastSuccess = ChronoUnit.MINUTES.between(lastSuccessTime, Instant.now())
             if (minutesSinceLastSuccess >= ERROR_RESET_MINUTES) {
                 apiErrorCounts[market] = 0
                 log.info("[$market] API 에러 카운터 리셋 (${ERROR_RESET_MINUTES}분 경과)")

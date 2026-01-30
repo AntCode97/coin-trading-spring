@@ -170,8 +170,9 @@ class CircuitBreaker(
         } else {
             // 수익 시 연속 손실 카운터만 리셋
             state.consecutiveLosses = 0
-            // 실행 성공이므로 실행 실패 카운터도 리셋
+            // 실행 성공이므로 실행 실패/슬리피지 카운터도 리셋
             state.consecutiveExecutionFailures = 0
+            state.consecutiveHighSlippage = 0
         }
     }
 
@@ -190,11 +191,13 @@ class CircuitBreaker(
     }
 
     /**
-     * 주문 실행 성공 기록 (NEW) - 실행 실패 카운터 리셋
+     * 주문 실행 성공 기록 (NEW) - 실행 실패/슬리피지 카운터 리셋
+     * [버그 수정] consecutiveHighSlippage도 리셋 (기존 실행 실패만 리셋)
      */
     fun recordExecutionSuccess(market: String) {
         val state = circuitStates[market] ?: return
         state.consecutiveExecutionFailures = 0
+        state.consecutiveHighSlippage = 0
     }
 
     /**

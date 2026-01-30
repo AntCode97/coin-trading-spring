@@ -29,6 +29,11 @@ class GlobalPositionManager(
 ) {
     private val log = LoggerFactory.getLogger(javaClass)
 
+    // [버그 수정] 하드코딩된 마켓 목록 상수로 추출 (중복 제거)
+    companion object {
+        val TRADING_ENGINE_MARKETS = listOf("KRW-BTC", "KRW-ETH", "KRW-XRP", "KRW-SOL")
+    }
+
     // 동시성 제어를 위한 락
     private val lock = ReentrantLock()
 
@@ -168,18 +173,18 @@ class GlobalPositionManager(
 
     /**
      * 전체 열린 포지션 수 (모든 마켓, 모든 엔진 합산)
+     * [버그 수정] 하드코딩된 마켓 목록을 상수로 변경 (중복 제거)
      */
     fun getTotalOpenPositions(): Int {
         val volumeSurgeCount = volumeSurgeRepository.countByStatus("OPEN").toInt()
         val memeScalperCount = memeScalperRepository.countByStatus("OPEN")
 
         // TradingEngine은 BUY 포지션 수
-        val tradesCount = tradeRepository.findLastBuyByMarket("KRW-BTC")?.let { 1 } ?: 0
-        val tradesCount2 = tradeRepository.findLastBuyByMarket("KRW-ETH")?.let { 1 } ?: 0
-        val tradesCount3 = tradeRepository.findLastBuyByMarket("KRW-XRP")?.let { 1 } ?: 0
-        val tradesCount4 = tradeRepository.findLastBuyByMarket("KRW-SOL")?.let { 1 } ?: 0
+        val tradesCount = TRADING_ENGINE_MARKETS.count { market ->
+            tradeRepository.findLastBuyByMarket(market) != null
+        }
 
-        return volumeSurgeCount + memeScalperCount + tradesCount + tradesCount2 + tradesCount3 + tradesCount4
+        return volumeSurgeCount + memeScalperCount + tradesCount
     }
 
     /**
@@ -216,17 +221,15 @@ class GlobalPositionManager(
 
     /**
      * 포지션 상태 요약 (모니터링용)
+     * [버그 수정] 하드코딩된 마켓 목록을 상수로 변경 (중복 제거)
      */
     fun getPositionSummary(): Map<String, Any> {
         val volumeSurgePositions = volumeSurgeRepository.findByStatus("OPEN")
         val memeScalperPositions = memeScalperRepository.findByStatus("OPEN")
 
         // TradingEngine 포지션 (모든 마켓의 마지막 BUY)
-        val tradesPositions = mutableListOf<String>()
-        listOf("KRW-BTC", "KRW-ETH", "KRW-XRP", "KRW-SOL").forEach { market ->
-            if (tradeRepository.findLastBuyByMarket(market) != null) {
-                tradesPositions.add(market)
-            }
+        val tradesPositions = TRADING_ENGINE_MARKETS.filter { market ->
+            tradeRepository.findLastBuyByMarket(market) != null
         }
 
         val byMarket = mutableMapOf<String, MutableList<String>>()
