@@ -218,6 +218,12 @@ class GridStrategy(
         return GridState(basePrice, gridLevels)
     }
 
+    /**
+     * 트리거된 레벨 찾기
+     * [버그 수정] SELL 레벨 threshold 역설정 수정
+     * - 기존: SELL에서 subtract(threshold) 사용 (역설정으로 항상 트리거됨)
+     * - 수정: SELL에서 add(threshold) 또는 price 그대로 사용
+     */
     private fun findTriggeredLevel(state: GridState, currentPrice: BigDecimal): GridLevel? {
         // 가장 가까운 미체결 레벨 찾기
         return state.levels
@@ -225,8 +231,10 @@ class GridStrategy(
             .filter { level ->
                 val threshold = level.price.multiply(BigDecimal("0.001")) // 0.1% 허용 오차
                 when (level.type) {
+                    // BUY: 가격이 레벨 이하로 떨어지면 트리거
                     SignalAction.BUY -> currentPrice <= level.price.add(threshold)
-                    SignalAction.SELL -> currentPrice >= level.price.subtract(threshold)
+                    // SELL: 가격이 레벨 이상으로 상승하면 트리거 (threshold는 상방 여유)
+                    SignalAction.SELL -> currentPrice >= level.price.add(threshold)
                     else -> false
                 }
             }

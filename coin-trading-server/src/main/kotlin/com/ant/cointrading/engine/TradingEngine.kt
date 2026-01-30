@@ -500,6 +500,9 @@ class TradingEngine(
 
     /**
      * 포지션 계산
+     * [버그 수정] 마켓 형식을 KRW-BTC, BTC_KRW 등 다양한 형식 지원
+     * 기존: _ 분할만 지원 (BTC_KRW만 정상 작동)
+     * 수정: PositionHelper.extractCoinSymbol 사용으로 모든 형식 지원
      */
     private fun calculatePosition(market: String, currentPrice: BigDecimal): Position? {
         val balances = try {
@@ -508,10 +511,9 @@ class TradingEngine(
             return null
         }
 
-        val parts = market.split("_")
-        if (parts.size != 2) return null
-
-        val coinBalance = balances.find { it.currency == parts[0] } ?: return null
+        // 코인 심변 추출 (KRW-BTC, BTC_KRW, BTC_KRW 등 모든 형식 지원)
+        val coinSymbol = PositionHelper.extractCoinSymbol(market)
+        val coinBalance = balances.find { it.currency == coinSymbol } ?: return null
         val quantity = coinBalance.balance
         if (quantity <= BigDecimal.ZERO) return null
 
