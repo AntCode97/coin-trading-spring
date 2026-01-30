@@ -1,8 +1,11 @@
 package com.ant.cointrading.regime
 
 import com.ant.cointrading.model.Candle
+import com.ant.cointrading.model.MarketRegime
+import com.ant.cointrading.model.RegimeAnalysis
 import org.slf4j.LoggerFactory
 import org.springframework.stereotype.Component
+import java.time.Instant
 import kotlin.math.abs
 import kotlin.math.exp
 import kotlin.math.ln
@@ -355,7 +358,31 @@ class RegimeModel(
         // 추가: Regime-dependent Kelly
         val regimeKelly = calculateRegimeDependentKelly(candles)
 
+        // 원래 RegimeAnalysis 반환 (확장 필드는 별도 제공)
         return RegimeAnalysis(
+            regime = baseAnalysis.regime,
+            confidence = baseAnalysis.confidence,
+            adx = baseAnalysis.adx,
+            atr = baseAnalysis.atr,
+            atrPercent = baseAnalysis.atrPercent,
+            trendDirection = baseAnalysis.trendDirection,
+            timestamp = baseAnalysis.timestamp
+        )
+    }
+
+    /**
+     * 확장 레짐 분석 (추가 정보 포함)
+     */
+    fun analyzeExtended(candles: List<Candle>): ExtendedRegimeAnalysis {
+        val baseAnalysis = hmmDetector.detect(candles)
+
+        // 추가: 레짐 안정성 점수
+        val stabilityScore = calculateRegimeStability(candles)
+
+        // 추가: Regime-dependent Kelly
+        val regimeKelly = calculateRegimeDependentKelly(candles)
+
+        return ExtendedRegimeAnalysis(
             regime = baseAnalysis.regime,
             confidence = baseAnalysis.confidence,
             adx = baseAnalysis.adx,
@@ -495,15 +522,15 @@ class RegimeModel(
 }
 
 /**
- * 레짐 분석 결과 (확장)
+ * 확장 레짐 분석 (Jim Simons 추가 정보)
  */
-data class RegimeAnalysis(
+data class ExtendedRegimeAnalysis(
     val regime: com.ant.cointrading.model.MarketRegime,
     val confidence: Double,
     val adx: Double?,
     val atr: Double?,
     val atrPercent: Double?,
-    val trendDirection: String?,
+    val trendDirection: Int,
     val timestamp: java.time.Instant,
     val stabilityScore: Double = 0.5,
     val regimeKelly: RegimeKellyRecommendation? = null

@@ -13,7 +13,9 @@ import com.fasterxml.jackson.databind.ObjectMapper
 import org.slf4j.LoggerFactory
 import org.springframework.scheduling.annotation.Scheduled
 import org.springframework.stereotype.Component
+import java.time.Instant
 import java.time.LocalDate
+import java.time.ZoneId
 import kotlin.math.sqrt
 
 /**
@@ -480,7 +482,9 @@ class WalkForwardOptimizer(
         if (candles.isEmpty()) return emptyList()
 
         val windows = mutableListOf<SimpleWalkForwardWindow>()
-        val dates = candles.map { it.timestamp.toLocalDate() }.sorted()
+        val dates = candles.map {
+            it.timestamp.atZone(ZoneId.systemDefault()).toLocalDate()
+        }.sorted()
         val firstDate = dates.first()
         val lastDate = dates.last()
 
@@ -493,11 +497,11 @@ class WalkForwardOptimizer(
 
             // 필터링
             val trainCandles = candles.filter {
-                val date = it.timestamp.toLocalDate()
+                val date = it.timestamp.atZone(ZoneId.systemDefault()).toLocalDate()
                 date >= trainStart && date <= trainEnd
             }
             val testCandles = candles.filter {
-                val date = it.timestamp.toLocalDate()
+                val date = it.timestamp.atZone(ZoneId.systemDefault()).toLocalDate()
                 date >= currentTestStart && date <= testEnd
             }
 
