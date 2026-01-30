@@ -2,11 +2,13 @@ package com.ant.cointrading.controller
 
 import com.ant.cointrading.repository.MemeScalperTradeRepository
 import com.ant.cointrading.repository.VolumeSurgeTradeRepository
+import com.ant.cointrading.stats.SharpeRatioCalculator
 import org.springframework.web.bind.annotation.*
 import java.math.BigDecimal
 import java.time.Instant
 import java.time.LocalDate
 import java.time.ZoneId
+import java.time.temporal.ChronoUnit
 
 /**
  * 실전 성과 대시보드 (Jim Simons 스타일 실시간 모니터링)
@@ -108,7 +110,7 @@ class PerformanceDashboardController(
     }
 
     /**
-     * 전략별 통계 계산
+     * 전략별 통계 계산 (Jim Simons 스타일)
      */
     private fun calculateStrategyStats(
         strategyName: String,
@@ -142,19 +144,14 @@ class PerformanceDashboardController(
         val avgWin = if (winningPnls.isNotEmpty()) winningPnls.average() else 0.0
         val avgLoss = if (losingPnls.isNotEmpty()) losingPnls.average() else 0.0
 
-        // Sharpe Ratio (간이 계산, 연율화 가정)
-        val avgReturn = if (totalTrades > 0) pnls.average() / 10000.0 else 0.0  // 1만원 기준
-        val stdReturn = if (pnls.size > 1) {
-            val returns = pnls.map { it / 10000.0 }
-            kotlin.math.sqrt(returns.map { (it - avgReturn) * (it - avgReturn) }.average())
-        } else {
-            0.0
-        }
-        val sharpeRatio = if (stdReturn > 0) {
-            avgReturn / stdReturn * kotlin.math.sqrt(252.0)  // 연율화
-        } else {
-            0.0
-        }
+        // Sharpe Ratio (암호화폐 적용: 자기상관 보정)
+        val capital = 10000.0  // 1만원 기준
+        val periodDays = calculatePeriodDays(trades)
+        val sharpeRatio = SharpeRatioCalculator.calculate(
+            pnls = pnls,
+            capital = capital,
+            periodDays = periodDays
+        )
 
         // 최근 7일 거래
         val sevenDaysAgo = Instant.now().minusSeconds(7 * 24 * 60 * 60)
@@ -172,10 +169,37 @@ class PerformanceDashboardController(
             "avgWin" to String.format("%.0f", avgWin),
             "avgLoss" to String.format("%.0f", avgLoss),
             "sharpeRatio" to String.format("%.2f", sharpeRatio),
+            "sharpeGrade" to SharpeRatioCalculator.getGrade(sharpeRatio),
+            "sharpeInterpretation" to SharpeRatioCalculator.interpret(sharpeRatio, totalTrades),
             "recent7DaysPnl" to String.format("%.0f", recentPnl),
             "recent7DaysTrades" to recentTrades.size,
             "isValidForLive" to (totalTrades >= 100 && sharpeRatio > 1.0 && winRate >= 0.5)
         )
+    }
+
+    /**
+     * 거래 기간 계산 (일)
+     */
+    private fun calculatePeriodDays(trades: List<Any>): Int {
+        if (trades.isEmpty()) return 1
+
+        val timestamps = trades.mapNotNull { getEntryTime(it) }.sorted()
+
+        if (timestamps.size < 2) return 1
+
+        val first = timestamps.first()
+        val last = timestamps.last()
+        val days = ChronoUnit.DAYS.between(first, last).toInt()
+
+        return maxOf(days, 1)
+    }
+
+    private fun getEntryTime(trade: Any): Instant? {
+        return when (trade) {
+            is com.ant.cointrading.repository.MemeScalperTradeEntity -> trade.entryTime
+            is com.ant.cointrading.repository.VolumeSurgeTradeEntity -> trade.entryTime
+            else -> null
+        }
     }
 
     /**

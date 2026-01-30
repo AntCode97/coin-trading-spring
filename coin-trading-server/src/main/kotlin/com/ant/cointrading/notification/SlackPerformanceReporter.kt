@@ -2,14 +2,15 @@ package com.ant.cointrading.notification
 
 import com.ant.cointrading.repository.MemeScalperTradeRepository
 import com.ant.cointrading.repository.VolumeSurgeTradeRepository
+import com.ant.cointrading.stats.SharpeRatioCalculator
 import org.slf4j.LoggerFactory
 import org.springframework.scheduling.annotation.Scheduled
 import org.springframework.stereotype.Component
 import java.time.Instant
+import java.time.LocalDate
 import java.time.ZoneId
-import java.time.format.DateTimeFormatter
+import java.time.temporal.ChronoUnit
 import kotlin.math.abs
-import kotlin.math.sqrt
 
 /**
  * 실시간 성과 보고 (Jim Simons 스타일)
@@ -119,7 +120,7 @@ class SlackPerformanceReporter(
     }
 
     /**
-     * 전략별 통계 계산
+     * 전략별 통계 계산 (Jim Simons 스타일)
      */
     private fun calculateStrategyStats(
         strategyName: String,
@@ -152,24 +153,23 @@ class SlackPerformanceReporter(
         val totalPnl = pnls.sum()
         val avgPnl = pnls.average()
 
-        // Sharpe Ratio (연율화 가정)
-        val avgReturn = avgPnl / 10000.0  // 1만원 기준
-        val stdReturn = if (pnls.size > 1) {
-            val returns = pnls.map { it / 10000.0 }
-            sqrt(returns.map { (it - avgReturn) * (it - avgReturn) }.average())
-        } else {
-            0.0
-        }
-        val sharpeRatio = if (stdReturn > 0) {
-            avgReturn / stdReturn * sqrt(252.0)
-        } else {
-            0.0
-        }
+        // 기본 자본 (포지션 사이즈)
+        val capital = 10000.0  // 1만원 기준
+
+        // 관측 기간 계산 (첫 거래 ~ 마지막 거래)
+        val periodDays = calculatePeriodDays(trades)
+
+        // Sharpe Ratio (암호화폐 적용: 자기상관 보정)
+        val sharpeRatio = SharpeRatioCalculator.calculate(
+            pnls = pnls,
+            capital = capital,
+            periodDays = periodDays
+        )
 
         // Kelly Criterion
         val avgWin = pnls.filter { it > 0 }.average()
         val avgLoss = abs(pnls.filter { it < 0 }.average())
-        val kellyFraction = if (avgLoss > 0 && totalTrades >= 30) {
+        val kellyFraction = if (avgLoss > 0 && totalTrades >= 100) {
             val b = avgWin / avgLoss
             val p = winRate
             val q = 1.0 - winRate
@@ -188,6 +188,30 @@ class SlackPerformanceReporter(
             sharpeRatio = sharpeRatio,
             kellyFraction = kellyFraction
         )
+    }
+
+    /**
+     * 거래 기간 계산 (일)
+     */
+    private fun calculatePeriodDays(trades: List<Any>): Int {
+        if (trades.isEmpty()) return 1
+
+        val timestamps = trades.mapNotNull {
+            when (it) {
+                is com.ant.cointrading.repository.MemeScalperTradeEntity -> it.entryTime
+                is com.ant.cointrading.repository.VolumeSurgeTradeEntity -> it.entryTime
+                else -> null
+            }
+        }.sorted()
+
+        if (timestamps.size < 2) return 1
+
+        val first = timestamps.first()
+        val last = timestamps.last()
+        val days = ChronoUnit.DAYS.between(first, last).toInt()
+
+        // 최소 1일
+        return maxOf(days, 1)
     }
 
     /**
