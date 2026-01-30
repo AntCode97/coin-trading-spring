@@ -84,7 +84,8 @@ class VolumeSurgeAnalyzer(
         val rsi = RsiCalculator.calculate(closes, RSI_PERIOD)
 
         // RSI 다이버전스 탐지 (quant-trading 스킬: 다이버전스 = 반전 신호)
-        val divergenceResult = divergenceDetector.detectRsiDivergence(closes, closes.map { RsiCalculator.calculate(closes) })
+        val rsiValues = RsiCalculator.calculateAll(closes)
+        val divergenceResult = divergenceDetector.detectRsiDivergence(closes, rsiValues)
 
         // MACD 계산 (시그널 + 히스토그램 반전)
         val macdResult = calculateMacdWithHistogram(closes)

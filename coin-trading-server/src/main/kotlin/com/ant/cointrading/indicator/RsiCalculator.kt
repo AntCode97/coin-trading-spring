@@ -48,6 +48,50 @@ object RsiCalculator {
     fun calculate(closes: List<Double>): Double = calculate(closes, 14)
 
     /**
+     * 각 시점별 RSI 계산 (다이버전스 탐지용)
+     *
+     * @param closes 종가 리스트 (오래된 순)
+     * @param period RSI 기간 (일반적으로 14)
+     * @return 각 시점별 RSI 값 리스트 (데이터 부족 시점 제외)
+     */
+    fun calculateAll(closes: List<Double>, period: Int = 14): List<Double> {
+        if (closes.size < period + 1) return emptyList()
+
+        val changes = closes.zipWithNext { a, b -> b - a }
+        val rsiValues = mutableListOf<Double>()
+
+        var avgGain = changes.take(period).filter { it > 0 }.sum() / period
+        var avgLoss = abs(changes.take(period).filter { it < 0 }.sum()) / period
+
+        // 초기 RSI (첫 번째 기간 완료 시점)
+        if (avgLoss == 0.0) {
+            rsiValues.add(100.0)
+        } else {
+            val rs = avgGain / avgLoss
+            rsiValues.add(100 - (100 / (1 + rs)))
+        }
+
+        // 이후 RSI (Wilder's Smoothing)
+        for (i in period until changes.size) {
+            val change = changes[i]
+            val gain = if (change > 0) change else 0.0
+            val loss = if (change < 0) abs(change) else 0.0
+
+            avgGain = (avgGain * (period - 1) + gain) / period
+            avgLoss = (avgLoss * (period - 1) + loss) / period
+
+            if (avgLoss == 0.0) {
+                rsiValues.add(100.0)
+            } else {
+                val rs = avgGain / avgLoss
+                rsiValues.add(100 - (100 / (1 + rs)))
+            }
+        }
+
+        return rsiValues
+    }
+
+    /**
      * 과매수/과매도 상태 판단
      *
      * @param rsi RSI 값
