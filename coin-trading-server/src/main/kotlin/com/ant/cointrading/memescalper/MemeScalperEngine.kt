@@ -558,20 +558,27 @@ class MemeScalperEngine(
             tradeRepository.save(position)
         }
 
-        // 5. 손절 체크 (손절은 최소 보유 시간 이후에만)
+        // 5. 익절 체크 (수수료 0.08% 고려 - 최소 0.1% 이상 수익 시에만)
+        // NOTE: 익절 체크가 손절/트레일링보다 우선되어야 함
+        if (pnlPercent >= properties.takeProfitPercent && pnlPercent > MIN_PROFIT_PERCENT) {
+            closePosition(position, currentPrice, "TAKE_PROFIT")
+            return
+        }
+
+        // 6. 손절 체크 (손절은 최소 보유 시간 이후에만)
         if (pnlPercent <= properties.stopLossPercent) {
             closePosition(position, currentPrice, "STOP_LOSS")
             return
         }
 
-        // 6. 트레일링 스탑 로직
+        // 7. 트레일링 스탑 로직 (익절 도달 이후에만 활성화)
         val triggerPercent = properties.trailingStopTrigger
         val offsetPercent = properties.trailingStopOffset
 
-        // 트레일링 활성화 조건: 수익이 trigger% 이상
-        if (!position.trailingActive && pnlPercent >= triggerPercent) {
+        // 트레일링 활성화 조건: 익절 도달 후 수익 유지
+        if (!position.trailingActive && pnlPercent >= triggerPercent && pnlPercent >= properties.takeProfitPercent) {
             position.trailingActive = true
-            log.info("[$market] 트레일링 스탑 활성화 (수익 ${String.format("%.2f", pnlPercent)}%)")
+            log.info("[$market] 트레일링 스탑 활성화 (익절 도달 후 수익률: ${String.format("%.2f", pnlPercent)}%)")
         }
 
         // 트레일링 중: 고점 대비 offset% 하락 시 청산
@@ -583,13 +590,6 @@ class MemeScalperEngine(
                 closePosition(position, currentPrice, "TRAILING_STOP")
                 return
             }
-        }
-
-        // 7. 익절 체크 (수수료 0.08% 고려 - 최소 0.1% 이상 수익 시에만)
-        // NOTE: 익절 체크가 트레일링보다 우선되어야 함
-        if (pnlPercent >= properties.takeProfitPercent && pnlPercent > MIN_PROFIT_PERCENT) {
-            closePosition(position, currentPrice, "TAKE_PROFIT")
-            return
         }
 
         // 8. 타임아웃 체크
