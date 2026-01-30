@@ -174,7 +174,9 @@ class PositionCloser(
     }
 
     companion object {
-        // 트레일링 고점 추적 (외부에서 관리됨)
+        // 트레일링 고점 추적 공유 맵
+        // 참고: 현재 VolumeSurgeEngine, MemeScalperEngine는 각자의 인스턴스 맵(highestPrices, peakPrices)을 사용
+        // 이 companion 객체 맵은 예비용으로 유지하며, 엔진들이 필요 시 공유 저장소로 활용 가능
         val highestPrices = ConcurrentHashMap<Long, Double>()
 
         /**
