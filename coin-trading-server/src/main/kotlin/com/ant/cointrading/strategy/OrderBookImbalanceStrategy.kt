@@ -202,6 +202,7 @@ class OrderBookImbalanceStrategy(
      * 양수 반환: 연속 양의 불균형 (매수 압력)
      * 음수 반환: 연속 음의 불균형 (매도 압력)
      * 0 반환: 혼재
+     * [버그 수정] recentImbalances.size 대신 CONSECUTIVE_CONFIRM_COUNT 사용으로 명확화
      */
     private fun checkConsecutiveDirection(history: List<ImbalancePoint>): Int {
         if (history.size < CONSECUTIVE_CONFIRM_COUNT) return 0
@@ -212,8 +213,8 @@ class OrderBookImbalanceStrategy(
         val allNegative = recentImbalances.all { it < 0 }
 
         return when {
-            allPositive -> recentImbalances.size
-            allNegative -> -recentImbalances.size
+            allPositive -> CONSECUTIVE_CONFIRM_COUNT
+            allNegative -> -CONSECUTIVE_CONFIRM_COUNT
             else -> 0
         }
     }
