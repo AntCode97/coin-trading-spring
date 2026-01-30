@@ -7,6 +7,7 @@ import com.ant.cointrading.repository.*
 import com.ant.cointrading.service.KeyValueService
 import com.ant.cointrading.service.ModelSelector
 import com.ant.cointrading.stats.TradeStatsCalculator
+import com.ant.cointrading.risk.KellyPositionSizer
 import com.ant.cointrading.util.DateTimeUtils.SEOUL_ZONE
 import com.ant.cointrading.util.DateTimeUtils.today
 import com.ant.cointrading.util.DateTimeUtils.todayRange
@@ -34,7 +35,8 @@ class VolumeSurgeReflector(
     private val keyValueService: KeyValueService,
     private val slackNotifier: SlackNotifier,
     private val reflectorTools: VolumeSurgeReflectorTools,
-    private val slackTools: SlackTools
+    private val slackTools: SlackTools,
+    private val kellyPositionSizer: KellyPositionSizer
 ) {
     private val log = LoggerFactory.getLogger(javaClass)
 
@@ -175,7 +177,7 @@ class VolumeSurgeReflector(
     }
 
     /**
-     * 사용자 프롬프트 생성
+     * 사용자 프롬프트 생성 (Jim Simons Kelly Criterion 추가)
      */
     private fun buildUserPrompt(stats: DailyStats, trades: List<VolumeSurgeTradeEntity>): String {
         val successCases = trades.filter { (it.pnlAmount ?: 0.0) > 0 }
@@ -185,6 +187,33 @@ class VolumeSurgeReflector(
         val failureCases = trades.filter { (it.pnlAmount ?: 0.0) <= 0 }
             .take(5)
             .joinToString("\n") { formatTradeCase(it, "실패") }
+
+        // Kelly Criterion 분석 (Jim Simons)
+        val closedTrades = trades.filter { it.status == "CLOSED" }
+        val kellyAnalysis = if (closedTrades.isNotEmpty()) {
+            val winRate = stats.winRate
+            val avgWin = closedTrades.filter { (it.pnlAmount ?: 0.0) > 0 }.map { it.pnlAmount!! }.average()
+            val avgLoss = kotlin.math.abs(closedTrades.filter { (it.pnlAmount ?: 0.0) < 0 }.map { it.pnlAmount!! }.average())
+
+            val kellyRec = when {
+                stats.totalTrades < 30 -> "최소 30건 거래 미달, Kelly 적용 불가"
+                winRate < 0.5 -> "승률 ${String.format("%.1f", winRate * 100)}% < 50%, Jim Simos: '베팅 중단'"
+                avgLoss == 0.0 -> "손실 데이터 없음"
+                else -> {
+                    val b = avgWin / avgLoss
+                    val f = (b * winRate - (1 - winRate)) / b
+                    "Kelly f* = ${String.format("%.2f", f * 100)}% (배당률 ${String.format("%.2f", b)}:1)"
+                }
+            }
+
+            """
+            === Kelly Criterion 분석 (Jim Simons) ===
+            $kellyRec
+
+            """
+        } else {
+            ""
+        }
 
         return """
             오늘 날짜: ${stats.date}
@@ -197,12 +226,21 @@ class VolumeSurgeReflector(
             승률: ${String.format("%.1f", stats.winRate * 100)}%
             총 손익: ${String.format("%.0f", stats.totalPnl)}원
             평균 보유시간: ${stats.avgHoldingMinutes?.let { String.format("%.1f", it) } ?: "N/A"}분
+            $kellyAnalysis
 
             === 성공 케이스 (최대 5건) ===
             $successCases
 
             === 실패 케이스 (최대 5건) ===
             $failureCases
+
+            === 분석 요청 ===
+            1. Kelly Criterion 상태 분석
+            2. 승률 50% 미만 시 파라미터 조정 제안
+               - 익절 목표 낮추기 (현재 ${properties.takeProfitPercent}%)
+               - 진입 조건 강화 (컨플루언스 최소 ${properties.minConfluenceScore}점)
+               - 거래량 비율 높이기 (현재 ${properties.minVolumeRatio}x)
+            3. R:R 비율 개선 제안 (현재 ${properties.takeProfitPercent / kotlin.math.abs(properties.stopLossPercent)}:1)
 
             위 데이터를 분석하고 도구를 사용하여:
             1. getTodayStats로 통계 확인
