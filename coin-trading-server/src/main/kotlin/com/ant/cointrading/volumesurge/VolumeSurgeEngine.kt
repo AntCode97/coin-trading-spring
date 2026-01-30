@@ -96,6 +96,9 @@ class VolumeSurgeEngine(
     // 트레일링 스탑 고점 추적
     private val highestPrices = ConcurrentHashMap<Long, Double>()
 
+    // 쿨다운 추적 (ABANDONED 재시도 타이밍용)
+    private val cooldowns = ConcurrentHashMap<String, Instant>()
+
     @PostConstruct
     fun init() {
         if (properties.enabled) {
@@ -521,6 +524,15 @@ class VolumeSurgeEngine(
                 log.error("[${position.market}] 청산 모니터링 오류: ${e.message}")
             }
         }
+
+        // ABANDONED 포지션 재시도 (10분마다 체크 - 빈번한 API 호출 방지)
+        val now = Instant.now()
+        val lastRetryCheckKey = "abandoned_last_check"
+        val lastCheck = cooldowns[lastRetryCheckKey]
+        if (lastCheck == null || ChronoUnit.MINUTES.between(lastCheck, now) >= 10) {
+            cooldowns[lastRetryCheckKey] = now
+            retryAbandonedPositions()
+        }
     }
 
     /**
@@ -544,6 +556,80 @@ class VolumeSurgeEngine(
                 tradeRepository.save(position)
             }
         )
+    }
+
+    /**
+     * ABANDONED 포지션 재시도
+     *
+     * 청산 실패 후 ABANDONED된 포지션을 재시도하여 고립 방지
+     */
+    private fun retryAbandonedPositions() {
+        val abandonedPositions = tradeRepository.findByStatus("ABANDONED")
+        if (abandonedPositions.isEmpty()) return
+
+        log.info("ABANDONED 포지션 ${abandonedPositions.size}건 재시도 시작")
+
+        abandonedPositions.forEach { position ->
+            try {
+                retryAbandonedPosition(position)
+            } catch (e: Exception) {
+                log.error("[${position.market}] ABANDONED 재시도 오류: ${e.message}")
+            }
+        }
+    }
+
+    /**
+     * ABANDONED 포지션 단일 재시도
+     *
+     * @return true면 재시도 성공/진행, false면 최종 ABANDONED
+     */
+    private fun retryAbandonedPosition(position: VolumeSurgeTradeEntity): Boolean {
+        val market = position.market
+
+        // 최종 ABANDONED 도달 여부 체크 (closeAttemptCount + 재시도 횟수)
+        val totalAttempts = position.closeAttemptCount + (position.abandonRetryCount ?: 0)
+        val maxTotalAttempts = TradingConstants.MAX_CLOSE_ATTEMPTS + 3  // 원래 시도 + 재시도 3회
+
+        if (totalAttempts >= maxTotalAttempts) {
+            log.warn("[$market] ABANDONED 재시도 ${maxTotalAttempts}회 초과 - 수동 개입 필요")
+            slackNotifier.sendWarning(
+                market,
+                """
+                ABANDONED 포지션 재시도 실패 (${maxTotalAttempts}회 초과)
+                진입가: ${position.entryPrice}원
+                수량: ${position.quantity}
+                수동으로 빗썸에서 매도 필요
+                """.trimIndent()
+            )
+            return false
+        }
+
+        // 잔고 확인 - 이미 없으면 CLOSED로 변경
+        val coinSymbol = market.removePrefix("KRW-")
+        val actualBalance = try {
+            bithumbPrivateApi.getBalances()?.find { it.currency == coinSymbol }?.balance ?: BigDecimal.ZERO
+        } catch (e: Exception) {
+            log.warn("[$market] 잔고 조회 실패: ${e.message}")
+            return false
+        }
+
+        if (actualBalance <= BigDecimal.ZERO) {
+            log.info("[$market] 잔고 없음 - ABANDONED -> CLOSED 변경")
+            position.status = "CLOSED"
+            position.exitTime = Instant.now()
+            position.exitReason = "ABANDONED_NO_BALANCE"
+            tradeRepository.save(position)
+            return true
+        }
+
+        // 재시도: closeAttemptCount 리셋 후 다시 청산 시도
+        log.info("[$market] ABANDONED 포지션 재시도 #${totalAttempts + 1}")
+        position.closeAttemptCount = 0  // 리셋
+        position.abandonRetryCount = (position.abandonRetryCount ?: 0) + 1
+        position.status = "OPEN"  // OPEN으로 복귀하여 청산 로직 타도록
+        tradeRepository.save(position)
+
+        return true
     }
 
     /**

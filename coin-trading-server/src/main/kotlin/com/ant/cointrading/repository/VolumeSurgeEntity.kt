@@ -213,6 +213,10 @@ class VolumeSurgeTradeEntity(
     @Column(nullable = false)
     override var closeAttemptCount: Int = 0,
 
+    /** ABANDONED 후 재시도 횟수 */
+    @Column(nullable = false)
+    var abandonRetryCount: Int = 0,
+
     /** 생성 시각 */
     @Column(nullable = false)
     var createdAt: Instant = Instant.now(),
