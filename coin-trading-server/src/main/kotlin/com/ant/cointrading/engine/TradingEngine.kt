@@ -76,6 +76,12 @@ class TradingEngine(
 
         // 거래 쿨다운: 매도 후 최소 5분은 대기해야 재매수 가능 (급등락 회피)
         const val TRADE_COOLDOWN_SECONDS = 300L  // 5분
+
+        // 레짐 기반 거래 중지 설정
+        const val REGIME_CHECK_INTERVAL_MS = 300_000L  // 5분마다 레짐 확인
+        const val BEAR_TREND_THRESHOLD = 0.8  // 80% 이상 마켓이 하락 추세면 중지
+        const val BULL_TREND_THRESHOLD = 0.5  // 50% 이상 상승/횡보면 재개
+        const val MIN_BEAR_DURATION_MINUTES = 30L  // 최소 30분간 하락 추세 유지 시 중지
     }
 
     private val log = LoggerFactory.getLogger(TradingEngine::class.java)
@@ -92,6 +98,11 @@ class TradingEngine(
 
     // [무한 루프 방지] 마켓별 마지막 매도 시간 (재매수 쿨다운 체크용)
     private val lastSellTime = ConcurrentHashMap<String, Instant>()
+
+    // 레짐 기반 거래 중지 상태 추적
+    private var lastBearTrendDetected: Instant? = null  // 마지막 하락 추세 감지 시간
+    @Volatile
+    private var isTradingSuspendedByRegime = false  // 레짐으로 인한 거래 중지 상태
 
     data class MarketState(
         var candles: List<Candle> = emptyList(),
@@ -556,5 +567,123 @@ class TradingEngine(
      */
     fun triggerAnalysis(market: String): TradingSignal? {
         return analyzeMarket(market)
+    }
+
+    /**
+     * 레짐 기반 거래 중지 모니터링 (5분마다 실행)
+     *
+     * 모든 마켓이 하락 추세(BEAR_TREND)이면 거래 중지
+     * 상승/횡보 전환 시 거래 재개
+     */
+    @Scheduled(fixedDelay = REGIME_CHECK_INTERVAL_MS)
+    fun monitorRegimeBasedTradingSuspension() {
+        try {
+            checkRegimeAndSuspendTrading()
+        } catch (e: Exception) {
+            log.error("레짐 기반 거래 중지 모니터링 오류: ${e.message}", e)
+        }
+    }
+
+    /**
+     * 레짐 확인 및 거래 중지/재개 처리
+     */
+    private fun checkRegimeAndSuspendTrading() {
+        val now = Instant.now()
+        val regimes = marketStates.values.mapNotNull { it.regime }
+
+        if (regimes.isEmpty()) {
+            log.debug("레짐 데이터 없음, 거래 중지 체크 스킵")
+            return
+        }
+
+        // 하락 추세 마켓 비율 계산
+        val bearMarketCount = regimes.count { it.regime == MarketRegime.BEAR_TREND }
+        val bearMarketRatio = bearMarketCount.toDouble() / regimes.size
+
+        // 현재 거래 활성화 상태 확인
+        val currentTradingEnabled = keyValueService.get("trading.enabled", "true").toBoolean()
+
+        log.debug("레짐 현황: 하락=${bearMarketCount}/${regimes.size} (${String.format("%.0f", bearMarketRatio * 100)}%), " +
+                  "거래활성=${currentTradingEnabled}, 중지상태=${isTradingSuspendedByRegime}")
+
+        when {
+            // 하락 추세가 80% 이상이면 거래 중지 고려
+            bearMarketRatio >= BEAR_TREND_THRESHOLD -> {
+                if (lastBearTrendDetected == null) {
+                    lastBearTrendDetected = now
+                    log.warn("하락 추세 감지: ${String.format("%.0f", bearMarketRatio * 100)}% 마켓이 BEAR_TREND")
+                }
+
+                val bearDurationMinutes = Duration.between(lastBearTrendDetected!!, now).toMinutes()
+
+                // 최소 30분간 하락 추세 유지 시 거래 중지
+                if (bearDurationMinutes >= MIN_BEAR_DURATION_MINUTES && !isTradingSuspendedByRegime) {
+                    suspendTradingDueToRegime(bearMarketRatio, bearDurationMinutes)
+                }
+            }
+
+            // 상승/횡보 50% 이상이면 거래 재개
+            bearMarketRatio < (1.0 - BULL_TREND_THRESHOLD) -> {
+                if (isTradingSuspendedByRegime) {
+                    resumeTradingDueToRegime(bearMarketRatio)
+                }
+                lastBearTrendDetected = null
+            }
+
+            // 중간 상태: 시간 초기화만
+            else -> {
+                lastBearTrendDetected = null
+            }
+        }
+    }
+
+    /**
+     * 레짐으로 인한 거래 중지 실행
+     */
+    private fun suspendTradingDueToRegime(bearMarketRatio: Double, durationMinutes: Long) {
+        isTradingSuspendedByRegime = true
+
+        // KeyValueService에 거래 중지 상태 저장
+        keyValueService.set(
+            key = "trading.enabled",
+            value = "false",
+            category = "trading",
+            description = "레짐 기반 자동 거래 중지 (하락 추세 ${String.format("%.0f", bearMarketRatio * 100)}%)"
+        )
+
+        val message = """
+            🛑 [레짐 기반 거래 중지]
+            하락 추세 지속 ${durationMinutes}분 (${String.format("%.0f", bearMarketRatio * 100)}% 마켓이 BEAR_TREND)
+            trading.enabled = false로 변경됨
+            상승/횡보 전환 시 자동 재개됩니다
+        """.trimIndent()
+
+        log.warn(message)
+        slackNotifier.sendSystemNotification("레짐 기반 거래 중지", message)
+    }
+
+    /**
+     * 레짐 개선으로 인한 거래 재개
+     */
+    private fun resumeTradingDueToRegime(bearMarketRatio: Double) {
+        isTradingSuspendedByRegime = false
+
+        // KeyValueService에 거래 재개 상태 저장
+        keyValueService.set(
+            key = "trading.enabled",
+            value = "true",
+            category = "trading",
+            description = "레짐 개선으로 거래 재개 (하락 추세 ${String.format("%.0f", bearMarketRatio * 100)}%)"
+        )
+
+        val message = """
+            ✅ [레짐 기반 거래 재개]
+            시장 상태 개선 (하락 추세 ${String.format("%.0f", bearMarketRatio * 100)}%)
+            trading.enabled = true로 변경됨
+            정상 트레이딩 재개
+        """.trimIndent()
+
+        log.info(message)
+        slackNotifier.sendSystemNotification("레짐 기반 거래 재개", message)
     }
 }
