@@ -419,11 +419,12 @@
             <div class="section-title">전략 & 엔진 설정</div>
             <div class="strategy-settings">
                 <div class="setting-category">
-                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">
-                        <h3 style="font-size: 14px; color: #fff;">Meme Scalper</h3>
-                        <label style="display: flex; align-items: center; gap: 5px;">
-                            <input type="checkbox" id="memeEnabled" onchange="toggleMemeScalper()" style="cursor: pointer;">
-                            <span style="font-size: 13px;">활성화</span>
+                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px;">
+                        <h3 style="font-size: 16px; color: #fff;">Meme Scalper</h3>
+                        <label class="toggle-switch">
+                            <input type="checkbox" id="memeEnabled" onchange="toggleMemeScalper()">
+                            <span class="slider"></span>
+                            <span class="status-text" id="memeStatusText">비활성</span>
                         </label>
                     </div>
                     <div class="setting-item">
@@ -444,11 +445,12 @@
                 </div>
 
                 <div class="setting-category">
-                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">
-                        <h3 style="font-size: 14px; color: #fff;">Volume Surge</h3>
-                        <label style="display: flex; align-items: center; gap: 5px;">
-                            <input type="checkbox" id="volumeEnabled" onchange="toggleVolumeSurge()" style="cursor: pointer;">
-                            <span style="font-size: 13px;">활성화</span>
+                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px;">
+                        <h3 style="font-size: 16px; color: #fff;">Volume Surge</h3>
+                        <label class="toggle-switch">
+                            <input type="checkbox" id="volumeEnabled" onchange="toggleVolumeSurge()">
+                            <span class="slider"></span>
+                            <span class="status-text" id="volumeStatusText">비활성</span>
                         </label>
                     </div>
                     <div class="setting-item">
@@ -518,6 +520,58 @@
             font-size: 13px;
             color: #848e9c;
         }
+
+        /* 토글 스위치 */
+        .toggle-switch {
+            position: relative;
+            display: inline-flex;
+            align-items: center;
+            cursor: pointer;
+        }
+
+        .toggle-switch input {
+            display: none;
+        }
+
+        .slider {
+            position: relative;
+            width: 44px;
+            height: 24px;
+            background: #3d4650;
+            border-radius: 12px;
+            transition: 0.3s;
+        }
+
+        .slider::before {
+            content: '';
+            position: absolute;
+            width: 18px;
+            height: 18px;
+            left: 3px;
+            bottom: 3px;
+            background: #848e9c;
+            border-radius: 50%;
+            transition: 0.3s;
+        }
+
+        .toggle-switch input:checked + .slider {
+            background: #0ecb81;
+        }
+
+        .toggle-switch input:checked + .slider::before {
+            transform: translateX(20px);
+            background: #fff;
+        }
+
+        .status-text {
+            margin-left: 8px;
+            font-size: 13px;
+            color: #848e9c;
+        }
+
+        .toggle-switch input:checked ~ .status-text {
+            color: #0ecb81;
+        }
     </style>
 
     <script>
@@ -532,9 +586,61 @@
             } catch (e) {
                 console.error('LLM 상태 로드 실패:', e);
             }
+
+            // 현재 설정값 로드
+            await loadCurrentSettings();
         }
 
-        initDashboard();
+        async function loadCurrentSettings() {
+            try {
+                // Meme Scalper 설정 로드
+                const memeEnabled = await getSetting('memescalper.enabled');
+                const memePositionSize = await getSetting('memescalper.positionSizeKrw');
+                const memeStopLoss = await getSetting('memescalper.stopLossPercent');
+                const memeTakeProfit = await getSetting('memescalper.takeProfitPercent');
+
+                if (memeEnabled !== null) {
+                    document.getElementById('memeEnabled').checked = memeEnabled === 'true';
+                    updateToggleText('memeEnabled', memeEnabled === 'true');
+                }
+                if (memePositionSize !== null) document.getElementById('memePositionSize').value = memePositionSize;
+                if (memeStopLoss !== null) document.getElementById('memeStopLoss').value = memeStopLoss;
+                if (memeTakeProfit !== null) document.getElementById('memeTakeProfit').value = memeTakeProfit;
+
+                // Volume Surge 설정 로드
+                const volumeEnabled = await getSetting('volumesurge.enabled');
+                const volumePositionSize = await getSetting('volumesurge.positionSizeKrw');
+                const volumeStopLoss = await getSetting('volumesurge.stopLossPercent');
+                const volumeTakeProfit = await getSetting('volumesurge.takeProfitPercent');
+
+                if (volumeEnabled !== null) {
+                    document.getElementById('volumeEnabled').checked = volumeEnabled === 'true';
+                    updateToggleText('volumeEnabled', volumeEnabled === 'true');
+                }
+                if (volumePositionSize !== null) document.getElementById('volumePositionSize').value = volumePositionSize;
+                if (volumeStopLoss !== null) document.getElementById('volumeStopLoss').value = volumeStopLoss;
+                if (volumeTakeProfit !== null) document.getElementById('volumeTakeProfit').value = volumeTakeProfit;
+            } catch (e) {
+                console.error('설정 로드 실패:', e);
+            }
+        }
+
+        async function getSetting(key) {
+            try {
+                const response = await fetch('/api/settings/' + key);
+                const result = await response.json();
+                return result.success ? result.value : null;
+            } catch (e) {
+                return null;
+            }
+        }
+
+        function updateToggleText(checkboxId, isEnabled) {
+            const textEl = document.getElementById(checkboxId.replace('Enabled', 'StatusText'));
+            if (textEl) {
+                textEl.textContent = isEnabled ? '활성' : '비활성';
+            }
+        }
 
         // 30초마다 자동 새로고침
         setTimeout(() => {
@@ -684,11 +790,13 @@
         async function toggleMemeScalper() {
             const enabled = document.getElementById('memeEnabled').checked;
             await updateSetting('memescalper.enabled', enabled);
+            updateToggleText('memeEnabled', enabled);
         }
 
         async function toggleVolumeSurge() {
             const enabled = document.getElementById('volumeEnabled').checked;
             await updateSetting('volumesurge.enabled', enabled);
+            updateToggleText('volumeEnabled', enabled);
         }
 
         async function updateMemeSetting(key, value) {
