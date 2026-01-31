@@ -1,0 +1,230 @@
+package com.ant.cointrading.controller
+
+import com.ant.cointrading.api.bithumb.BithumbPrivateApi
+import com.ant.cointrading.api.bithumb.BithumbPublicApi
+import com.ant.cointrading.config.MemeScalperProperties
+import com.ant.cointrading.config.VolumeSurgeProperties
+import com.ant.cointrading.repository.MemeScalperTradeRepository
+import com.ant.cointrading.repository.VolumeSurgeTradeRepository
+import org.springframework.stereotype.Controller
+import org.springframework.ui.Model
+import org.springframework.web.bind.annotation.GetMapping
+import org.springframework.web.bind.annotation.RequestMapping
+import java.math.BigDecimal
+
+@Controller
+@RequestMapping("/dashboard")
+class DashboardController(
+    private val bithumbPrivateApi: BithumbPrivateApi,
+    private val bithumbPublicApi: BithumbPublicApi,
+    private val memeScalperProperties: MemeScalperProperties,
+    private val volumeSurgeProperties: VolumeSurgeProperties,
+    private val memeScalperRepository: MemeScalperTradeRepository,
+    private val volumeSurgeRepository: VolumeSurgeTradeRepository
+) {
+
+    @GetMapping
+    fun dashboard(model: Model): String {
+        // 잔고 조회
+        val balances = try {
+            bithumbPrivateApi.getBalances() ?: emptyList()
+        } catch (e: Exception) {
+            emptyList()
+        }
+
+        // 총 자산 계산
+        val krwBalance = balances.find { it.currency == "KRW" }?.balance ?: BigDecimal.ZERO
+        var totalAssetKrw = krwBalance.toDouble()
+
+        val coinAssets = balances.mapNotNull { balance ->
+            if (balance.currency == "KRW" || balance.balance <= BigDecimal.ZERO) return@mapNotNull null
+
+            val market = "KRW-${balance.currency}"
+            val currentPrice = try {
+                bithumbPublicApi.getCurrentPrice(market)?.firstOrNull()?.tradePrice?.toDouble()
+            } catch (e: Exception) {
+                null
+            }
+
+            if (currentPrice != null) {
+                val value = balance.balance.toDouble() * currentPrice
+                totalAssetKrw += value
+                CoinAsset(
+                    symbol = balance.currency,
+                    quantity = balance.balance.toDouble(),
+                    avgPrice = balance.avgBuyPrice?.toDouble() ?: 0.0,
+                    currentPrice = currentPrice,
+                    value = value,
+                    pnl = (currentPrice - (balance.avgBuyPrice?.toDouble() ?: currentPrice)) * balance.balance.toDouble(),
+                    pnlPercent = if (balance.avgBuyPrice != null && balance.avgBuyPrice!! > BigDecimal.ZERO) {
+                        ((currentPrice - balance.avgBuyPrice.toDouble()) / balance.avgBuyPrice.toDouble()) * 100
+                    } else 0.0
+                )
+            } else null
+        }
+
+        // 열린 포지션 조회 (간단 버전)
+        val openPositions = getOpenPositionsSimple()
+
+        // 오늘 통계
+        val todayStats = getTodayStats()
+
+        // 전체 통계
+        val totalStats = getTotalStats()
+
+        model.addAttribute("krwBalance", krwBalance.toDouble())
+        model.addAttribute("totalAssetKrw", totalAssetKrw)
+        model.addAttribute("coinAssets", coinAssets)
+        model.addAttribute("openPositions", openPositions)
+        model.addAttribute("todayStats", todayStats)
+        model.addAttribute("totalStats", totalStats)
+
+        // 엔진 상태 - 간단히 boolean 값만 전달
+        val memeOpenCount = memeScalperRepository.findByStatus("OPEN").size
+        val volumeOpenCount = volumeSurgeRepository.findByStatus("OPEN").size
+
+        model.addAttribute("memeScalperEnabled", if (memeScalperProperties.enabled) "true" else "false")
+        model.addAttribute("memeScalperOpenPositions", memeOpenCount)
+        model.addAttribute("volumeSurgeEnabled", if (volumeSurgeProperties.enabled) "true" else "false")
+        model.addAttribute("volumeSurgeOpenPositions", volumeOpenCount)
+
+        return "dashboard"
+    }
+
+    private fun getOpenPositionsSimple(): List<PositionInfo> {
+        val positions = mutableListOf<PositionInfo>()
+
+        // Meme Scalper 포지션
+        memeScalperRepository.findByStatus("OPEN").forEach { trade ->
+            val currentPrice = try {
+                bithumbPublicApi.getCurrentPrice(trade.market)?.firstOrNull()?.tradePrice?.toDouble() ?: trade.entryPrice
+            } catch (e: Exception) {
+                trade.entryPrice
+            }
+
+            val pnl = (currentPrice - trade.entryPrice) * trade.quantity
+            val pnlPercent = ((currentPrice - trade.entryPrice) / trade.entryPrice) * 100
+
+            positions.add(PositionInfo(
+                market = trade.market,
+                strategy = "Meme Scalper",
+                entryPrice = trade.entryPrice,
+                currentPrice = currentPrice,
+                quantity = trade.quantity,
+                value = trade.entryPrice * trade.quantity,
+                pnl = pnl,
+                pnlPercent = pnlPercent,
+                takeProfitPrice = 0.0,  // 간단화
+                stopLossPrice = 0.0,   // 간단화
+                entryTime = trade.entryTime,
+                peakPrice = trade.peakPrice
+            ))
+        }
+
+        // Volume Surge 포지션
+        volumeSurgeRepository.findByStatus("OPEN").forEach { trade ->
+            val currentPrice = try {
+                bithumbPublicApi.getCurrentPrice(trade.market)?.firstOrNull()?.tradePrice?.toDouble() ?: trade.entryPrice
+            } catch (e: Exception) {
+                trade.entryPrice
+            }
+
+            val pnl = (currentPrice - trade.entryPrice) * trade.quantity
+            val pnlPercent = ((currentPrice - trade.entryPrice) / trade.entryPrice) * 100
+
+            positions.add(PositionInfo(
+                market = trade.market,
+                strategy = "Volume Surge",
+                entryPrice = trade.entryPrice,
+                currentPrice = currentPrice,
+                quantity = trade.quantity,
+                value = trade.entryPrice * trade.quantity,
+                pnl = pnl,
+                pnlPercent = pnlPercent,
+                takeProfitPrice = 0.0,  // 간단화
+                stopLossPrice = 0.0,   // 간단화
+                entryTime = trade.entryTime,
+                peakPrice = null
+            ))
+        }
+
+        return positions.sortedByDescending { it.entryTime }
+    }
+
+    private fun getTodayStats(): StatsInfo {
+        val now = java.time.Instant.now()
+        val startOfDay = java.time.ZonedDateTime.now(java.time.ZoneId.systemDefault()).toLocalDate().atStartOfDay(java.time.ZoneId.systemDefault()).toInstant()
+
+        val memeTrades = memeScalperRepository.findByStatus("CLOSED").filter { it.exitTime != null && it.exitTime!!.isAfter(startOfDay) }
+        val volumeTrades = volumeSurgeRepository.findByStatus("CLOSED").filter { it.exitTime != null && it.exitTime!!.isAfter(startOfDay) }
+
+        val allPnl = memeTrades.mapNotNull { it.pnlAmount }.filterNotNull() + volumeTrades.mapNotNull { it.pnlAmount }.filterNotNull()
+        val totalPnl = allPnl.sum()
+        val winCount = allPnl.count { it > 0 }
+        val lossCount = allPnl.count { it < 0 }
+
+        return StatsInfo(
+            totalTrades = memeTrades.size + volumeTrades.size,
+            winCount = winCount,
+            lossCount = lossCount,
+            totalPnl = totalPnl,
+            winRate = if (allPnl.isNotEmpty()) winCount.toDouble() / allPnl.size else 0.0
+        )
+    }
+
+    private fun getTotalStats(): StatsInfo {
+        val memeTrades = memeScalperRepository.findByStatus("CLOSED")
+        val volumeTrades = volumeSurgeRepository.findByStatus("CLOSED")
+
+        val allPnl = memeTrades.mapNotNull { it.pnlAmount }.filterNotNull() + volumeTrades.mapNotNull { it.pnlAmount }.filterNotNull()
+        val totalPnl = allPnl.sum()
+        val winCount = allPnl.count { it > 0 }
+        val lossCount = allPnl.count { it < 0 }
+
+        return StatsInfo(
+            totalTrades = memeTrades.size + volumeTrades.size,
+            winCount = winCount,
+            lossCount = lossCount,
+            totalPnl = totalPnl,
+            winRate = if (allPnl.isNotEmpty()) winCount.toDouble() / allPnl.size else 0.0
+        )
+    }
+}
+
+data class CoinAsset(
+    val symbol: String,
+    val quantity: Double,
+    val avgPrice: Double,
+    val currentPrice: Double,
+    val value: Double,
+    val pnl: Double,
+    val pnlPercent: Double
+)
+
+data class PositionInfo(
+    val market: String,
+    val strategy: String,
+    val entryPrice: Double,
+    val currentPrice: Double,
+    val quantity: Double,
+    val value: Double,
+    val pnl: Double,
+    val pnlPercent: Double,
+    val takeProfitPrice: Double,
+    val stopLossPrice: Double,
+    val entryTime: java.time.Instant,
+    val peakPrice: Double?
+)
+
+data class StatsInfo(
+    val totalTrades: Int,
+    val winCount: Int,
+    val lossCount: Int,
+    val totalPnl: Double,
+    val winRate: Double
+)
+
+data class EngineStatusInfo(
+    val enabled: Boolean,
+    val openPositions: Int
+)

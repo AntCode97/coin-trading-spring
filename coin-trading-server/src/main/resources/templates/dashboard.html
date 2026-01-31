@@ -1,0 +1,366 @@
+<!DOCTYPE html>
+<html lang="ko" xmlns:th="http://www.thymeleaf.org">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>코인 트레이딩 대시보드</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: #0f1419;
+            color: #e1e1e1;
+            min-height: 100vh;
+        }
+
+        .container {
+            max-width: 1400px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+
+        h1 {
+            color: #fff;
+            margin-bottom: 20px;
+            font-size: 24px;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        h1 span.refresh {
+            font-size: 12px;
+            color: #888;
+            font-weight: normal;
+        }
+
+        .summary-cards {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 15px;
+            margin-bottom: 30px;
+        }
+
+        .card {
+            background: #1e2329;
+            border-radius: 12px;
+            padding: 20px;
+            border: 1px solid #2b3139;
+        }
+
+        .card-title {
+            font-size: 12px;
+            color: #848e9c;
+            margin-bottom: 8px;
+        }
+
+        .card-value {
+            font-size: 24px;
+            font-weight: 600;
+            color: #fff;
+        }
+
+        .card-value.positive { color: #0ecb81; }
+        .card-value.negative { color: #f6465d; }
+
+        .section {
+            background: #1e2329;
+            border-radius: 12px;
+            padding: 20px;
+            margin-bottom: 20px;
+            border: 1px solid #2b3139;
+        }
+
+        .section-title {
+            font-size: 16px;
+            font-weight: 600;
+            color: #fff;
+            margin-bottom: 15px;
+            padding-bottom: 10px;
+            border-bottom: 1px solid #2b3139;
+        }
+
+        .positions-table {
+            width: 100%;
+            border-collapse: collapse;
+        }
+
+        .positions-table th,
+        .positions-table td {
+            padding: 12px;
+            text-align: left;
+            border-bottom: 1px solid #2b3139;
+        }
+
+        .positions-table th {
+            color: #848e9c;
+            font-size: 12px;
+            font-weight: normal;
+        }
+
+        .positions-table td {
+            color: #e1e1e1;
+            font-size: 14px;
+        }
+
+        .positions-table tr:hover {
+            background: #2b3139;
+        }
+
+        .positive { color: #0ecb81; }
+        .negative { color: #f6465d; }
+        .neutral { color: #e1e1e1; }
+
+        .strategy-tag {
+            display: inline-block;
+            padding: 2px 8px;
+            border-radius: 4px;
+            font-size: 11px;
+            font-weight: 500;
+        }
+
+        .strategy-meme { background: #f6465d20; color: #f6465d; }
+        .strategy-volume { background: #0ecb8120; color: #0ecb81; }
+        .strategy-dca { background: #3b82f620; color: #3b82f6; }
+
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(4, 1fr);
+            gap: 15px;
+        }
+
+        .stat-item {
+            text-align: center;
+        }
+
+        .stat-label {
+            font-size: 12px;
+            color: #848e9c;
+            margin-bottom: 5px;
+        }
+
+        .stat-value {
+            font-size: 18px;
+            font-weight: 600;
+            color: #fff;
+        }
+
+        .engine-status {
+            display: flex;
+            gap: 20px;
+            font-size: 12px;
+        }
+
+        .engine-item {
+            display: flex;
+            align-items: center;
+            gap: 5px;
+        }
+
+        .status-dot {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+        }
+
+        .status-dot.active { background: #0ecb81; }
+        .status-dot.inactive { background: #f6465d; }
+
+        .coin-list {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(250px, 1fr));
+            gap: 10px;
+        }
+
+        .coin-item {
+            background: #2b3139;
+            border-radius: 8px;
+            padding: 15px;
+        }
+
+        .coin-symbol {
+            font-size: 14px;
+            font-weight: 600;
+            color: #fff;
+            margin-bottom: 8px;
+        }
+
+        .coin-detail {
+            font-size: 12px;
+            color: #848e9c;
+            margin-bottom: 4px;
+        }
+
+        .coin-detail span {
+            color: #e1e1e1;
+        }
+
+        .no-positions {
+            text-align: center;
+            padding: 40px;
+            color: #848e9c;
+            font-size: 14px;
+        }
+
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.5; }
+        }
+
+        .live-indicator {
+            animation: pulse 2s infinite;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>
+            트레이딩 대시보드
+            <span class="refresh live-indicator">실시간 업데이트 중</span>
+        </h1>
+
+        <!-- 요약 카드 -->
+        <div class="summary-cards">
+            <div class="card">
+                <div class="card-title">총 자산</div>
+                <div class="card-value" th:text="${#numbers.formatInteger(totalAssetKrw, 1, 'COMMA')} + '원'">0원</div>
+            </div>
+            <div class="card">
+                <div class="card-title">KRW 잔고</div>
+                <div class="card-value" th:text="${#numbers.formatInteger(krwBalance, 1, 'COMMA')} + '원'">0원</div>
+            </div>
+            <div class="card">
+                <div class="card-title">오늘 수익</div>
+                <div class="card-value" th:class="${todayStats.totalPnl >= 0} ? 'positive' : 'negative'"
+                     th:text="${todayStats.totalPnl >= 0 ? '+' : ''} + ${#numbers.formatInteger(todayStats.totalPnl, 1, 'COMMA')} + '원'">0원</div>
+            </div>
+            <div class="card">
+                <div class="card-title">전체 수익</div>
+                <div class="card-value" th:class="${totalStats.totalPnl >= 0} ? 'positive' : 'negative'"
+                     th:text="${totalStats.totalPnl >= 0 ? '+' : ''} + ${#numbers.formatInteger(totalStats.totalPnl, 1, 'COMMA')} + '원'">0원</div>
+            </div>
+        </div>
+
+        <!-- 엔진 상태 -->
+        <div class="section">
+            <div class="section-title">엔진 상태</div>
+            <div class="engine-status">
+                <div class="engine-item">
+                    <div class="status-dot" th:class="${memeScalperEnabled == 'true' ? 'active' : 'inactive'}"></div>
+                    <span>Meme Scalper: </span>
+                    <span th:text="${memeScalperEnabled == 'true' ? '활성' : '비활성'}">비활성</span>
+                    <span style="color: #848e9c; margin-left: 5px;">(포지션: <span th:text="${memeScalperOpenPositions}">0</span>)</span>
+                </div>
+                <div class="engine-item">
+                    <div class="status-dot" th:class="${volumeSurgeEnabled == 'true' ? 'active' : 'inactive'}"></div>
+                    <span>Volume Surge: </span>
+                    <span th:text="${volumeSurgeEnabled == 'true' ? '활성' : '비활성'}">비활성</span>
+                    <span style="color: #848e9c; margin-left: 5px;">(포지션: <span th:text="${volumeSurgeOpenPositions}">0</span>)</span>
+                </div>
+            </div>
+        </div>
+
+        <!-- 열린 포지션 -->
+        <div class="section">
+            <div class="section-title">열린 포지션</div>
+            <div th:if="${#lists.isEmpty(openPositions)}" class="no-positions">
+                열린 포지션이 없습니다
+            </div>
+            <table class="positions-table" th:if="${!#lists.isEmpty(openPositions)}">
+                <thead>
+                    <tr>
+                        <th>마켓</th>
+                        <th>전략</th>
+                        <th>진입가</th>
+                        <th>현재가</th>
+                        <th>수량</th>
+                        <th>평가금액</th>
+                        <th>손익</th>
+                        <th>손익률</th>
+                        <th>익절가</th>
+                        <th>손절가</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr th:each="pos : ${openPositions}">
+                        <td th:text="${pos.market}">KRW-BTC</td>
+                        <td>
+                            <span class="strategy-tag"
+                                  th:class="${pos.strategy == 'Meme Scalper' ? 'strategy-meme' : (pos.strategy == 'Volume Surge' ? 'strategy-volume' : 'strategy-dca')}"
+                                  th:text="${pos.strategy}">Meme Scalper</span>
+                        </td>
+                        <td th:text="${#numbers.formatInteger(pos.entryPrice, 1, 'COMMA')}">0</td>
+                        <td th:text="${#numbers.formatInteger(pos.currentPrice, 1, 'COMMA')}">0</td>
+                        <td th:text="${#numbers.formatDecimal(pos.quantity, 1, 4)}">0</td>
+                        <td th:text="|${#numbers.formatInteger(pos.value, 1, 'COMMA')}원|">0원</td>
+                        <td th:class="${pos.pnl >= 0} ? 'positive' : 'negative'"
+                            th:text="|${pos.pnl >= 0 ? '+' : ''}${#numbers.formatInteger(pos.pnl, 1, 'COMMA')}원|">0원</td>
+                        <td th:class="${pos.pnlPercent >= 0} ? 'positive' : 'negative'"
+                            th:text="|${pos.pnlPercent >= 0 ? '+' : ''}${#numbers.formatDecimal(pos.pnlPercent, 1, 2)}%|">0%</td>
+                        <td th:text="${#numbers.formatInteger(pos.takeProfitPrice, 1, 'COMMA')}">0</td>
+                        <td th:text="${#numbers.formatInteger(pos.stopLossPrice, 1, 'COMMA')}">0</td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+
+        <!-- 보유 코인 -->
+        <div class="section">
+            <div class="section-title">보유 코인</div>
+            <div class="coin-list" th:if="${!#lists.isEmpty(coinAssets)}">
+                <div class="coin-item" th:each="coin : ${coinAssets}">
+                    <div class="coin-symbol" th:text="${coin.symbol}">BTC</div>
+                    <div class="coin-detail">수량: <span th:text="${#numbers.formatDecimal(coin.quantity, 1, 4)}">0</span></div>
+                    <div class="coin-detail">평단가: <span th:text="|${#numbers.formatInteger(coin.avgPrice, 1, 'COMMA')}원|">0원</span></div>
+                    <div class="coin-detail">현재가: <span th:text="|${#numbers.formatInteger(coin.currentPrice, 1, 'COMMA')}원|">0원</span></div>
+                    <div class="coin-detail">평가액: <span th:text="|${#numbers.formatInteger(coin.value, 1, 'COMMA')}원|">0원</span></div>
+                    <div class="coin-detail">
+                        손익: <span th:class="${coin.pnl >= 0} ? 'positive' : 'negative'"
+                               th:text="|${coin.pnl >= 0 ? '+' : ''}${#numbers.formatInteger(coin.pnl, 1, 'COMMA')}원|">0원</span>
+                        <span style="margin-left: 8px;" th:class="${coin.pnlPercent >= 0} ? 'positive' : 'negative'"
+                              th:text="|(${coin.pnlPercent >= 0 ? '+' : ''}${#numbers.formatDecimal(coin.pnlPercent, 1, 2)}%)|">(0%)</span>
+                    </div>
+                </div>
+            </div>
+            <div class="no-positions" th:if="${#lists.isEmpty(coinAssets)}">
+                보유 중인 코인이 없습니다
+            </div>
+        </div>
+
+        <!-- 통계 -->
+        <div class="section">
+            <div class="section-title">거래 통계</div>
+            <div class="stats-grid">
+                <div class="stat-item">
+                    <div class="stat-label">오늘 거래</div>
+                    <div class="stat-value" th:text="${todayStats.totalTrades} + '건'">0건</div>
+                </div>
+                <div class="stat-item">
+                    <div class="stat-label">오늘 승률</div>
+                    <div class="stat-value" th:text="${#numbers.formatPercent(todayStats.winRate, 1, 1)} + ' (' + ${todayStats.winCount} + '승 ' + ${todayStats.lossCount} + '패)'">0%</div>
+                </div>
+                <div class="stat-item">
+                    <div class="stat-label">전체 거래</div>
+                    <div class="stat-value" th:text="${totalStats.totalTrades} + '건'">0건</div>
+                </div>
+                <div class="stat-item">
+                    <div class="stat-label">전체 승률</div>
+                    <div class="stat-value" th:text="${#numbers.formatPercent(totalStats.winRate, 1, 1)} + ' (' + ${totalStats.winCount} + '승 ' + ${totalStats.lossCount} + '패)'">0%</div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // 30초마다 자동 새로고침
+        setTimeout(() => {
+            location.reload();
+        }, 30000);
+    </script>
+</body>
+</html>
