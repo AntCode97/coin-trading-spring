@@ -394,6 +394,81 @@
                 </div>
             </div>
         </div>
+
+        <!-- LLM 최적화 -->
+        <div class="section">
+            <div class="section-title">LLM 최적화</div>
+            <div class="optimizer">
+                <div class="optimizer-status">
+                    <div style="margin-bottom: 15px;">
+                        <span style="color: #848e9c; font-size: 14px;">LLM 서비스: </span>
+                        <span id="llmServiceStatus" style="margin-left: 10px;">확인 중...</span>
+                    </div>
+                    <div style="margin-bottom: 15px;">
+                        <span style="color: #848e9c; font-size: 14px;">마지막 최적화: </span>
+                        <span id="lastOptimization" style="margin-left: 10px;">없음</span>
+                    </div>
+                </div>
+                <button onclick="runOptimization()" style="width: 100%; padding: 12px; background: #3b82f6; color: #fff; border: none; border-radius: 6px; cursor: pointer; font-weight: 600;">최적화 실행</button>
+                <div id="optimizationResult" style="margin-top: 10px; padding: 10px; border-radius: 4px; display: none; white-space: pre-wrap; font-size: 13px;"></div>
+            </div>
+        </div>
+
+        <!-- 전략 설정 -->
+        <div class="section">
+            <div class="section-title">전략 & 엔진 설정</div>
+            <div class="strategy-settings">
+                <div class="setting-category">
+                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">
+                        <h3 style="font-size: 14px; color: #fff;">Meme Scalper</h3>
+                        <label style="display: flex; align-items: center; gap: 5px;">
+                            <input type="checkbox" id="memeEnabled" onchange="toggleMemeScalper()" style="cursor: pointer;">
+                            <span style="font-size: 13px;">활성화</span>
+                        </label>
+                    </div>
+                    <div class="setting-item">
+                        <label>1회 주문 금액 (KRW)</label>
+                        <input type="number" id="memePositionSize" value="6000" onchange="updateMemeSetting('positionSizeKrw', this.value)" style="padding: 6px; background: #2b3139; border: 1px solid #3d4650; color: #e1e1e1; border-radius: 4px; width: 120px;">
+                        <span style="font-size: 11px; color: #848e9c; margin-left: 5px;">초단타 매수 금액</span>
+                    </div>
+                    <div class="setting-item">
+                        <label>손절률 (%)</label>
+                        <input type="number" id="memeStopLoss" value="-1.5" step="0.1" onchange="updateMemeSetting('stopLossPercent', this.value)" style="padding: 6px; background: #2b3139; border: 1px solid #3d4650; color: #e1e1e1; border-radius: 4px; width: 120px;">
+                        <span style="font-size: 11px; color: #848e9c; margin-left: 5px;">마이너스 = 손절</span>
+                    </div>
+                    <div class="setting-item">
+                        <label>익절률 (%)</label>
+                        <input type="number" id="memeTakeProfit" value="3.0" step="0.1" onchange="updateMemeSetting('takeProfitPercent', this.value)" style="padding: 6px; background: #2b3139; border: 1px solid #3d4650; color: #e1e1e1; border-radius: 4px; width: 120px;">
+                        <span style="font-size: 11px; color: #848e9c; margin-left: 5px;">목표 수익률</span>
+                    </div>
+                </div>
+
+                <div class="setting-category">
+                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">
+                        <h3 style="font-size: 14px; color: #fff;">Volume Surge</h3>
+                        <label style="display: flex; align-items: center; gap: 5px;">
+                            <input type="checkbox" id="volumeEnabled" onchange="toggleVolumeSurge()" style="cursor: pointer;">
+                            <span style="font-size: 13px;">활성화</span>
+                        </label>
+                    </div>
+                    <div class="setting-item">
+                        <label>1회 주문 금액 (KRW)</label>
+                        <input type="number" id="volumePositionSize" value="10000" onchange="updateVolumeSetting('positionSizeKrw', this.value)" style="padding: 6px; background: #2b3139; border: 1px solid #3d4650; color: #e1e1e1; border-radius: 4px; width: 120px;">
+                        <span style="font-size: 11px; color: #848e9c; margin-left: 5px;">거래량 급등 매수 금액</span>
+                    </div>
+                    <div class="setting-item">
+                        <label>손절률 (%)</label>
+                        <input type="number" id="volumeStopLoss" value="-2.0" step="0.1" onchange="updateVolumeSetting('stopLossPercent', this.value)" style="padding: 6px; background: #2b3139; border: 1px solid #3d4650; color: #e1e1e1; border-radius: 4px; width: 120px;">
+                        <span style="font-size: 11px; color: #848e9c; margin-left: 5px;">마이너스 = 손절</span>
+                    </div>
+                    <div class="setting-item">
+                        <label>익절률 (%)</label>
+                        <input type="number" id="volumeTakeProfit" value="6.0" step="0.1" onchange="updateVolumeSetting('takeProfitPercent', this.value)" style="padding: 6px; background: #2b3139; border: 1px solid #3d4650; color: #e1e1e1; border-radius: 4px; width: 120px;">
+                        <span style="font-size: 11px; color: #848e9c; margin-left: 5px;">목표 수익률</span>
+                    </div>
+                </div>
+            </div>
+        </div>
     </div>
 
     <style>
@@ -418,9 +493,49 @@
         .form-buttons button:hover {
             opacity: 0.9;
         }
+
+        .strategy-settings {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+            gap: 20px;
+        }
+
+        .setting-category {
+            background: #2b3139;
+            border-radius: 8px;
+            padding: 15px;
+        }
+
+        .setting-item {
+            display: flex;
+            align-items: center;
+            margin-bottom: 10px;
+            gap: 10px;
+        }
+
+        .setting-item label {
+            width: 120px;
+            font-size: 13px;
+            color: #848e9c;
+        }
     </style>
 
     <script>
+        // 페이지 로드 시 초기화
+        async function initDashboard() {
+            // LLM 최적화 상태 로드
+            try {
+                const statusResponse = await fetch('/api/optimizer/status');
+                const status = await statusResponse.json();
+                document.getElementById('llmServiceStatus').textContent = status.llmServiceAvailable ? '사용 가능' : '사용 불가';
+                document.getElementById('lastOptimization').textContent = status.lastOptimizedAt || '없음';
+            } catch (e) {
+                console.error('LLM 상태 로드 실패:', e);
+            }
+        }
+
+        initDashboard();
+
         // 30초마다 자동 새로고침
         setTimeout(() => {
             location.reload();
@@ -534,6 +649,72 @@
                 setTimeout(() => {
                     resultDiv.style.display = 'none';
                 }, 3000);
+            }
+        }
+
+        // LLM 최적화
+        async function runOptimization() {
+            const resultDiv = document.getElementById('optimizationResult');
+            resultDiv.style.display = 'block';
+            resultDiv.style.background = '#2b3139';
+            resultDiv.style.color = '#848e9c';
+            resultDiv.textContent = '최적화 실행 중...';
+
+            try {
+                const response = await fetch('/api/optimizer/run', { method: 'POST' });
+                const result = await response.json();
+
+                if (result.success) {
+                    resultDiv.style.background = '#0ecb8120';
+                    resultDiv.style.color = '#0ecb81';
+                    resultDiv.textContent = result.result;
+                } else {
+                    resultDiv.style.background = '#f6465d20';
+                    resultDiv.style.color = '#f6465d';
+                    resultDiv.textContent = result.result || '최적화 실패';
+                }
+            } catch (e) {
+                resultDiv.style.background = '#f6465d20';
+                resultDiv.style.color = '#f6465d';
+                resultDiv.textContent = '오류: ' + e.message;
+            }
+        }
+
+        // 전략 설정 관리
+        async function toggleMemeScalper() {
+            const enabled = document.getElementById('memeEnabled').checked;
+            await updateSetting('memescalper.enabled', enabled);
+        }
+
+        async function toggleVolumeSurge() {
+            const enabled = document.getElementById('volumeEnabled').checked;
+            await updateSetting('volumesurge.enabled', enabled);
+        }
+
+        async function updateMemeSetting(key, value) {
+            await updateSetting('memescalper.' + key, value);
+        }
+
+        async function updateVolumeSetting(key, value) {
+            await updateSetting('volumesurge.' + key, value);
+        }
+
+        async function updateSetting(key, value) {
+            try {
+                const response = await fetch('/api/settings', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ key: key, value: String(value) })
+                });
+                const result = await response.json();
+
+                if (result.success) {
+                    console.log('설정 저장됨:', key, value);
+                } else {
+                    alert('설정 저장 실패: ' + result.message);
+                }
+            } catch (e) {
+                alert('설정 저장 오류: ' + e.message);
             }
         }
     </script>
