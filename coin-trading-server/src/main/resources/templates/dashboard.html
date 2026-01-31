@@ -354,13 +354,188 @@
                 </div>
             </div>
         </div>
+
+        <!-- 수동 매매 -->
+        <div class="section">
+            <div class="section-title">수동 매매</div>
+            <div class="manual-trade">
+                <div class="trade-form">
+                    <div class="form-row">
+                        <label>마켓:</label>
+                        <select id="tradeMarket" style="flex: 1; padding: 8px; background: #2b3139; border: 1px solid #3d4650; color: #e1e1e1; border-radius: 4px;">
+                            <option value="KRW-BTC">BTC</option>
+                            <option value="KRW-ETH">ETH</option>
+                            <option value="KRW-XRP">XRP</option>
+                            <option value="KRW-SOL">SOL</option>
+                            <option value="KRW-DOGE">DOGE</option>
+                            <option value="KRW-ADA">ADA</option>
+                        </select>
+                    </div>
+                    <div class="form-row">
+                        <label>주문 유형:</label>
+                        <select id="orderType" style="flex: 1; padding: 8px; background: #2b3139; border: 1px solid #3d4650; color: #e1e1e1; border-radius: 4px;">
+                            <option value="market">시장가</option>
+                            <option value="price">지정가</option>
+                        </select>
+                    </div>
+                    <div class="form-row" id="priceRow" style="display: none;">
+                        <label>가격 (KRW):</label>
+                        <input type="number" id="tradePrice" placeholder="가격 입력" style="flex: 1; padding: 8px; background: #2b3139; border: 1px solid #3d4650; color: #e1e1e1; border-radius: 4px;">
+                    </div>
+                    <div class="form-row">
+                        <label id="amountLabel">금액 (KRW):</label>
+                        <input type="number" id="tradeAmount" placeholder="금액 입력" value="10000" style="flex: 1; padding: 8px; background: #2b3139; border: 1px solid #3d4650; color: #e1e1e1; border-radius: 4px;">
+                    </div>
+                    <div class="form-buttons">
+                        <button onclick="executeBuy()" style="flex: 1; padding: 12px; background: #0ecb81; color: #fff; border: none; border-radius: 6px; cursor: pointer; font-weight: 600;">매수</button>
+                        <button onclick="executeSell()" style="flex: 1; padding: 12px; background: #f6465d; color: #fff; border: none; border-radius: 6px; cursor: pointer; font-weight: 600; margin-left: 10px;">매도</button>
+                    </div>
+                    <div id="tradeResult" style="margin-top: 10px; padding: 10px; border-radius: 4px; display: none;"></div>
+                </div>
+            </div>
+        </div>
     </div>
+
+    <style>
+        .manual-trade {
+            max-width: 500px;
+        }
+        .form-row {
+            display: flex;
+            align-items: center;
+            margin-bottom: 12px;
+            gap: 10px;
+        }
+        .form-row label {
+            width: 100px;
+            color: #848e9c;
+            font-size: 14px;
+        }
+        .form-buttons {
+            display: flex;
+            margin-top: 15px;
+        }
+        .form-buttons button:hover {
+            opacity: 0.9;
+        }
+    </style>
 
     <script>
         // 30초마다 자동 새로고침
         setTimeout(() => {
             location.reload();
         }, 30000);
+
+        // 주문 유형 변경 시 가격 입력 표시/숨김
+        document.getElementById('orderType').addEventListener('change', function() {
+            const priceRow = document.getElementById('priceRow');
+            const amountLabel = document.getElementById('amountLabel');
+            if (this.value === 'price') {
+                priceRow.style.display = 'flex';
+                amountLabel.textContent = '수량:';
+            } else {
+                priceRow.style.display = 'none';
+                amountLabel.textContent = '금액 (KRW):';
+            }
+        });
+
+        async function executeBuy() {
+            const market = document.getElementById('tradeMarket').value;
+            const orderType = document.getElementById('orderType').value;
+            const price = document.getElementById('tradePrice').value;
+            const amount = document.getElementById('tradeAmount').value;
+
+            if (!amount || amount <= 0) {
+                showResult('금액을 입력해주세요', false);
+                return;
+            }
+
+            showResult('주문 중...', true, false);
+
+            try {
+                const params = new URLSearchParams({
+                    market: market,
+                    orderType: orderType,
+                    amountKrw: orderType === 'market' ? amount : undefined,
+                    quantity: orderType === 'price' ? amount : undefined,
+                    price: orderType === 'price' ? price : undefined
+                });
+
+                const response = await fetch('/api/manual-trading/buy?' + params, {
+                    method: 'POST'
+                });
+                const result = await response.json();
+
+                if (result.success) {
+                    showResult('매수 완료! ' + result.message, true);
+                    setTimeout(() => location.reload(), 2000);
+                } else {
+                    showResult('매수 실패: ' + result.error, false);
+                }
+            } catch (e) {
+                showResult('오류: ' + e.message, false);
+            }
+        }
+
+        async function executeSell() {
+            const market = document.getElementById('tradeMarket').value;
+            const orderType = document.getElementById('orderType').value;
+            const price = document.getElementById('tradePrice').value;
+            const amount = document.getElementById('tradeAmount').value;
+
+            if (!amount || amount <= 0) {
+                showResult('수량을 입력해주세요', false);
+                return;
+            }
+
+            showResult('주문 중...', true, false);
+
+            try {
+                // 잔고 조회
+                const balanceResponse = await fetch('/api/manual-trading/balance/' + market);
+                const balance = await balanceResponse.json();
+
+                if (!balance.success || !balance.balance || balance.balance <= 0) {
+                    showResult('보유 코인이 없습니다', false);
+                    return;
+                }
+
+                const params = new URLSearchParams({
+                    market: market,
+                    orderType: orderType,
+                    quantity: orderType === 'market' ? balance.balance : amount,
+                    price: orderType === 'price' ? price : undefined
+                });
+
+                const response = await fetch('/api/manual-trading/sell?' + params, {
+                    method: 'POST'
+                });
+                const result = await response.json();
+
+                if (result.success) {
+                    showResult('매도 완료! ' + result.message, true);
+                    setTimeout(() => location.reload(), 2000);
+                } else {
+                    showResult('매도 실패: ' + result.error, false);
+                }
+            } catch (e) {
+                showResult('오류: ' + e.message, false);
+            }
+        }
+
+        function showResult(message, isSuccess, showOnly = true) {
+            const resultDiv = document.getElementById('tradeResult');
+            resultDiv.style.display = 'block';
+            resultDiv.style.background = isSuccess === false ? '#f6465d20' : '#0ecb8120';
+            resultDiv.style.color = isSuccess === false ? '#f6465d' : '#0ecb81';
+            resultDiv.textContent = message;
+
+            if (showOnly && isSuccess) {
+                setTimeout(() => {
+                    resultDiv.style.display = 'none';
+                }, 3000);
+            }
+        }
     </script>
 </body>
 </html>
