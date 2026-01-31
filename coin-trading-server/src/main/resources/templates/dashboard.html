@@ -262,6 +262,18 @@
                     <span th:text="${volumeSurgeEnabled == 'true' ? '활성' : '비활성'}">비활성</span>
                     <span style="color: #848e9c; margin-left: 5px;">(포지션: <span th:text="${volumeSurgeOpenPositions}">0</span>)</span>
                 </div>
+                <div class="engine-item">
+                    <div class="status-dot" th:class="${dcaEngineEnabled == 'true' ? 'active' : 'inactive'}"></div>
+                    <span>DCA Engine: </span>
+                    <span th:text="${dcaEngineEnabled == 'true' ? '활성' : '비활성'}">비활성</span>
+                    <span style="color: #848e9c; margin-left: 5px;">(포지션: <span th:text="${dcaEngineOpenPositions}">0</span>)</span>
+                </div>
+                <div class="engine-item">
+                    <div class="status-dot" th:class="${tradingEngineEnabled == 'true' ? 'active' : 'inactive'}"></div>
+                    <span>Trading Engine: </span>
+                    <span th:text="${tradingEngineEnabled == 'true' ? '활성' : '비활성'}">비활성</span>
+                    <span style="color: #848e9c; margin-left: 5px;">(마켓: <span th:text="${tradingEngineMarkets}">BTC, ETH</span>)</span>
+                </div>
             </div>
         </div>
 

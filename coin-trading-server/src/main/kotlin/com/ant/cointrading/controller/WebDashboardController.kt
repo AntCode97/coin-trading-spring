@@ -3,7 +3,10 @@ package com.ant.cointrading.controller
 import com.ant.cointrading.api.bithumb.BithumbPrivateApi
 import com.ant.cointrading.api.bithumb.BithumbPublicApi
 import com.ant.cointrading.config.MemeScalperProperties
+import com.ant.cointrading.config.TradingProperties
 import com.ant.cointrading.config.VolumeSurgeProperties
+import com.ant.cointrading.dca.DcaEngine
+import com.ant.cointrading.repository.DcaPositionRepository
 import com.ant.cointrading.repository.MemeScalperTradeRepository
 import com.ant.cointrading.repository.VolumeSurgeTradeRepository
 import org.springframework.stereotype.Controller
@@ -17,10 +20,13 @@ import java.math.BigDecimal
 class DashboardController(
     private val bithumbPrivateApi: BithumbPrivateApi,
     private val bithumbPublicApi: BithumbPublicApi,
+    private val tradingProperties: TradingProperties,
     private val memeScalperProperties: MemeScalperProperties,
     private val volumeSurgeProperties: VolumeSurgeProperties,
     private val memeScalperRepository: MemeScalperTradeRepository,
-    private val volumeSurgeRepository: VolumeSurgeTradeRepository
+    private val volumeSurgeRepository: VolumeSurgeTradeRepository,
+    private val dcaPositionRepository: DcaPositionRepository,
+    private val dcaEngine: DcaEngine
 ) {
 
     @GetMapping
@@ -79,14 +85,19 @@ class DashboardController(
         model.addAttribute("todayStats", todayStats)
         model.addAttribute("totalStats", totalStats)
 
-        // 엔진 상태 - 간단히 boolean 값만 전달
+        // 엔진 상태
         val memeOpenCount = memeScalperRepository.findByStatus("OPEN").size
         val volumeOpenCount = volumeSurgeRepository.findByStatus("OPEN").size
+        val dcaOpenCount = dcaPositionRepository.findByStatus("OPEN").size
 
         model.addAttribute("memeScalperEnabled", if (memeScalperProperties.enabled) "true" else "false")
         model.addAttribute("memeScalperOpenPositions", memeOpenCount)
         model.addAttribute("volumeSurgeEnabled", if (volumeSurgeProperties.enabled) "true" else "false")
         model.addAttribute("volumeSurgeOpenPositions", volumeOpenCount)
+        model.addAttribute("tradingEngineEnabled", if (tradingProperties.enabled) "true" else "false")
+        model.addAttribute("tradingEngineMarkets", tradingProperties.markets.joinToString(", "))
+        model.addAttribute("dcaEngineEnabled", if (tradingProperties.enabled) "true" else "false")
+        model.addAttribute("dcaEngineOpenPositions", dcaOpenCount)
 
         return "dashboard"
     }
@@ -148,6 +159,33 @@ class DashboardController(
             ))
         }
 
+        // DCA 포지션
+        dcaPositionRepository.findByStatus("OPEN").forEach { pos ->
+            val currentPrice = try {
+                bithumbPublicApi.getCurrentPrice(pos.market)?.firstOrNull()?.tradePrice?.toDouble() ?: pos.averagePrice
+            } catch (e: Exception) {
+                pos.averagePrice
+            }
+
+            val pnl = (currentPrice - pos.averagePrice) * pos.totalQuantity
+            val pnlPercent = ((currentPrice - pos.averagePrice) / pos.averagePrice) * 100
+
+            positions.add(PositionInfo(
+                market = pos.market,
+                strategy = "DCA",
+                entryPrice = pos.averagePrice,
+                currentPrice = currentPrice,
+                quantity = pos.totalQuantity,
+                value = pos.averagePrice * pos.totalQuantity,
+                pnl = pnl,
+                pnlPercent = pnlPercent,
+                takeProfitPrice = pos.averagePrice * (1 + pos.takeProfitPercent / 100),
+                stopLossPrice = pos.averagePrice * (1 + pos.stopLossPercent / 100),
+                entryTime = pos.createdAt,
+                peakPrice = null
+            ))
+        }
+
         return positions.sortedByDescending { it.entryTime }
     }
 
@@ -157,14 +195,17 @@ class DashboardController(
 
         val memeTrades = memeScalperRepository.findByStatus("CLOSED").filter { it.exitTime != null && it.exitTime!!.isAfter(startOfDay) }
         val volumeTrades = volumeSurgeRepository.findByStatus("CLOSED").filter { it.exitTime != null && it.exitTime!!.isAfter(startOfDay) }
+        val dcaTrades = dcaPositionRepository.findByStatus("CLOSED").filter { it.exitedAt != null && it.exitedAt!!.isAfter(startOfDay) }
 
-        val allPnl = memeTrades.mapNotNull { it.pnlAmount }.filterNotNull() + volumeTrades.mapNotNull { it.pnlAmount }.filterNotNull()
+        val allPnl = memeTrades.mapNotNull { it.pnlAmount }.filterNotNull() +
+                     volumeTrades.mapNotNull { it.pnlAmount }.filterNotNull() +
+                     dcaTrades.mapNotNull { it.realizedPnl }.filterNotNull()
         val totalPnl = allPnl.sum()
         val winCount = allPnl.count { it > 0 }
         val lossCount = allPnl.count { it < 0 }
 
         return StatsInfo(
-            totalTrades = memeTrades.size + volumeTrades.size,
+            totalTrades = memeTrades.size + volumeTrades.size + dcaTrades.size,
             winCount = winCount,
             lossCount = lossCount,
             totalPnl = totalPnl,
@@ -175,14 +216,17 @@ class DashboardController(
     private fun getTotalStats(): StatsInfo {
         val memeTrades = memeScalperRepository.findByStatus("CLOSED")
         val volumeTrades = volumeSurgeRepository.findByStatus("CLOSED")
+        val dcaTrades = dcaPositionRepository.findByStatus("CLOSED")
 
-        val allPnl = memeTrades.mapNotNull { it.pnlAmount }.filterNotNull() + volumeTrades.mapNotNull { it.pnlAmount }.filterNotNull()
+        val allPnl = memeTrades.mapNotNull { it.pnlAmount }.filterNotNull() +
+                     volumeTrades.mapNotNull { it.pnlAmount }.filterNotNull() +
+                     dcaTrades.mapNotNull { it.realizedPnl }.filterNotNull()
         val totalPnl = allPnl.sum()
         val winCount = allPnl.count { it > 0 }
         val lossCount = allPnl.count { it < 0 }
 
         return StatsInfo(
-            totalTrades = memeTrades.size + volumeTrades.size,
+            totalTrades = memeTrades.size + volumeTrades.size + dcaTrades.size,
             winCount = winCount,
             lossCount = lossCount,
             totalPnl = totalPnl,
