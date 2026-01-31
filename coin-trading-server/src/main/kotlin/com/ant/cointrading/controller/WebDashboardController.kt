@@ -61,7 +61,7 @@ class DashboardController(
                     } else 0.0
                 )
             } else null
-        }
+        }.filter { it.value >= 100.0 }  // 평가액 100원 미만 필터링
 
         // 열린 포지션 조회 (간단 버전)
         val openPositions = getOpenPositionsSimple()
