@@ -230,6 +230,154 @@
         .live-indicator {
             animation: pulse 2s infinite;
         }
+
+        /* ===== 모바일 반응형 ===== */
+        @media (max-width: 768px) {
+            .container {
+                padding: 12px;
+            }
+
+            h1 {
+                font-size: 20px;
+                flex-direction: column;
+                align-items: flex-start;
+                gap: 5px;
+            }
+
+            h1 span.refresh {
+                font-size: 11px;
+            }
+
+            /* 요약 카드 2열로 */
+            .summary-cards {
+                grid-template-columns: repeat(2, 1fr);
+                gap: 10px;
+                margin-bottom: 20px;
+            }
+
+            .card {
+                padding: 15px;
+                border-radius: 10px;
+            }
+
+            .card-title {
+                font-size: 11px;
+            }
+
+            .card-value {
+                font-size: 18px;
+            }
+
+            /* 섹션 패딩 감소 */
+            .section {
+                padding: 15px;
+                border-radius: 10px;
+                margin-bottom: 15px;
+            }
+
+            .section-title {
+                font-size: 14px;
+                margin-bottom: 12px;
+            }
+
+            /* 테이블: 가로 스크롤 */
+            .positions-table {
+                font-size: 11px;
+                display: block;
+                overflow-x: auto;
+                white-space: nowrap;
+                -webkit-overflow-scrolling: touch;
+            }
+
+            .positions-table thead,
+            .positions-table tbody,
+            .positions-table tr,
+            .positions-table th,
+            .positions-table td {
+                display: block;
+            }
+
+            .positions-table thead {
+                display: none;
+            }
+
+            .positions-table tr {
+                margin-bottom: 15px;
+                background: #1e2329;
+                border-radius: 8px;
+                padding: 12px;
+                border: 1px solid #2b3139;
+            }
+
+            .positions-table td {
+                padding: 6px 0;
+                border: none;
+                display: flex;
+                justify-content: space-between;
+                align-items: center;
+                white-space: normal;
+            }
+
+            .positions-table td::before {
+                content: attr(data-label);
+                font-weight: 500;
+                color: #848e9c;
+                font-size: 11px;
+            }
+
+            /* 엔진 상태 2열로 */
+            .engine-status {
+                flex-direction: column;
+                gap: 12px;
+            }
+
+            .engine-item {
+                font-size: 12px;
+            }
+
+            /* 통계 그리드 2열로 */
+            .stats-grid {
+                grid-template-columns: repeat(2, 1fr);
+                gap: 10px;
+            }
+
+            .stat-value {
+                font-size: 16px;
+            }
+
+            /* 코인 리스트 1열로 */
+            .coin-list {
+                grid-template-columns: 1fr;
+                gap: 10px;
+            }
+
+            /* 전략 태그, 청산사유 태그 */
+            .strategy-tag,
+            .exit-reason {
+                font-size: 10px;
+                padding: 3px 6px;
+            }
+
+            /* tooltip-cell 스타일 유지 */
+            .tooltip-cell {
+                border-bottom: 1px dotted #848e9c;
+            }
+        }
+
+        /* 소형 모바일 (아이폰 SE 등) */
+        @media (max-width: 375px) {
+            .summary-cards {
+                grid-template-columns: 1fr;
+            }
+
+            .card-value {
+                font-size: 20px;
+            }
+
+            .stats-grid {
+                grid-template-columns: 1fr;
+            }
+        }
     </style>
 </head>
 <body>
@@ -315,22 +463,22 @@
                 </thead>
                 <tbody>
                     <tr th:each="pos : ${openPositions}">
-                        <td th:text="${pos.market}">KRW-BTC</td>
-                        <td>
+                        <td data-label="마켓" th:text="${pos.market}">KRW-BTC</td>
+                        <td data-label="전략">
                             <span class="strategy-tag"
                                   th:class="${pos.strategy == 'Meme Scalper' ? 'strategy-meme' : (pos.strategy == 'Volume Surge' ? 'strategy-volume' : 'strategy-dca')}"
                                   th:text="${pos.strategy}">Meme Scalper</span>
                         </td>
-                        <td th:text="${#numbers.formatInteger(pos.entryPrice, 1, 'COMMA')}">0</td>
-                        <td th:text="${#numbers.formatInteger(pos.currentPrice, 1, 'COMMA')}">0</td>
-                        <td th:text="${#numbers.formatDecimal(pos.quantity, 1, 4)}">0</td>
-                        <td th:text="|${#numbers.formatInteger(pos.value, 1, 'COMMA')}원|">0원</td>
-                        <td th:class="${pos.pnl >= 0} ? 'positive' : 'negative'"
+                        <td data-label="진입가" th:text="${#numbers.formatInteger(pos.entryPrice, 1, 'COMMA')}">0</td>
+                        <td data-label="현재가" th:text="${#numbers.formatInteger(pos.currentPrice, 1, 'COMMA')}">0</td>
+                        <td data-label="수량" th:text="${#numbers.formatDecimal(pos.quantity, 1, 4)}">0</td>
+                        <td data-label="평가금액" th:text="|${#numbers.formatInteger(pos.value, 1, 'COMMA')}원|">0원</td>
+                        <td data-label="손익" th:class="${pos.pnl >= 0} ? 'positive' : 'negative'"
                             th:text="|${pos.pnl >= 0 ? '+' : ''}${#numbers.formatInteger(pos.pnl, 1, 'COMMA')}원|">0원</td>
-                        <td th:class="${pos.pnlPercent >= 0} ? 'positive' : 'negative'"
+                        <td data-label="손익률" th:class="${pos.pnlPercent >= 0} ? 'positive' : 'negative'"
                             th:text="|${pos.pnlPercent >= 0 ? '+' : ''}${#numbers.formatDecimal(pos.pnlPercent, 1, 2)}%|">0%</td>
-                        <td th:text="${#numbers.formatInteger(pos.takeProfitPrice, 1, 'COMMA')}">0</td>
-                        <td th:text="${#numbers.formatInteger(pos.stopLossPrice, 1, 'COMMA')}">0</td>
+                        <td data-label="익절가" th:text="${#numbers.formatInteger(pos.takeProfitPrice, 1, 'COMMA')}">0</td>
+                        <td data-label="손절가" th:text="${#numbers.formatInteger(pos.stopLossPrice, 1, 'COMMA')}">0</td>
                     </tr>
                 </tbody>
             </table>
@@ -358,23 +506,23 @@
                 </thead>
                 <tbody>
                     <tr th:each="trade : ${todayTrades}">
-                        <td th:text="${trade.market}">KRW-BTC</td>
-                        <td>
+                        <td data-label="마켓" th:text="${trade.market}">KRW-BTC</td>
+                        <td data-label="전략">
                             <span class="strategy-tag"
                                   th:class="${trade.strategy == 'Meme Scalper' ? 'strategy-meme' : (trade.strategy == 'Volume Surge' ? 'strategy-volume' : 'strategy-dca')}"
                                   th:text="${trade.strategy}">Meme Scalper</span>
                         </td>
-                        <td th:text="${#numbers.formatDecimal(trade.entryPrice, 1, 0)}">0</td>
-                        <td th:text="${#numbers.formatDecimal(trade.exitPrice, 1, 0)}">0</td>
-                        <td th:text="${#numbers.formatDecimal(trade.quantity, 1, 4)}">0</td>
-                        <td th:title="|진입: ${trade.entryTimeFormatted} / 청산: ${trade.exitTimeFormatted}|"
+                        <td data-label="진입가" th:text="${#numbers.formatDecimal(trade.entryPrice, 1, 0)}">0</td>
+                        <td data-label="청산가" th:text="${#numbers.formatDecimal(trade.exitPrice, 1, 0)}">0</td>
+                        <td data-label="수량" th:text="${#numbers.formatDecimal(trade.quantity, 1, 4)}">0</td>
+                        <td data-label="보유시간" th:title="|진입: ${trade.entryTimeFormatted} / 청산: ${trade.exitTimeFormatted}|"
                             th:text="${trade.holdingMinutes} + '분'"
                             class="tooltip-cell">0분</td>
-                        <td th:class="${trade.pnlAmount >= 0} ? 'positive' : 'negative'"
+                        <td data-label="손익" th:class="${trade.pnlAmount >= 0} ? 'positive' : 'negative'"
                             th:text="|${trade.pnlAmount >= 0 ? '+' : ''}${#numbers.formatDecimal(trade.pnlAmount, 1, 0)}원|">0원</td>
-                        <td th:class="${trade.pnlPercent >= 0} ? 'positive' : 'negative'"
+                        <td data-label="손익률" th:class="${trade.pnlPercent >= 0} ? 'positive' : 'negative'"
                             th:text="|${trade.pnlPercent >= 0 ? '+' : ''}${#numbers.formatDecimal(trade.pnlPercent, 1, 2)}%|">0%</td>
-                        <td>
+                        <td data-label="사유">
                             <span class="exit-reason"
                                   th:class="${trade.exitReason == 'TAKE_PROFIT' ? 'exit-profit' : (trade.exitReason == 'STOP_LOSS' ? 'exit-loss' : 'exit-other')}"
                                   th:text="${trade.exitReason}">TAKE_PROFIT</span>
