@@ -252,3 +252,12 @@ management:
   endpoint:
     health:
       show-details: always
+
+# Thymeleaf 캐시 비활성화 (개발 중 템플릿 즉시 반영)
+spring:
+  thymeleaf:
+    cache: false
+  web:
+    resources:
+      cache:
+        period: 0  # 정적 리소스 캐시 비활성화
