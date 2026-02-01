@@ -72,6 +72,9 @@ class DashboardController(
         // 열린 포지션 조회 (간단 버전)
         val openPositions = getOpenPositionsSimple()
 
+        // 오늘 거래 내역
+        val todayTrades = getTodayTrades()
+
         // 오늘 통계
         val todayStats = getTodayStats()
 
@@ -82,6 +85,7 @@ class DashboardController(
         model.addAttribute("totalAssetKrw", totalAssetKrw)
         model.addAttribute("coinAssets", coinAssets)
         model.addAttribute("openPositions", openPositions)
+        model.addAttribute("todayTrades", todayTrades)
         model.addAttribute("todayStats", todayStats)
         model.addAttribute("totalStats", totalStats)
 
@@ -189,6 +193,73 @@ class DashboardController(
         return positions.sortedByDescending { it.entryTime }
     }
 
+    /**
+     * 오늘 체결된 거래 내역 조회
+     */
+    private fun getTodayTrades(): List<ClosedTradeInfo> {
+        val trades = mutableListOf<ClosedTradeInfo>()
+        val startOfDay = java.time.ZonedDateTime.now(java.time.ZoneId.systemDefault()).toLocalDate().atStartOfDay(java.time.ZoneId.systemDefault()).toInstant()
+
+        // Meme Scalper 체결 내역
+        memeScalperRepository.findByStatus("CLOSED")
+            .filter { it.exitTime != null && it.exitTime!!.isAfter(startOfDay) }
+            .forEach { trade ->
+                trades.add(ClosedTradeInfo(
+                    market = trade.market,
+                    strategy = "Meme Scalper",
+                    entryPrice = trade.entryPrice,
+                    exitPrice = trade.exitPrice,
+                    quantity = trade.quantity,
+                    entryTime = trade.entryTime,
+                    exitTime = trade.exitTime!!,
+                    holdingMinutes = java.time.Duration.between(trade.entryTime, trade.exitTime!!).toMinutes(),
+                    pnlAmount = trade.pnlAmount ?: 0.0,
+                    pnlPercent = trade.pnlPercent ?: 0.0,
+                    exitReason = trade.exitReason ?: "UNKNOWN"
+                ))
+            }
+
+        // Volume Surge 체결 내역
+        volumeSurgeRepository.findByStatus("CLOSED")
+            .filter { it.exitTime != null && it.exitTime!!.isAfter(startOfDay) }
+            .forEach { trade ->
+                trades.add(ClosedTradeInfo(
+                    market = trade.market,
+                    strategy = "Volume Surge",
+                    entryPrice = trade.entryPrice,
+                    exitPrice = trade.exitPrice,
+                    quantity = trade.quantity,
+                    entryTime = trade.entryTime,
+                    exitTime = trade.exitTime!!,
+                    holdingMinutes = java.time.Duration.between(trade.entryTime, trade.exitTime!!).toMinutes(),
+                    pnlAmount = trade.pnlAmount ?: 0.0,
+                    pnlPercent = trade.pnlPercent ?: 0.0,
+                    exitReason = trade.exitReason ?: "UNKNOWN"
+                ))
+            }
+
+        // DCA 체결 내역
+        dcaPositionRepository.findByStatus("CLOSED")
+            .filter { it.exitedAt != null && it.exitedAt!!.isAfter(startOfDay) }
+            .forEach { pos ->
+                trades.add(ClosedTradeInfo(
+                    market = pos.market,
+                    strategy = "DCA",
+                    entryPrice = pos.averagePrice,
+                    exitPrice = pos.exitPrice ?: 0.0,
+                    quantity = pos.totalQuantity,
+                    entryTime = pos.createdAt,
+                    exitTime = pos.exitedAt!!,
+                    holdingMinutes = java.time.Duration.between(pos.createdAt, pos.exitedAt!!).toMinutes(),
+                    pnlAmount = pos.realizedPnl ?: 0.0,
+                    pnlPercent = pos.realizedPnlPercent ?: 0.0,
+                    exitReason = pos.exitReason ?: "UNKNOWN"
+                ))
+            }
+
+        return trades.sortedByDescending { it.exitTime }
+    }
+
     private fun getTodayStats(): StatsInfo {
         val now = java.time.Instant.now()
         val startOfDay = java.time.ZonedDateTime.now(java.time.ZoneId.systemDefault()).toLocalDate().atStartOfDay(java.time.ZoneId.systemDefault()).toInstant()
@@ -271,4 +342,18 @@ data class StatsInfo(
 data class EngineStatusInfo(
     val enabled: Boolean,
     val openPositions: Int
+)
+
+data class ClosedTradeInfo(
+    val market: String,
+    val strategy: String,
+    val entryPrice: Double,
+    val exitPrice: Double,
+    val quantity: Double,
+    val entryTime: java.time.Instant,
+    val exitTime: java.time.Instant,
+    val holdingMinutes: Long,
+    val pnlAmount: Double,
+    val pnlPercent: Double,
+    val exitReason: String
 )

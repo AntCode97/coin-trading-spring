@@ -128,6 +128,16 @@
         .strategy-volume { background: #0ecb8120; color: #0ecb81; }
         .strategy-dca { background: #3b82f620; color: #3b82f6; }
 
+        .exit-reason {
+            padding: 4px 8px;
+            border-radius: 4px;
+            font-size: 11px;
+            font-weight: 500;
+        }
+        .exit-profit { background: #0ecb8120; color: #0ecb81; }
+        .exit-loss { background: #f6465d20; color: #f6465d; }
+        .exit-other { background: #848e9c20; color: #848e9c; }
+
         .stats-grid {
             display: grid;
             grid-template-columns: repeat(4, 1fr);
@@ -316,6 +326,52 @@
                             th:text="|${pos.pnlPercent >= 0 ? '+' : ''}${#numbers.formatDecimal(pos.pnlPercent, 1, 2)}%|">0%</td>
                         <td th:text="${#numbers.formatInteger(pos.takeProfitPrice, 1, 'COMMA')}">0</td>
                         <td th:text="${#numbers.formatInteger(pos.stopLossPrice, 1, 'COMMA')}">0</td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+
+        <!-- 오늘 거래 내역 -->
+        <div class="section">
+            <div class="section-title">오늘 거래 내역</div>
+            <div th:if="${#lists.isEmpty(todayTrades)}" class="no-positions">
+                오늘 체결된 거래가 없습니다
+            </div>
+            <table class="positions-table" th:if="${!#lists.isEmpty(todayTrades)}">
+                <thead>
+                    <tr>
+                        <th>마켓</th>
+                        <th>전략</th>
+                        <th>진입가</th>
+                        <th>청산가</th>
+                        <th>수량</th>
+                        <th>보유시간</th>
+                        <th>손익</th>
+                        <th>손익률</th>
+                        <th>사유</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr th:each="trade : ${todayTrades}">
+                        <td th:text="${trade.market}">KRW-BTC</td>
+                        <td>
+                            <span class="strategy-tag"
+                                  th:class="${trade.strategy == 'Meme Scalper' ? 'strategy-meme' : (trade.strategy == 'Volume Surge' ? 'strategy-volume' : 'strategy-dca')}"
+                                  th:text="${trade.strategy}">Meme Scalper</span>
+                        </td>
+                        <td th:text="${#numbers.formatInteger(trade.entryPrice, 1, 'COMMA')}">0</td>
+                        <td th:text="${#numbers.formatInteger(trade.exitPrice, 1, 'COMMA')}">0</td>
+                        <td th:text="${#numbers.formatDecimal(trade.quantity, 1, 4)}">0</td>
+                        <td th:text="${trade.holdingMinutes + '분'}">0분</td>
+                        <td th:class="${trade.pnlAmount >= 0} ? 'positive' : 'negative'"
+                            th:text="|${trade.pnlAmount >= 0 ? '+' : ''}${#numbers.formatInteger(trade.pnlAmount, 1, 'COMMA')}원|">0원</td>
+                        <td th:class="${trade.pnlPercent >= 0} ? 'positive' : 'negative'"
+                            th:text="|${trade.pnlPercent >= 0 ? '+' : ''}${#numbers.formatDecimal(trade.pnlPercent, 1, 2)}%|">0%</td>
+                        <td>
+                            <span class="exit-reason"
+                                  th:class="${trade.exitReason == 'TAKE_PROFIT' ? 'exit-profit' : (trade.exitReason == 'STOP_LOSS' ? 'exit-loss' : 'exit-other')}"
+                                  th:text="${trade.exitReason}">TAKE_PROFIT</span>
+                        </td>
                     </tr>
                 </tbody>
             </table>
