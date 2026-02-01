@@ -37,7 +37,7 @@ class DashboardController(
 ) {
 
     @GetMapping
-    fun dashboard(model: Model): String {
+    fun dashboard(model: Model, @RequestParam(defaultValue = "0") daysAgo: Int): String {
         // 잔고 조회
         val balances = try {
             bithumbPrivateApi.getBalances() ?: emptyList()
@@ -76,17 +76,27 @@ class DashboardController(
             } else null
         }.filter { it.value >= 100.0 }  // 평가액 100원 미만 필터링
 
+        // 날짜 범위 계산
+        val targetDate = java.time.ZonedDateTime.now(java.time.ZoneId.systemDefault()).toLocalDate()
+            .minusDays(daysAgo.toLong())
+            .atStartOfDay(java.time.ZoneId.systemDefault())
+            .toInstant()
+
         // 열린 포지션 조회 (간단 버전)
         val openPositions = getOpenPositionsSimple()
 
         // 오늘 거래 내역
-        val todayTrades = getTodayTrades()
+        val todayTrades = getTodayTrades(targetDate)
 
         // 오늘 통계
-        val todayStats = getTodayStats()
+        val todayStats = getTodayStats(targetDate)
 
         // 전체 통계
         val totalStats = getTotalStats()
+
+        // 현재 조회 중인 날짜 표시
+        val dateFormatter = java.time.format.DateTimeFormatter.ofPattern("MM-dd (E)")
+        val currentDateStr = targetDate.atZone(java.time.ZoneId.systemDefault()).toLocalDate().format(dateFormatter)
 
         model.addAttribute("krwBalance", krwBalance.toDouble())
         model.addAttribute("totalAssetKrw", totalAssetKrw)
@@ -95,6 +105,8 @@ class DashboardController(
         model.addAttribute("todayTrades", todayTrades)
         model.addAttribute("todayStats", todayStats)
         model.addAttribute("totalStats", totalStats)
+        model.addAttribute("currentDateStr", currentDateStr)
+        model.addAttribute("currentDaysAgo", daysAgo)
 
         // 엔진 상태
         val memeOpenCount = memeScalperRepository.findByStatus("OPEN").size
@@ -205,15 +217,16 @@ class DashboardController(
     }
 
     /**
-     * 오늘 체결된 거래 내역 조회
+     * 체결된 거래 내역 조회 (날짜별)
      */
-    private fun getTodayTrades(): List<ClosedTradeInfo> {
+    private fun getTodayTrades(targetDate: java.time.Instant): List<ClosedTradeInfo> {
         val trades = mutableListOf<ClosedTradeInfo>()
-        val startOfDay = java.time.ZonedDateTime.now(java.time.ZoneId.systemDefault()).toLocalDate().atStartOfDay(java.time.ZoneId.systemDefault()).toInstant()
+        val startOfDay = targetDate.atZone(java.time.ZoneId.systemDefault()).toLocalDate().atStartOfDay(java.time.ZoneId.systemDefault()).toInstant()
+        val endOfDay = startOfDay.plus(java.time.Duration.ofDays(1))
 
         // Meme Scalper 체결 내역
         memeScalperRepository.findByStatus("CLOSED")
-            .filter { it.exitTime != null && it.exitTime!!.isAfter(startOfDay) }
+            .filter { it.exitTime != null && it.exitTime!!.isAfter(startOfDay) && it.exitTime!!.isBefore(endOfDay) }
             .forEach { trade ->
                 trades.add(ClosedTradeInfo(
                     market = trade.market,
@@ -271,13 +284,13 @@ class DashboardController(
         return trades.sortedByDescending { it.exitTime }
     }
 
-    private fun getTodayStats(): StatsInfo {
-        val now = java.time.Instant.now()
-        val startOfDay = java.time.ZonedDateTime.now(java.time.ZoneId.systemDefault()).toLocalDate().atStartOfDay(java.time.ZoneId.systemDefault()).toInstant()
+    private fun getTodayStats(targetDate: java.time.Instant): StatsInfo {
+        val startOfDay = targetDate.atZone(java.time.ZoneId.systemDefault()).toLocalDate().atStartOfDay(java.time.ZoneId.systemDefault()).toInstant()
+        val endOfDay = startOfDay.plus(java.time.Duration.ofDays(1))
 
-        val memeTrades = memeScalperRepository.findByStatus("CLOSED").filter { it.exitTime != null && it.exitTime!!.isAfter(startOfDay) }
-        val volumeTrades = volumeSurgeRepository.findByStatus("CLOSED").filter { it.exitTime != null && it.exitTime!!.isAfter(startOfDay) }
-        val dcaTrades = dcaPositionRepository.findByStatus("CLOSED").filter { it.exitedAt != null && it.exitedAt!!.isAfter(startOfDay) }
+        val memeTrades = memeScalperRepository.findByStatus("CLOSED").filter { it.exitTime != null && it.exitTime!!.isAfter(startOfDay) && it.exitTime!!.isBefore(endOfDay) }
+        val volumeTrades = volumeSurgeRepository.findByStatus("CLOSED").filter { it.exitTime != null && it.exitTime!!.isAfter(startOfDay) && it.exitTime!!.isBefore(endOfDay) }
+        val dcaTrades = dcaPositionRepository.findByStatus("CLOSED").filter { it.exitedAt != null && it.exitedAt!!.isAfter(startOfDay) && it.exitedAt!!.isBefore(endOfDay) }
 
         val allPnl = memeTrades.mapNotNull { it.pnlAmount }.filterNotNull() +
                      volumeTrades.mapNotNull { it.pnlAmount }.filterNotNull() +

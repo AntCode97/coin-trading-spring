@@ -163,6 +163,39 @@
             background: #b03547;
         }
 
+        .date-nav {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .date-nav-btn {
+            background: #2b3139;
+            color: #e1e1e1;
+            border: 1px solid #3d4650;
+            padding: 4px 10px;
+            border-radius: 4px;
+            font-size: 13px;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+
+        .date-nav-btn:hover:not(:disabled) {
+            background: #3d4650;
+        }
+
+        .date-nav-btn:disabled {
+            opacity: 0.3;
+            cursor: not-allowed;
+        }
+
+        .date-current {
+            font-size: 14px;
+            color: #e1e1e1;
+            min-width: 100px;
+            text-align: center;
+        }
+
         .stats-grid {
             display: grid;
             grid-template-columns: repeat(4, 1fr);
@@ -515,9 +548,18 @@
 
         <!-- 오늘 거래 내역 -->
         <div class="section">
-            <div class="section-title">오늘 거래 내역</div>
+            <div class="section-title">
+                <div style="display: flex; justify-content: space-between; align-items: center;">
+                    <span>거래 내역</span>
+                    <div class="date-nav">
+                        <button class="date-nav-btn" onclick="changeDate(-1)" th:disabled="${currentDaysAgo == 7}">◀ 이전</button>
+                        <span class="date-current" th:text="${currentDateStr}">02-01 (금)</span>
+                        <button class="date-nav-btn" onclick="changeDate(1)" th:disabled="${currentDaysAgo == 0}">다음 ▶</button>
+                    </div>
+                </div>
+            </div>
             <div th:if="${#lists.isEmpty(todayTrades)}" class="no-positions">
-                오늘 체결된 거래가 없습니다
+                해당 날짜에 체결된 거래가 없습니다
             </div>
             <table class="positions-table" th:if="${!#lists.isEmpty(todayTrades)}">
                 <thead>
@@ -1114,6 +1156,14 @@
                 button.disabled = false;
                 button.textContent = '매도';
             }
+        }
+
+        // 날짜별 조회
+        function changeDate(offset) {
+            const urlParams = new URLSearchParams(window.location.search);
+            let daysAgo = parseInt(urlParams.get('daysAgo') || '0');
+            daysAgo = Math.max(0, Math.min(7, daysAgo + offset)); // 0-7일 범위 제한
+            window.location.href = '/dashboard?daysAgo=' + daysAgo;
         }
     </script>
 </body>
