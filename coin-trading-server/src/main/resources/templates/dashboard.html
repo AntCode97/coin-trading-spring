@@ -143,6 +143,26 @@
             border-bottom: 1px dotted #848e9c;
         }
 
+        .sell-btn {
+            background: #f6465d;
+            color: #fff;
+            border: none;
+            padding: 6px 12px;
+            border-radius: 4px;
+            font-size: 12px;
+            font-weight: 500;
+            cursor: pointer;
+            transition: background 0.2s;
+        }
+
+        .sell-btn:hover {
+            background: #d63d56;
+        }
+
+        .sell-btn:active {
+            background: #b03547;
+        }
+
         .stats-grid {
             display: grid;
             grid-template-columns: repeat(4, 1fr);
@@ -459,6 +479,7 @@
                         <th>손익률</th>
                         <th>익절가</th>
                         <th>손절가</th>
+                        <th>매도</th>
                     </tr>
                 </thead>
                 <tbody>
@@ -479,6 +500,14 @@
                             th:text="|${pos.pnlPercent >= 0 ? '+' : ''}${#numbers.formatDecimal(pos.pnlPercent, 1, 2)}%|">0%</td>
                         <td data-label="익절가" th:text="${#numbers.formatInteger(pos.takeProfitPrice, 1, 'COMMA')}">0</td>
                         <td data-label="손절가" th:text="${#numbers.formatInteger(pos.stopLossPrice, 1, 'COMMA')}">0</td>
+                        <td data-label="매도">
+                            <button class="sell-btn"
+                                    th:data-market="${pos.market}"
+                                    th:data-strategy="${pos.strategy}"
+                                    onclick="manualSell(this)">
+                                매도
+                            </button>
+                        </td>
                     </tr>
                 </tbody>
             </table>
@@ -1046,6 +1075,41 @@
                 }
             } catch (e) {
                 alert('설정 저장 오류: ' + e.message);
+            }
+        }
+
+        // 수동 매도
+        async function manualSell(button) {
+            const market = button.dataset.market;
+            const strategy = button.dataset.strategy;
+
+            if (!confirm(`${market} (${strategy}) 포지션을 매도하시겠습니까?`)) {
+                return;
+            }
+
+            button.disabled = true;
+            button.textContent = '매도중...';
+
+            try {
+                const response = await fetch('/dashboard/manual-close', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+                    body: `market=${encodeURIComponent(market)}&strategy=${encodeURIComponent(strategy)}`
+                });
+                const result = await response.json();
+
+                if (result.success) {
+                    alert('매도 완료!');
+                    location.reload();
+                } else {
+                    alert('매도 실패: ' + (result.error || result.message || '알 수 없는 오류'));
+                    button.disabled = false;
+                    button.textContent = '매도';
+                }
+            } catch (e) {
+                alert('매도 오류: ' + e.message);
+                button.disabled = false;
+                button.textContent = '매도';
             }
         }
     </script>

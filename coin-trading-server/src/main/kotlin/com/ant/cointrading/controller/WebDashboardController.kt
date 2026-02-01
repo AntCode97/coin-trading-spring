@@ -6,13 +6,18 @@ import com.ant.cointrading.config.MemeScalperProperties
 import com.ant.cointrading.config.TradingProperties
 import com.ant.cointrading.config.VolumeSurgeProperties
 import com.ant.cointrading.dca.DcaEngine
+import com.ant.cointrading.memescalper.MemeScalperEngine
 import com.ant.cointrading.repository.DcaPositionRepository
 import com.ant.cointrading.repository.MemeScalperTradeRepository
 import com.ant.cointrading.repository.VolumeSurgeTradeRepository
+import com.ant.cointrading.volumesurge.VolumeSurgeEngine
 import org.springframework.stereotype.Controller
 import org.springframework.ui.Model
 import org.springframework.web.bind.annotation.GetMapping
+import org.springframework.web.bind.annotation.PostMapping
 import org.springframework.web.bind.annotation.RequestMapping
+import org.springframework.web.bind.annotation.RequestParam
+import org.springframework.web.bind.annotation.ResponseBody
 import java.math.BigDecimal
 
 @Controller
@@ -26,7 +31,9 @@ class DashboardController(
     private val memeScalperRepository: MemeScalperTradeRepository,
     private val volumeSurgeRepository: VolumeSurgeTradeRepository,
     private val dcaPositionRepository: DcaPositionRepository,
-    private val dcaEngine: DcaEngine
+    private val dcaEngine: DcaEngine,
+    private val memeScalperEngine: MemeScalperEngine,
+    private val volumeSurgeEngine: VolumeSurgeEngine
 ) {
 
     @GetMapping
@@ -149,7 +156,7 @@ class DashboardController(
 
             // 익절가/손절가 계산 (appliedTakeProfitPercent/appliedStopLossPercent 사용)
             val takeProfitPrice = trade.entryPrice * (1 + (trade.appliedTakeProfitPercent ?: 6.0) / 100)
-            val stopLossPrice = trade.entryPrice * (1 + (trade.appliedStopLossPercent ?: -3.0) / 100)
+            val stopLossPrice = trade.entryPrice * (1 - (trade.appliedStopLossPercent ?: 3.0) / 100)
 
             positions.add(PositionInfo(
                 market = trade.market,
@@ -307,6 +314,21 @@ class DashboardController(
             totalPnl = totalPnl,
             winRate = if (allPnl.isNotEmpty()) winCount.toDouble() / allPnl.size else 0.0
         )
+    }
+
+    /**
+     * 수동 매도
+     */
+    @PostMapping("/manual-close")
+    @ResponseBody
+    fun manualClose(@RequestParam market: String, @RequestParam strategy: String): Map<String, Any?> {
+        val result = when (strategy) {
+            "Meme Scalper" -> memeScalperEngine.manualClose(market)
+            "Volume Surge" -> volumeSurgeEngine.manualClose(market)
+            "DCA" -> dcaEngine.manualClose(market)
+            else -> mapOf("success" to false, "error" to "알 수 없는 전략: $strategy")
+        }
+        return result
     }
 }
 
