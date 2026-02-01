@@ -1162,9 +1162,18 @@
         function changeDate(offset) {
             const urlParams = new URLSearchParams(window.location.search);
             let daysAgo = parseInt(urlParams.get('daysAgo') || '0');
+            console.log('Current daysAgo:', daysAgo, 'Offset:', offset);
             daysAgo = Math.max(0, Math.min(7, daysAgo + offset)); // 0-7일 범위 제한
-            window.location.href = '/dashboard?daysAgo=' + daysAgo;
+            console.log('New daysAgo:', daysAgo);
+            const newUrl = '/dashboard?daysAgo=' + daysAgo;
+            console.log('Navigating to:', newUrl);
+            window.location.href = newUrl;
         }
+
+        // 페이지 로드 시 현재 파라미터 로깅
+        console.log('Page loaded. URL:', window.location.href);
+        console.log('daysAgo param:', new URLSearchParams(window.location.search).get('daysAgo'));
+        console.log('currentDateStr from server:', document.querySelector('.date-current')?.textContent);
     </script>
 </body>
 </html>
