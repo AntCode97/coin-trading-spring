@@ -138,6 +138,11 @@
         .exit-loss { background: #f6465d20; color: #f6465d; }
         .exit-other { background: #848e9c20; color: #848e9c; }
 
+        .tooltip-cell {
+            cursor: help;
+            border-bottom: 1px dotted #848e9c;
+        }
+
         .stats-grid {
             display: grid;
             grid-template-columns: repeat(4, 1fr);
@@ -362,7 +367,9 @@
                         <td th:text="${#numbers.formatDecimal(trade.entryPrice, 1, 0)}">0</td>
                         <td th:text="${#numbers.formatDecimal(trade.exitPrice, 1, 0)}">0</td>
                         <td th:text="${#numbers.formatDecimal(trade.quantity, 1, 4)}">0</td>
-                        <td th:text="${trade.holdingMinutes} + '분'">0분</td>
+                        <td th:title="|진입: ${trade.entryTimeFormatted} / 청산: ${trade.exitTimeFormatted}|"
+                            th:text="${trade.holdingMinutes} + '분'"
+                            class="tooltip-cell">0분</td>
                         <td th:class="${trade.pnlAmount >= 0} ? 'positive' : 'negative'"
                             th:text="|${trade.pnlAmount >= 0 ? '+' : ''}${#numbers.formatDecimal(trade.pnlAmount, 1, 0)}원|">0원</td>
                         <td th:class="${trade.pnlPercent >= 0} ? 'positive' : 'negative'"

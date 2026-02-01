@@ -355,5 +355,16 @@ data class ClosedTradeInfo(
     val holdingMinutes: Long,
     val pnlAmount: Double,
     val pnlPercent: Double,
-    val exitReason: String
-)
+    val exitReason: String,
+    val entryTimeFormatted: String = formatInstant(entryTime),
+    val exitTimeFormatted: String = formatInstant(exitTime)
+) {
+    companion object {
+        private val KST_ZONE = java.time.ZoneId.of("Asia/Seoul")
+        private val DATETIME_FORMATTER = java.time.format.DateTimeFormatter.ofPattern("MM-dd HH:mm")
+
+        fun formatInstant(instant: java.time.Instant): String {
+            return instant.atZone(KST_ZONE).format(DATETIME_FORMATTER)
+        }
+    }
+}
