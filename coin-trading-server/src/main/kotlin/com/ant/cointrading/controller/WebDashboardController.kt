@@ -147,6 +147,10 @@ class DashboardController(
             val pnl = (currentPrice - trade.entryPrice) * trade.quantity
             val pnlPercent = ((currentPrice - trade.entryPrice) / trade.entryPrice) * 100
 
+            // 익절가/손절가 계산 (appliedTakeProfitPercent/appliedStopLossPercent 사용)
+            val takeProfitPrice = trade.entryPrice * (1 + (trade.appliedTakeProfitPercent ?: 6.0) / 100)
+            val stopLossPrice = trade.entryPrice * (1 + (trade.appliedStopLossPercent ?: -3.0) / 100)
+
             positions.add(PositionInfo(
                 market = trade.market,
                 strategy = "Volume Surge",
@@ -156,8 +160,8 @@ class DashboardController(
                 value = trade.entryPrice * trade.quantity,
                 pnl = pnl,
                 pnlPercent = pnlPercent,
-                takeProfitPrice = 0.0,  // 간단화
-                stopLossPrice = 0.0,   // 간단화
+                takeProfitPrice = takeProfitPrice,
+                stopLossPrice = stopLossPrice,
                 entryTime = trade.entryTime,
                 peakPrice = null
             ))
