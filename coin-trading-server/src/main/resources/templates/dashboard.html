@@ -554,8 +554,29 @@
                         <td data-label="사유">
                             <span class="exit-reason tooltip-cell"
                                   th:class="${trade.exitReason == 'TAKE_PROFIT' ? 'exit-profit' : (trade.exitReason == 'STOP_LOSS' ? 'exit-loss' : 'exit-other')}"
-                                  th:title="${trade.exitReason == 'TAKE_PROFIT' ? '목표 익절가 도달하여 자동 청산' : (trade.exitReason == 'STOP_LOSS' ? '손절가 도달하여 자동 청산' : (trade.exitReason == 'TIMEOUT' ? '보유 시간 초과로 강제 청산' : (trade.exitReason == 'TRAILING_STOP' ? '고점 하락 시 트레일링 스탑으로 청산' : (trade.exitReason == 'ABANDONED_NO_BALANCE' ? '잔고 부족으로 청산 실패 (실제 매수 안됨)' : (trade.exitReason == 'SIGNAL_REVERSAL' ? '반대 신호 발생으로 청산' : '기타 사유'))))}"
-                                  th:text="${trade.exitReason}">TAKE_PROFIT</span>
+                                  th:with="reason=${trade.exitReason}">
+                                <span th:if="${reason == 'TAKE_PROFIT'}"
+                                      th:title="목표 익절가 도달하여 자동 청산"
+                                      th:text="${reason}">TAKE_PROFIT</span>
+                                <span th:if="${reason == 'STOP_LOSS'}"
+                                      th:title="손절가 도달하여 자동 청산"
+                                      th:text="${reason}">STOP_LOSS</span>
+                                <span th:if="${reason == 'TIMEOUT'}"
+                                      th:title="보유 시간 초과로 강제 청산"
+                                      th:text="${reason}">TIMEOUT</span>
+                                <span th:if="${reason == 'TRAILING_STOP'}"
+                                      th:title="고점 하락 시 트레일링 스탑으로 청산"
+                                      th:text="${reason}">TRAILING_STOP</span>
+                                <span th:if="${reason == 'ABANDONED_NO_BALANCE'}"
+                                      th:title="잔고 부족으로 청산 실패 (실제 매수 안됨)"
+                                      th:text="${reason}">ABANDONED_NO_BALANCE</span>
+                                <span th:if="${reason == 'SIGNAL_REVERSAL'}"
+                                      th:title="반대 신호 발생으로 청산"
+                                      th:text="${reason}">SIGNAL_REVERSAL</span>
+                                <span th:if="${reason == null or reason == 'UNKNOWN'}"
+                                      th:title="기타 사유"
+                                      th:text="${reason ?: 'UNKNOWN'}">UNKNOWN</span>
+                            </span>
                         </td>
                     </tr>
                 </tbody>
