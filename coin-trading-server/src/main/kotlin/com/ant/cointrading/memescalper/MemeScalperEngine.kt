@@ -411,6 +411,14 @@ class MemeScalperEngine(
         val regime = detectMarketRegime(bithumbPublicApi, regimeDetector, market, log)
         val executionResult = executeBuyOrderWithValidation(market, signal, regime) ?: return
 
+        // 실제 잔고 확인 (API 응답만 믿지 않음)
+        if (!verifyActualBalance(market, executionResult.quantity)) {
+            log.error("[$market] 실제 잔고 확인 실패 - 주문 체결되었으나 코인 잔고 없음")
+            slackNotifier.sendWarning(market, "매수 주문 체결되었으나 실제 잔고 없음 (API 응답 불일치) - 수동 확인 필요")
+            cooldowns[market] = Instant.now().plus(60, ChronoUnit.SECONDS)
+            return
+        }
+
         if (!checkRaceCondition(market)) return
 
         val savedTrade = createAndSaveTradeEntity(signal, executionResult, regime)
@@ -486,6 +494,38 @@ class MemeScalperEngine(
         }
 
         return OrderExecutionResult(executedPrice, executedQuantity)
+    }
+
+    /**
+     * 실제 잔고 확인 (API 응답만 믿지 않음)
+     *
+     * 빗썸 API는 주문 체결 응답을 보내지만, 실제 잔고가 증가하지 않는 경우가 있음.
+     * 주문 실행 후 반드시 실제 잔고를 확인하여 포지션 생성 여부를 결정해야 함.
+     */
+    private fun verifyActualBalance(market: String, expectedQuantity: Double): Boolean {
+        return try {
+            val coinSymbol = PositionHelper.extractCoinSymbol(market)
+            val balances = bithumbPrivateApi.getBalances() ?: run {
+                log.error("[$market] 잔고 조회 실패 - null 응답")
+                return false
+            }
+
+            val actualBalance = balances.find { it.currency == coinSymbol }?.balance ?: BigDecimal.ZERO
+
+            // 예상 수량의 90% 이상이면 성공으로 간주 (부분 체결/수수료 고려)
+            val minAcceptableBalance = BigDecimal(expectedQuantity).multiply(BigDecimal("0.9"))
+
+            if (actualBalance < minAcceptableBalance) {
+                log.error("[$market] 잔고 불일치: 예상=${String.format("%.4f", expectedQuantity)}, 실제=${actualBalance}")
+                return false
+            }
+
+            log.info("[$market] 잔고 확인 완료: ${actualBalance}")
+            true
+        } catch (e: Exception) {
+            log.error("[$market] 잔고 확인 중 예외 발생: ${e.message}", e)
+            false
+        }
     }
 
     /**
