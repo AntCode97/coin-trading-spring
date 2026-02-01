@@ -9,6 +9,7 @@ import org.springframework.context.ApplicationEventPublisher
 import org.springframework.core.ParameterizedTypeReference
 import org.springframework.stereotype.Component
 import org.springframework.web.client.RestClient
+import org.springframework.web.client.ResourceAccessException
 import org.springframework.web.client.toEntity
 import java.io.ByteArrayInputStream
 import java.nio.charset.StandardCharsets
@@ -20,6 +21,7 @@ import java.nio.charset.StandardCharsets
  * RestClient 사용 (Virtual Thread 기반)
  *
  * 에러 발생 시 TradingErrorEvent 발행하여 Slack 알림
+ * 타임아웃/연결 에러 시 자동 재시도 (최대 3회)
  */
 @Component
 class BithumbPublicApi(
@@ -28,6 +30,11 @@ class BithumbPublicApi(
     private val eventPublisher: ApplicationEventPublisher
 ) {
     private val log = LoggerFactory.getLogger(javaClass)
+
+    companion object {
+        private const val MAX_RETRY_ATTEMPTS = 3
+        private const val RETRY_DELAY_MS = 1000L
+    }
 
     /**
      * OHLCV(캔들) 데이터 조회
@@ -262,25 +269,55 @@ class BithumbPublicApi(
 
     /**
      * 거래 가능 마켓 목록 조회
+     * 타임아웃/연결 에러 시 자동 재시도
      */
     fun getMarketAll(): List<MarketInfo>? {
-        return try {
+        return executeWithRetry("getMarketAll") {
             bithumbRestClient.get()
                 .uri("/v1/market/all")
                 .retrieve()
                 .body(object : ParameterizedTypeReference<List<MarketInfo>>() {})
-        } catch (e: Exception) {
-            log.error("Failed to get market list: {}", e.message, e)
-            eventPublisher.publishEvent(TradingErrorEvent(
-                eventSource = this,
-                component = "BithumbPublicApi",
-                operation = "getMarketAll",
-                market = null,
-                errorMessage = e.message ?: "Unknown error",
-                exception = e
-            ))
-            null
         }
+    }
+
+    /**
+     * 재시도 로직이 포함된 실행 헬퍼
+     * 타임아웃/연결 에러 시 최대 3회 재시도
+     */
+    private fun <T> executeWithRetry(
+        operation: String,
+        block: () -> T
+    ): T? {
+        var lastException: Exception? = null
+
+        for (attempt in 1..MAX_RETRY_ATTEMPTS) {
+            try {
+                return block()
+            } catch (e: ResourceAccessException) {
+                lastException = e
+                if (attempt < MAX_RETRY_ATTEMPTS) {
+                    log.warn("$operation 실패 (연결 타임아웃), 재시도 $attempt/$MAX_RETRY_ATTEMPTS: ${e.message}")
+                    Thread.sleep(RETRY_DELAY_MS * attempt) // 지수 백오프
+                } else {
+                    log.error("$operation 실패: 최대 재시도 횟수 초과")
+                }
+            } catch (e: Exception) {
+                lastException = e
+                log.error("$operation 실패 (시도 $attempt/$MAX_RETRY_ATTEMPTS): ${e.message}")
+                break // 타임아웃 외 에러는 재시도 안 함
+            }
+        }
+
+        // 모든 재시도 실패 시 이벤트 발행
+        eventPublisher.publishEvent(TradingErrorEvent(
+            eventSource = this,
+            component = "BithumbPublicApi",
+            operation = operation,
+            market = null,
+            errorMessage = lastException?.message ?: "Max retry exceeded",
+            exception = lastException
+        ))
+        return null
     }
 
     /**

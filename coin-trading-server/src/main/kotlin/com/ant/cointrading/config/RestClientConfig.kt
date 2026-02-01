@@ -10,11 +10,21 @@ import java.time.Duration
 @Configuration
 class RestClientConfig {
 
+    companion object {
+        // 빗썸 API 타임아웃 설정 (연결 지연 대응)
+        const val BITHUMB_CONNECT_TIMEOUT_SECONDS = 30L
+        const val BITHUMB_READ_TIMEOUT_SECONDS = 30L
+
+        // 일반 API 타임아웃 설정
+        const val DEFAULT_CONNECT_TIMEOUT_SECONDS = 10L
+        const val DEFAULT_READ_TIMEOUT_SECONDS = 10L
+    }
+
     @Bean
     fun bithumbRestClient(properties: BithumbProperties): RestClient {
         val requestFactory: ClientHttpRequestFactory = SimpleClientHttpRequestFactory().apply {
-            setConnectTimeout(Duration.ofSeconds(10))
-            setReadTimeout(Duration.ofSeconds(10))
+            setConnectTimeout(Duration.ofSeconds(BITHUMB_CONNECT_TIMEOUT_SECONDS))
+            setReadTimeout(Duration.ofSeconds(BITHUMB_READ_TIMEOUT_SECONDS))
         }
 
         return RestClient.builder()
