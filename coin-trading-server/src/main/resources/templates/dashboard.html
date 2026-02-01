@@ -552,8 +552,9 @@
                         <td data-label="손익률" th:class="${trade.pnlPercent >= 0} ? 'positive' : 'negative'"
                             th:text="|${trade.pnlPercent >= 0 ? '+' : ''}${#numbers.formatDecimal(trade.pnlPercent, 1, 2)}%|">0%</td>
                         <td data-label="사유">
-                            <span class="exit-reason"
+                            <span class="exit-reason tooltip-cell"
                                   th:class="${trade.exitReason == 'TAKE_PROFIT' ? 'exit-profit' : (trade.exitReason == 'STOP_LOSS' ? 'exit-loss' : 'exit-other')}"
+                                  th:title="${trade.exitReason == 'TAKE_PROFIT' ? '목표 익절가 도달하여 자동 청산' : (trade.exitReason == 'STOP_LOSS' ? '손절가 도달하여 자동 청산' : (trade.exitReason == 'TIMEOUT' ? '보유 시간 초과로 강제 청산' : (trade.exitReason == 'TRAILING_STOP' ? '고점 하락 시 트레일링 스탑으로 청산' : (trade.exitReason == 'ABANDONED_NO_BALANCE' ? '잔고 부족으로 청산 실패 (실제 매수 안됨)' : (trade.exitReason == 'SIGNAL_REVERSAL' ? '반대 신호 발생으로 청산' : '기타 사유'))))}"
                                   th:text="${trade.exitReason}">TAKE_PROFIT</span>
                         </td>
                     </tr>
