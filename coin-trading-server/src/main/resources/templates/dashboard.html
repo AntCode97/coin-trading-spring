@@ -359,12 +359,12 @@
                                   th:class="${trade.strategy == 'Meme Scalper' ? 'strategy-meme' : (trade.strategy == 'Volume Surge' ? 'strategy-volume' : 'strategy-dca')}"
                                   th:text="${trade.strategy}">Meme Scalper</span>
                         </td>
-                        <td th:text="${#numbers.formatInteger(trade.entryPrice, 1, 'COMMA')}">0</td>
-                        <td th:text="${#numbers.formatInteger(trade.exitPrice, 1, 'COMMA')}">0</td>
+                        <td th:text="${#numbers.formatDecimal(trade.entryPrice, 1, 0)}">0</td>
+                        <td th:text="${#numbers.formatDecimal(trade.exitPrice, 1, 0)}">0</td>
                         <td th:text="${#numbers.formatDecimal(trade.quantity, 1, 4)}">0</td>
-                        <td th:text="${trade.holdingMinutes + '분'}">0분</td>
+                        <td th:text="${trade.holdingMinutes} + '분'">0분</td>
                         <td th:class="${trade.pnlAmount >= 0} ? 'positive' : 'negative'"
-                            th:text="|${trade.pnlAmount >= 0 ? '+' : ''}${#numbers.formatInteger(trade.pnlAmount, 1, 'COMMA')}원|">0원</td>
+                            th:text="|${trade.pnlAmount >= 0 ? '+' : ''}${#numbers.formatDecimal(trade.pnlAmount, 1, 0)}원|">0원</td>
                         <td th:class="${trade.pnlPercent >= 0} ? 'positive' : 'negative'"
                             th:text="|${trade.pnlPercent >= 0 ? '+' : ''}${#numbers.formatDecimal(trade.pnlPercent, 1, 2)}%|">0%</td>
                         <td>
