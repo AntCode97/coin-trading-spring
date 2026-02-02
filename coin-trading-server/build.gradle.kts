@@ -4,6 +4,7 @@ plugins {
     kotlin("plugin.jpa")
     id("org.springframework.boot")
     id("io.spring.dependency-management")
+    id("com.github.node-gradle.node") version "7.1.0"
 }
 
 kotlin {
@@ -97,4 +98,62 @@ tasks.named<org.springframework.boot.gradle.tasks.run.BootRun>("bootRun") {
                 environment(key.trim(), value.trim())
             }
     }
+}
+
+// ===========================================
+// React Frontend Build Integration
+// ===========================================
+
+// Node.js 설정
+configure<com.github.gradle.node.nodetask.NodeExtension> {
+    download.set(true)
+    version.set("20.18.0")
+    workDir.set(file("${rootProject.projectDir}/coin-trading-client"))
+    nodeProjectDir.set(file("${rootProject.projectDir}/coin-trading-client"))
+}
+
+// React 설치 태스크
+tasks.register<com.github.gradle.node.nodetask.NodeTask>("installReact") {
+    dependsOn("nodeSetup")
+    description = "Install React dependencies"
+    workingDir.set(file("${rootProject.projectDir}/coin-trading-client"))
+    args.set(listOf("install"))
+}
+
+// React 빌드 태스크
+tasks.register<com.github.gradle.node.nodetask.NodeTask>("buildReact") {
+    dependsOn("installReact")
+    description = "Build React frontend"
+    workingDir.set(file("${rootProject.projectDir}/coin-trading-client"))
+    args.set(listOf("run", "build"))
+
+    doLast {
+        // 빌드 결과물을 Spring static 폴더로 복사
+        val reactBuildDir = file("${rootProject.projectDir}/coin-trading-client/dist")
+        val staticDir = file("${projectDir}/src/main/resources/static")
+
+        // 기존 static 폴더 삭제
+        delete(staticDir)
+
+        // static 폴더 생성
+        staticDir.mkdirs()
+
+        // React 빌드 결과물 복사
+        copy {
+            from(reactBuildDir)
+            into(staticDir)
+        }
+
+        println("React build completed and copied to ${staticDir.absolutePath}")
+    }
+}
+
+// processResources가 React 빌드 후 실행되도록 설정
+tasks.named<ProcessResources>("processResources") {
+    dependsOn("buildReact")
+}
+
+// 개발용: React 빌드 스킵 (gradlew build -x buildReact)
+tasks.named("buildReact") {
+    onlyIf { !project.hasProperty("skipReact") }
 }

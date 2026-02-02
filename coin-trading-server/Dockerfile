@@ -1,8 +1,28 @@
 # coin-trading-server Dockerfile
-# 통합 트레이딩 서버 (MCP + 자동 매매)
+# Multi-stage build: React Frontend + Spring Boot Backend
 
-# Build stage
-FROM eclipse-temurin:25-jdk-alpine AS builder
+# ===========================================
+# Stage 1: Build React Frontend
+# ===========================================
+FROM node:20.18.0-alpine AS react-builder
+
+WORKDIR /app
+
+# Copy React project files
+COPY coin-trading-client/package*.json ./
+COPY coin-trading-client/package-lock.json* ./
+
+# Install dependencies
+RUN npm ci
+
+# Copy React source and build
+COPY coin-trading-client ./
+RUN npm run build
+
+# ===========================================
+# Stage 2: Build Spring Boot Backend
+# ===========================================
+FROM eclipse-temurin:25-jdk-alpine AS backend-builder
 
 WORKDIR /app
 
@@ -13,8 +33,11 @@ COPY build.gradle.kts .
 COPY settings.gradle.kts .
 COPY coin-trading-server/build.gradle.kts coin-trading-server/
 
-# Install git (required for build-info)
-RUN apk add --no-cache git
+# Install git and Node.js (required for React build integration)
+RUN apk add --no-cache git nodejs npm
+
+# Copy React build output (already built in Stage 1)
+COPY --from=react-builder /app/dist coin-trading-client/dist/
 
 # Copy source and .git (for build-info git metadata)
 COPY coin-trading-server/src coin-trading-server/src
@@ -23,10 +46,12 @@ COPY .git .git
 # Download dependencies
 RUN chmod +x gradlew && ./gradlew dependencies --no-daemon || true
 
-# Build
-RUN ./gradlew :coin-trading-server:bootJar --no-daemon -x test
+# Build (React files already in place, just copy to static)
+RUN ./gradlew :coin-trading-server:bootJar --no-daemon -x test -x buildReact
 
-# Runtime stage
+# ===========================================
+# Stage 3: Runtime
+# ===========================================
 FROM eclipse-temurin:25-jre-alpine
 
 WORKDIR /app
@@ -35,8 +60,8 @@ WORKDIR /app
 RUN addgroup -S appgroup && adduser -S appuser -G appgroup
 USER appuser
 
-# Copy jar
-COPY --from=builder /app/coin-trading-server/build/libs/*.jar app.jar
+# Copy jar (includes React static files)
+COPY --from=backend-builder /app/coin-trading-server/build/libs/*.jar app.jar
 
 # Environment
 # 힙 1GB, GC 명시하지 않고 JVM 판단에 맡김
