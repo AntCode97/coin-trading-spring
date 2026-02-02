@@ -122,6 +122,19 @@ class DashboardController(
         model.addAttribute("dcaEngineEnabled", if (tradingProperties.enabled) "true" else "false")
         model.addAttribute("dcaEngineOpenPositions", dcaOpenCount)
 
+        // 청산 사유 툴팁
+        val exitReasonTitles = mapOf(
+            "TAKE_PROFIT" to "목표 익절가 도달",
+            "STOP_LOSS" to "손절가 도달",
+            "TIMEOUT" to "보유 시간 초과",
+            "TRAILING_STOP" to "트레일링 스탑 청산",
+            "ABANDONED_NO_BALANCE" to "잔고 부족 (매수 안됨)",
+            "SIGNAL_REVERSAL" to "반대 신호 발생",
+            "MANUAL" to "수동 매도",
+            "UNKNOWN" to "기타 사유"
+        )
+        model.addAttribute("exitReasonTitles", exitReasonTitles)
+
         return "dashboard"
     }
 

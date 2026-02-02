@@ -594,10 +594,10 @@
                         <td data-label="손익률" th:class="${trade.pnlPercent >= 0} ? 'positive' : 'negative'"
                             th:text="|${trade.pnlPercent >= 0 ? '+' : ''}${#numbers.formatDecimal(trade.pnlPercent, 1, 2)}%|">0%</td>
                         <td data-label="사유">
-                            <span class="exit-reason tooltip-cell"
+                            <span class="exit-reason"
                                   th:class="${trade.exitReason == 'TAKE_PROFIT' ? 'exit-profit' : (trade.exitReason == 'STOP_LOSS' ? 'exit-loss' : 'exit-other')}"
                                   th:text="${trade.exitReason}"
-                                  th:title="${trade.exitReason == 'TAKE_PROFIT' ? '목표 익절가 도달' : (trade.exitReason == 'STOP_LOSS' ? '손절가 도달' : (trade.exitReason == 'TIMEOUT' ? '보유 시간 초과' : (trade.exitReason == 'TRAILING_STOP' ? '트레일링 스탑 청산' : (trade.exitReason == 'ABANDONED_NO_BALANCE' ? '잔고 부족 (매수 안됨)' : (trade.exitReason == 'SIGNAL_REVERSAL' ? '반대 신호 발생' : '기타 사유'))))}">
+                                  th:title="${exitReasonTitles[trade.exitReason]}">
                                 TAKE_PROFIT
                             </span>
                         </td>
