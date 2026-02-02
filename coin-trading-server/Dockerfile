@@ -20,7 +20,7 @@ COPY coin-trading-client ./
 RUN npm run build
 
 # ===========================================
-# Stage 2: Build Spring Boot Backend
+# Stage 2: Build Spring Boot Backend + React
 # ===========================================
 FROM eclipse-temurin:25-jdk-alpine AS backend-builder
 
@@ -33,8 +33,8 @@ COPY build.gradle.kts .
 COPY settings.gradle.kts .
 COPY coin-trading-server/build.gradle.kts coin-trading-server/
 
-# Install git and Node.js (required for React build integration)
-RUN apk add --no-cache git nodejs npm
+# Install git (required for build-info)
+RUN apk add --no-cache git
 
 # Copy React build output (already built in Stage 1)
 COPY --from=react-builder /app/dist coin-trading-client/dist/
@@ -43,11 +43,15 @@ COPY --from=react-builder /app/dist coin-trading-client/dist/
 COPY coin-trading-server/src coin-trading-server/src
 COPY .git .git
 
+# Create static directory and copy React build
+RUN mkdir -p coin-trading-server/src/main/resources/static && \
+    cp -r coin-trading-client/dist/* coin-trading-server/src/main/resources/static/
+
 # Download dependencies
 RUN chmod +x gradlew && ./gradlew dependencies --no-daemon || true
 
-# Build (React files already in place, just copy to static)
-RUN ./gradlew :coin-trading-server:bootJar --no-daemon -x test -x buildReact
+# Build Spring Boot
+RUN ./gradlew :coin-trading-server:bootJar --no-daemon -x test
 
 # ===========================================
 # Stage 3: Runtime
