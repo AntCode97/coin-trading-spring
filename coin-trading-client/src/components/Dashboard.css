@@ -1,5 +1,5 @@
 /* =====================================================
-   토스(Toss) 스타일 대시보드
+   토스(Toss) 스타일 대시보드 - Dark Mode
    Minimal, Clean, Human-Centered Design
    ===================================================== */
 
@@ -7,33 +7,36 @@
 @import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap');
 
 :root {
-  /* Toss-inspired Color Palette */
-  --bg-primary: #FFFFFF;
-  --bg-secondary: #F5F6F8;
-  --bg-card: #FFFFFF;
-  --bg-card-hover: #FAFBFC;
+  /* Toss Dark Mode Color Palette */
+  --bg-primary: #111111;
+  --bg-secondary: #1A1A1A;
+  --bg-card: #222222;
+  --bg-card-hover: #2A2A2A;
 
-  --text-primary: #191919;
-  --text-secondary: #8E8E93;
-  --text-muted: #C7C7CC;
+  --text-primary: #FFFFFF;
+  --text-secondary: #9CA3AF;
+  --text-muted: #6B7280;
 
-  --accent-green: #00C641;
-  --accent-green-light: #E8F5EB;
-  --accent-red: #FF5E57;
-  --accent-red-light: #FFF0F0;
-  --accent-blue: #3B82F6;
-  --accent-blue-light: #F0F5FF;
-  --accent-orange: #FF9500;
-  --accent-purple: #8B5CF6;
-  --accent-purple-light: #F5F3FF;
+  --accent-green: #00D47A;
+  --accent-green-dim: rgba(0, 212, 122, 0.15);
+  --accent-red: #FF6B6B;
+  --accent-red-dim: rgba(255, 107, 107, 0.15);
+  --accent-blue: #60A5FA;
+  --accent-blue-dim: rgba(96, 165, 250, 0.15);
+  --accent-orange: #FB923C;
+  --accent-purple: #A78BFA;
+  --accent-purple-dim: rgba(167, 139, 250, 0.15);
 
-  --border-light: #E8EBF0;
-  --border-medium: #D1D5DB;
+  --border-light: #2A2A2A;
+  --border-medium: #3A3A3A;
 
-  --shadow-sm: 0 1px 3px rgba(0, 0, 0, 0.04);
-  --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.06);
-  --shadow-lg: 0 8px 24px rgba(0, 0, 0, 0.08);
-  --shadow-xl: 0 16px 48px rgba(0, 0, 0, 0.1);
+  --shadow-sm: 0 1px 3px rgba(0, 0, 0, 0.2);
+  --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.3);
+  --shadow-lg: 0 8px 24px rgba(0, 0, 0, 0.4);
+  --shadow-xl: 0 16px 48px rgba(0, 0, 0, 0.5);
+
+  --shadow-glow-green: 0 0 24px rgba(0, 212, 122, 0.3);
+  --shadow-glow-red: 0 0 24px rgba(255, 107, 107, 0.3);
 
   --radius-sm: 8px;
   --radius-md: 12px;
@@ -54,7 +57,7 @@
 
 body {
   font-family: 'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, 'Pretendard', sans-serif;
-  background: var(--bg-secondary);
+  background: var(--bg-primary);
   color: var(--text-primary);
   line-height: 1.5;
   -webkit-font-smoothing: antialiased;
@@ -66,7 +69,7 @@ body {
    ===================================================== */
 .toss-container {
   min-height: 100vh;
-  background: var(--bg-secondary);
+  background: var(--bg-primary);
   padding: 20px 24px;
 }
 
@@ -86,7 +89,8 @@ body {
   padding: 20px 24px;
   background: var(--bg-card);
   border-radius: var(--radius-xl);
-  box-shadow: var(--shadow-sm);
+  box-shadow: var(--shadow-md);
+  border: 1px solid var(--border-light);
 }
 
 .toss-header-left {
@@ -98,13 +102,13 @@ body {
 .toss-logo {
   width: 48px;
   height: 48px;
-  background: linear-gradient(135deg, #00C641 0%, #00A838 100%);
+  background: linear-gradient(135deg, #00D47A 0%, #00B894 100%);
   border-radius: var(--radius-md);
   display: flex;
   align-items: center;
   justify-content: center;
   font-size: 24px;
-  box-shadow: 0 4px 12px rgba(0, 198, 65, 0.3);
+  box-shadow: var(--shadow-glow-green);
 }
 
 .toss-title-section {
@@ -137,9 +141,9 @@ body {
   align-items: center;
   gap: 6px;
   padding: 6px 12px;
-  background: var(--accent-green-light);
+  background: var(--accent-green-dim);
   border-radius: var(--radius-full);
-  border: 1px solid rgba(0, 198, 65, 0.2);
+  border: 1px solid rgba(0, 212, 122, 0.3);
 }
 
 .toss-live-dot {
@@ -148,6 +152,7 @@ body {
   background: var(--accent-green);
   border-radius: 50%;
   animation: toss-pulse 2s ease-in-out infinite;
+  box-shadow: 0 0 8px var(--accent-green);
 }
 
 @keyframes toss-pulse {
@@ -167,7 +172,7 @@ body {
   align-items: center;
   gap: 6px;
   padding: 10px 16px;
-  background: var(--bg-card);
+  background: var(--bg-secondary);
   border: 1px solid var(--border-light);
   border-radius: var(--radius-sm);
   color: var(--text-primary);
@@ -189,17 +194,18 @@ body {
 }
 
 /* =====================================================
-   Asset Card - Toss Style
+   Asset Card - Toss Dark Style
    ===================================================== */
 .toss-asset-section {
   margin-bottom: 24px;
 }
 
 .toss-asset-card {
-  background: var(--bg-card);
+  background: linear-gradient(145deg, var(--bg-card) 0%, var(--bg-secondary) 100%);
   border-radius: var(--radius-xl);
   padding: 32px;
-  box-shadow: var(--shadow-md);
+  box-shadow: var(--shadow-lg);
+  border: 1px solid var(--border-light);
   display: flex;
   justify-content: space-between;
   align-items: center;
@@ -215,11 +221,11 @@ body {
   left: 0;
   right: 0;
   height: 4px;
-  background: linear-gradient(90deg, var(--accent-green) 0%, #00A838 100%);
+  background: linear-gradient(90deg, var(--accent-green) 0%, #00B894 100%);
 }
 
 .toss-asset-card.toss-loss::before {
-  background: linear-gradient(90deg, var(--accent-red) 0%, #E53935 100%);
+  background: linear-gradient(90deg, var(--accent-red) 0%, #E63946 100%);
 }
 
 .toss-asset-main {
@@ -264,8 +270,9 @@ body {
   font-size: 13px;
   color: var(--text-secondary);
   padding: 6px 12px;
-  background: var(--bg-secondary);
+  background: var(--bg-primary);
   border-radius: var(--radius-sm);
+  border: 1px solid var(--border-light);
 }
 
 .toss-asset-breakdown-item strong {
@@ -287,16 +294,21 @@ body {
   align-items: center;
   gap: 8px;
   font-weight: 700;
+  border: 1px solid;
 }
 
 .toss-pnl-badge.toss-profit {
-  background: var(--accent-green-light);
+  background: var(--accent-green-dim);
   color: var(--accent-green);
+  border-color: rgba(0, 212, 122, 0.3);
+  box-shadow: var(--shadow-glow-green);
 }
 
 .toss-pnl-badge.toss-loss {
-  background: var(--accent-red-light);
+  background: var(--accent-red-dim);
   color: var(--accent-red);
+  border-color: rgba(255, 107, 107, 0.3);
+  box-shadow: var(--shadow-glow-red);
 }
 
 .toss-pnl-icon {
@@ -310,7 +322,7 @@ body {
 .toss-pnl-percent {
   font-size: 15px;
   padding: 2px 8px;
-  background: rgba(255, 255, 255, 0.6);
+  background: rgba(255, 255, 255, 0.1);
   border-radius: var(--radius-sm);
 }
 
@@ -335,13 +347,14 @@ body {
 .toss-card {
   background: var(--bg-card);
   border-radius: var(--radius-lg);
-  box-shadow: var(--shadow-sm);
+  box-shadow: var(--shadow-md);
+  border: 1px solid var(--border-light);
   overflow: hidden;
   transition: box-shadow var(--transition-normal);
 }
 
 .toss-card:hover {
-  box-shadow: var(--shadow-md);
+  box-shadow: var(--shadow-lg);
 }
 
 .toss-card-header {
@@ -349,6 +362,7 @@ body {
   justify-content: space-between;
   align-items: center;
   padding: 20px 24px;
+  background: rgba(255, 255, 255, 0.02);
   border-bottom: 1px solid var(--border-light);
 }
 
@@ -361,7 +375,7 @@ body {
 .toss-card-icon {
   width: 36px;
   height: 36px;
-  background: var(--accent-blue-light);
+  background: var(--accent-blue-dim);
   border-radius: var(--radius-md);
   display: flex;
   align-items: center;
@@ -432,15 +446,15 @@ body {
 }
 
 .toss-strategy-meme {
-  background: linear-gradient(135deg, #8B5CF6 0%, #7C3AED 100%);
+  background: linear-gradient(135deg, #A78BFA 0%, #8B5CF6 100%);
 }
 
 .toss-strategy-volume {
-  background: linear-gradient(135deg, #3B82F6 0%, #2563EB 100%);
+  background: linear-gradient(135deg, #60A5FA 0%, #3B82F6 100%);
 }
 
 .toss-strategy-dca {
-  background: linear-gradient(135deg, #00C641 0%, #00A838 100%);
+  background: linear-gradient(135deg, #00D47A 0%, #00B894 100%);
 }
 
 .toss-position-details {
@@ -494,14 +508,17 @@ body {
   border-radius: var(--radius-md);
   text-align: right;
   min-width: 130px;
+  border: 1px solid;
 }
 
 .toss-pnl-box.toss-pnl-positive {
-  background: var(--accent-green-light);
+  background: var(--accent-green-dim);
+  border-color: rgba(0, 212, 122, 0.3);
 }
 
 .toss-pnl-box.toss-pnl-negative {
-  background: var(--accent-red-light);
+  background: var(--accent-red-dim);
+  border-color: rgba(255, 107, 107, 0.3);
 }
 
 .toss-pnl-amount {
@@ -534,8 +551,8 @@ body {
 
 .toss-sell-btn {
   padding: 10px 16px;
-  background: var(--accent-red-light);
-  border: none;
+  background: var(--accent-red-dim);
+  border: 1px solid var(--accent-red);
   border-radius: var(--radius-sm);
   color: var(--accent-red);
   font-size: 13px;
@@ -548,7 +565,7 @@ body {
   background: var(--accent-red);
   color: white;
   transform: translateY(-1px);
-  box-shadow: 0 4px 12px rgba(255, 94, 87, 0.3);
+  box-shadow: 0 4px 12px rgba(255, 107, 107, 0.3);
 }
 
 /* =====================================================
@@ -604,7 +621,7 @@ body {
 .toss-stat-highlight {
   grid-column: 1 / -1;
   padding: 28px;
-  background: linear-gradient(135deg, var(--bg-card) 0%, var(--bg-secondary) 100%);
+  background: linear-gradient(135deg, var(--bg-card) 0%, rgba(34, 34, 34, 0.5) 100%);
   border-top: 2px solid;
 }
 
@@ -632,7 +649,7 @@ body {
 .toss-date-btn {
   width: 32px;
   height: 32px;
-  background: var(--bg-card);
+  background: var(--bg-secondary);
   border: 1px solid var(--border-light);
   border-radius: var(--radius-sm);
   color: var(--text-primary);
@@ -661,7 +678,7 @@ body {
   min-width: 100px;
   text-align: center;
   padding: 8px 16px;
-  background: var(--bg-secondary);
+  background: var(--bg-primary);
   border-radius: var(--radius-sm);
 }
 
@@ -702,23 +719,27 @@ body {
 }
 
 .toss-exit-success {
-  background: var(--accent-green-light);
+  background: var(--accent-green-dim);
   color: var(--accent-green);
+  border: 1px solid rgba(0, 212, 122, 0.3);
 }
 
 .toss-exit-danger {
-  background: var(--accent-red-light);
+  background: var(--accent-red-dim);
   color: var(--accent-red);
+  border: 1px solid rgba(255, 107, 107, 0.3);
 }
 
 .toss-exit-warning {
-  background: rgba(255, 149, 0, 0.1);
+  background: rgba(251, 146, 60, 0.15);
   color: var(--accent-orange);
+  border: 1px solid rgba(251, 146, 60, 0.3);
 }
 
 .toss-exit-info {
-  background: rgba(139, 92, 246, 0.1);
+  background: var(--accent-purple-dim);
   color: var(--accent-purple);
+  border: 1px solid rgba(167, 139, 250, 0.3);
 }
 
 .toss-trade-prices {
@@ -757,14 +778,17 @@ body {
   border-radius: var(--radius-md);
   text-align: right;
   min-width: 120px;
+  border: 1px solid;
 }
 
 .toss-trade-pnl.toss-pnl-positive {
-  background: var(--accent-green-light);
+  background: var(--accent-green-dim);
+  border-color: rgba(0, 212, 122, 0.3);
 }
 
 .toss-trade-pnl.toss-pnl-negative {
-  background: var(--accent-red-light);
+  background: var(--accent-red-dim);
+  border-color: rgba(255, 107, 107, 0.3);
 }
 
 .toss-trade-pnl-amount {
