@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { dashboardApi } from '../api';
+import { dashboardApi, systemControlApi } from '../api';
 import './Dashboard.css';
 
 // YYYY-MM-DD 형식으로 날짜 변환
@@ -21,6 +21,8 @@ function addDays(date: Date, days: number): Date {
 export default function Dashboard() {
   const [requestDate, setRequestDate] = useState<string | null>(null); // null = 오늘
   const [syncing, setSyncing] = useState(false);
+  const [systemControlExpanded, setSystemControlExpanded] = useState(false);
+  const [executingAction, setExecutingAction] = useState<string | null>(null);
 
   const { data, isLoading, error, refetch } = useQuery({
     queryKey: ['dashboard', requestDate],
@@ -105,6 +107,26 @@ export default function Dashboard() {
     }
   };
 
+  // 시스템 제어 핸들러
+  const handleSystemAction = async (actionName: string, apiCall: () => Promise<any>, confirmMsg?: string) => {
+    if (confirmMsg && !confirm(confirmMsg)) {
+      return;
+    }
+
+    setExecutingAction(actionName);
+    try {
+      const result = await apiCall();
+      alert(result.message || '완료되었습니다.');
+      refetch();
+    } catch (e: any) {
+      alert('오류: ' + e.message);
+    } finally {
+      setExecutingAction(null);
+    }
+  };
+
+  const isActionExecuting = (actionName: string) => executingAction === actionName;
+
   if (isLoading) {
     return (
       <div className="toss-loading-container">
@@ -176,11 +198,116 @@ export default function Dashboard() {
             >
               {syncing ? '동기화 중...' : '잔고 동기화'}
             </button>
+            <button
+              className={`toss-system-toggle ${systemControlExpanded ? 'expanded' : ''}`}
+              onClick={() => setSystemControlExpanded(!systemControlExpanded)}
+            >
+              ⚙️ 시스템 제어
+              <span className={`toss-toggle-arrow ${systemControlExpanded ? 'open' : ''}`}>▼</span>
+            </button>
             <button className="toss-refresh-btn" onClick={() => refetch()}>
               새로고침
             </button>
           </div>
         </header>
+
+        {/* System Control Panel */}
+        {systemControlExpanded && (
+          <div className="system-control-panel">
+            <div className="system-control-grid">
+              {/* AI & Optimization */}
+              <div className="control-group">
+                <h3 className="control-group-title">🤖 AI & 최적화</h3>
+                <div className="control-buttons">
+                  <button
+                    className="control-btn control-btn-primary"
+                    onClick={() => handleSystemAction('optimizer', () => systemControlApi.runOptimizer(), 'LLM 최적화를 실행하시겠습니까?')}
+                    disabled={isActionExecuting('optimizer')}
+                  >
+                    {isActionExecuting('optimizer') ? '실행 중...' : 'LLM 최적화 실행'}
+                  </button>
+                </div>
+              </div>
+
+              {/* Strategy Control */}
+              <div className="control-group">
+                <h3 className="control-group-title">📊 전략 제어</h3>
+                <div className="control-buttons">
+                  <button
+                    className="control-btn"
+                    onClick={() => handleSystemAction('vs-reflection', () => systemControlApi.runVolumeSurgeReflection())}
+                    disabled={isActionExecuting('vs-reflection')}
+                  >
+                    {isActionExecuting('vs-reflection') ? '실행 중...' : 'VS 회고'}
+                  </button>
+                  <button
+                    className="control-btn control-btn-warning"
+                    onClick={() => handleSystemAction('vs-reset', () => systemControlApi.resetVolumeSurgeCircuitBreaker(), 'Volume Surge 서킷 브레이커를 리셋하시겠습니까?')}
+                    disabled={isActionExecuting('vs-reset')}
+                  >
+                    {isActionExecuting('vs-reset') ? '리셋 중...' : 'VS 서킷 리셋'}
+                  </button>
+                  <button
+                    className="control-btn"
+                    onClick={() => handleSystemAction('ms-reflection', () => systemControlApi.runMemeScalperReflection())}
+                    disabled={isActionExecuting('ms-reflection')}
+                  >
+                    {isActionExecuting('ms-reflection') ? '실행 중...' : 'MS 회고'}
+                  </button>
+                  <button
+                    className="control-btn control-btn-warning"
+                    onClick={() => handleSystemAction('ms-reset', () => systemControlApi.resetMemeScalperCircuitBreaker(), 'Meme Scalper 서킷 브레이커를 리셋하시겠습니까?')}
+                    disabled={isActionExecuting('ms-reset')}
+                  >
+                    {isActionExecuting('ms-reset') ? '리셋 중...' : 'MS 서킷 리셋'}
+                  </button>
+                </div>
+              </div>
+
+              {/* Data Refresh */}
+              <div className="control-group">
+                <h3 className="control-group-title">🔄 데이터 갱신</h3>
+                <div className="control-buttons">
+                  <button
+                    className="control-btn"
+                    onClick={() => handleSystemAction('exchange-rate', () => systemControlApi.refreshExchangeRate())}
+                    disabled={isActionExecuting('exchange-rate')}
+                  >
+                    {isActionExecuting('exchange-rate') ? '갱신 중...' : '환율 갱신'}
+                  </button>
+                  <button
+                    className="control-btn"
+                    onClick={() => handleSystemAction('funding-scan', () => systemControlApi.scanFundingOpportunities())}
+                    disabled={isActionExecuting('funding-scan')}
+                  >
+                    {isActionExecuting('funding-scan') ? '스캔 중...' : '펀딩 스캔'}
+                  </button>
+                  <button
+                    className="control-btn control-btn-secondary"
+                    onClick={() => handleSystemAction('cache-refresh', () => systemControlApi.refreshCache())}
+                    disabled={isActionExecuting('cache-refresh')}
+                  >
+                    {isActionExecuting('cache-refresh') ? '갱신 중...' : '캐시 갱신'}
+                  </button>
+                </div>
+              </div>
+
+              {/* Sync */}
+              <div className="control-group">
+                <h3 className="control-group-title">🔗 동기화</h3>
+                <div className="control-buttons">
+                  <button
+                    className="control-btn"
+                    onClick={() => handleSystemAction('sync-orders', () => dashboardApi.syncOrders())}
+                    disabled={isActionExecuting('sync-orders')}
+                  >
+                    {isActionExecuting('sync-orders') ? '확인 중...' : '미체결 주문 확인'}
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
 
         {/* Asset Card */}
         <section className="toss-asset-section">

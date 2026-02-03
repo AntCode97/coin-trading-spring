@@ -83,6 +83,13 @@ export interface SyncAction {
   actualQuantity: number;
 }
 
+// System Control API Responses
+export interface SystemControlResult {
+  success: boolean;
+  message: string;
+  data?: Record<string, any>;
+}
+
 export const dashboardApi = {
   getData: (date: string | null = null): Promise<DashboardData> =>
     api.get('/dashboard', { params: date ? { date } : {} }).then(res => res.data),
@@ -98,6 +105,38 @@ export const dashboardApi = {
 
   syncOrders: (): Promise<SyncResult> =>
     api.post('/sync/orders').then(res => res.data),
+};
+
+export const systemControlApi = {
+  // LLM Optimizer
+  runOptimizer: (): Promise<SystemControlResult> =>
+    api.post('/optimizer/run').then(res => res.data),
+
+  // Volume Surge
+  runVolumeSurgeReflection: (): Promise<SystemControlResult> =>
+    api.post('/volume-surge/reflect').then(res => res.data),
+
+  resetVolumeSurgeCircuitBreaker: (): Promise<SystemControlResult> =>
+    api.post('/volume-surge/reset-circuit-breaker').then(res => res.data),
+
+  // Meme Scalper
+  runMemeScalperReflection: (): Promise<SystemControlResult> =>
+    api.post('/meme-scalper/reflect').then(res => res.data),
+
+  resetMemeScalperCircuitBreaker: (): Promise<SystemControlResult> =>
+    api.post('/meme-scaler/reset').then(res => res.data),
+
+  // Kimchi Premium
+  refreshExchangeRate: (): Promise<SystemControlResult> =>
+    api.post('/kimchi-premium/exchange-rate/refresh').then(res => res.data),
+
+  // Funding Rate
+  scanFundingOpportunities: (): Promise<SystemControlResult> =>
+    api.post('/funding/scan').then(res => res.data),
+
+  // Settings
+  refreshCache: (): Promise<SystemControlResult> =>
+    api.post('/settings/cache/refresh').then(res => res.data),
 };
 
 export default api;
