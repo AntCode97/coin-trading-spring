@@ -20,7 +20,7 @@ function addDays(date: Date, days: number): Date {
 
 export default function Dashboard() {
   const [requestDate, setRequestDate] = useState<string | null>(null); // null = 오늘
-  const [emergencyMode, setEmergencyMode] = useState(false);
+  const [syncing, setSyncing] = useState(false);
 
   const { data, isLoading, error, refetch } = useQuery({
     queryKey: ['dashboard', requestDate],
@@ -73,37 +73,36 @@ export default function Dashboard() {
     }
   };
 
-  // 긴급 전체 매도
-  const handleEmergencySellAll = async () => {
-    if (!data || data.openPositions.length === 0) return;
-
-    const totalLoss = data.openPositions.reduce((sum, pos) => sum + (pos.pnl < 0 ? pos.pnl : 0), 0);
-    const lossText = totalLoss < 0 ? `${Math.abs(totalLoss).toLocaleString()}원 손실` : `${totalLoss.toLocaleString()}원 이익`;
-
-    if (!confirm(`긴급 전체 매도를 실행합니다.\n\n${data.openPositions.length}개 포지션 (${lossText})\n\n정말 모두 매도하시겠습니까?`)) {
+  const handleSync = async () => {
+    if (!confirm('실제 잔고와 DB 포지션을 동기화하시겠습니까?\n\n잔고가 없는 포지션은 자동으로 CLOSED 처리됩니다.')) {
       return;
     }
 
-    let successCount = 0;
-    let failCount = 0;
+    setSyncing(true);
+    try {
+      const result = await dashboardApi.syncPositions();
 
-    for (const pos of data.openPositions) {
-      try {
-        const result = await dashboardApi.manualClose(pos.market, pos.strategy);
-        if (result.success) {
-          successCount++;
-        } else {
-          failCount++;
-          console.error(`${pos.market} 매도 실패:`, result.error);
-        }
-      } catch (e: any) {
-        failCount++;
-        console.error(`${pos.market} 매도 오류:`, e);
+      let message = result.message;
+      if (result.actions.length > 0) {
+        message += '\n\n상세 내역:\n';
+        result.actions.forEach((action, idx) => {
+          message += `${idx + 1}. ${action.market} (${action.strategy})\n`;
+          message += `   ${action.reason}\n`;
+        });
       }
-    }
 
-    alert(`전체 매도 완료!\n성공: ${successCount}건\n실패: ${failCount}건`);
-    refetch();
+      if (result.fixedCount > 0) {
+        alert(`동기화 완료!\n\n${message}`);
+      } else {
+        alert(`동기화 완료!\n\n${message}\n\n수정된 항목이 없습니다. 모든 포지션이 정상입니다.`);
+      }
+
+      refetch();
+    } catch (e: any) {
+      alert('동기화 오류: ' + e.message);
+    } finally {
+      setSyncing(false);
+    }
   };
 
   if (isLoading) {
@@ -153,12 +152,8 @@ export default function Dashboard() {
     : 0;
   const isPositive = totalPnl >= 0;
 
-  // 총 손실 계산 (긴급 모드 판단용)
-  const totalLoss = data.openPositions.reduce((sum, pos) => sum + (pos.pnl < 0 ? pos.pnl : 0), 0);
-  const hasSignificantLoss = totalLoss < -5000; // 5000원 이상 손실이면 경고
-
   return (
-    <div className={`toss-container ${emergencyMode ? 'toss-emergency-mode' : ''}`}>
+    <div className="toss-container">
       <div className="toss-content">
         {/* Header */}
         <header className="toss-header">
@@ -174,29 +169,18 @@ export default function Dashboard() {
               <span className="toss-live-dot"></span>
               <span className="toss-live-text">실시간</span>
             </div>
+            <button
+              className={`toss-sync-btn ${syncing ? 'syncing' : ''}`}
+              onClick={handleSync}
+              disabled={syncing}
+            >
+              {syncing ? '동기화 중...' : '잔고 동기화'}
+            </button>
             <button className="toss-refresh-btn" onClick={() => refetch()}>
               새로고침
             </button>
-            {/* 긴급 모드 토글 (모바일용) */}
-            <button
-              className={`toss-emergency-toggle ${emergencyMode ? 'active' : ''}`}
-              onClick={() => setEmergencyMode(!emergencyMode)}
-              aria-label="긴급 모드"
-            >
-              🚨
-            </button>
           </div>
         </header>
-
-        {/* 긴급 경고 배너 */}
-        {hasSignificantLoss && (
-          <div className="toss-emergency-banner">
-            <span className="toss-emergency-icon">⚠️</span>
-            <span className="toss-emergency-text">
-              전체 손실 {Math.abs(totalLoss).toLocaleString()}원 - 긴급 매도 고려
-            </span>
-          </div>
-        )}
 
         {/* Asset Card */}
         <section className="toss-asset-section">
@@ -235,19 +219,6 @@ export default function Dashboard() {
             </div>
           </div>
         </section>
-
-        {/* 긴급 액션 버튼 (모바일 우선) */}
-        {data.openPositions.length > 0 && (
-          <section className="toss-emergency-actions">
-            <button
-              className="toss-emergency-sell-all-btn"
-              onClick={handleEmergencySellAll}
-            >
-              <span className="toss-emergency-icon">🚨</span>
-              <span className="toss-emergency-text">전체 매도 ({data.openPositions.length}개)</span>
-            </button>
-          </section>
-        )}
 
         {/* Main Grid */}
         <div className="toss-main-grid">
@@ -425,15 +396,22 @@ export default function Dashboard() {
                               <span className="toss-trade-price-label">{trade.exitPrice.toLocaleString()}원</span>
                             </span>
                           </div>
-                          <div className="toss-trade-times">
-                            <span className="toss-trade-time-entry">
-                              <span className="toss-trade-time-label">매수</span>
-                              <span className="toss-trade-time-value">{trade.entryTimeFormatted}</span>
-                            </span>
-                            <span className="toss-trade-time-exit">
-                              <span className="toss-trade-time-label">매도</span>
-                              <span className="toss-trade-time-value">{trade.exitTimeFormatted}</span>
-                            </span>
+                          <div className="toss-trade-timeline">
+                            <div className="toss-trade-timeline-item toss-trade-entry">
+                              <span className="toss-trade-timeline-icon">🟢</span>
+                              <div className="toss-trade-timeline-content">
+                                <span className="toss-trade-timeline-label">매수</span>
+                                <span className="toss-trade-timeline-time">{trade.entryTimeFormatted}</span>
+                              </div>
+                            </div>
+                            <div className="toss-trade-timeline-spacer"></div>
+                            <div className="toss-trade-timeline-item toss-trade-exit">
+                              <span className="toss-trade-timeline-icon">🔴</span>
+                              <div className="toss-trade-timeline-content">
+                                <span className="toss-trade-timeline-label">매도</span>
+                                <span className="toss-trade-timeline-time">{trade.exitTimeFormatted}</span>
+                              </div>
+                            </div>
                           </div>
                         </div>
                         <div className="toss-trade-side">
@@ -445,8 +423,9 @@ export default function Dashboard() {
                               {isTradeProfit ? '+' : ''}{trade.pnlPercent.toFixed(2)}%
                             </span>
                           </div>
-                          <div className="toss-trade-time">
-                            {trade.holdingMinutes}분 보유
+                          <div className="toss-trade-holding">
+                            <span className="toss-trade-holding-icon">⏱</span>
+                            <span className="toss-trade-holding-text">{trade.holdingMinutes}분</span>
                           </div>
                         </div>
                       </div>
@@ -457,18 +436,6 @@ export default function Dashboard() {
             </div>
           </div>
         </div>
-
-        {/* 긴급 모드 하단 고정 버튼 (모바일) */}
-        {emergencyMode && data.openPositions.length > 0 && (
-          <div className="toss-emergency-fixed">
-            <button
-              className="toss-emergency-fixed-btn"
-              onClick={handleEmergencySellAll}
-            >
-              🚨 전체 매도 ({data.openPositions.length}개)
-            </button>
-          </div>
-        )}
       </div>
     </div>
   );

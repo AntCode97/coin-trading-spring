@@ -210,6 +210,44 @@ body {
   border-color: var(--border-strong);
 }
 
+.toss-sync-btn {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 14px;
+  background: var(--accent-secondary);
+  border: 1px solid var(--accent-primary);
+  border-radius: var(--radius-md);
+  color: var(--accent-primary);
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all var(--duration-fast) var(--easing-default);
+}
+
+.toss-sync-btn:hover:not(:disabled) {
+  background: var(--accent-tertiary);
+  border-color: var(--accent-primary);
+}
+
+.toss-sync-btn:disabled {
+  opacity: 0.6;
+  cursor: wait;
+}
+
+.toss-sync-btn.syncing {
+  animation: sync-pulse 1s ease-in-out infinite;
+}
+
+@keyframes sync-pulse {
+  0%, 100% {
+    transform: scale(1);
+  }
+  50% {
+    transform: scale(0.98);
+  }
+}
+
 /* Asset Card */
 .toss-asset-section {
   margin-bottom: var(--space-xl);
@@ -775,35 +813,67 @@ body {
   font-size: 12px;
 }
 
-.toss-trade-times {
+.toss-trade-timeline {
   display: flex;
   align-items: center;
-  gap: var(--space-md);
+  gap: var(--space-sm);
   margin-top: var(--space-sm);
-  padding-top: var(--space-sm);
-  border-top: 1px solid var(--border-subtle);
+  padding: var(--space-sm) 0;
+  border-top: 1px dashed var(--border-subtle);
 }
 
-.toss-trade-time-entry,
-.toss-trade-time-exit {
+.toss-trade-timeline-item {
   display: flex;
   align-items: center;
-  gap: 4px;
+  gap: 6px;
+  flex: 1;
 }
 
-.toss-trade-time-label {
+.toss-trade-timeline-spacer {
+  flex: 0 0 20px;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+}
+
+.toss-trade-timeline-spacer::after {
+  content: '';
+  width: 4px;
+  height: 1px;
+  background: var(--border-subtle);
+}
+
+.toss-trade-timeline-icon {
+  font-size: 12px;
+  line-height: 1;
+}
+
+.toss-trade-timeline-content {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.toss-trade-timeline-label {
   font-size: 10px;
   color: var(--text-tertiary);
-  font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
+  font-weight: 500;
+  letter-spacing: 0.02em;
 }
 
-.toss-trade-time-value {
+.toss-trade-timeline-time {
   font-size: 11px;
   color: var(--text-secondary);
-  font-weight: 500;
+  font-weight: 600;
   font-variant-numeric: tabular-nums;
+}
+
+.toss-trade-entry .toss-trade-timeline-label {
+  color: var(--success-primary);
+}
+
+.toss-trade-exit .toss-trade-timeline-label {
+  color: var(--danger-primary);
 }
 
 .toss-trade-side {
@@ -840,10 +910,25 @@ body {
   font-weight: 500;
 }
 
-.toss-trade-time {
+.toss-trade-holding {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 8px;
+  background: var(--bg-tertiary);
+  border-radius: var(--radius-sm);
+}
+
+.toss-trade-holding-icon {
+  font-size: 10px;
+  line-height: 1;
+}
+
+.toss-trade-holding-text {
   font-size: 11px;
   color: var(--text-tertiary);
   font-weight: 500;
+  font-variant-numeric: tabular-nums;
 }
 
 /* Empty State */

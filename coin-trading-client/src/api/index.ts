@@ -66,6 +66,23 @@ export interface DashboardData {
   requestDate: string;  // YYYY-MM-DD format
 }
 
+export interface SyncResult {
+  success: boolean;
+  message: string;
+  actions: SyncAction[];
+  fixedCount: number;
+  verifiedCount: number;
+}
+
+export interface SyncAction {
+  market: string;
+  strategy: string;
+  action: string;
+  reason: string;
+  dbQuantity: number;
+  actualQuantity: number;
+}
+
 export const dashboardApi = {
   getData: (date: string | null = null): Promise<DashboardData> =>
     api.get('/dashboard', { params: date ? { date } : {} }).then(res => res.data),
@@ -75,6 +92,12 @@ export const dashboardApi = {
       params: { market, strategy },
       headers: { 'Content-Type': 'application/x-www-form-urlencoded' }
     }).then(res => res.data),
+
+  syncPositions: (): Promise<SyncResult> =>
+    api.post('/sync/positions').then(res => res.data),
+
+  syncOrders: (): Promise<SyncResult> =>
+    api.post('/sync/orders').then(res => res.data),
 };
 
 export default api;
