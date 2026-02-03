@@ -158,6 +158,34 @@ object PositionHelper {
 
             when (orderStatus?.state) {
                 "done" -> {
+                    // 체결 수량 확인 - 0이면 실제 체결 안 됨
+                    val executedVolume = orderStatus.executedVolume?.toDouble() ?: 0.0
+                    if (executedVolume <= 0) {
+                        log.warn("[$market] 주문 done이지만 체결 수량 0 - 실제 미체결, 잔고 확인 후 재매도 필요")
+
+                        // 잔고 확인 - 여전히 코인이 있으면 재매도 필요
+                        val coinSymbol = extractCoinSymbol(market)
+                        val actualBalance = try {
+                            bithumbPrivateApi.getBalances()?.find { it.currency == coinSymbol }?.balance ?: BigDecimal.ZERO
+                        } catch (e: Exception) {
+                            log.warn("[$market] 잔고 조회 실패: ${e.message}")
+                            BigDecimal.ZERO
+                        }
+
+                        if (actualBalance > BigDecimal.ZERO) {
+                            log.info("[$market] 잔고 여전히 존재 (${actualBalance}) - 재매도 필요")
+                            onOrderCancelled()  // OPEN으로 복원하여 재매도 유도
+                            return false
+                        }
+
+                        // 잔고도 없으면 실제로 체결된 것으로 간주
+                        log.info("[$market] 잔고 0 - 체결 완료로 간주")
+                        val actualPrice = orderStatus.price?.toDouble() ?: position.exitPrice ?: position.entryPrice
+                        onOrderDone(actualPrice)
+                        return true
+                    }
+
+                    // 체결 수량이 있으면 정상 체결
                     val actualPrice = orderStatus.price?.toDouble() ?: position.exitPrice ?: 0.0
                     onOrderDone(actualPrice)
                     true
