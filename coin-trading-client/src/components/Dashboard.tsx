@@ -389,28 +389,25 @@ export default function Dashboard() {
                               </span>
                             </div>
                           </div>
-                          <div className="toss-trade-prices">
-                            <span className="toss-trade-price">
-                              <span className="toss-trade-price-label">{trade.entryPrice.toLocaleString()}원</span>
-                              <span className="toss-trade-arrow">→</span>
-                              <span className="toss-trade-price-label">{trade.exitPrice.toLocaleString()}원</span>
-                            </span>
-                          </div>
-                          <div className="toss-trade-timeline">
-                            <div className="toss-trade-timeline-item toss-trade-entry">
-                              <span className="toss-trade-timeline-icon">🟢</span>
-                              <div className="toss-trade-timeline-content">
-                                <span className="toss-trade-timeline-label">매수</span>
-                                <span className="toss-trade-timeline-time">{trade.entryTimeFormatted}</span>
-                              </div>
+                          <div className="toss-trade-body">
+                            <div className="toss-trade-prices">
+                              <span className="toss-trade-entry">
+                                <span className="toss-trade-label">매수</span>
+                                <span className="toss-trade-price">{trade.entryPrice.toLocaleString()}원</span>
+                              </span>
+                              <span className="toss-trade-divider">→</span>
+                              <span className="toss-trade-exit">
+                                <span className="toss-trade-label">매도</span>
+                                <span className="toss-trade-price">{trade.exitPrice.toLocaleString()}원</span>
+                              </span>
                             </div>
-                            <div className="toss-trade-timeline-spacer"></div>
-                            <div className="toss-trade-timeline-item toss-trade-exit">
-                              <span className="toss-trade-timeline-icon">🔴</span>
-                              <div className="toss-trade-timeline-content">
-                                <span className="toss-trade-timeline-label">매도</span>
-                                <span className="toss-trade-timeline-time">{trade.exitTimeFormatted}</span>
-                              </div>
+                            <div className="toss-trade-times">
+                              <span className="toss-trade-time-entry">
+                                🟢 {trade.entryTimeFormatted}
+                              </span>
+                              <span className="toss-trade-time-exit">
+                                🔴 {trade.exitTimeFormatted}
+                              </span>
                             </div>
                           </div>
                         </div>
