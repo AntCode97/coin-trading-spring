@@ -775,6 +775,37 @@ body {
   font-size: 12px;
 }
 
+.toss-trade-times {
+  display: flex;
+  align-items: center;
+  gap: var(--space-md);
+  margin-top: var(--space-sm);
+  padding-top: var(--space-sm);
+  border-top: 1px solid var(--border-subtle);
+}
+
+.toss-trade-time-entry,
+.toss-trade-time-exit {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.toss-trade-time-label {
+  font-size: 10px;
+  color: var(--text-tertiary);
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.toss-trade-time-value {
+  font-size: 11px;
+  color: var(--text-secondary);
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+}
+
 .toss-trade-side {
   display: flex;
   flex-direction: column;

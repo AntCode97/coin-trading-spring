@@ -425,6 +425,16 @@ export default function Dashboard() {
                               <span className="toss-trade-price-label">{trade.exitPrice.toLocaleString()}원</span>
                             </span>
                           </div>
+                          <div className="toss-trade-times">
+                            <span className="toss-trade-time-entry">
+                              <span className="toss-trade-time-label">매수</span>
+                              <span className="toss-trade-time-value">{trade.entryTimeFormatted}</span>
+                            </span>
+                            <span className="toss-trade-time-exit">
+                              <span className="toss-trade-time-label">매도</span>
+                              <span className="toss-trade-time-value">{trade.exitTimeFormatted}</span>
+                            </span>
+                          </div>
                         </div>
                         <div className="toss-trade-side">
                           <div className={`toss-trade-pnl ${isTradeProfit ? 'toss-pnl-positive' : 'toss-pnl-negative'}`}>
