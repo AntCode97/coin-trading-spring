@@ -880,25 +880,375 @@ body {
   font-weight: 500;
 }
 
-/* Responsive */
+/* =====================================================
+   긴급 모드 및 모바일 최적화
+   ===================================================== */
+
+/* 긴급 모드 토글 버튼 */
+.toss-emergency-toggle {
+  width: 40px;
+  height: 40px;
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-md);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 20px;
+  cursor: pointer;
+  transition: all var(--duration-fast) var(--easing-default);
+}
+
+.toss-emergency-toggle.active {
+  background: var(--danger-secondary);
+  border-color: var(--danger-primary);
+  animation: emergency-pulse 1s ease-in-out infinite;
+}
+
+@keyframes emergency-pulse {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(239, 68, 68, 0.4); }
+  50% { box-shadow: 0 0 0 8px rgba(239, 68, 68, 0); }
+}
+
+/* 긴급 경고 배너 */
+.toss-emergency-banner {
+  display: flex;
+  align-items: center;
+  gap: var(--space-md);
+  padding: var(--space-md) var(--space-lg);
+  background: var(--danger-secondary);
+  border: 1px solid var(--danger-primary);
+  border-radius: var(--radius-md);
+  margin-bottom: var(--space-lg);
+  animation: slide-down 0.3s ease-out;
+}
+
+@keyframes slide-down {
+  from {
+    opacity: 0;
+    transform: translateY(-10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.toss-emergency-icon {
+  font-size: 20px;
+  animation: warning-shake 0.5s ease-in-out infinite;
+}
+
+@keyframes warning-shake {
+  0%, 100% { transform: translateX(0); }
+  25% { transform: translateX(-3px); }
+  75% { transform: translateX(3px); }
+}
+
+.toss-emergency-text {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--danger-primary);
+}
+
+/* 긴급 전체 매도 버튼 */
+.toss-emergency-actions {
+  margin-bottom: var(--space-lg);
+}
+
+.toss-emergency-sell-all-btn {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-md);
+  padding: 16px var(--space-lg);
+  background: var(--danger-primary);
+  border: none;
+  border-radius: var(--radius-md);
+  color: var(--text-inverse);
+  font-size: 15px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all var(--duration-fast) var(--easing-default);
+  box-shadow: 0 4px 12px rgba(239, 68, 68, 0.3);
+}
+
+.toss-emergency-sell-all-btn:hover {
+  background: #DC2626;
+  transform: translateY(-1px);
+  box-shadow: 0 6px 16px rgba(239, 68, 68, 0.4);
+}
+
+.toss-emergency-sell-all-btn:active {
+  transform: translateY(0);
+}
+
+/* 긴급 모드 하단 고정 버튼 (모바일) */
+.toss-emergency-fixed {
+  position: fixed;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  padding: var(--space-md) var(--space-lg);
+  background: var(--bg-primary);
+  border-top: 1px solid var(--border-subtle);
+  z-index: 1000;
+  box-shadow: 0 -4px 20px rgba(0, 0, 0, 0.5);
+}
+
+.toss-emergency-fixed-btn {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-md);
+  padding: 16px;
+  background: var(--danger-primary);
+  border: none;
+  border-radius: var(--radius-md);
+  color: var(--text-inverse);
+  font-size: 16px;
+  font-weight: 600;
+  cursor: pointer;
+  box-shadow: 0 4px 12px rgba(239, 68, 68, 0.4);
+}
+
+/* 큰 손실 포지션 강조 */
+.toss-position-danger {
+  background: var(--danger-secondary);
+  border-left: 3px solid var(--danger-primary);
+  animation: danger-flash 2s ease-in-out 3;
+}
+
+@keyframes danger-flash {
+  0%, 100% { background: var(--danger-secondary); }
+  50% { background: var(--danger-tertiary); }
+}
+
+.toss-pnl-box.toss-pnl-danger {
+  background: var(--danger-primary);
+  color: var(--text-inverse);
+  animation: pnl-pulse 1s ease-in-out infinite;
+}
+
+@keyframes pnl-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.7; }
+}
+
+/* 오류 재시도 버튼 */
+.toss-retry-btn {
+  margin-top: var(--space-md);
+  padding: 10px 20px;
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-md);
+  color: var(--text-primary);
+  font-size: 14px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all var(--duration-fast) var(--eargin--default);
+}
+
+.toss-retry-btn:hover {
+  background: var(--bg-hover);
+  border-color: var(--border-strong);
+}
+
+/* =====================================================
+   반응형 모바일 최적화
+   ===================================================== */
+
+/* 작은 모바일 (375px - iPhone SE) */
+@media (max-width: 375px) {
+  .toss-content {
+    padding: var(--space-sm);
+  }
+
+  .toss-header {
+    flex-direction: column;
+    gap: var(--space-sm);
+    padding: var(--space-sm);
+  }
+
+  .toss-logo {
+    width: 36px;
+    height: 36px;
+    font-size: 16px;
+  }
+
+  .toss-title {
+    font-size: 16px;
+  }
+
+  .toss-subtitle {
+    font-size: 12px;
+  }
+
+  .toss-header-right {
+    width: 100%;
+    justify-content: space-between;
+  }
+
+  .toss-live-badge {
+    font-size: 11px;
+    padding: 3px 8px;
+  }
+
+  .toss-refresh-btn {
+    font-size: 12px;
+    padding: 6px 10px;
+  }
+
+  /* 긴급 모드 토글 - 더 크게 */
+  .toss-emergency-toggle {
+    width: 44px;
+    height: 44px;
+    font-size: 22px;
+  }
+
+  .toss-asset-card {
+    flex-direction: column;
+    align-items: flex-start;
+    padding: var(--space-md);
+    gap: var(--space-md);
+  }
+
+  .toss-asset-value {
+    font-size: 28px;
+  }
+
+  .toss-asset-unit {
+    font-size: 14px;
+  }
+
+  .toss-asset-breakdown {
+    flex-direction: column;
+    gap: var(--space-sm);
+  }
+
+  .toss-asset-breakdown-item {
+    font-size: 12px;
+    padding: 3px 8px;
+  }
+
+  .toss-pnl-badge {
+    width: 100%;
+    justify-content: center;
+  }
+
+  .toss-pnl-amount {
+    font-size: 14px;
+  }
+
+  .toss-pnl-percent {
+    font-size: 11px;
+  }
+
+  /* 긴급 매도 버튼 - 더 크게 */
+  .toss-emergency-sell-all-btn {
+    padding: 18px var(--space-lg);
+    font-size: 16px;
+  }
+
+  .toss-emergency-icon {
+    font-size: 22px;
+  }
+
+  /* 포지션 아이템 */
+  .toss-position-item {
+    padding: 12px var(--space-sm);
+  }
+
+  .toss-market-symbol {
+    font-size: 14px;
+  }
+
+  .toss-strategy-badge {
+    font-size: 10px;
+    padding: 2px 6px;
+  }
+
+  .toss-position-details {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: var(--space-sm);
+  }
+
+  .toss-price-info {
+    gap: var(--space-sm);
+  }
+
+  .toss-price-group {
+    gap: 1px;
+  }
+
+  .toss-price-label {
+    font-size: 10px;
+  }
+
+  .toss-price-value {
+    font-size: 13px;
+  }
+
+  .toss-position-action {
+    width: 100%;
+    flex-direction: column;
+    gap: var(--space-sm);
+  }
+
+  .toss-pnl-box {
+    width: 100%;
+    padding: 8px 10px;
+  }
+
+  .toss-pnl-amount {
+    font-size: 13px;
+  }
+
+  .toss-pnl-percent {
+    font-size: 11px;
+  }
+
+  .toss-sell-btn {
+    width: 100%;
+    padding: 12px;
+    font-size: 14px;
+    min-height: 44px; /* 모바일 터치 타겟 최소 크기 */
+  }
+}
+
+/* 터치 디바이스 최소 크기 (44px) */
 @media (max-width: 768px) {
+  .toss-sell-btn,
+  .toss-refresh-btn,
+  .toss-date-btn,
+  .toss-emergency-toggle,
+  .toss-emergency-fixed-btn,
+  .toss-retry-btn {
+    min-height: 44px;
+    min-width: 44px;
+  }
+}
+
+/* 중간 모바일 (768px) */
+@media (min-width: 376px) and (max-width: 768px) {
   .toss-content {
     padding: var(--space-md);
   }
 
   .toss-header {
-    flex-direction: column;
-    gap: var(--space-md);
-    padding: var(--space-md);
+    flex-wrap: wrap;
   }
 
   .toss-header-left {
-    width: 100%;
-    justify-content: space-between;
+    flex: 1;
+    min-width: 200px;
   }
 
-  .toss-title-section {
-    gap: 0;
+  .toss-header-right {
+    flex-wrap: wrap;
   }
 
   .toss-asset-card {
@@ -906,10 +1256,6 @@ body {
     align-items: flex-start;
     padding: var(--space-lg);
     gap: var(--space-lg);
-  }
-
-  .toss-asset-value {
-    font-size: 32px;
   }
 
   .toss-pnl-section {
@@ -951,4 +1297,78 @@ body {
     width: 100%;
     text-align: left;
   }
+
+  /* 긴급 액션 */
+  .toss-emergency-actions {
+    order: -1; /* 포지션 카드 위로 이동 */
+  }
+
+  .toss-emergency-sell-all-btn {
+    padding: 18px var(--space-xl);
+  }
 }
+
+/* 긴급 모드 전체 모바일 */
+@media (max-width: 768px) {
+  .toss-emergency-mode .toss-main-grid {
+    padding-bottom: 80px; /* 하단 고정 버튼 공간 확보 */
+  }
+
+  .toss-emergency-mode .toss-emergency-actions {
+    display: none; /* 상단 버튼만 표시 */
+  }
+
+  .toss-emergency-mode .toss-card {
+    opacity: 0.9;
+  }
+
+  .toss-emergency-mode .toss-position-item.toss-position-danger {
+    animation: danger-flash-mobile 1.5s ease-in-out infinite;
+  }
+
+  @keyframes danger-flash-mobile {
+    0%, 100% {
+      background: var(--danger-secondary);
+      border-left-width: 3px;
+    }
+    50% {
+      background: var(--bg-elevated);
+      border-left-width: 4px;
+    }
+  }
+}
+
+/* 로딩/에러 상태 모바일 개선 */
+@media (max-width: 768px) {
+  .toss-loading-container,
+  .toss-error-container {
+    padding: var(--space-2xl);
+    min-height: 100vh;
+  }
+
+  .toss-loading-text,
+  .toss-error-text {
+    font-size: 14px;
+    text-align: center;
+    line-height: 1.6;
+  }
+}
+
+/* 다크 모바일 랜드스크롭 방지 */
+@media (max-width: 768px) {
+  body {
+    -webkit-tap-highlight-color: transparent;
+  }
+
+  .toss-sell-btn,
+  .toss-refresh-btn,
+  .toss-date-btn,
+  .toss-emergency-toggle,
+  .toss-emergency-sell-all-btn,
+  .toss-emergency-fixed-btn,
+  .toss-retry-btn {
+    touch-action: manipulation;
+    user-select: none;
+  }
+}
+

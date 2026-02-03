@@ -20,11 +20,12 @@ function addDays(date: Date, days: number): Date {
 
 export default function Dashboard() {
   const [requestDate, setRequestDate] = useState<string | null>(null); // null = 오늘
+  const [emergencyMode, setEmergencyMode] = useState(false);
 
   const { data, isLoading, error, refetch } = useQuery({
     queryKey: ['dashboard', requestDate],
     queryFn: () => dashboardApi.getData(requestDate),
-    refetchInterval: 30000,
+    refetchInterval: 10000, // 10초마다 새로고침 (긴급 대응용)
   });
 
   // 현재 조회 중인 날짜 (null이면 오늘)
@@ -72,6 +73,39 @@ export default function Dashboard() {
     }
   };
 
+  // 긴급 전체 매도
+  const handleEmergencySellAll = async () => {
+    if (!data || data.openPositions.length === 0) return;
+
+    const totalLoss = data.openPositions.reduce((sum, pos) => sum + (pos.pnl < 0 ? pos.pnl : 0), 0);
+    const lossText = totalLoss < 0 ? `${Math.abs(totalLoss).toLocaleString()}원 손실` : `${totalLoss.toLocaleString()}원 이익`;
+
+    if (!confirm(`긴급 전체 매도를 실행합니다.\n\n${data.openPositions.length}개 포지션 (${lossText})\n\n정말 모두 매도하시겠습니까?`)) {
+      return;
+    }
+
+    let successCount = 0;
+    let failCount = 0;
+
+    for (const pos of data.openPositions) {
+      try {
+        const result = await dashboardApi.manualClose(pos.market, pos.strategy);
+        if (result.success) {
+          successCount++;
+        } else {
+          failCount++;
+          console.error(`${pos.market} 매도 실패:`, result.error);
+        }
+      } catch (e: any) {
+        failCount++;
+        console.error(`${pos.market} 매도 오류:`, e);
+      }
+    }
+
+    alert(`전체 매도 완료!\n성공: ${successCount}건\n실패: ${failCount}건`);
+    refetch();
+  };
+
   if (isLoading) {
     return (
       <div className="toss-loading-container">
@@ -87,6 +121,7 @@ export default function Dashboard() {
         <p className="toss-error-text">
           오류가 발생했습니다: {error instanceof Error ? error.message : '알 수 없는 오류'}
         </p>
+        <button className="toss-retry-btn" onClick={() => refetch()}>재시도</button>
       </div>
     );
   }
@@ -95,6 +130,7 @@ export default function Dashboard() {
     return (
       <div className="toss-error-container">
         <p className="toss-error-text">데이터를 불러올 수 없습니다</p>
+        <button className="toss-retry-btn" onClick={() => refetch()}>재시도</button>
       </div>
     );
   }
@@ -117,8 +153,12 @@ export default function Dashboard() {
     : 0;
   const isPositive = totalPnl >= 0;
 
+  // 총 손실 계산 (긴급 모드 판단용)
+  const totalLoss = data.openPositions.reduce((sum, pos) => sum + (pos.pnl < 0 ? pos.pnl : 0), 0);
+  const hasSignificantLoss = totalLoss < -5000; // 5000원 이상 손실이면 경고
+
   return (
-    <div className="toss-container">
+    <div className={`toss-container ${emergencyMode ? 'toss-emergency-mode' : ''}`}>
       <div className="toss-content">
         {/* Header */}
         <header className="toss-header">
@@ -137,8 +177,26 @@ export default function Dashboard() {
             <button className="toss-refresh-btn" onClick={() => refetch()}>
               새로고침
             </button>
+            {/* 긴급 모드 토글 (모바일용) */}
+            <button
+              className={`toss-emergency-toggle ${emergencyMode ? 'active' : ''}`}
+              onClick={() => setEmergencyMode(!emergencyMode)}
+              aria-label="긴급 모드"
+            >
+              🚨
+            </button>
           </div>
         </header>
+
+        {/* 긴급 경고 배너 */}
+        {hasSignificantLoss && (
+          <div className="toss-emergency-banner">
+            <span className="toss-emergency-icon">⚠️</span>
+            <span className="toss-emergency-text">
+              전체 손실 {Math.abs(totalLoss).toLocaleString()}원 - 긴급 매도 고려
+            </span>
+          </div>
+        )}
 
         {/* Asset Card */}
         <section className="toss-asset-section">
@@ -178,6 +236,19 @@ export default function Dashboard() {
           </div>
         </section>
 
+        {/* 긴급 액션 버튼 (모바일 우선) */}
+        {data.openPositions.length > 0 && (
+          <section className="toss-emergency-actions">
+            <button
+              className="toss-emergency-sell-all-btn"
+              onClick={handleEmergencySellAll}
+            >
+              <span className="toss-emergency-icon">🚨</span>
+              <span className="toss-emergency-text">전체 매도 ({data.openPositions.length}개)</span>
+            </button>
+          </section>
+        )}
+
         {/* Main Grid */}
         <div className="toss-main-grid">
           {/* Left Column */}
@@ -195,8 +266,9 @@ export default function Dashboard() {
                 <div className="toss-position-list">
                   {data.openPositions.map((pos, idx) => {
                     const isPosProfit = pos.pnl >= 0;
+                    const isBigLoss = !isPosProfit && pos.pnl < -5000; // 5000원 이상 손실
                     return (
-                      <div key={idx} className="toss-position-item">
+                      <div key={idx} className={`toss-position-item ${isBigLoss ? 'toss-position-danger' : ''}`}>
                         <div className="toss-position-header">
                           <span className="toss-market-symbol">{pos.market}</span>
                           <span className={`toss-strategy-badge ${
@@ -225,7 +297,7 @@ export default function Dashboard() {
                             </div>
                           </div>
                           <div className="toss-position-action">
-                            <div className={`toss-pnl-box ${isPosProfit ? 'toss-pnl-positive' : 'toss-pnl-negative'}`}>
+                            <div className={`toss-pnl-box ${isPosProfit ? 'toss-pnl-positive' : 'toss-pnl-negative'} ${isBigLoss ? 'toss-pnl-danger' : ''}`}>
                               <span className="toss-pnl-amount">
                                 {isPosProfit ? '+' : ''}{pos.pnl.toLocaleString()}원
                               </span>
@@ -375,6 +447,18 @@ export default function Dashboard() {
             </div>
           </div>
         </div>
+
+        {/* 긴급 모드 하단 고정 버튼 (모바일) */}
+        {emergencyMode && data.openPositions.length > 0 && (
+          <div className="toss-emergency-fixed">
+            <button
+              className="toss-emergency-fixed-btn"
+              onClick={handleEmergencySellAll}
+            >
+              🚨 전체 매도 ({data.openPositions.length}개)
+            </button>
+          </div>
+        )}
       </div>
     </div>
   );
