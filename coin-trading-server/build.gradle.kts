@@ -126,7 +126,7 @@ tasks.named("processResources") {
 }
 
 // bootJar 태스크 전에 React 빌드 및 복사 실행
-tasks.named<org.springframework.boot.gradle.tasks.boot.BootJar>("bootJar") {
+tasks.named("bootJar") {
     dependsOn("copyReactBuild")
 }
 
