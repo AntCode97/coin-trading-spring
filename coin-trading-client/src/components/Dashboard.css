@@ -97,12 +97,21 @@ body {
 .toss-container {
   min-height: 100vh;
   background: var(--bg-primary);
+  display: flex;
+  justify-content: center;
 }
 
 .toss-content {
-  max-width: 1280px;
+  width: 100%;
+  max-width: 1400px;
   margin: 0 auto;
-  padding: var(--space-xl);
+  padding: var(--space-2xl) var(--space-xl);
+}
+
+@media (min-width: 1440px) {
+  .toss-content {
+    padding: var(--space-2xl) var(--space-3xl);
+  }
 }
 
 /* Header */
@@ -381,7 +390,7 @@ body {
 .toss-main-grid {
   display: grid;
   grid-template-columns: 1.4fr 1fr;
-  gap: var(--space-lg);
+  gap: var(--space-xl);
 }
 
 @media (max-width: 1024px) {
@@ -394,7 +403,7 @@ body {
 .toss-right-column {
   display: flex;
   flex-direction: column;
-  gap: var(--space-lg);
+  gap: var(--space-xl);
 }
 
 /* Card */
@@ -403,6 +412,12 @@ body {
   border-radius: var(--radius-lg);
   border: 1px solid var(--border-subtle);
   overflow: hidden;
+  box-shadow: var(--shadow-sm);
+  transition: box-shadow var(--duration-normal) var(--easing-default);
+}
+
+.toss-card:hover {
+  box-shadow: var(--shadow-md);
 }
 
 .toss-card-header {
@@ -614,16 +629,18 @@ body {
 .toss-stats-grid {
   display: grid;
   grid-template-columns: repeat(4, 1fr);
-  gap: 1px;
+  gap: var(--space-sm);
   background: var(--border-subtle);
   border-radius: var(--radius-md);
   overflow: hidden;
+  padding: 1px;
 }
 
 .toss-stat-item {
   background: var(--bg-elevated);
   padding: var(--space-lg) var(--space-md);
   text-align: center;
+  border-radius: var(--radius-sm);
 }
 
 .toss-stat-label {
