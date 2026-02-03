@@ -9,7 +9,7 @@ services:
     image: dbswns97/coin-trading-frontend:latest
     container_name: coin-trading-frontend
     ports:
-      - "1104:80"  # 1104 포트에서 접근
+      - "80:80"  # 1225 포트에서 접근
     environment:
       - TZ=Asia/Seoul
     restart: unless-stopped
@@ -25,9 +25,8 @@ services:
   coin-trading-backend:
     image: dbswns97/coin-trading-server:latest
     container_name: coin-trading-server
-    # 내부 통신용으로만 8080 노출 (외부에서 직접 접근 불가)
     expose:
-      - "8080"
+      - "8080:8080"
     env_file:
       - .env
     environment:
@@ -59,7 +58,7 @@ services:
       - /var/run/docker.sock:/var/run/docker.sock
     environment:
       - WATCHTOWER_CLEANUP=true
-      - WATCHTOWER_POLL_INTERVAL=300  # 5분마다 체크
+      - WATCHTOWER_POLL_INTERVAL=60  # 1분마다 체크
       - WATCHTOWER_LABEL_ENABLE=true    # 라벨 있는 컨테이너만 모니터링
       - TZ=Asia/Seoul
     restart: unless-stopped
