@@ -95,16 +95,25 @@ if ! grep -qE '"(credsStore|auths)"' ~/.docker/config.json 2>/dev/null; then
 fi
 echo -e "${GREEN}로그인 확인 완료${NC}"
 
-# Gradle 빌드
+# Gradle 빌드 (Spring Boot)
 echo ""
-echo -e "${YELLOW}[2/4] Gradle 빌드...${NC}"
+echo -e "${YELLOW}[2/5] Gradle 빌드 (Spring Boot)...${NC}"
 ./gradlew :coin-trading-server:build -x test --no-daemon
 echo -e "${GREEN}Gradle 빌드 완료${NC}"
+
+# React 빌드
+echo ""
+echo -e "${YELLOW}[2.5/5] React 빌드...${NC}"
+cd coin-trading-client
+npm install
+npm run build
+cd ..
+echo -e "${GREEN}React 빌드 완료${NC}"
 
 # Docker buildx 빌더 설정 (멀티아키텍처용)
 if [[ "$USE_BUILDX" == "true" || -n "$PLATFORM" ]]; then
     echo ""
-    echo -e "${YELLOW}[2.5/4] Docker buildx 빌더 설정...${NC}"
+    echo -e "${YELLOW}[3/5] Docker buildx 빌더 설정...${NC}"
 
     # buildx 빌더가 없으면 생성
     if ! docker buildx inspect multiarch-builder &> /dev/null; then
@@ -116,13 +125,14 @@ if [[ "$USE_BUILDX" == "true" || -n "$PLATFORM" ]]; then
     echo -e "${GREEN}buildx 빌더 준비 완료${NC}"
 fi
 
-# Docker 이미지 빌드 및 푸시
+# ===========================================
+# Spring Boot 이미지 빌드 및 푸시
+# ===========================================
 echo ""
-echo -e "${YELLOW}[3/4] Docker 이미지 빌드...${NC}"
+echo -e "${YELLOW}[3.5/5] Spring Boot Docker 이미지 빌드...${NC}"
 
 if [[ "$USE_BUILDX" == "true" ]]; then
-    # 멀티아키텍처 빌드 (buildx 사용, 빌드와 푸시 동시에)
-    echo -e "${CYAN}멀티아키텍처 빌드 중 (시간이 걸릴 수 있음)...${NC}"
+    echo -e "${CYAN}멀티아키텍처 빌드 중...${NC}"
     docker buildx build ${BUILD_OPTS} \
         --platform "${PLATFORM}" \
         -t ${DOCKER_USERNAME}/${IMAGE_NAME}:${TAG} \
@@ -130,9 +140,8 @@ if [[ "$USE_BUILDX" == "true" ]]; then
         -f coin-trading-server/Dockerfile \
         --push \
         .
-    echo -e "${GREEN}Docker 이미지 빌드 및 푸시 완료${NC}"
+    echo -e "${GREEN}Spring Boot 이미지 빌드 및 푸시 완료${NC}"
 else
-    # 단일 플랫폼 빌드
     PLATFORM_OPT=""
     if [[ -n "$PLATFORM" ]]; then
         PLATFORM_OPT="--platform ${PLATFORM}"
@@ -142,16 +151,54 @@ else
         -t ${DOCKER_USERNAME}/${IMAGE_NAME}:${TAG} \
         -t ${DOCKER_USERNAME}/${IMAGE_NAME}:latest \
         -f coin-trading-server/Dockerfile .
-    echo -e "${GREEN}Docker 이미지 빌드 완료${NC}"
+    echo -e "${GREEN}Spring Boot 이미지 빌드 완료${NC}"
 
-    # Docker Hub 푸시
     echo ""
-    echo -e "${YELLOW}[4/4] Docker Hub 푸시...${NC}"
+    echo -e "${YELLOW}[4/5] Spring Boot Docker Hub 푸시...${NC}"
     docker push ${DOCKER_USERNAME}/${IMAGE_NAME}:${TAG}
     if [[ "$TAG" != "latest" ]]; then
         docker push ${DOCKER_USERNAME}/${IMAGE_NAME}:latest
     fi
-    echo -e "${GREEN}Docker Hub 푸시 완료${NC}"
+    echo -e "${GREEN}Spring Boot 푸시 완료${NC}"
+fi
+
+# ===========================================
+# React Frontend 이미지 빌드 및 푸시
+# ===========================================
+echo ""
+echo -e "${YELLOW}[4.5/5] React Frontend Docker 이미지 빌드...${NC}"
+
+REACT_IMAGE_NAME="coin-trading-frontend"
+
+if [[ "$USE_BUILDX" == "true" ]]; then
+    echo -e "${CYAN}멀티아키텍처 빌드 중...${NC}"
+    docker buildx build ${BUILD_OPTS} \
+        --platform "${PLATFORM}" \
+        -t ${DOCKER_USERNAME}/${REACT_IMAGE_NAME}:${TAG} \
+        -t ${DOCKER_USERNAME}/${REACT_IMAGE_NAME}:latest \
+        -f coin-trading-client/Dockerfile \
+        --push \
+        .
+    echo -e "${GREEN}React Frontend 이미지 빌드 및 푸시 완료${NC}"
+else
+    PLATFORM_OPT=""
+    if [[ -n "$PLATFORM" ]]; then
+        PLATFORM_OPT="--platform ${PLATFORM}"
+    fi
+
+    docker build ${BUILD_OPTS} ${PLATFORM_OPT} \
+        -t ${DOCKER_USERNAME}/${REACT_IMAGE_NAME}:${TAG} \
+        -t ${DOCKER_USERNAME}/${REACT_IMAGE_NAME}:latest \
+        -f coin-trading-client/Dockerfile .
+    echo -e "${GREEN}React Frontend 이미지 빌드 완료${NC}"
+
+    echo ""
+    echo -e "${YELLOW}[5/5] React Frontend Docker Hub 푸시...${NC}"
+    docker push ${DOCKER_USERNAME}/${REACT_IMAGE_NAME}:${TAG}
+    if [[ "$TAG" != "latest" ]]; then
+        docker push ${DOCKER_USERNAME}/${REACT_IMAGE_NAME}:latest
+    fi
+    echo -e "${GREEN}React Frontend 푸시 완료${NC}"
 fi
 
 echo ""

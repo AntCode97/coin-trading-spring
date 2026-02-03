@@ -1,13 +1,33 @@
 # NAS용 Docker Compose
-# 이미 빌드된 이미지를 Docker Hub에서 pull해서 사용
-# Watchtower로 자동 업데이트 지원
+# React Frontend (nginx) + Spring Boot Backend 분리 실행
 
 services:
-  coin-trading:
+  # ===========================================
+  # React Frontend (nginx)
+  # ===========================================
+  coin-trading-frontend:
+    image: dbswns97/coin-trading-frontend:latest
+    container_name: coin-trading-frontend
+    ports:
+      - "1104:80"  # 1104 포트에서 접근
+    environment:
+      - TZ=Asia/Seoul
+    restart: unless-stopped
+    # Watchtower로 자동 업데이트
+    labels:
+      - "com.centurylinklabs.watchtower.enable=true"
+    depends_on:
+      - coin-trading-backend
+
+  # ===========================================
+  # Spring Boot Backend
+  # ===========================================
+  coin-trading-backend:
     image: dbswns97/coin-trading-server:latest
     container_name: coin-trading-server
-    ports:
-      - "8080:8080"
+    # 내부 통신용으로만 8080 노출 (외부에서 직접 접근 불가)
+    expose:
+      - "8080"
     env_file:
       - .env
     environment:
@@ -25,13 +45,13 @@ services:
       timeout: 10s
       retries: 3
       start_period: 40s
-    # Watchtower로 자동 업데이트 대상 표시
+    # Watchtower로 자동 업데이트
     labels:
       - "com.centurylinklabs.watchtower.enable=true"
 
-  # Watchtower: Docker 이미지 자동 업데이트 도구
-  # - Docker Hub에 새 이미지가 푸시되면 자동으로 컨테이너 갱신
-  # - 5분마다 체크하여 latest 태그 변경 감지
+  # ===========================================
+  # Watchtower: Docker 이미지 자동 업데이트
+  # ===========================================
   watchtower:
     image: containrrr/watchtower
     container_name: watchtower
