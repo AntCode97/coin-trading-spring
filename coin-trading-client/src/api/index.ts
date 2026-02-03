@@ -72,6 +72,13 @@ export interface DashboardData {
   totalStats: StatsInfo;
   currentDateStr: string;
   requestDate: string;  // YYYY-MM-DD format
+  activeStrategies: StrategyInfo[];
+}
+
+export interface StrategyInfo {
+  name: string;
+  description: string;
+  code: string;
 }
 
 export interface SyncResult {

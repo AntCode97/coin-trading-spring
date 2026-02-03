@@ -104,6 +104,18 @@ class DashboardController(
         val currentDateStr = targetDate.atZone(java.time.ZoneId.systemDefault()).toLocalDate().format(dateFormatter)
         val requestDate = targetDate.atZone(java.time.ZoneId.systemDefault()).toLocalDate().toString()  // YYYY-MM-DD
 
+        // 활성화된 전략 목록
+        val activeStrategies = mutableListOf<StrategyInfo>()
+        if (memeScalperProperties.enabled) {
+            activeStrategies.add(StrategyInfo("Meme Scalper", "단타 매매", "memescalper"))
+        }
+        if (volumeSurgeProperties.enabled) {
+            activeStrategies.add(StrategyInfo("Volume Surge", "거래량 급등", "volumesurge"))
+        }
+        if (tradingProperties.enabled) {
+            activeStrategies.add(StrategyInfo("Mean Reversion", "평균 회귀", "meanreversion"))
+        }
+
         return DashboardResponse(
             krwBalance = krwBalance.toDouble(),
             totalAssetKrw = totalAssetKrw,
@@ -113,7 +125,8 @@ class DashboardController(
             todayStats = todayStats,
             totalStats = totalStats,
             currentDateStr = currentDateStr,
-            requestDate = requestDate
+            requestDate = requestDate,
+            activeStrategies = activeStrategies
         )
     }
 
@@ -361,7 +374,14 @@ data class DashboardResponse(
     val todayStats: StatsInfo,
     val totalStats: StatsInfo,
     val currentDateStr: String,
-    val requestDate: String  // YYYY-MM-DD format
+    val requestDate: String,  // YYYY-MM-DD format
+    val activeStrategies: List<StrategyInfo> = emptyList()
+)
+
+data class StrategyInfo(
+    val name: String,           // 전략 이름 (예: "Meme Scalper")
+    val description: String,    // 설명 (예: "단타 매매")
+    val code: String            // 코드 (CSS class용)
 )
 
 data class CoinAsset(

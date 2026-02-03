@@ -191,6 +191,19 @@ export default function Dashboard() {
               <span className="toss-live-dot"></span>
               <span className="toss-live-text">실시간</span>
             </div>
+            {data.activeStrategies && data.activeStrategies.length > 0 && (
+              <div className="toss-strategies-container">
+                {data.activeStrategies.map((strategy) => (
+                  <span
+                    key={strategy.code}
+                    className={`toss-strategy-tag toss-strategy-${strategy.code}`}
+                    title={strategy.description}
+                  >
+                    {strategy.name}
+                  </span>
+                ))}
+              </div>
+            )}
             <button
               className={`toss-sync-btn ${syncing ? 'syncing' : ''}`}
               onClick={handleSync}
