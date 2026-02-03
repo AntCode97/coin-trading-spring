@@ -51,12 +51,12 @@ class TradingController(
      * 사용 가능한 전략 목록
      */
     @GetMapping("/strategies")
-    fun getStrategies(): List<StrategyInfo> {
+    fun getStrategies(): List<Map<String, Any>> {
         return strategySelector.getAllStrategies().map { strategy ->
-            StrategyInfo(
-                name = strategy.name,
-                description = strategy.getDescription(),
-                isCurrent = strategy.name == tradingProperties.strategy.type.name
+            mapOf(
+                "name" to strategy.name,
+                "description" to strategy.getDescription(),
+                "isCurrent" to (strategy.name == tradingProperties.strategy.type.name)
             )
         }
     }
@@ -120,12 +120,6 @@ class TradingController(
         )
     }
 }
-
-data class StrategyInfo(
-    val name: String,
-    val description: String,
-    val isCurrent: Boolean
-)
 
 data class StrategyConfigResponse(
     val type: String,
