@@ -262,17 +262,19 @@ export default function Dashboard() {
                 </div>
                 <div className="toss-date-selector">
                   <button
-                    onClick={() => handleDateChange(-1)}
+                    onClick={() => handleDateChange(1)}
                     disabled={daysAgo >= 7}
                     className="toss-date-btn"
+                    aria-label="이전 날짜"
                   >
                     ◀
                   </button>
                   <span className="toss-date-display">{data.currentDateStr}</span>
                   <button
-                    onClick={() => handleDateChange(1)}
+                    onClick={() => handleDateChange(-1)}
                     disabled={daysAgo <= 0}
                     className="toss-date-btn"
+                    aria-label="다음 날짜"
                   >
                     ▶
                   </button>
