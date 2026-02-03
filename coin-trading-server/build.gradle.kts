@@ -99,3 +99,34 @@ tasks.named<org.springframework.boot.gradle.tasks.run.BootRun>("bootRun") {
     }
 }
 
+// ============================================
+// React SPA 빌드 통합
+// ============================================
+
+// React 빌드 후 static 폴더로 복사하는 태스크
+tasks.register<Copy>("copyReactBuild") {
+    group = "build"
+    description = "Copy React build output to Spring Boot static resources"
+
+    val reactDistDir = file("${rootProject.projectDir}/coin-trading-client/dist")
+    val staticDir = file("${project.projectDir}/src/main/resources/static")
+
+    // React 빌드 output이 존재할 때만 복사
+    onlyIf { reactDistDir.exists() }
+
+    from(reactDistDir) {
+        include("**/*")
+    }
+    into(staticDir)
+}
+
+// processResources 태스크 후에 React 복사 실행 (jar 패키징 전에 반영)
+tasks.named("processResources") {
+    finalizedBy("copyReactBuild")
+}
+
+// bootJar 태스크 전에 React 빌드 및 복사 실행
+tasks.named<org.springframework.boot.gradle.tasks.boot.BootJar>("bootJar") {
+    dependsOn("copyReactBuild")
+}
+

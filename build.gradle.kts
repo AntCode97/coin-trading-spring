@@ -16,3 +16,33 @@ allprojects {
         maven { url = uri("https://repo.spring.io/milestone") }
     }
 }
+
+// ============================================
+// React 빌드 태스크 (루트 프로젝트)
+// ============================================
+
+tasks.register("buildReact") {
+    group = "build"
+    description = "Build React SPA client"
+
+    val reactDir = file("${rootProject.projectDir}/coin-trading-client")
+    val nodeModulesDir = file("${reactDir}/node_modules")
+
+    // node_modules가 없으면 npm install 실행
+    doFirst {
+        if (!nodeModulesDir.exists()) {
+            exec {
+                workingDir = reactDir
+                commandLine = listOf("npm", "install")
+            }
+        }
+    }
+
+    // React 빌드 실행
+    doLast {
+        exec {
+            workingDir = reactDir
+            commandLine = listOf("npm", "run", "build")
+        }
+    }
+}
