@@ -126,24 +126,61 @@ class MemeScalperEngine(
     }
 
     /**
-     * 서버 재시작 시 열린 포지션 복원
+     * 서버 재시작 시 상태 복원
+     *
+     * - OPEN, CLOSING 포지션을 메모리 맵에 로드
+     * - CLOSING 포지션은 즉시 모니터링 재개
      */
     private fun restoreOpenPositions() {
+        // OPEN 포지션 복원
         val openPositions = tradeRepository.findByStatus("OPEN")
-        if (openPositions.isEmpty()) {
-            log.info("복원할 열린 포지션 없음")
-            return
+        if (openPositions.isNotEmpty()) {
+            log.info("OPEN 포지션 ${openPositions.size}건 복원 중...")
+            openPositions.forEach { position ->
+                val positionId = position.id ?: run {
+                    log.warn("[${position.market}] 포지션 ID 없음 - 복원 스킵")
+                    return@forEach
+                }
+                peakPrices[positionId] = position.peakPrice ?: position.entryPrice
+                peakVolumes[positionId] = position.peakVolume ?: 0.0
+                log.info("[${position.market}] OPEN 포지션 복원 완료")
+            }
+            log.info("=== ${openPositions.size}건 OPEN 포지션 복원 완료 ===")
+        } else {
+            log.info("복원할 OPEN 포지션 없음")
         }
 
-        log.info("열린 포지션 ${openPositions.size}건 복원")
-        openPositions.forEach { position ->
-            val positionId = position.id ?: run {
-                log.warn("[${position.market}] 포지션 ID 없음 - 복원 스킵")
-                return@forEach
+        // CLOSING 포지션 복원 (즉시 모니터링 재개)
+        val closingPositions = tradeRepository.findByStatus("CLOSING")
+        if (closingPositions.isNotEmpty()) {
+            log.info("CLOSING 포지션 ${closingPositions.size}건 복원 중...")
+            closingPositions.forEach { position ->
+                val positionId = position.id ?: run {
+                    log.warn("[${position.market}] CLOSING 포지션 ID 없음 - 복원 스킵")
+                    return@forEach
+                }
+
+                // 피크 가격/거래량 복원
+                peakPrices[positionId] = position.peakPrice ?: position.entryPrice
+                peakVolumes[positionId] = position.peakVolume ?: 0.0
+
+                log.warn("[${position.market}] CLOSING 포지션 복원 - 주문ID: ${position.closeOrderId}, 청산시도: ${position.closeAttemptCount}회")
+
+                // 즉시 청산 상태 확인
+                monitorClosingPosition(position)
             }
-            peakPrices[positionId] = position.peakPrice ?: position.entryPrice
-            peakVolumes[positionId] = position.peakVolume ?: 0.0
-            log.info("[${position.market}] 포지션 복원 완료")
+            log.info("=== ${closingPositions.size}건 CLOSING 포지션 복원 완료, 모니터링 재개 ===")
+        }
+
+        // ABANDONED 포지션 로그만 출력 (재시도는 스케줄러에서 처리)
+        val abandonedPositions = tradeRepository.findByStatus("ABANDONED")
+        if (abandonedPositions.isNotEmpty()) {
+            log.warn("ABANDONED 포지션 ${abandonedPositions.size}건 존재 - 10분마다 자동 재시도 예정")
+        }
+
+        val totalRestored = openPositions.size + closingPositions.size
+        if (totalRestored > 0) {
+            log.info("=== 총 ${totalRestored}건 포지션 복원 완료, 모니터링 재개 ===")
         }
     }
 

@@ -17,6 +17,9 @@ import com.ant.cointrading.regime.RegimeDetector
 import com.ant.cointrading.repository.DcaPositionEntity
 import com.ant.cointrading.repository.DcaPositionRepository
 import com.ant.cointrading.strategy.DcaStrategy
+import com.ant.cointrading.engine.GlobalPositionManager
+import com.ant.cointrading.engine.PositionHelper
+import com.ant.cointrading.engine.PositionCloser
 import jakarta.annotation.PostConstruct
 import org.slf4j.LoggerFactory
 import org.springframework.scheduling.annotation.Scheduled
@@ -51,9 +54,13 @@ class DcaEngine(
     private val orderExecutor: OrderExecutor,
     private val dcaPositionRepository: DcaPositionRepository,
     private val slackNotifier: SlackNotifier,
-    private val regimeDetector: RegimeDetector
+    private val regimeDetector: RegimeDetector,
+    private val globalPositionManager: GlobalPositionManager
 ) {
     private val log = LoggerFactory.getLogger(javaClass)
+
+    // 공통 청산 로직 (PositionCloser 사용)
+    private val positionCloser = PositionCloser(bithumbPrivateApi, orderExecutor, slackNotifier)
 
     // 마켓별 쿨다운 추적
     private val cooldowns = ConcurrentHashMap<String, Instant>()
@@ -61,6 +68,7 @@ class DcaEngine(
     companion object {
         private const val SCAN_INTERVAL_MS = 60_000L  // 1분
         private const val MONITOR_INTERVAL_MS = 5_000L // 5초
+        private const val CLOSE_RETRY_BACKOFF_SECONDS = 10L  // 청산 재시도 백오프
         // MIN_ORDER_AMOUNT_KRW는 TradingConstants.MIN_ORDER_AMOUNT_KRW 사용
     }
 
@@ -87,6 +95,16 @@ class DcaEngine(
         log.info("DCA 열린 포지션 ${openPositions.size}건 복원")
         openPositions.forEach { position ->
             log.info("[${position.market}] 포지션 복원: 수량=${position.totalQuantity}, 평균가=${position.averagePrice}원")
+        }
+
+        // CLOSING 포지션 복구 (서버 재시작으로 중단된 청산 재개)
+        val closingPositions = dcaPositionRepository.findByStatus("CLOSING")
+        if (closingPositions.isNotEmpty()) {
+            log.warn("CLOSING 포지션 ${closingPositions.size}건 복구 - 청산 재개 시도")
+            closingPositions.forEach { position ->
+                log.warn("[${position.market}] CLOSING 포지션 복구: 시도=${position.closeAttemptCount ?: 0}")
+                // CLOSING 상태이면 다음 모니터링 사이클에서 자동 처리됨
+            }
         }
     }
 
@@ -174,7 +192,153 @@ class DcaEngine(
     }
 
     /**
+     * 진입 조건 체크
+     *
+     * [엔진 간 충돌 방지] 다른 엔진의 포지션 확인
+     * [잔고 불일치 방지] 이미 해당 코인 보유 시 진입 불가
+     */
+    private fun shouldEnterPosition(market: String): Boolean {
+        // [엔진 간 충돌 방지] 다른 엔진(TradingEngine, VolumeSurge, MemeScalper)에서 포지션 확인
+        if (globalPositionManager.hasOpenPosition(market)) {
+            log.debug("[$market] 다른 엔진에서 열린 포지션 존재 - DCA 진입 차단")
+            return false
+        }
+
+        // 실제 잔고 체크 - KRW 충분한지 + 이미 해당 코인 보유 시 진입 불가
+        val coinSymbol = PositionHelper.extractCoinSymbol(market)
+        val requiredKrw = BigDecimal(tradingProperties.orderAmountKrw.toLong())
+
+        try {
+            val balances = bithumbPrivateApi.getBalances() ?: return false
+
+            // 1. KRW 잔고 체크 - 포지션 크기 + 여유분(10%)
+            val krwBalance = balances.find { it.currency == "KRW" }?.balance ?: BigDecimal.ZERO
+            val minRequired = requiredKrw.multiply(BigDecimal("1.1"))  // 10% 여유
+            if (krwBalance < minRequired) {
+                log.warn("[$market] KRW 잔고 부족: ${krwBalance}원 < ${minRequired}원")
+                return false
+            }
+
+            // 2. 코인 잔고 체크 - 이미 보유 시 진입 불가 (엣지 케이스 방지)
+            val coinBalance = balances.find { it.currency == coinSymbol }?.balance ?: BigDecimal.ZERO
+            if (coinBalance > BigDecimal.ZERO) {
+                log.warn("[$market] 이미 $coinSymbol 잔고 보유 중: $coinBalance - 중복 진입 방지")
+                return false
+            }
+        } catch (e: Exception) {
+            log.warn("[$market] 잔고 조회 실패, 진입 보류: ${e.message}")
+            return false
+        }
+
+        return true
+    }
+
+    /**
+     * 매수 주문 실행 및 검증
+     *
+     * [엣지 케이스 처리]
+     * - executedVolume 0 체크 (API 응답과 실제 체결 불일치)
+     * - 진입가 0 검증
+     */
+    private fun executeBuyOrderWithValidation(
+        market: String,
+        signal: TradingSignal,
+        orderAmount: BigDecimal
+    ): BuyExecutionResult? {
+        val buySignal = TradingSignal(
+            market = market,
+            action = SignalAction.BUY,
+            confidence = signal.confidence,
+            price = signal.price,
+            reason = "DCA 진입: ${signal.reason}",
+            strategy = "DCA",
+            regime = signal.regime
+        )
+
+        val orderResult = orderExecutor.execute(buySignal, orderAmount)
+
+        if (!orderResult.success) {
+            log.error("[$market] 매수 주문 실패: ${orderResult.message}")
+            cooldowns[market] = Instant.now().plus(5, ChronoUnit.MINUTES)
+            return null
+        }
+
+        // 체결 수량 검증
+        val executedQuantity = orderResult.executedQuantity?.toDouble() ?: 0.0
+        if (executedQuantity <= 0) {
+            log.error("[$market] 체결 수량 0 - 주문 실패로 간주")
+            slackNotifier.sendWarning(market, "매수 주문 체결 수량 0 - API 확인 필요")
+            cooldowns[market] = Instant.now().plus(5, ChronoUnit.MINUTES)
+            return null
+        }
+
+        // 체결가 결정 - 우선순위: orderResult > API 현재가 > signal
+        val executedPrice = orderResult.price?.toDouble()?.takeIf { it > 0 }
+            ?: bithumbPublicApi.getCurrentPrice(market)?.firstOrNull()?.tradePrice?.toDouble()
+            ?: signal.price.toDouble()
+
+        // 진입가 검증
+        if (executedPrice <= 0) {
+            log.error("[$market] 유효하지 않은 진입가: $executedPrice - 포지션 생성 취소")
+            slackNotifier.sendWarning(market, "매수 체결되었으나 체결가 확인 불가 - 수동 확인 필요")
+            cooldowns[market] = Instant.now().plus(60, ChronoUnit.SECONDS)
+            return null
+        }
+
+        // 슬리피지 경고
+        val expectedPrice = signal.price.toDouble()
+        if (expectedPrice > 0) {
+            val slippagePercent = ((executedPrice - expectedPrice) / expectedPrice) * 100
+            if (kotlin.math.abs(slippagePercent) > 1.0) {
+                log.warn("[$market] 슬리피지 경고: ${String.format("%.2f", slippagePercent)}%")
+            }
+        }
+
+        return BuyExecutionResult(executedPrice, executedQuantity)
+    }
+
+    /**
+     * 실제 잔고 확인 (API 응답만 믿지 않음)
+     *
+     * 빗썸 API는 주문 체결 응답을 보내지만, 실제 잔고가 증가하지 않는 경우가 있음.
+     * 주문 실행 후 반드시 실제 잔고를 확인하여 포지션 생성 여부를 결정해야 함.
+     */
+    private fun verifyActualBalance(market: String, expectedQuantity: Double): Boolean {
+        return try {
+            val coinSymbol = PositionHelper.extractCoinSymbol(market)
+            val balances = bithumbPrivateApi.getBalances() ?: run {
+                log.error("[$market] 잔고 조회 실패 - null 응답")
+                return false
+            }
+
+            val actualBalance = balances.find { it.currency == coinSymbol }?.balance ?: BigDecimal.ZERO
+
+            // 예상 수량의 90% 이상이면 성공으로 간주 (부분 체결/수수료 고려)
+            val minAcceptableBalance = BigDecimal(expectedQuantity).multiply(BigDecimal("0.9"))
+
+            if (actualBalance < minAcceptableBalance) {
+                log.error("[$market] 잔고 불일치: 예상=${String.format("%.6f", expectedQuantity)}, 실제=${actualBalance}")
+                slackNotifier.sendWarning(market, """
+                    매수 주문 체결되었으나 실제 잔고 없음 (API 응답 불일치)
+                    예상 수량: ${String.format("%.6f", expectedQuantity)}
+                    실제 잔고: ${actualBalance}
+                    주문 확인 필요.
+                """.trimIndent())
+                return false
+            }
+
+            log.info("[$market] 잔고 확인 완료: ${actualBalance}")
+            true
+        } catch (e: Exception) {
+            log.error("[$market] 잔고 확인 중 예외 발생: ${e.message}", e)
+            false
+        }
+    }
+
+    /**
      * 포지션 진입
+     *
+     * 켄트백: 각 하위 작업을 명확한 메서드로 분리 (Compose Method 패턴)
      */
     private fun enterPosition(
         market: String,
@@ -184,113 +348,143 @@ class DcaEngine(
     ) {
         log.info("[$market] DCA 진입 시도: 신뢰도=${signal.confidence}%, 이유=${signal.reason}")
 
-        // 주문 금액 결정 (기본 10,000원)
         val orderAmount = BigDecimal.valueOf(tradingProperties.orderAmountKrw.toLong())
 
-        // KRW 잔고 확인
-        try {
-            val balances = bithumbPrivateApi.getBalances()
-            val krwBalance = balances?.find { it.currency == "KRW" }?.balance ?: BigDecimal.ZERO
-
-            if (krwBalance < orderAmount) {
-                log.warn("[$market] KRW 잔고 부족: ${krwBalance}원 < ${orderAmount}원")
-                return
-            }
-        } catch (e: Exception) {
-            log.warn("[$market] 잔고 조회 실패: ${e.message}")
+        // 1. 잔고 확인 및 진입 조건 체크
+        if (!shouldEnterPosition(market)) {
             return
         }
 
-        // 매수 주문 실행
-        val buySignal = TradingSignal(
-            market = market,
-            action = SignalAction.BUY,
-            confidence = signal.confidence,
-            price = currentPrice,
-            reason = "DCA 진입: ${signal.reason}",
-            strategy = "DCA",
-            regime = regime.regime.name
+        // 2. 매수 주문 실행 및 검증
+        val executionResult = executeBuyOrderWithValidation(market, signal, orderAmount) ?: return
+
+        // 3. 실제 잔고 확인 (API 응답만 믿지 않음)
+        if (!verifyActualBalance(market, executionResult.quantity)) {
+            log.error("[$market] 실제 잔고 확인 실패 - 포지션 생성 취소")
+            cooldowns[market] = Instant.now().plus(60, ChronoUnit.SECONDS)
+            return
+        }
+
+        // 4. DCA 포지션 생성/갱신
+        dcaStrategy.recordBuy(
+            market,
+            executionResult.quantity,
+            executionResult.price,
+            executionResult.quantity * executionResult.price
         )
 
-        val orderResult = orderExecutor.execute(buySignal, orderAmount)
+        // 5. 진입 후 상태 설정
+        setupPostEntryState(market, regime)
 
-        if (!orderResult.success) {
-            log.error("[$market] DCA 매수 실패: ${orderResult.message}")
-            cooldowns[market] = Instant.now().plus(5, ChronoUnit.MINUTES)
-            return
-        }
+        // 6. 진입 알림 발송
+        sendEntryNotification(market, executionResult, regime)
 
-        // 체결 정보 추출
-        val executedQuantity = orderResult.executedQuantity?.toDouble() ?: 0.0
-        val executedPrice = orderResult.price?.toDouble()
-            ?: bithumbPublicApi.getCurrentPrice(market)?.firstOrNull()?.tradePrice?.toDouble()
-            ?: currentPrice.toDouble()
+        log.info("[$market] 진입 완료: 가격=${executionResult.price}, 수량=${executionResult.quantity}")
+    }
 
-        if (executedQuantity <= 0) {
-            log.error("[$market] 체결 수량 0 - 진입 실패")
-            cooldowns[market] = Instant.now().plus(5, ChronoUnit.MINUTES)
-            return
-        }
-
-        val executedAmount = executedQuantity * executedPrice
-
-        // DcaStrategy.recordBuy() 호출 (포지션 생성/갱신)
-        dcaStrategy.recordBuy(market, executedQuantity, executedPrice, executedAmount)
-
-        // 쿨다운 설정 (DCA 간격만큼)
+    /**
+     * 진입 후 상태 설정
+     */
+    private fun setupPostEntryState(market: String, regime: RegimeAnalysis) {
         val cooldownMinutes = tradingProperties.strategy.dcaInterval / 60_000
-        cooldowns[market] = Instant.now().plus(cooldownMinutes.toLong(), ChronoUnit.MINUTES)
+        cooldowns[market] = Instant.now().plus(cooldownMinutes, ChronoUnit.MINUTES)
+    }
 
-        // Slack 알림
+    /**
+     * 진입 알림 발송
+     */
+    private fun sendEntryNotification(market: String, result: BuyExecutionResult, regime: RegimeAnalysis) {
+        val executedAmount = result.price * result.quantity
         slackNotifier.sendSystemNotification(
             "DCA 진입",
             """
             마켓: $market
-            체결가: ${executedPrice}원
-            수량: ${String.format("%.6f", executedQuantity)}
-            금액: ${executedAmount}원
+            체결가: ${result.price}원
+            수량: ${String.format("%.6f", result.quantity)}
+            금액: ${String.format("%.0f", executedAmount)}원
             레짐: ${regime.regime.name}
             """.trimIndent()
         )
-
-        log.info("[$market] DCA 진입 완료: 가격=$executedPrice, 수량=$executedQuantity")
     }
+
+    /**
+     * 매수 실행 결과
+     */
+    private data class BuyExecutionResult(
+        val price: Double,
+        val quantity: Double
+    )
 
     /**
      * 포지션 모니터링 (5초마다)
      *
-     * 열린 포지션의 익절/손절/타임아웃 조건 확인
+     * OPEN: 익절/손절/타임아웃 조건 확인
+     * CLOSING: 청산 주문 상태 확인
      */
     @Scheduled(fixedDelay = MONITOR_INTERVAL_MS)
     fun monitorPositions() {
         if (!tradingProperties.enabled) return
 
+        // OPEN 포지션 모니터링
         val openPositions = dcaPositionRepository.findByStatus("OPEN")
-        if (openPositions.isEmpty()) {
-            return
-        }
-
         openPositions.forEach { position ->
             try {
                 monitorSinglePosition(position)
             } catch (e: Exception) {
-                log.error("[${position.market}] 포지션 모니터링 오류: ${e.message}")
+                log.error("[${position.market}] OPEN 포지션 모니터링 오류: ${e.message}")
             }
+        }
+
+        // CLOSING 포지션 모니터링 (청산 진행 중)
+        val closingPositions = dcaPositionRepository.findByStatus("CLOSING")
+        closingPositions.forEach { position ->
+            try {
+                monitorClosingPosition(position)
+            } catch (e: Exception) {
+                log.error("[${position.market}] CLOSING 포지션 모니터링 오류: ${e.message}")
+            }
+        }
+
+        // ABANDONED 포지션 재시도 (10분마다 체크)
+        val now = Instant.now()
+        val lastRetryCheckKey = "abandoned_last_check"
+        val lastCheck = cooldowns[lastRetryCheckKey]
+        if (lastCheck == null || ChronoUnit.MINUTES.between(lastCheck, now) >= 10) {
+            cooldowns[lastRetryCheckKey] = now
+            retryAbandonedPositions()
         }
     }
 
     /**
      * 단일 포지션 모니터링
+     *
+     * 20년차 퀀트의 포지션 모니터링:
+     * 1. 진입가 무결성 검증 - 0원이면 거래 불가
+     * 2. 안전한 손익률 계산 - NaN/Infinity 방지
      */
     private fun monitorSinglePosition(position: DcaPositionEntity) {
         val market = position.market
+
+        // 0. 진입가 무결성 검증 - 진입가가 0이면 거래 불가능
+        if (position.averagePrice <= 0) {
+            log.error("[$market] 진입가 무효(${position.averagePrice}) - 포지션 정리 필요")
+            // 현재가로 진입가 보정 시도
+            val ticker = bithumbPublicApi.getCurrentPrice(market)?.firstOrNull()
+            if (ticker != null) {
+                position.averagePrice = ticker.tradePrice.toDouble()
+                position.createdAt = Instant.now()  // 진입 시간도 리셋
+                dcaPositionRepository.save(position)
+                log.info("[$market] 진입가 보정: ${position.averagePrice}원")
+            }
+            return  // 이번 사이클은 스킵
+        }
 
         // 현재가 조회
         val ticker = bithumbPublicApi.getCurrentPrice(market)?.firstOrNull() ?: return
         val currentPrice = ticker.tradePrice.toDouble()
 
-        // 현재 수익률 계산
-        val currentPnlPercent = ((currentPrice - position.averagePrice) / position.averagePrice) * 100
+        // 현재 수익률 계산 (안전하게)
+        val currentPnlPercent = safePnlPercent(position.averagePrice, currentPrice)
 
         // 포지션 정보 갱신
         position.lastPrice = currentPrice
@@ -321,52 +515,260 @@ class DcaEngine(
     }
 
     /**
-     * 포지션 청산
+     * 안전한 손익률 계산 - NaN/Infinity 방지
      */
-    private fun closePosition(position: DcaPositionEntity, exitPrice: Double, reason: String) {
+    private fun safePnlPercent(entryPrice: Double, currentPrice: Double): Double {
+        if (entryPrice <= 0) return 0.0
+        return ((currentPrice - entryPrice) / entryPrice) * 100
+    }
+
+    /**
+     * CLOSING 포지션 모니터링
+     *
+     * PositionHelper를 통해 청산 주문 상태 확인 및 완료 처리
+     */
+    private fun monitorClosingPosition(position: DcaPositionEntity) {
+        val market = position.market
+        val closeOrderId = position.closeOrderId
+
+        // 주문 ID가 없으면 OPEN으로 복원
+        if (closeOrderId.isNullOrBlank()) {
+            log.warn("[$market] 청산 주문 ID 없음, OPEN으로 복원")
+            position.status = "OPEN"
+            position.closeOrderId = null
+            position.closeAttemptCount = 0
+            dcaPositionRepository.save(position)
+            return
+        }
+
+        // 주문 상태 조회 (PositionHelper 위임)
+        PositionHelper.monitorClosingPosition(
+            bithumbPrivateApi = bithumbPrivateApi,
+            position = position,  // DcaPositionEntity가 PositionEntity를 구현하므로 직접 전달
+            waitTimeoutSeconds = 30L,
+            errorTimeoutMinutes = 5L,
+            onOrderDone = { actualPrice ->
+                // 주문 체결 완료 - 실제 체결 수량 확인
+                val actualQuantity = try {
+                    val coinSymbol = PositionHelper.extractCoinSymbol(market)
+                    val balances = bithumbPrivateApi.getBalances()
+                    val beforeQuantity = position.totalQuantity
+                    val currentBalance = balances?.find { it.currency == coinSymbol }?.balance?.toDouble() ?: 0.0
+                    val soldQuantity = beforeQuantity - currentBalance
+                    if (soldQuantity > 0) soldQuantity else position.totalQuantity
+                } catch (e: Exception) {
+                    log.warn("[$market] 체결 수량 계산 실패, 전량 체결로 간주: ${e.message}")
+                    position.totalQuantity
+                }
+                finalizeClose(position, actualPrice, actualQuantity, position.exitReason ?: "UNKNOWN")
+            },
+            onOrderCancelled = {
+                log.warn("[$market] 청산 주문 취소됨 또는 복원 필요")
+                position.status = "OPEN"
+                position.closeOrderId = null
+                position.closeAttemptCount = 0
+                dcaPositionRepository.save(position)
+            }
+        )
+    }
+
+    /**
+     * ABANDONED 포지션 재시도
+     *
+     * 청산 실패 후 ABANDONED된 포지션을 재시도하여 고립 방지
+     */
+    private fun retryAbandonedPositions() {
+        val abandonedPositions = dcaPositionRepository.findByStatus("ABANDONED")
+        if (abandonedPositions.isEmpty()) return
+
+        log.info("ABANDONED 포지션 ${abandonedPositions.size}건 재시도 시작")
+
+        abandonedPositions.forEach { position ->
+            try {
+                retryAbandonedPosition(position)
+            } catch (e: Exception) {
+                log.error("[${position.market}] ABANDONED 재시도 오류: ${e.message}")
+            }
+        }
+    }
+
+    /**
+     * ABANDONED 포지션 단일 재시도
+     */
+    private fun retryAbandonedPosition(position: DcaPositionEntity): Boolean {
         val market = position.market
 
-        log.info("[$market] DCA 청산 시도: $reason")
+        // 최종 ABANDONED 도달 여부 체크
+        val maxTotalAttempts = TradingConstants.MAX_CLOSE_ATTEMPTS + 3
+        if (position.closeAttemptCount >= maxTotalAttempts) {
+            log.warn("[$market] ABANDONED 재시도 ${maxTotalAttempts}회 초과 - 수동 개입 필요")
+            slackNotifier.sendWarning(
+                market,
+                """
+                ABANDONED 포지션 재시도 실패 (${maxTotalAttempts}회 초과)
+                진입가: ${position.averagePrice}원
+                수량: ${position.totalQuantity}
+                수동으로 빗썸에서 매도 필요
+                """.trimIndent()
+            )
+            return false
+        }
 
-        // 코인 잔고 확인
+        // 잔고 확인 - 이미 없으면 CLOSED로 변경
         val coinSymbol = market.removePrefix("KRW-")
         val actualBalance = try {
             bithumbPrivateApi.getBalances()?.find { it.currency == coinSymbol }?.balance ?: BigDecimal.ZERO
         } catch (e: Exception) {
             log.warn("[$market] 잔고 조회 실패: ${e.message}")
-            BigDecimal(position.totalQuantity)
+            return false
         }
 
         if (actualBalance <= BigDecimal.ZERO) {
-            log.warn("[$market] 잔고 없음 - ABANDONED 처리")
+            log.info("[$market] 잔고 없음 - ABANDONED -> CLOSED 변경")
             position.status = "CLOSED"
             position.exitReason = "ABANDONED_NO_BALANCE"
             position.exitedAt = Instant.now()
-            position.exitPrice = exitPrice
             position.realizedPnl = 0.0
             position.realizedPnlPercent = 0.0
             dcaPositionRepository.save(position)
+            return true
+        }
+
+        // 재시도: closeAttemptCount 리셋 후 OPEN으로 복귀
+        log.info("[$market] ABANDONED 포지션 재시도 #${position.closeAttemptCount + 1}")
+        position.closeAttemptCount = 0
+        position.status = "OPEN"
+        dcaPositionRepository.save(position)
+
+        return true
+    }
+
+    /**
+     * 포지션 청산
+     *
+     * 켄트백: 각 하위 작업을 명확한 메서드로 분리 (Compose Method 패턴)
+     */
+    private fun closePosition(position: DcaPositionEntity, exitPrice: Double, reason: String) {
+        val market = position.market
+
+        // 1. 최대 시도 횟수 체크
+        if (position.closeAttemptCount >= TradingConstants.MAX_CLOSE_ATTEMPTS) {
+            log.error("[$market] 청산 시도 ${TradingConstants.MAX_CLOSE_ATTEMPTS}회 초과, ABANDONED 처리")
+            handleAbandoned(position, exitPrice, "MAX_ATTEMPTS")
             return
         }
 
-        // 매도 수량 결정
+        // 2. 중복 청산 방지
+        if (!canClosePosition(position.status, position.lastCloseAttempt)) {
+            return
+        }
+
+        log.info("[$market] 포지션 청산 시도 #${position.closeAttemptCount + 1}: $reason")
+
+        // 3. 실제 잔고 확인
+        val actualBalance = getActualSellBalance(market, position.totalQuantity)
+        if (actualBalance <= BigDecimal.ZERO) {
+            log.warn("[$market] 실제 잔고 없음 - ABANDONED 처리")
+            handleAbandoned(position, exitPrice, "NO_BALANCE")
+            return
+        }
+
+        // 4. 매도 수량 결정 및 최소 금액 체크
         val sellQuantity = actualBalance.toDouble().coerceAtMost(position.totalQuantity)
         val sellAmount = BigDecimal(sellQuantity * exitPrice)
 
-        // 최소 주문 금액 체크
         if (sellAmount < TradingConstants.MIN_ORDER_AMOUNT_KRW) {
-            log.warn("[$market] 매도 금액 미달 (${sellAmount}원)")
-            position.status = "CLOSED"
-            position.exitReason = "ABANDONED_MIN_AMOUNT"
-            position.exitedAt = Instant.now()
-            position.exitPrice = exitPrice
-            position.realizedPnl = 0.0
-            position.realizedPnlPercent = 0.0
+            log.warn("[$market] 최소 주문 금액 미달 - ABANDONED 처리")
+            handleAbandoned(position, exitPrice, "MIN_AMOUNT")
+            return
+        }
+
+        // 5. 상태 변경 및 저장 (CLOSING 상태로)
+        position.status = "CLOSING"
+        position.exitReason = reason
+        position.lastCloseAttempt = Instant.now()
+        position.closeAttemptCount++
+        dcaPositionRepository.save(position)
+
+        // 6. 매도 주문 실행
+        val orderResult = executeSellOrder(market, sellQuantity, exitPrice, reason)
+
+        if (orderResult == null) {
+            // 주문 실패 - OPEN으로 복원
+            log.warn("[$market] 매도 주문 실패 - OPEN으로 복원")
+            position.status = "OPEN"
+            position.closeOrderId = null
             dcaPositionRepository.save(position)
             return
         }
 
-        // 매도 주문 실행
+        // 7. closeOrderId 업데이트
+        position.closeOrderId = orderResult.orderId
+        dcaPositionRepository.save(position)
+
+        // 8. 체결 결과 확인
+        if (orderResult.isFullyFilled) {
+            // 전체 체결 - 완료 처리
+            finalizeClose(
+                position,
+                orderResult.actualPrice,
+                orderResult.actualQuantity,
+                reason
+            )
+        } else {
+            // 부분 체결 - 남은 수량을 위해 OPEN으로 복원 (다음 사이클에서 재청산)
+            val remainingQuantity = position.totalQuantity - (orderResult.actualQuantity ?: 0.0)
+            log.warn("[$market] 부분 체결: ${orderResult.actualQuantity}/${position.totalQuantity}, 남은 수량=$remainingQuantity")
+
+            position.totalQuantity = remainingQuantity.coerceAtLeast(0.0)
+            position.status = if (remainingQuantity > 0) "OPEN" else "CLOSED"
+            dcaPositionRepository.save(position)
+        }
+    }
+
+    /**
+     * 중복 청산 방지 체크
+     */
+    private fun canClosePosition(status: String, lastAttempt: Instant?): Boolean {
+        if (status == "CLOSING") {
+            val lastAttempt = lastAttempt ?: return false
+            val elapsed = ChronoUnit.SECONDS.between(lastAttempt, Instant.now())
+            return elapsed >= CLOSE_RETRY_BACKOFF_SECONDS
+        }
+        return true
+    }
+
+    /**
+     * 실제 매도 가능 잔고 확인
+     */
+    private fun getActualSellBalance(market: String, requestedQuantity: Double): BigDecimal {
+        val coinSymbol = PositionHelper.extractCoinSymbol(market)
+        return try {
+            val balances = bithumbPrivateApi.getBalances() ?: return BigDecimal.ZERO
+            val coinBalance = balances.find { it.currency == coinSymbol }?.balance ?: BigDecimal.ZERO
+
+            when {
+                coinBalance <= BigDecimal.ZERO -> BigDecimal.ZERO
+                coinBalance < BigDecimal(requestedQuantity) -> coinBalance  // 전량 매도
+                else -> BigDecimal(requestedQuantity)
+            }
+        } catch (e: Exception) {
+            log.warn("[$market] 잔고 조회 실패: ${e.message}")
+            BigDecimal.ZERO
+        }
+    }
+
+    /**
+     * 매도 주문 실행
+     *
+     * @return SellExecutionResult or null (실패 시)
+     */
+    private fun executeSellOrder(
+        market: String,
+        sellQuantity: Double,
+        exitPrice: Double,
+        reason: String
+    ): SellExecutionResult? {
         val sellSignal = TradingSignal(
             market = market,
             action = SignalAction.SELL,
@@ -377,24 +779,53 @@ class DcaEngine(
             regime = null
         )
 
+        val sellAmount = BigDecimal(sellQuantity * exitPrice)
         val orderResult = orderExecutor.execute(sellSignal, sellAmount)
 
         if (!orderResult.success) {
-            log.error("[$market] DCA 매도 실패: ${orderResult.message}")
-            return
+            log.error("[$market] 매도 주문 실패: ${orderResult.message}")
+            return null
         }
 
-        // 체결가 결정
-        val actualExitPrice = orderResult.price?.toDouble() ?: exitPrice
+        // executedVolume 0 체크 (엣지 케이스)
+        val executedQuantity = orderResult.executedQuantity?.toDouble() ?: 0.0
+        if (executedQuantity <= 0) {
+            log.error("[$market] 체결 수량 0 - 매도 실패로 간주")
+            slackNotifier.sendWarning(market, """
+                매도 주문 체결 수량 0
+                주문ID: ${orderResult.orderId}
+                API 확인 필요.
+            """.trimIndent())
+            return null
+        }
 
-        // 실제 매도 수량
-        val actualSellQuantity = orderResult.executedQuantity?.toDouble() ?: sellQuantity
+        // 실제 체결가 결정
+        val actualPrice = orderResult.price?.toDouble() ?: exitPrice
+
+        return SellExecutionResult(
+            orderId = orderResult.orderId ?: "",
+            actualPrice = actualPrice,
+            actualQuantity = executedQuantity,
+            isFullyFilled = kotlin.math.abs(executedQuantity - sellQuantity) < 0.0001  // 99.99% 이상 체결
+        )
+    }
+
+    /**
+     * 청산 완료 처리
+     */
+    private fun finalizeClose(
+        position: DcaPositionEntity,
+        actualExitPrice: Double,
+        actualSellQuantity: Double,
+        reason: String
+    ) {
+        val market = position.market
 
         // 손익 계산
         val pnlAmount = (actualExitPrice - position.averagePrice) * actualSellQuantity
         val pnlPercent = ((actualExitPrice - position.averagePrice) / position.averagePrice) * 100
 
-        // DcaStrategy.recordSell() 호출
+        // DcaStrategy.recordSell() 호출 (포지션 완전 청산)
         dcaStrategy.recordSell(market, actualSellQuantity, actualExitPrice, reason)
 
         // 포지션 상태 업데이트
@@ -420,8 +851,49 @@ class DcaEngine(
             """.trimIndent()
         )
 
-        log.info("[$market] DCA 청산 완료: $reason, 손익=${pnlAmount}원 (${pnlPercent}%)")
+        log.info("[$market] 청산 완료: $reason, 손익=${pnlAmount}원 (${pnlPercent}%)")
     }
+
+    /**
+     * ABANDONED 처리
+     */
+    private fun handleAbandoned(position: DcaPositionEntity, exitPrice: Double, abandonReason: String) {
+        val market = position.market
+
+        // 실제 손익 계산 (현재가 기준)
+        val pnlAmount = (exitPrice - position.averagePrice) * position.totalQuantity
+        val pnlPercent = ((exitPrice - position.averagePrice) / position.averagePrice) * 100
+
+        position.status = "ABANDONED"
+        position.exitReason = "ABANDONED_$abandonReason"
+        position.exitPrice = exitPrice
+        position.exitedAt = Instant.now()
+        position.realizedPnl = pnlAmount
+        position.realizedPnlPercent = pnlPercent
+        dcaPositionRepository.save(position)
+
+        slackNotifier.sendWarning(
+            market,
+            """
+            DCA 포지션 ABANDONED: $abandonReason
+            진입가: ${position.averagePrice}원 → 현재가: ${exitPrice}원
+            추정 손익: ${String.format("%.0f", pnlAmount)}원 (${String.format("%.2f", pnlPercent)}%)
+            수동 확인 필요
+            """.trimIndent()
+        )
+
+        log.warn("[$market] ABANDONED 처리: $abandonReason, 추정 손익=${pnlAmount}원 (${pnlPercent}%)")
+    }
+
+    /**
+     * 매도 실행 결과
+     */
+    private data class SellExecutionResult(
+        val orderId: String,
+        val actualPrice: Double,
+        val actualQuantity: Double,
+        val isFullyFilled: Boolean
+    )
 
     /**
      * 상태 조회 (API용)

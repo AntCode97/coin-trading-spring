@@ -114,35 +114,72 @@ class VolumeSurgeEngine(
     /**
      * 서버 재시작 시 상태 복원
      *
-     * - 트레일링 스탑 고점을 메모리 맵에 로드
+     * - OPEN, CLOSING 포지션을 메모리 맵에 로드
+     * - CLOSING 포지션은 즉시 모니터링 재개
      */
     private fun restoreOpenPositions() {
+        // OPEN 포지션 복원
         val openPositions = tradeRepository.findByStatus("OPEN")
-        if (openPositions.isEmpty()) {
-            log.info("복원할 열린 포지션 없음")
-            return
-        }
+        if (openPositions.isNotEmpty()) {
+            log.info("열린 포지션 ${openPositions.size}건 복원 중...")
 
-        log.info("열린 포지션 ${openPositions.size}건 복원 중...")
-
-        openPositions.forEach { position ->
-            // 트레일링 스탑 고점 복원
-            if (position.trailingActive) {
-                val highestPriceValue = position.highestPrice
-                if (highestPriceValue != null) {
-                    val positionId = position.id ?: run {
-                        log.warn("[${position.market}] 포지션 ID 없음 - 트레일링 고점 복원 스킵")
-                        return@forEach
+            openPositions.forEach { position ->
+                // 트레일링 스탑 고점 복원
+                if (position.trailingActive) {
+                    val highestPriceValue = position.highestPrice
+                    if (highestPriceValue != null) {
+                        val positionId = position.id ?: run {
+                            log.warn("[${position.market}] 포지션 ID 없음 - 트레일링 고점 복원 스킵")
+                            return@forEach
+                        }
+                        highestPrices[positionId] = highestPriceValue
+                        log.info("[${position.market}] 트레일링 고점 복원: $highestPriceValue")
                     }
-                    highestPrices[positionId] = highestPriceValue
-                    log.info("[${position.market}] 트레일링 고점 복원: $highestPriceValue")
                 }
+
+                log.info("[${position.market}] OPEN 포지션 복원 완료 - 진입가: ${position.entryPrice}, 트레일링: ${position.trailingActive}")
             }
 
-            log.info("[${position.market}] 포지션 복원 완료 - 진입가: ${position.entryPrice}, 트레일링: ${position.trailingActive}")
+            log.info("=== ${openPositions.size}건 OPEN 포지션 복원 완료 ===")
+        } else {
+            log.info("복원할 OPEN 포지션 없음")
         }
 
-        log.info("=== ${openPositions.size}건 포지션 복원 완료, 모니터링 재개 ===")
+        // CLOSING 포지션 복원 (즉시 모니터링 재개)
+        val closingPositions = tradeRepository.findByStatus("CLOSING")
+        if (closingPositions.isNotEmpty()) {
+            log.info("CLOSING 포지션 ${closingPositions.size}건 복원 중...")
+
+            closingPositions.forEach { position ->
+                val positionId = position.id ?: run {
+                    log.warn("[${position.market}] CLOSING 포지션 ID 없음 - 복원 스킵")
+                    return@forEach
+                }
+
+                // 트레일링 고점도 복원
+                if (position.trailingActive && position.highestPrice != null) {
+                    highestPrices[positionId] = position.highestPrice!!
+                }
+
+                log.warn("[${position.market}] CLOSING 포지션 복원 - 주문ID: ${position.closeOrderId}, 청산시도: ${position.closeAttemptCount}회")
+
+                // 즉시 청산 상태 확인
+                monitorClosingPosition(position)
+            }
+
+            log.info("=== ${closingPositions.size}건 CLOSING 포지션 복원 완료, 모니터링 재개 ===")
+        }
+
+        // ABANDONED 포지션 로그만 출력 (재시도는 스케줄러에서 처리)
+        val abandonedPositions = tradeRepository.findByStatus("ABANDONED")
+        if (abandonedPositions.isNotEmpty()) {
+            log.warn("ABANDONED 포지션 ${abandonedPositions.size}건 존재 - 10분마다 자동 재시도 예정")
+        }
+
+        val totalRestored = openPositions.size + closingPositions.size
+        if (totalRestored > 0) {
+            log.info("=== 총 ${totalRestored}건 포지션 복원 완료, 모니터링 재개 ===")
+        }
     }
 
     /**
