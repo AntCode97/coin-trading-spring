@@ -732,198 +732,289 @@ body {
   border-radius: var(--radius-sm);
 }
 
-/* Trade List */
-.toss-trade-list {
+/* =====================================================
+   TradingView Style Trade List
+   Professional, Compact, Data-Dense Design
+   ===================================================== */
+
+.tv-trade-list {
   display: flex;
   flex-direction: column;
-  gap: 1px;
-  background: var(--border-subtle);
+  background: var(--bg-secondary);
   border-radius: var(--radius-md);
   overflow: hidden;
-}
-
-.toss-trade-item {
-  background: var(--bg-elevated);
-  padding: var(--space-lg) var(--space-xl);
-  transition: background var(--duration-fast) var(--easing-default);
-}
-
-.toss-trade-item:hover {
-  background: var(--bg-tertiary);
-}
-
-.toss-trade-main {
-  display: flex;
-  justify-content: space-between;
-  align-items: flex-start;
-  gap: var(--space-xl);
-}
-
-.toss-trade-header {
-  display: flex;
-  align-items: center;
-  gap: var(--space-sm);
-  margin-bottom: var(--space-md);
-  flex-wrap: wrap;
-}
-
-.toss-trade-badges {
-  display: flex;
-  align-items: center;
-  gap: var(--space-sm);
-}
-
-.toss-strategy-badge-small {
-  font-size: 11px;
-  padding: 3px 8px;
-}
-
-.toss-exit-badge {
-  font-size: 11px;
-  font-weight: 600;
-  padding: 3px 8px;
-  border-radius: var(--radius-sm);
-  letter-spacing: 0.02em;
   border: 1px solid var(--border-subtle);
 }
 
-.toss-exit-success {
-  background: var(--success-secondary);
-  color: var(--success-primary);
+.tv-trade-row {
+  display: flex;
+  align-items: stretch;
+  position: relative;
+  background: var(--bg-elevated);
+  transition: background var(--duration-fast) var(--easing-default);
+  border-bottom: 1px solid var(--border-subtle);
 }
 
-.toss-exit-danger {
-  background: var(--danger-secondary);
-  color: var(--danger-primary);
+.tv-trade-row:last-child {
+  border-bottom: none;
 }
 
-.toss-exit-warning {
-  background: var(--warning-secondary);
-  color: var(--warning-primary);
+.tv-trade-row:hover {
+  background: var(--bg-hover);
 }
 
-.toss-exit-info {
-  background: var(--accent-secondary);
-  color: var(--accent-primary);
+/* Left Color Indicator - 3px solid color bar */
+.tv-indicator {
+  width: 3px;
+  flex-shrink: 0;
 }
 
-.toss-trade-body {
+.tv-indicator-profit {
+  background: var(--success-primary);
+}
+
+.tv-indicator-loss {
+  background: var(--danger-primary);
+}
+
+/* Main Content Area */
+.tv-trade-content {
+  flex: 1;
+  padding: 12px 16px;
   display: flex;
   flex-direction: column;
-  gap: var(--space-md);
+  gap: 8px;
+  min-width: 0;
 }
 
-.toss-trade-prices {
+/* Header Row: Identity + Meta */
+.tv-trade-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+}
+
+.tv-trade-identity {
   display: flex;
   align-items: center;
-  gap: var(--space-md);
-  padding: var(--space-md);
-  background: var(--bg-tertiary);
-  border-radius: var(--radius-md);
+  gap: 8px;
+  flex-shrink: 0;
 }
 
-.toss-trade-entry,
-.toss-trade-exit {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-  flex: 1;
-}
-
-.toss-trade-label {
-  font-size: 11px;
-  color: var(--text-tertiary);
-  font-weight: 500;
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
-}
-
-.toss-trade-price {
-  font-size: 15px;
+.tv-market {
+  font-size: 14px;
   font-weight: 600;
   color: var(--text-primary);
+  letter-spacing: -0.01em;
+  font-variant-numeric: tabular-nums;
 }
 
-.toss-trade-divider {
-  color: var(--text-tertiary);
-  font-size: 16px;
-  font-weight: 300;
+.tv-strategy {
+  font-size: 10px;
+  font-weight: 600;
+  color: white;
+  padding: 2px 6px;
+  border-radius: 3px;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
 }
 
-.toss-trade-times {
+.tv-strategy-meme {
+  background: var(--strategy-meme);
+}
+
+.tv-strategy-volume {
+  background: var(--strategy-volume);
+}
+
+.tv-strategy-dca {
+  background: var(--strategy-dca);
+}
+
+/* Meta Info: Exit Reason + Holding Time */
+.tv-trade-meta {
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  gap: var(--space-md);
+  gap: 8px;
+  flex-shrink: 0;
 }
 
-.toss-trade-time-entry,
-.toss-trade-time-exit {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  font-size: 13px;
-  color: var(--text-secondary);
-  background: var(--bg-primary);
-  padding: 6px 10px;
-  border-radius: var(--radius-sm);
+.tv-exit-reason {
+  font-size: 11px;
   font-weight: 500;
+  color: var(--text-secondary);
+  padding: 2px 6px;
+  background: var(--bg-tertiary);
+  border-radius: 3px;
+  letter-spacing: 0.02em;
 }
 
-.toss-trade-side {
-  display: flex;
-  flex-direction: column;
-  align-items: flex-end;
-  gap: var(--space-md);
-  min-width: 120px;
-}
-
-.toss-trade-pnl {
-  padding: 6px 10px;
-  border-radius: var(--radius-sm);
-  text-align: right;
-  min-width: 100px;
-  border: 1px solid var(--border-subtle);
-}
-
-.toss-trade-pnl.toss-pnl-positive {
+.tv-exit-reason[data-reason="목표 달성"] {
+  color: var(--success-primary);
   background: var(--success-tertiary);
 }
 
-.toss-trade-pnl.toss-pnl-negative {
+.tv-exit-reason[data-reason="손절"] {
+  color: var(--danger-primary);
   background: var(--danger-tertiary);
 }
 
-.toss-trade-pnl-amount {
-  font-size: 14px;
-  font-weight: 600;
-  display: block;
-}
-
-.toss-trade-pnl-percent {
-  font-size: 12px;
+.tv-holding-time {
+  font-size: 11px;
   font-weight: 500;
+  color: var(--text-tertiary);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.02em;
 }
 
-.toss-trade-holding {
+/* Detail Row: Prices + Times */
+.tv-trade-details {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 16px;
+}
+
+.tv-prices {
   display: flex;
   align-items: center;
+  gap: 8px;
+}
+
+.tv-price-group {
+  display: flex;
+  align-items: baseline;
   gap: 4px;
-  padding: 4px 8px;
-  background: var(--bg-tertiary);
-  border-radius: var(--radius-sm);
 }
 
-.toss-trade-holding-icon {
+.tv-price-label {
   font-size: 10px;
-  line-height: 1;
+  font-weight: 600;
+  color: var(--text-tertiary);
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
 }
 
-.toss-trade-holding-text {
-  font-size: 11px;
-  color: var(--text-tertiary);
+.tv-price-value {
+  font-size: 13px;
   font-weight: 500;
+  color: var(--text-secondary);
   font-variant-numeric: tabular-nums;
+  letter-spacing: -0.01em;
+}
+
+.tv-arrow-icon {
+  color: var(--text-tertiary);
+  flex-shrink: 0;
+}
+
+.tv-times {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.tv-time {
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--text-tertiary);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.01em;
+}
+
+.tv-time-separator {
+  color: var(--text-tertiary);
+  font-size: 10px;
+}
+
+/* PnL Section - Right aligned, emphasized */
+.tv-pnl-section {
+  display: flex;
+  align-items: center;
+  padding: 0 16px;
+  border-left: 1px solid var(--border-subtle);
+  background: var(--bg-tertiary);
+  flex-shrink: 0;
+}
+
+.tv-pnl {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 2px;
+}
+
+.tv-pnl-amount {
+  font-size: 16px;
+  font-weight: 600;
+  letter-spacing: -0.02em;
+  font-variant-numeric: tabular-nums;
+}
+
+.tv-pnl-percent {
+  font-size: 12px;
+  font-weight: 500;
+  letter-spacing: -0.01em;
+  font-variant-numeric: tabular-nums;
+}
+
+.tv-pnl-profit .tv-pnl-amount,
+.tv-pnl-profit .tv-pnl-percent {
+  color: var(--success-primary);
+}
+
+.tv-pnl-loss .tv-pnl-amount,
+.tv-pnl-loss .tv-pnl-percent {
+  color: var(--danger-primary);
+}
+
+/* Mobile Responsive for TV Style */
+@media (max-width: 768px) {
+  .tv-trade-row {
+    flex-wrap: wrap;
+  }
+
+  .tv-indicator {
+    width: 4px;
+  }
+
+  .tv-trade-content {
+    flex: 1;
+    min-width: 0;
+    padding: 10px 12px;
+  }
+
+  .tv-pnl-section {
+    width: 100%;
+    border-left: none;
+    border-top: 1px solid var(--border-subtle);
+    padding: 8px 12px;
+    justify-content: flex-end;
+  }
+
+  .tv-pnl {
+    flex-direction: row;
+    gap: 8px;
+  }
+
+  .tv-pnl-amount {
+    font-size: 14px;
+  }
+
+  .tv-pnl-percent {
+    font-size: 11px;
+  }
+
+  .tv-trade-details {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 6px;
+  }
+
+  .tv-times {
+    align-self: flex-end;
+  }
 }
 
 /* Empty State */

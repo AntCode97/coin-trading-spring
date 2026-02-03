@@ -367,62 +367,67 @@ export default function Dashboard() {
                   <p className="toss-empty-text">체결된 거래가 없어요</p>
                 </div>
               ) : (
-                <div className="toss-trade-list">
+                <div className="tv-trade-list">
                   {data.todayTrades.map((trade, idx) => {
                     const isTradeProfit = trade.pnlAmount >= 0;
                     const exitReason = exitReasonLabels[trade.exitReason] || exitReasonLabels.UNKNOWN;
                     return (
-                      <div key={idx} className="toss-trade-item">
-                        <div className="toss-trade-main">
-                          <div className="toss-trade-header">
-                            <span className="toss-market-symbol">{trade.market}</span>
-                            <div className="toss-trade-badges">
-                              <span className={`toss-strategy-badge toss-strategy-badge-small ${
-                                trade.strategy === 'Meme Scalper' ? 'toss-strategy-meme' :
-                                trade.strategy === 'Volume Surge' ? 'toss-strategy-volume' :
-                                'toss-strategy-dca'
+                      <div key={idx} className={`tv-trade-row ${isTradeProfit ? 'tv-profit' : 'tv-loss'}`}>
+                        {/* Left Color Indicator */}
+                        <div className={`tv-indicator ${isTradeProfit ? 'tv-indicator-profit' : 'tv-indicator-loss'}`} />
+
+                        {/* Main Content */}
+                        <div className="tv-trade-content">
+                          {/* Header Row */}
+                          <div className="tv-trade-header">
+                            <div className="tv-trade-identity">
+                              <span className="tv-market">{trade.market}</span>
+                              <span className={`tv-strategy ${
+                                trade.strategy === 'Meme Scalper' ? 'tv-strategy-meme' :
+                                trade.strategy === 'Volume Surge' ? 'tv-strategy-volume' :
+                                'tv-strategy-dca'
                               }`}>
                                 {trade.strategy}
                               </span>
-                              <span className={`toss-exit-badge ${exitReason.className}`}>
-                                {exitReason.label}
-                              </span>
+                            </div>
+                            <div className="tv-trade-meta">
+                              <span className="tv-exit-reason" data-reason={exitReason.label}>{exitReason.label}</span>
+                              <span className="tv-holding-time">{trade.holdingMinutes}m</span>
                             </div>
                           </div>
-                          <div className="toss-trade-body">
-                            <div className="toss-trade-prices">
-                              <span className="toss-trade-entry">
-                                <span className="toss-trade-label">매수</span>
-                                <span className="toss-trade-price">{trade.entryPrice.toLocaleString()}원</span>
-                              </span>
-                              <span className="toss-trade-divider">→</span>
-                              <span className="toss-trade-exit">
-                                <span className="toss-trade-label">매도</span>
-                                <span className="toss-trade-price">{trade.exitPrice.toLocaleString()}원</span>
-                              </span>
+
+                          {/* Detail Row */}
+                          <div className="tv-trade-details">
+                            <div className="tv-prices">
+                              <div className="tv-price-group">
+                                <span className="tv-price-label">IN</span>
+                                <span className="tv-price-value">{trade.entryPrice.toLocaleString()}</span>
+                              </div>
+                              <svg className="tv-arrow-icon" width="12" height="12" viewBox="0 0 12 12" fill="none">
+                                <path d="M4 2L8 6L4 10" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/>
+                              </svg>
+                              <div className="tv-price-group">
+                                <span className="tv-price-label">OUT</span>
+                                <span className="tv-price-value">{trade.exitPrice.toLocaleString()}</span>
+                              </div>
                             </div>
-                            <div className="toss-trade-times">
-                              <span className="toss-trade-time-entry">
-                                🟢 {trade.entryTimeFormatted}
-                              </span>
-                              <span className="toss-trade-time-exit">
-                                🔴 {trade.exitTimeFormatted}
-                              </span>
+                            <div className="tv-times">
+                              <span className="tv-time">{trade.entryTimeFormatted}</span>
+                              <span className="tv-time-separator">—</span>
+                              <span className="tv-time">{trade.exitTimeFormatted}</span>
                             </div>
                           </div>
                         </div>
-                        <div className="toss-trade-side">
-                          <div className={`toss-trade-pnl ${isTradeProfit ? 'toss-pnl-positive' : 'toss-pnl-negative'}`}>
-                            <span className="toss-trade-pnl-amount">
-                              {isTradeProfit ? '+' : ''}{trade.pnlAmount.toLocaleString()}원
+
+                        {/* PnL Section */}
+                        <div className="tv-pnl-section">
+                          <div className={`tv-pnl ${isTradeProfit ? 'tv-pnl-profit' : 'tv-pnl-loss'}`}>
+                            <span className="tv-pnl-amount">
+                              {isTradeProfit ? '+' : ''}{trade.pnlAmount.toLocaleString()}
                             </span>
-                            <span className="toss-trade-pnl-percent">
+                            <span className="tv-pnl-percent">
                               {isTradeProfit ? '+' : ''}{trade.pnlPercent.toFixed(2)}%
                             </span>
-                          </div>
-                          <div className="toss-trade-holding">
-                            <span className="toss-trade-holding-icon">⏱</span>
-                            <span className="toss-trade-holding-text">{trade.holdingMinutes}분</span>
                           </div>
                         </div>
                       </div>
