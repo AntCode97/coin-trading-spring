@@ -884,6 +884,13 @@ body {
   font-size: 28px;
 }
 
+.toss-stat-sublabel {
+  font-size: 11px;
+  color: var(--text-tertiary);
+  margin-top: 2px;
+  font-weight: 500;
+}
+
 /* Date Selector */
 .toss-date-selector {
   display: flex;

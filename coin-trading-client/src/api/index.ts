@@ -52,6 +52,8 @@ export interface StatsInfo {
   lossCount: number;
   totalPnl: number;
   winRate: number;
+  totalInvested: number;  // 트레이딩에 사용한 총 금액
+  roi: number;            // 트레이딩 금액 대비 수익률 (%)
 }
 
 export interface DashboardData {

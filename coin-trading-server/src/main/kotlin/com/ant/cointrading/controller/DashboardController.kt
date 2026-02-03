@@ -293,12 +293,22 @@ class DashboardController(
         val winCount = allPnl.count { it > 0 }
         val lossCount = allPnl.count { it < 0 }
 
+        // 트레이딩에 사용한 총 금액 (매수 금액 합계)
+        val totalInvested = memeTrades.sumOf { it.entryPrice * it.quantity } +
+                           volumeTrades.sumOf { it.entryPrice * it.quantity } +
+                           dcaTrades.sumOf { it.averagePrice * it.totalQuantity }
+
+        // 트레이딩 금액 대비 수익률 (ROI)
+        val roi = if (totalInvested > 0) (totalPnl / totalInvested) * 100 else 0.0
+
         return StatsInfo(
             totalTrades = memeTrades.size + volumeTrades.size + dcaTrades.size,
             winCount = winCount,
             lossCount = lossCount,
             totalPnl = totalPnl,
-            winRate = if (allPnl.isNotEmpty()) winCount.toDouble() / allPnl.size else 0.0
+            winRate = if (allPnl.isNotEmpty()) winCount.toDouble() / allPnl.size else 0.0,
+            totalInvested = totalInvested,
+            roi = roi
         )
     }
 
@@ -400,5 +410,7 @@ data class StatsInfo(
     val winCount: Int,
     val lossCount: Int,
     val totalPnl: Double,
-    val winRate: Double
+    val winRate: Double,
+    val totalInvested: Double = 0.0,  // 트레이딩에 사용한 총 금액
+    val roi: Double = 0.0            // 트레이딩 금액 대비 수익률 (%)
 )

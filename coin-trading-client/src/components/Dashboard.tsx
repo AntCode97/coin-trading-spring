@@ -464,6 +464,13 @@ export default function Dashboard() {
                     {isPositive ? '+' : ''}{totalPnl.toLocaleString()}원
                   </div>
                 </div>
+                <div className={`toss-stat-highlight ${isPositive ? 'toss-stat-positive' : 'toss-stat-negative'}`}>
+                  <div className="toss-stat-label">수익률</div>
+                  <div className={`toss-stat-value ${isPositive ? 'toss-green' : 'toss-red'}`}>
+                    {isPositive ? '+' : ''}{data.todayStats.roi.toFixed(2)}%
+                  </div>
+                  <div className="toss-stat-sublabel">투자금 {data.todayStats.totalInvested.toLocaleString()}원</div>
+                </div>
               </div>
             </div>
           </div>
