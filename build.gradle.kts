@@ -31,7 +31,7 @@ tasks.register("buildReact") {
     // node_modules가 없으면 npm install 실행
     doFirst {
         if (!nodeModulesDir.exists()) {
-            exec {
+            project.exec {
                 workingDir = reactDir
                 commandLine = listOf("npm", "install")
             }
@@ -40,7 +40,7 @@ tasks.register("buildReact") {
 
     // React 빌드 실행
     doLast {
-        exec {
+        project.exec {
             workingDir = reactDir
             commandLine = listOf("npm", "run", "build")
         }
