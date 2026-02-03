@@ -63,12 +63,12 @@ export interface DashboardData {
   todayStats: StatsInfo;
   totalStats: StatsInfo;
   currentDateStr: string;
-  currentDaysAgo: number;
+  requestDate: string;  // YYYY-MM-DD format
 }
 
 export const dashboardApi = {
-  getData: (daysAgo: number = 0): Promise<DashboardData> =>
-    api.get(`/dashboard?daysAgo=${daysAgo}`).then(res => res.data),
+  getData: (date: string | null = null): Promise<DashboardData> =>
+    api.get('/dashboard', { params: date ? { date } : {} }).then(res => res.data),
 
   manualClose: (market: string, strategy: string): Promise<{ success: boolean; error?: string }> =>
     api.post('/dashboard/manual-close', null, {

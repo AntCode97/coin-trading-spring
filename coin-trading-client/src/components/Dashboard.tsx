@@ -3,18 +3,55 @@ import { useQuery } from '@tanstack/react-query';
 import { dashboardApi } from '../api';
 import './Dashboard.css';
 
+// YYYY-MM-DD 형식으로 날짜 변환
+function formatDate(date: Date): string {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+}
+
+// 날짜 더하기/빼기
+function addDays(date: Date, days: number): Date {
+  const result = new Date(date);
+  result.setDate(result.getDate() + days);
+  return result;
+}
+
 export default function Dashboard() {
-  const [daysAgo, setDaysAgo] = useState(0);
+  const [requestDate, setRequestDate] = useState<string | null>(null); // null = 오늘
 
   const { data, isLoading, error, refetch } = useQuery({
-    queryKey: ['dashboard', daysAgo],
-    queryFn: () => dashboardApi.getData(daysAgo),
+    queryKey: ['dashboard', requestDate],
+    queryFn: () => dashboardApi.getData(requestDate),
     refetchInterval: 30000,
   });
 
+  // 현재 조회 중인 날짜 (null이면 오늘)
+  const currentDate = requestDate ? new Date(requestDate + 'T00:00:00') : new Date();
+
   const handleDateChange = (offset: number) => {
-    const newValue = Math.max(0, Math.min(7, daysAgo + offset));
-    setDaysAgo(newValue);
+    const newDate = addDays(currentDate, offset);
+    const today = new Date();
+
+    // 미래 날짜는 조회 불가
+    if (newDate > today) {
+      return;
+    }
+
+    // 최대 30일 전까지만 조회
+    const maxDate = addDays(today, -30);
+    if (newDate < maxDate) {
+      return;
+    }
+
+    // 오늘이면 null, 아니면 YYYY-MM-DD
+    const isNewToday =
+      newDate.getDate() === today.getDate() &&
+      newDate.getMonth() === today.getMonth() &&
+      newDate.getFullYear() === today.getFullYear();
+
+    setRequestDate(isNewToday ? null : formatDate(newDate));
   };
 
   const handleManualSell = async (market: string, strategy: string) => {
@@ -262,8 +299,8 @@ export default function Dashboard() {
                 </div>
                 <div className="toss-date-selector">
                   <button
-                    onClick={() => handleDateChange(1)}
-                    disabled={daysAgo >= 7}
+                    onClick={() => handleDateChange(-1)}
+                    disabled={isTodayDisabled(currentDate)}
                     className="toss-date-btn"
                     aria-label="이전 날짜"
                   >
@@ -271,8 +308,8 @@ export default function Dashboard() {
                   </button>
                   <span className="toss-date-display">{data.currentDateStr}</span>
                   <button
-                    onClick={() => handleDateChange(-1)}
-                    disabled={daysAgo <= 0}
+                    onClick={() => handleDateChange(1)}
+                    disabled={requestDate === null}
                     className="toss-date-btn"
                     aria-label="다음 날짜"
                   >
@@ -341,4 +378,11 @@ export default function Dashboard() {
       </div>
     </div>
   );
+}
+
+// 오늘 날짜인지 확인 (이전 버튼 disabled용)
+function isTodayDisabled(date: Date): boolean {
+  const today = new Date();
+  const maxDate = addDays(today, -30);
+  return date <= maxDate;
 }

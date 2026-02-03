@@ -36,12 +36,18 @@ class DashboardController(
 ) {
 
     @GetMapping
-    fun getDashboard(@RequestParam(defaultValue = "0") daysAgo: Int): DashboardResponse {
-        // 날짜 범위 계산
-        val targetDate = java.time.ZonedDateTime.now(java.time.ZoneId.systemDefault()).toLocalDate()
-            .minusDays(daysAgo.toLong())
-            .atStartOfDay(java.time.ZoneId.systemDefault())
-            .toInstant()
+    fun getDashboard(@RequestParam date: String?): DashboardResponse {
+        // 날짜 파싱 (YYYY-MM-DD), null이면 오늘
+        val targetDate = if (date.isNullOrBlank()) {
+            java.time.LocalDate.now(java.time.ZoneId.systemDefault())
+        } else {
+            try {
+                java.time.LocalDate.parse(date)
+            } catch (e: Exception) {
+                // 파싱 실패하면 오늘 사용
+                java.time.LocalDate.now(java.time.ZoneId.systemDefault())
+            }
+        }.atStartOfDay(java.time.ZoneId.systemDefault()).toInstant()
 
         // 잔고 조회
         val balances = try {
@@ -96,6 +102,7 @@ class DashboardController(
         // 현재 조회 중인 날짜 표시
         val dateFormatter = java.time.format.DateTimeFormatter.ofPattern("MM-dd (E)")
         val currentDateStr = targetDate.atZone(java.time.ZoneId.systemDefault()).toLocalDate().format(dateFormatter)
+        val requestDate = targetDate.atZone(java.time.ZoneId.systemDefault()).toLocalDate().toString()  // YYYY-MM-DD
 
         return DashboardResponse(
             krwBalance = krwBalance.toDouble(),
@@ -106,7 +113,7 @@ class DashboardController(
             todayStats = todayStats,
             totalStats = totalStats,
             currentDateStr = currentDateStr,
-            currentDaysAgo = daysAgo
+            requestDate = requestDate
         )
     }
 
@@ -344,7 +351,7 @@ data class DashboardResponse(
     val todayStats: StatsInfo,
     val totalStats: StatsInfo,
     val currentDateStr: String,
-    val currentDaysAgo: Int
+    val requestDate: String  // YYYY-MM-DD format
 )
 
 data class CoinAsset(
