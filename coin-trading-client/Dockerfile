@@ -8,14 +8,14 @@ FROM node:20.18.0-alpine AS builder
 
 WORKDIR /app
 
-# Copy package files
-COPY package*.json ./
+# Copy package files from coin-trading-client
+COPY coin-trading-client/package*.json ./
 
 # Install dependencies
 RUN npm ci
 
 # Copy source and build
-COPY . .
+COPY coin-trading-client/ ./
 
 # Build React app
 RUN npm run build
@@ -25,8 +25,8 @@ RUN npm run build
 # ===========================================
 FROM nginx:alpine
 
-# Copy nginx config
-COPY nginx.conf /etc/nginx/conf.d/default.conf
+# Copy nginx config from coin-trading-client
+COPY coin-trading-client/nginx.conf /etc/nginx/conf.d/default.conf
 
 # Copy React build output
 COPY --from=builder /app/dist /usr/share/nginx/html
