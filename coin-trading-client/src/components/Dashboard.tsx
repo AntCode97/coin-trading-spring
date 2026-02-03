@@ -217,91 +217,100 @@ export default function Dashboard() {
             <div className="system-control-grid">
               {/* AI & Optimization */}
               <div className="control-group">
-                <h3 className="control-group-title">🤖 AI & 최적화</h3>
+                <h3 className="control-group-title">🤖 AI 분석</h3>
                 <div className="control-buttons">
                   <button
                     className="control-btn control-btn-primary"
-                    onClick={() => handleSystemAction('optimizer', () => systemControlApi.runOptimizer(), 'LLM 최적화를 실행하시겠습니까?')}
+                    onClick={() => handleSystemAction('optimizer', () => systemControlApi.runOptimizer(), 'AI가 전체 거래 내역을 분석하고 최적의 전략을 찾습니다.\n\n실행하시겠습니까?')}
                     disabled={isActionExecuting('optimizer')}
+                    title="AI가 거래 기록을 분석하여 최적의 전략 파라미터를 제안합니다"
                   >
-                    {isActionExecuting('optimizer') ? '실행 중...' : 'LLM 최적화 실행'}
+                    {isActionExecuting('optimizer') ? '분석 중...' : '전체 거래 분석'}
                   </button>
                 </div>
               </div>
 
-              {/* Strategy Control */}
+              {/* Strategy Analysis */}
               <div className="control-group">
-                <h3 className="control-group-title">📊 전략 제어</h3>
+                <h3 className="control-group-title">📊 전략 분석</h3>
                 <div className="control-buttons">
                   <button
                     className="control-btn"
                     onClick={() => handleSystemAction('vs-reflection', () => systemControlApi.runVolumeSurgeReflection())}
                     disabled={isActionExecuting('vs-reflection')}
+                    title="거래량이 급증하는 종목 단타 거래의 성과를 분석합니다"
                   >
-                    {isActionExecuting('vs-reflection') ? '실행 중...' : 'VS 회고'}
-                  </button>
-                  <button
-                    className="control-btn control-btn-warning"
-                    onClick={() => handleSystemAction('vs-reset', () => systemControlApi.resetVolumeSurgeCircuitBreaker(), 'Volume Surge 서킷 브레이커를 리셋하시겠습니까?')}
-                    disabled={isActionExecuting('vs-reset')}
-                  >
-                    {isActionExecuting('vs-reset') ? '리셋 중...' : 'VS 서킷 리셋'}
+                    {isActionExecuting('vs-reflection') ? '분석 중...' : '거래량 급등 분석'}
                   </button>
                   <button
                     className="control-btn"
                     onClick={() => handleSystemAction('ms-reflection', () => systemControlApi.runMemeScalperReflection())}
                     disabled={isActionExecuting('ms-reflection')}
+                    title="밈 코인 단타 거래의 성과를 분석합니다"
                   >
-                    {isActionExecuting('ms-reflection') ? '실행 중...' : 'MS 회고'}
+                    {isActionExecuting('ms-reflection') ? '분석 중...' : '단타 매매 분석'}
+                  </button>
+                </div>
+              </div>
+
+              {/* Strategy Restart */}
+              <div className="control-group">
+                <h3 className="control-group-title">🔄 전략 재시작</h3>
+                <div className="control-buttons">
+                  <button
+                    className="control-btn control-btn-warning"
+                    onClick={() => handleSystemAction('vs-reset', () => systemControlApi.resetVolumeSurgeCircuitBreaker(), '거래량 급등 전략이 연속 손실로 자동 정지된 경우 재시작합니다.\n\n재시작하시겠습니까?')}
+                    disabled={isActionExecuting('vs-reset')}
+                    title="연속 손실로 정지된 거래량 급등 전략을 다시 시작합니다"
+                  >
+                    {isActionExecuting('vs-reset') ? '재시작 중...' : '거래량 급등 재시작'}
                   </button>
                   <button
                     className="control-btn control-btn-warning"
-                    onClick={() => handleSystemAction('ms-reset', () => systemControlApi.resetMemeScalperCircuitBreaker(), 'Meme Scalper 서킷 브레이커를 리셋하시겠습니까?')}
+                    onClick={() => handleSystemAction('ms-reset', () => systemControlApi.resetMemeScalperCircuitBreaker(), '단타 매매 전략이 연속 손실로 자동 정지된 경우 재시작합니다.\n\n재시작하시겠습니까?')}
                     disabled={isActionExecuting('ms-reset')}
+                    title="연속 손실로 정지된 단타 매매 전략을 다시 시작합니다"
                   >
-                    {isActionExecuting('ms-reset') ? '리셋 중...' : 'MS 서킷 리셋'}
+                    {isActionExecuting('ms-reset') ? '재시작 중...' : '단타 매매 재시작'}
                   </button>
                 </div>
               </div>
 
               {/* Data Refresh */}
               <div className="control-group">
-                <h3 className="control-group-title">🔄 데이터 갱신</h3>
+                <h3 className="control-group-title">📡 데이터 갱신</h3>
                 <div className="control-buttons">
                   <button
                     className="control-btn"
                     onClick={() => handleSystemAction('exchange-rate', () => systemControlApi.refreshExchangeRate())}
                     disabled={isActionExecuting('exchange-rate')}
+                    title="원-달러 환율 정보를 최신으로 갱신합니다"
                   >
-                    {isActionExecuting('exchange-rate') ? '갱신 중...' : '환율 갱신'}
+                    {isActionExecuting('exchange-rate') ? '갱신 중...' : '환율 정보 갱신'}
                   </button>
                   <button
                     className="control-btn"
                     onClick={() => handleSystemAction('funding-scan', () => systemControlApi.scanFundingOpportunities())}
                     disabled={isActionExecuting('funding-scan')}
+                    title="펀딩 비율 차익거래 기회를 스캔합니다"
                   >
-                    {isActionExecuting('funding-scan') ? '스캔 중...' : '펀딩 스캔'}
+                    {isActionExecuting('funding-scan') ? '스캔 중...' : '차익거래 기회 스캔'}
+                  </button>
+                  <button
+                    className="control-btn control-btn-secondary"
+                    onClick={() => handleSystemAction('sync-orders', () => dashboardApi.syncOrders())}
+                    disabled={isActionExecuting('sync-orders')}
+                    title="체결되지 않은 주문 내역을 확인합니다"
+                  >
+                    {isActionExecuting('sync-orders') ? '확인 중...' : '미체결 주문 확인'}
                   </button>
                   <button
                     className="control-btn control-btn-secondary"
                     onClick={() => handleSystemAction('cache-refresh', () => systemControlApi.refreshCache())}
                     disabled={isActionExecuting('cache-refresh')}
+                    title="설정 캐시를 초기화합니다"
                   >
-                    {isActionExecuting('cache-refresh') ? '갱신 중...' : '캐시 갱신'}
-                  </button>
-                </div>
-              </div>
-
-              {/* Sync */}
-              <div className="control-group">
-                <h3 className="control-group-title">🔗 동기화</h3>
-                <div className="control-buttons">
-                  <button
-                    className="control-btn"
-                    onClick={() => handleSystemAction('sync-orders', () => dashboardApi.syncOrders())}
-                    disabled={isActionExecuting('sync-orders')}
-                  >
-                    {isActionExecuting('sync-orders') ? '확인 중...' : '미체결 주문 확인'}
+                    {isActionExecuting('cache-refresh') ? '갱신 중...' : '캐시 초기화'}
                   </button>
                 </div>
               </div>
