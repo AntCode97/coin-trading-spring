@@ -1,0 +1,753 @@
+/* =====================================================
+   TradingView 스타일 대시보드 CSS
+   ===================================================== */
+
+/* TradingView 색상 팔레트 */
+:root {
+  --tv-bg-primary: #131722;
+  --tv-bg-secondary: #1E222D;
+  --tv-bg-tertiary: #2A2E39;
+  --tv-bg-hover: #363A45;
+
+  --tv-text-primary: #D1D4DC;
+  --tv-text-secondary: #787B86;
+  --tv-text-muted: #434651;
+
+  --tv-accent-blue: #2962FF;
+  --tv-accent-green: #26A69A;
+  --tv-accent-red: #EF5350;
+  --tv-accent-orange: #FF9800;
+  --tv-accent-yellow: #FFD54F;
+
+  --tv-border: #2A2E39;
+
+  --tv-meme-purple: #7C4DFF;
+  --tv-dca-teal: #26A69A;
+}
+
+/* =====================================================
+   기본 컨테이너
+   ===================================================== */
+.tv-container {
+  min-height: 100vh;
+  background-color: var(--tv-bg-primary);
+  color: var(--tv-text-primary);
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Oxygen, Ubuntu, Cantarell, "Open Sans", "Helvetica Neue", sans-serif;
+  font-size: 14px;
+  line-height: 1.5;
+  padding: 16px;
+}
+
+/* =====================================================
+   로딩 / 에러 상태
+   ===================================================== */
+.tv-loading-container {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  min-height: 100vh;
+  gap: 16px;
+}
+
+.tv-spinner {
+  width: 48px;
+  height: 48px;
+  border: 3px solid var(--tv-bg-tertiary);
+  border-top-color: var(--tv-accent-blue);
+  border-radius: 50%;
+  animation: tv-spin 1s linear infinite;
+}
+
+@keyframes tv-spin {
+  to { transform: rotate(360deg); }
+}
+
+.tv-loading-text {
+  color: var(--tv-text-secondary);
+  font-size: 14px;
+}
+
+.tv-error-container {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  min-height: 100vh;
+  padding: 24px;
+}
+
+.tv-error-icon {
+  font-size: 48px;
+  margin-bottom: 16px;
+}
+
+.tv-error-text {
+  color: var(--tv-text-secondary);
+  text-align: center;
+}
+
+/* =====================================================
+   헤더
+   ===================================================== */
+.tv-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 20px;
+  padding-bottom: 16px;
+  border-bottom: 1px solid var(--tv-border);
+}
+
+.tv-header-left {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.tv-title {
+  font-size: 20px;
+  font-weight: 600;
+  color: var(--tv-text-primary);
+  margin: 0;
+}
+
+.tv-header-meta {
+  display: flex;
+  gap: 16px;
+  align-items: center;
+}
+
+.tv-update-indicator {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--tv-text-secondary);
+}
+
+.tv-pulse-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background-color: var(--tv-accent-green);
+  animation: tv-pulse 2s ease-in-out infinite;
+}
+
+@keyframes tv-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.5; }
+}
+
+.tv-header-right {
+  display: flex;
+  gap: 8px;
+}
+
+.tv-refresh-button {
+  padding: 6px 12px;
+  background-color: transparent;
+  border: 1px solid var(--tv-border);
+  border-radius: 4px;
+  color: var(--tv-text-primary);
+  cursor: pointer;
+  font-size: 13px;
+  transition: background-color 0.15s ease;
+}
+
+.tv-refresh-button:hover {
+  background-color: var(--tv-bg-hover);
+}
+
+/* =====================================================
+   자산 카드
+   ===================================================== */
+.tv-asset-section {
+  margin-bottom: 20px;
+}
+
+.tv-asset-card {
+  background-color: var(--tv-bg-secondary);
+  border-radius: 8px;
+  padding: 20px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 20px;
+  border-left: 4px solid transparent;
+}
+
+.tv-asset-card-positive {
+  border-left-color: var(--tv-accent-green);
+}
+
+.tv-asset-card-negative {
+  border-left-color: var(--tv-accent-red);
+}
+
+.tv-asset-content {
+  flex: 1;
+}
+
+.tv-asset-label {
+  font-size: 13px;
+  color: var(--tv-text-secondary);
+  margin-bottom: 8px;
+}
+
+.tv-asset-value {
+  font-size: 32px;
+  font-weight: 600;
+  color: var(--tv-text-primary);
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+
+.tv-asset-unit {
+  font-size: 18px;
+  font-weight: 400;
+  color: var(--tv-text-secondary);
+}
+
+.tv-asset-breakdown {
+  display: flex;
+  gap: 16px;
+  margin-top: 8px;
+  font-size: 12px;
+  color: var(--tv-text-secondary);
+}
+
+.tv-asset-breakdown-item {
+  display: flex;
+  gap: 4px;
+}
+
+.tv-asset-breakdown-item strong {
+  color: var(--tv-text-primary);
+}
+
+.tv-pnl-badge {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 16px;
+  border-radius: 6px;
+  font-size: 14px;
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+.tv-pnl-positive {
+  background-color: rgba(38, 166, 154, 0.15);
+  color: var(--tv-accent-green);
+}
+
+.tv-pnl-negative {
+  background-color: rgba(239, 83, 80, 0.15);
+  color: var(--tv-accent-red);
+}
+
+.tv-pnl-icon {
+  font-size: 12px;
+}
+
+.tv-pnl-value {
+  font-weight: 600;
+}
+
+.tv-pnl-percent {
+  font-size: 13px;
+  opacity: 0.9;
+}
+
+/* =====================================================
+   메인 그리드
+   ===================================================== */
+.tv-main-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px;
+}
+
+@media (max-width: 1024px) {
+  .tv-main-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* =====================================================
+   카드
+   ===================================================== */
+.tv-card {
+  background-color: var(--tv-bg-secondary);
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.tv-card-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--tv-border);
+}
+
+.tv-card-title {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--tv-text-primary);
+  margin: 0;
+}
+
+.tv-card-badge {
+  background-color: var(--tv-accent-blue);
+  color: white;
+  font-size: 12px;
+  font-weight: 500;
+  padding: 2px 8px;
+  border-radius: 4px;
+}
+
+/* =====================================================
+   포지션 리스트
+   ===================================================== */
+.tv-position-list {
+  display: flex;
+  flex-direction: column;
+}
+
+.tv-position-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--tv-border);
+  gap: 16px;
+}
+
+.tv-position-item:last-child {
+  border-bottom: none;
+}
+
+.tv-position-main {
+  flex: 1;
+  min-width: 0;
+}
+
+.tv-position-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.tv-market-symbol {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--tv-text-primary);
+}
+
+.tv-strategy-badge {
+  font-size: 11px;
+  font-weight: 500;
+  color: white;
+  padding: 2px 6px;
+  border-radius: 3px;
+}
+
+.tv-strategy-meme {
+  background-color: var(--tv-meme-purple);
+}
+
+.tv-strategy-volume {
+  background-color: var(--tv-accent-blue);
+}
+
+.tv-strategy-dca {
+  background-color: var(--tv-dca-teal);
+}
+
+.tv-position-prices {
+  display: flex;
+  gap: 16px;
+}
+
+.tv-price-group {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.tv-price-label {
+  font-size: 11px;
+  color: var(--tv-text-secondary);
+}
+
+.tv-price-value {
+  font-size: 13px;
+  color: var(--tv-text-primary);
+  font-weight: 500;
+}
+
+.tv-price-up {
+  color: var(--tv-accent-green) !important;
+}
+
+.tv-price-down {
+  color: var(--tv-accent-red) !important;
+}
+
+.tv-position-side {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 8px;
+}
+
+.tv-pnl-display {
+  text-align: right;
+  padding: 6px 10px;
+  border: 1px solid;
+  border-radius: 4px;
+  min-width: 110px;
+}
+
+.tv-pnl-border-positive {
+  border-color: var(--tv-accent-green);
+}
+
+.tv-pnl-border-negative {
+  border-color: var(--tv-accent-red);
+}
+
+.tv-pnl-amount {
+  font-size: 13px;
+  font-weight: 600;
+  display: block;
+}
+
+.tv-pnl-percent {
+  font-size: 12px;
+  opacity: 0.9;
+}
+
+.tv-sell-button {
+  background-color: rgba(239, 83, 80, 0.1);
+  color: var(--tv-accent-red);
+  border: 1px solid var(--tv-accent-red);
+  border-radius: 4px;
+  padding: 4px 12px;
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.tv-sell-button:hover {
+  background-color: var(--tv-accent-red);
+  color: white;
+}
+
+/* =====================================================
+   통계 그리드
+   ===================================================== */
+.tv-stats-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 1px;
+  background-color: var(--tv-border);
+}
+
+.tv-stat-item {
+  background-color: var(--tv-bg-secondary);
+  padding: 16px;
+  text-align: center;
+}
+
+.tv-stat-item-highlight {
+  grid-column: 1 / -1;
+  border-top: 2px solid;
+  margin-top: 1px;
+}
+
+.tv-stat-border-positive {
+  border-top-color: var(--tv-accent-green);
+}
+
+.tv-stat-border-negative {
+  border-top-color: var(--tv-accent-red);
+}
+
+.tv-stat-label {
+  font-size: 12px;
+  color: var(--tv-text-secondary);
+  margin-bottom: 8px;
+}
+
+.tv-stat-value {
+  font-size: 24px;
+  font-weight: 600;
+  color: var(--tv-text-primary);
+}
+
+.tv-stat-value-large {
+  font-size: 28px;
+  font-weight: 600;
+}
+
+/* =====================================================
+   거래 내역
+   ===================================================== */
+.tv-trade-list {
+  display: flex;
+  flex-direction: column;
+}
+
+.tv-trade-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--tv-border);
+  gap: 12px;
+}
+
+.tv-trade-main {
+  flex: 1;
+  min-width: 0;
+}
+
+.tv-trade-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 8px;
+  flex-wrap: wrap;
+}
+
+.tv-strategy-badge-small {
+  font-size: 10px;
+  font-weight: 500;
+  color: white;
+  padding: 2px 5px;
+  border-radius: 3px;
+}
+
+.tv-exit-reason-badge {
+  font-size: 10px;
+  font-weight: 500;
+  padding: 2px 6px;
+  border-radius: 3px;
+}
+
+.tv-exit-reason-success {
+  background-color: rgba(38, 166, 154, 0.15);
+  color: var(--tv-accent-green);
+}
+
+.tv-exit-reason-danger {
+  background-color: rgba(239, 83, 80, 0.15);
+  color: var(--tv-accent-red);
+}
+
+.tv-exit-reason-warning {
+  background-color: rgba(255, 152, 0, 0.15);
+  color: var(--tv-accent-orange);
+}
+
+.tv-exit-reason-info {
+  background-color: rgba(255, 213, 79, 0.15);
+  color: var(--tv-accent-yellow);
+}
+
+.tv-exit-reason-muted {
+  background-color: rgba(120, 123, 134, 0.15);
+  color: var(--tv-text-secondary);
+}
+
+.tv-exit-reason-secondary {
+  background-color: rgba(41, 98, 255, 0.15);
+  color: var(--tv-accent-blue);
+}
+
+.tv-exit-reason-blue {
+  background-color: rgba(41, 98, 255, 0.15);
+  color: var(--tv-accent-blue);
+}
+
+.tv-trade-prices {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+}
+
+.tv-trade-price {
+  display: flex;
+  gap: 4px;
+}
+
+.tv-trade-price-label {
+  color: var(--tv-text-secondary);
+  font-size: 12px;
+}
+
+.tv-trade-price-arrow {
+  color: var(--tv-text-secondary);
+}
+
+.tv-trade-side {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 4px;
+}
+
+.tv-trade-pnl {
+  padding: 6px 10px;
+  border: 1px solid;
+  border-radius: 4px;
+  text-align: right;
+}
+
+.tv-trade-pnl-amount {
+  font-size: 13px;
+  font-weight: 600;
+  display: block;
+}
+
+.tv-trade-pnl-percent {
+  font-size: 12px;
+  opacity: 0.9;
+}
+
+.tv-trade-holding-time {
+  font-size: 11px;
+  color: var(--tv-text-secondary);
+}
+
+/* =====================================================
+   날짜 선택기
+   ===================================================== */
+.tv-date-selector {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.tv-date-button {
+  background-color: transparent;
+  border: 1px solid var(--tv-border);
+  border-radius: 4px;
+  color: var(--tv-text-primary);
+  cursor: pointer;
+  padding: 4px 8px;
+  font-size: 13px;
+  transition: all 0.15s ease;
+}
+
+.tv-date-button:hover:not(:disabled) {
+  background-color: var(--tv-bg-hover);
+}
+
+.tv-date-button:disabled,
+.tv-date-button-disabled {
+  opacity: 0.3;
+  cursor: not-allowed;
+}
+
+.tv-date-display {
+  font-size: 13px;
+  color: var(--tv-text-primary);
+  min-width: 80px;
+  text-align: center;
+}
+
+/* =====================================================
+   빈 상태
+   ===================================================== */
+.tv-empty-state {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 40px 20px;
+}
+
+.tv-empty-icon {
+  font-size: 48px;
+  margin-bottom: 12px;
+  opacity: 0.5;
+}
+
+.tv-empty-text {
+  color: var(--tv-text-secondary);
+  font-size: 13px;
+}
+
+/* =====================================================
+   텍스트 색상 유틸리티
+   ===================================================== */
+.tv-text-green {
+  color: var(--tv-accent-green) !important;
+}
+
+.tv-text-red {
+  color: var(--tv-accent-red) !important;
+}
+
+.tv-text-orange {
+  color: var(--tv-accent-orange) !important;
+}
+
+/* =====================================================
+   반응형
+   ===================================================== */
+@media (max-width: 768px) {
+  .tv-container {
+    padding: 12px;
+  }
+
+  .tv-position-item {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+
+  .tv-position-side {
+    align-items: flex-start;
+    width: 100%;
+  }
+
+  .tv-pnl-display {
+    text-align: left;
+  }
+
+  .tv-stats-grid {
+    grid-template-columns: repeat(2, 1fr);
+  }
+
+  .tv-asset-card {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+
+  .tv-pnl-badge {
+    width: 100%;
+    justify-content: center;
+  }
+
+  .tv-trade-item {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+
+  .tv-trade-side {
+    align-items: flex-start;
+    width: 100%;
+  }
+
+  .tv-trade-pnl {
+    text-align: left;
+  }
+}
