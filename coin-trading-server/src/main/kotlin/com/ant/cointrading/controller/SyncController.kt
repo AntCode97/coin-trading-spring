@@ -14,11 +14,13 @@ import org.springframework.web.bind.annotation.RequestMapping
 import org.springframework.web.bind.annotation.RestController
 import java.math.BigDecimal
 import java.time.Instant
+import java.time.format.DateTimeFormatter
 
 /**
  * 빗썸 실제 잔고/주문 내역과 DB 동기화 컨트롤러
  *
  * DB에 포지션이 있지만 실제 잔고가 없는 경우를 처리합니다.
+ * 실제 체결 내역을 확인하여 진짜 매도되었는지 검증합니다.
  */
 @RestController
 @RequestMapping("/api/sync")
@@ -36,12 +38,16 @@ class SyncController(
 
     /**
      * 실제 잔고와 DB 포지션 동기화
+     * - 빗썸 체결 내역을 확인하여 실제 매도 여부를 검증
+     * - 실제 매도 체결이 있으면 해당 정보로 업데이트
+     * - 체결 내역이 없으면 자동 처리하지 않고 리포트만
      */
     @PostMapping("/positions")
     fun syncPositions(): SyncResult {
         val results = mutableListOf<SyncAction>()
         var fixedCount = 0
         var verifiedCount = 0
+        var skippedCount = 0
 
         try {
             // 실제 잔고 조회
@@ -65,31 +71,67 @@ class SyncController(
 
             log.info("실제 잔고 코인: ${coinsWithBalance.keys}")
 
+            // 완료된 주문 목록 조회 (state=done, 최근 100개)
+            val doneOrders = try {
+                bithumbPrivateApi.getOrders(null, "done", 0, 100) ?: emptyList()
+            } catch (e: Exception) {
+                log.error("체결 내역 조회 실패: ${e.message}")
+                emptyList()
+            }
+
+            // 매도 주문만 필터링 (side=ask)
+            val sellOrders = doneOrders
+                .filter { it.side == "ask" && it.state == "done" && it.executedVolume != null && it.executedVolume > BigDecimal.ZERO }
+                .associateBy { it.market ?: "" }
+
+            log.info("체결된 매도 주문: ${sellOrders.keys}")
+
             // Meme Scalper 포지션 체크
             memeScalperRepository.findByStatus("OPEN").forEach { position ->
                 val coinSymbol = extractCoinSymbol(position.market)
                 val actualBalanceObj = coinsWithBalance[coinSymbol]
 
                 if (actualBalanceObj == null) {
-                    // 실제 잔고 없음 -> CLOSED로 변경
-                    log.warn("[Meme Scalper] ${position.market} DB에 있지만 실제 잔고 없음 -> CLOSED 처리")
-                    position.status = "CLOSED"
-                    position.exitPrice = position.entryPrice
-                    position.exitTime = Instant.now()
-                    position.exitReason = "SYNC_NO_BALANCE"
-                    position.pnlAmount = -((position.entryPrice * position.quantity) * 0.001)
-                    position.pnlPercent = -0.1
-                    memeScalperRepository.save(position)
+                    // 잔고 없음 -> 체결 내역 확인
+                    val sellOrder = sellOrders[position.market]
 
-                    results.add(SyncAction(
-                        market = position.market,
-                        strategy = "Meme Scalper",
-                        action = "CLOSED",
-                        reason = "실제 잔고 없음",
-                        dbQuantity = position.quantity,
-                        actualQuantity = 0.0
-                    ))
-                    fixedCount++
+                    if (sellOrder != null && isMatchingOrder(sellOrder, position.quantity)) {
+                        // 실제 매도 체결 확인 -> 실제 정보로 CLOSED 처리
+                        val executedPrice = sellOrder.price?.toDouble() ?: position.entryPrice
+                        val executedTime = parseInstant(sellOrder.createdAt)
+
+                        log.info("[Meme Scalper] ${position.market} 실제 체결 확인 - 가격=$executedPrice, 시간=${sellOrder.createdAt}")
+
+                        position.status = "CLOSED"
+                        position.exitPrice = executedPrice
+                        position.exitTime = executedTime
+                        position.exitReason = "SYNC_CONFIRMED"
+                        position.pnlAmount = (executedPrice - position.entryPrice) * position.quantity
+                        position.pnlPercent = ((executedPrice - position.entryPrice) / position.entryPrice) * 100
+                        memeScalperRepository.save(position)
+
+                        results.add(SyncAction(
+                            market = position.market,
+                            strategy = "Meme Scalper",
+                            action = "CLOSED_CONFIRMED",
+                            reason = "실제 매도 체결 확인 (가격: ${executedPrice.toInt()}원, 시간: ${formatTime(executedTime)})",
+                            dbQuantity = position.quantity,
+                            actualQuantity = sellOrder.executedVolume?.toDouble() ?: 0.0
+                        ))
+                        fixedCount++
+                    } else {
+                        // 체결 내역 없음 -> 자동 처리하지 않음
+                        log.warn("[Meme Scalper] ${position.market} DB에 있지만 잔고 없음, 체결 내역 없음 -> 수동 확인 필요")
+                        results.add(SyncAction(
+                            market = position.market,
+                            strategy = "Meme Scalper",
+                            action = "MANUAL_REVIEW",
+                            reason = "잔고 없음, 체결 내역 없음. 빗썸에서 수동 확인 필요.",
+                            dbQuantity = position.quantity,
+                            actualQuantity = 0.0
+                        ))
+                        skippedCount++
+                    }
                 } else {
                     // 잔고 있음 -> 검증
                     val dbQuantity = BigDecimal(position.quantity)
@@ -117,24 +159,43 @@ class SyncController(
                 val actualBalanceObj = coinsWithBalance[coinSymbol]
 
                 if (actualBalanceObj == null) {
-                    log.warn("[Volume Surge] ${position.market} DB에 있지만 실제 잔고 없음 -> CLOSED 처리")
-                    position.status = "CLOSED"
-                    position.exitPrice = position.entryPrice
-                    position.exitTime = Instant.now()
-                    position.exitReason = "SYNC_NO_BALANCE"
-                    position.pnlAmount = -((position.entryPrice * position.quantity) * 0.001)
-                    position.pnlPercent = -0.1
-                    volumeSurgeRepository.save(position)
+                    val sellOrder = sellOrders[position.market]
 
-                    results.add(SyncAction(
-                        market = position.market,
-                        strategy = "Volume Surge",
-                        action = "CLOSED",
-                        reason = "실제 잔고 없음",
-                        dbQuantity = position.quantity,
-                        actualQuantity = 0.0
-                    ))
-                    fixedCount++
+                    if (sellOrder != null && isMatchingOrder(sellOrder, position.quantity)) {
+                        val executedPrice = sellOrder.price?.toDouble() ?: position.entryPrice
+                        val executedTime = parseInstant(sellOrder.createdAt)
+
+                        log.info("[Volume Surge] ${position.market} 실제 체결 확인 - 가격=$executedPrice, 시간=${sellOrder.createdAt}")
+
+                        position.status = "CLOSED"
+                        position.exitPrice = executedPrice
+                        position.exitTime = executedTime
+                        position.exitReason = "SYNC_CONFIRMED"
+                        position.pnlAmount = (executedPrice - position.entryPrice) * position.quantity
+                        position.pnlPercent = ((executedPrice - position.entryPrice) / position.entryPrice) * 100
+                        volumeSurgeRepository.save(position)
+
+                        results.add(SyncAction(
+                            market = position.market,
+                            strategy = "Volume Surge",
+                            action = "CLOSED_CONFIRMED",
+                            reason = "실제 매도 체결 확인 (가격: ${executedPrice.toInt()}원, 시간: ${formatTime(executedTime)})",
+                            dbQuantity = position.quantity,
+                            actualQuantity = sellOrder.executedVolume?.toDouble() ?: 0.0
+                        ))
+                        fixedCount++
+                    } else {
+                        log.warn("[Volume Surge] ${position.market} DB에 있지만 잔고 없음, 체결 내역 없음 -> 수동 확인 필요")
+                        results.add(SyncAction(
+                            market = position.market,
+                            strategy = "Volume Surge",
+                            action = "MANUAL_REVIEW",
+                            reason = "잔고 없음, 체결 내역 없음. 빗썸에서 수동 확인 필요.",
+                            dbQuantity = position.quantity,
+                            actualQuantity = 0.0
+                        ))
+                        skippedCount++
+                    }
                 } else {
                     val dbQuantity = BigDecimal(position.quantity)
                     val actualQuantity = actualBalanceObj.balance
@@ -160,24 +221,43 @@ class SyncController(
                 val actualBalanceObj = coinsWithBalance[coinSymbol]
 
                 if (actualBalanceObj == null) {
-                    log.warn("[DCA] ${position.market} DB에 있지만 실제 잔고 없음 -> CLOSED 처리")
-                    position.status = "CLOSED"
-                    position.exitPrice = position.averagePrice
-                    position.exitedAt = Instant.now()
-                    position.exitReason = "SYNC_NO_BALANCE"
-                    position.realizedPnl = -((position.averagePrice * position.totalQuantity) * 0.001)
-                    position.realizedPnlPercent = -0.1
-                    dcaPositionRepository.save(position)
+                    val sellOrder = sellOrders[position.market]
 
-                    results.add(SyncAction(
-                        market = position.market,
-                        strategy = "DCA",
-                        action = "CLOSED",
-                        reason = "실제 잔고 없음",
-                        dbQuantity = position.totalQuantity,
-                        actualQuantity = 0.0
-                    ))
-                    fixedCount++
+                    if (sellOrder != null && isMatchingOrder(sellOrder, position.totalQuantity)) {
+                        val executedPrice = sellOrder.price?.toDouble() ?: position.averagePrice
+                        val executedTime = parseInstant(sellOrder.createdAt)
+
+                        log.info("[DCA] ${position.market} 실제 체결 확인 - 가격=$executedPrice, 시간=${sellOrder.createdAt}")
+
+                        position.status = "CLOSED"
+                        position.exitPrice = executedPrice
+                        position.exitedAt = executedTime
+                        position.exitReason = "SYNC_CONFIRMED"
+                        position.realizedPnl = (executedPrice - position.averagePrice) * position.totalQuantity
+                        position.realizedPnlPercent = ((executedPrice - position.averagePrice) / position.averagePrice) * 100
+                        dcaPositionRepository.save(position)
+
+                        results.add(SyncAction(
+                            market = position.market,
+                            strategy = "DCA",
+                            action = "CLOSED_CONFIRMED",
+                            reason = "실제 매도 체결 확인 (가격: ${executedPrice.toInt()}원, 시간: ${formatTime(executedTime)})",
+                            dbQuantity = position.totalQuantity,
+                            actualQuantity = sellOrder.executedVolume?.toDouble() ?: 0.0
+                        ))
+                        fixedCount++
+                    } else {
+                        log.warn("[DCA] ${position.market} DB에 있지만 잔고 없음, 체결 내역 없음 -> 수동 확인 필요")
+                        results.add(SyncAction(
+                            market = position.market,
+                            strategy = "DCA",
+                            action = "MANUAL_REVIEW",
+                            reason = "잔고 없음, 체결 내역 없음. 빗썸에서 수동 확인 필요.",
+                            dbQuantity = position.totalQuantity,
+                            actualQuantity = 0.0
+                        ))
+                        skippedCount++
+                    }
                 } else {
                     val dbQuantity = BigDecimal(position.totalQuantity)
                     val actualQuantity = actualBalanceObj.balance
@@ -197,9 +277,18 @@ class SyncController(
                 }
             }
 
+            val message = buildString {
+                append("동기화 완료: ")
+                append("${fixedCount}개 체결 확인, ")
+                append("${verifiedCount}개 검증")
+                if (skippedCount > 0) {
+                    append(", ${skippedCount}개 수동 확인 필요")
+                }
+            }
+
             return SyncResult(
                 success = true,
-                message = "동기화 완료: ${fixedCount}개 수정, ${verifiedCount}개 검증",
+                message = message,
                 actions = results,
                 fixedCount = fixedCount,
                 verifiedCount = verifiedCount
@@ -215,6 +304,44 @@ class SyncController(
                 verifiedCount = verifiedCount
             )
         }
+    }
+
+    /**
+     * 주문이 포지션과 일치하는지 확인
+     * 체결 수량이 포지션 수량과 비슷하면 일치로 간주 (10% 오차 허용)
+     */
+    private fun isMatchingOrder(order: com.ant.cointrading.api.bithumb.OrderResponse, positionQty: Double): Boolean {
+        val executedQty = order.executedVolume ?: return false
+        val positionQty = BigDecimal(positionQty)
+
+        // 수량이 10% 이내로 일치하면 같은 주문으로 간주
+        val diff = (executedQty - positionQty).abs()
+        val ratio = diff.divide(positionQty, 4, java.math.RoundingMode.HALF_UP)
+
+        return ratio <= BigDecimal("0.1")
+    }
+
+    /**
+     * ISO-8601 형식의 시간을 Instant로 변환
+     */
+    private fun parseInstant(dateTimeStr: String?): Instant {
+        if (dateTimeStr.isNullOrBlank()) return Instant.now()
+
+        return try {
+            Instant.parse(dateTimeStr)
+        } catch (e: Exception) {
+            log.warn("시간 파싱 실패: $dateTimeStr, 현재 시간 사용")
+            Instant.now()
+        }
+    }
+
+    /**
+     * Instant를 한국 시간으로 포맷팅
+     */
+    private fun formatTime(instant: Instant): String {
+        val kstZone = java.time.ZoneId.of("Asia/Seoul")
+        val formatter = DateTimeFormatter.ofPattern("MM-dd HH:mm")
+        return instant.atZone(kstZone).format(formatter)
     }
 
     /**
