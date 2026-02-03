@@ -125,7 +125,8 @@ class VolumeSurgeReflector(
             // ReflectorTools와 SlackTools를 결합하여 ChatClient 생성
             val allTools = arrayOf(reflectorTools, slackTools)
 
-            val chatClient = modelSelector.getChatClient()
+            // 회고용 ChatClient (무조건 OpenAI 사용 - 무료 토큰)
+            val chatClient = modelSelector.getChatClientForReflection()
                 .mutate()
                 .defaultTools(*allTools)
                 .build()

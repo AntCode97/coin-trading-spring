@@ -77,10 +77,12 @@ class LlmOptimizer(
     }
 
     /**
-     * 현재 설정된 모델로 ChatClient 생성 (tools 포함)
+     * 회고/최적화용 ChatClient 생성 (무조건 OpenAI 사용)
+     *
+     * OpenAI가 무료 토큰을 더 많이 제공하여 회고/최적화에 적합
      */
     private fun createChatClient(): ChatClient {
-        return modelSelector.getChatClient()
+        return modelSelector.getChatClientForReflection()
             .mutate()
             .defaultTools(optimizerTools)
             .build()
