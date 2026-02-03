@@ -5,12 +5,8 @@ on:
     branches:
       - main
     tags:
-      - 'v*'  # v1.0.0 같은 태그
-    paths:
-      - 'coin-trading-server/**'
-      - 'coin-trading-client/**'
-      - '.github/workflows/docker-build.yml'
-  workflow_dispatch:  # 수동 실행
+      - 'v*'
+  workflow_dispatch:
 
 env:
   DOCKER_USERNAME: dbswns97
@@ -23,10 +19,7 @@ jobs:
   # ===========================================
   build-backend:
     runs-on: ubuntu-latest
-    if: |
-      contains(github.event.head_commit.message, '[skip backend]') == false &&
-      (contains(github.event.head_commit.modified, 'coin-trading-server/') ||
-       github.event_name == 'workflow_dispatch')
+    if: contains(github.event.head_commit.message, '[skip backend]') == false
 
     steps:
       - name: Checkout
@@ -88,10 +81,7 @@ jobs:
   # ===========================================
   build-frontend:
     runs-on: ubuntu-latest
-    if: |
-      contains(github.event.head_commit.message, '[skip frontend]') == false &&
-      (contains(github.event.head_commit.modified, 'coin-trading-client/') ||
-       github.event_name == 'workflow_dispatch')
+    if: contains(github.event.head_commit.message, '[skip frontend]') == false
 
     steps:
       - name: Checkout
