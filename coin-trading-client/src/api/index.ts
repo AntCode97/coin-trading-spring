@@ -5,6 +5,12 @@ const api = axios.create({
   timeout: 10000,
 });
 
+// Long-running API 클라이언트 (LLM 최적화, 회고 등은 10분 타임아웃)
+const longRunningApi = axios.create({
+  baseURL: '/api',
+  timeout: 600000, // 10분
+});
+
 export interface CoinAsset {
   symbol: string;
   quantity: number;
@@ -110,20 +116,21 @@ export const dashboardApi = {
 };
 
 export const systemControlApi = {
-  // LLM Optimizer
+  // LLM Optimizer (장기 실행 - 10분 타임아웃)
   runOptimizer: (): Promise<SystemControlResult> =>
-    api.post('/optimizer/run').then(res => res.data),
+    longRunningApi.post('/optimizer/run').then(res => res.data),
 
-  // Volume Surge
+  // Volume Surge (장기 실행 - 10분 타임아웃)
   runVolumeSurgeReflection: (): Promise<SystemControlResult> =>
-    api.post('/volume-surge/reflect').then(res => res.data),
+    longRunningApi.post('/volume-surge/reflect').then(res => res.data),
 
+  // Meme Scalper (장기 실행 - 10분 타임아웃)
+  runMemeScalperReflection: (): Promise<SystemControlResult> =>
+    longRunningApi.post('/meme-scaler/reflect').then(res => res.data),
+
+  // 나머지는 기본 api 사용 (10초 타임아웃)
   resetVolumeSurgeCircuitBreaker: (): Promise<SystemControlResult> =>
     api.post('/volume-surge/reset-circuit-breaker').then(res => res.data),
-
-  // Meme Scalper
-  runMemeScalperReflection: (): Promise<SystemControlResult> =>
-    api.post('/meme-scalper/reflect').then(res => res.data),
 
   resetMemeScalperCircuitBreaker: (): Promise<SystemControlResult> =>
     api.post('/meme-scaler/reset').then(res => res.data),
