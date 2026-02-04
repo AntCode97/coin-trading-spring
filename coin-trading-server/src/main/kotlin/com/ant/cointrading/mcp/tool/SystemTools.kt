@@ -214,7 +214,7 @@ class SystemTools(
         }
 
         return DailySummary(
-            date = startOfDay.toString().substring(0, 10),
+            date = startOfDay.atZone(java.time.ZoneId.of("UTC")).format(java.time.format.DateTimeFormatter.ISO_LOCAL_DATE),
             memeScalperTrades = memeTrades.size,
             memeScalperPnl = memePnl,
             memeScalperWinRate = memeWinRate * 100,
