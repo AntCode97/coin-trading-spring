@@ -173,7 +173,7 @@ class DcaEngine(
         // CandleResponse -> Candle 변환
         val candles = candleResponses.map { response ->
             Candle(
-                timestamp = Instant.parse(response.candleDateTimeUtc),
+                timestamp = parseInstantSafe(response.candleDateTimeUtc),
                 open = response.openingPrice,
                 high = response.highPrice,
                 low = response.lowPrice,
@@ -938,5 +938,30 @@ class DcaEngine(
         closePosition(position, exitPrice, "MANUAL")
 
         return mapOf("success" to true, "exitPrice" to exitPrice)
+    }
+
+    /**
+     * 안전한 Instant 파싱 (시간대 정보 없으면 UTC로 간주)
+     */
+    private fun parseInstantSafe(dateTimeStr: String?): Instant {
+        if (dateTimeStr.isNullOrBlank()) return Instant.now()
+
+        return try {
+            Instant.parse(dateTimeStr)
+        } catch (e: Exception) {
+            // 시간대 정보 없으면 UTC로 간주하고 'Z' 추가
+            try {
+                Instant.parse("${dateTimeStr}Z")
+            } catch (e2: Exception) {
+                // 그래도 실패하면 LocalDateTime으로 파싱 후 UTC로 변환
+                try {
+                    val localDateTime = java.time.LocalDateTime.parse(dateTimeStr)
+                    localDateTime.atZone(java.time.ZoneId.of("UTC")).toInstant()
+                } catch (e3: Exception) {
+                    log.warn("시간 파싱 실패: $dateTimeStr, 현재 시간 사용")
+                    Instant.now()
+                }
+            }
+        }
     }
 }
