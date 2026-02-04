@@ -418,7 +418,7 @@ class SyncController(
     }
 
     /**
-     * ISO-8601 형식의 시간을 Instant로 변환
+     * ISO-8601 형식의 시간을 Instant로 변환 (시간대 없으면 UTC로 간주)
      */
     private fun parseInstant(dateTimeStr: String?): Instant {
         if (dateTimeStr.isNullOrBlank()) return Instant.now()
@@ -426,8 +426,19 @@ class SyncController(
         return try {
             Instant.parse(dateTimeStr)
         } catch (e: Exception) {
-            log.warn("시간 파싱 실패: $dateTimeStr, 현재 시간 사용")
-            Instant.now()
+            // 시간대 정보 없으면 UTC로 간주하고 'Z' 추가
+            try {
+                Instant.parse("${dateTimeStr}Z")
+            } catch (e2: Exception) {
+                // 그래도 실패하면 LocalDateTime으로 파싱 후 UTC 변환
+                try {
+                    val localDateTime = java.time.LocalDateTime.parse(dateTimeStr)
+                    localDateTime.atZone(java.time.ZoneId.of("UTC")).toInstant()
+                } catch (e3: Exception) {
+                    log.warn("시간 파싱 실패: $dateTimeStr, 현재 시간 사용")
+                    Instant.now()
+                }
+            }
         }
     }
 

@@ -209,7 +209,7 @@ class RegimeDetector {
     fun detectFromBithumb(candleResponses: List<CandleResponse>): RegimeAnalysis {
         val candles = candleResponses.map { response ->
             Candle(
-                timestamp = Instant.parse(response.candleDateTimeUtc),
+                timestamp = parseInstantSafe(response.candleDateTimeUtc),
                 open = response.openingPrice,
                 high = response.highPrice,
                 low = response.lowPrice,
@@ -218,6 +218,24 @@ class RegimeDetector {
             )
         }
         return detect(candles)
+    }
+
+    /**
+     * 안전한 Instant 파싱 (시간대 정보 없으면 UTC로 간주)
+     */
+    private fun parseInstantSafe(dateTimeStr: String?): Instant {
+        if (dateTimeStr.isNullOrBlank()) return Instant.now()
+
+        return try {
+            Instant.parse(dateTimeStr)
+        } catch (e: Exception) {
+            try {
+                Instant.parse("${dateTimeStr}Z")
+            } catch (e2: Exception) {
+                val localDateTime = java.time.LocalDateTime.parse(dateTimeStr)
+                localDateTime.atZone(java.time.ZoneId.of("UTC")).toInstant()
+            }
+        }
     }
 }
 

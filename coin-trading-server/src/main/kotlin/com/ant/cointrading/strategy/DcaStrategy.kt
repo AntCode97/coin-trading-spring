@@ -50,13 +50,9 @@ class DcaStrategy(
             val key = KEY_PREFIX + market
             val savedTime = keyValueService.get(key)
             if (savedTime != null) {
-                try {
-                    val instant = Instant.parse(savedTime)
-                    lastBuyTime[market] = instant
-                    log.info("[$market] DCA 마지막 매수 시간 복원: $instant")
-                } catch (e: Exception) {
-                    log.warn("[$market] DCA 상태 복원 실패: ${e.message}")
-                }
+                val instant = parseInstantSafe(savedTime)
+                lastBuyTime[market] = instant
+                log.info("[$market] DCA 마지막 매수 시간 복원: $instant")
             }
         }
         log.info("DCA 전략 상태 복원 완료: ${lastBuyTime.size}개 마켓")
@@ -280,6 +276,24 @@ class DcaStrategy(
             "DCA 첫 매수 (시장: $regimeText)"
         } else {
             "DCA 정기 매수 (시장: $regimeText)"
+        }
+    }
+
+    /**
+     * 안전한 Instant 파싱 (시간대 정보 없으면 UTC로 간주)
+     */
+    private fun parseInstantSafe(dateTimeStr: String?): Instant {
+        if (dateTimeStr.isNullOrBlank()) return Instant.now()
+
+        return try {
+            Instant.parse(dateTimeStr)
+        } catch (e: Exception) {
+            try {
+                Instant.parse("${dateTimeStr}Z")
+            } catch (e2: Exception) {
+                val localDateTime = java.time.LocalDateTime.parse(dateTimeStr)
+                localDateTime.atZone(java.time.ZoneId.of("UTC")).toInstant()
+            }
         }
     }
 }
