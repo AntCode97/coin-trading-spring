@@ -386,6 +386,7 @@ class TradingEngine(
                 OrderRejectionReason.EXCEPTION -> "시스템 예외"
                 OrderRejectionReason.CIRCUIT_BREAKER -> "서킷 브레이커 발동"
                 OrderRejectionReason.BELOW_MIN_ORDER_AMOUNT -> "최소 주문 금액(5000원) 미달"
+                OrderRejectionReason.MARKET_SUSPENDED -> "거래 정지/상장 폐지 코인"
                 null -> result.message
             }
             log.error("[$market] 주문 실패: $errorDetail")

@@ -1,5 +1,6 @@
 package com.ant.cointrading.order
 
+import com.ant.cointrading.api.bithumb.BithumbApiException
 import com.ant.cointrading.api.bithumb.BithumbPrivateApi
 import com.ant.cointrading.api.bithumb.OrderResponse
 import com.ant.cointrading.config.TradingProperties
@@ -260,6 +261,17 @@ class OrderExecutor(
 
             executionResult
 
+        } catch (e: MarketSuspendedException) {
+            log.error("[$market] 거래 정지 코인: ${e.message}")
+            circuitBreaker.recordExecutionFailure(market, "거래 정지: ${e.message}")
+
+            OrderResult(
+                success = false,
+                market = market,
+                side = side,
+                message = "거래 정지/상장 폐지 코인: ${e.message}",
+                rejectionReason = OrderRejectionReason.MARKET_SUSPENDED
+            )
         } catch (e: Exception) {
             log.error("[$market] 주문 실행 실패: ${e.message}", e)
             circuitBreaker.recordExecutionFailure(market, e.message ?: "Unknown error")
@@ -390,21 +402,29 @@ class OrderExecutor(
             return submitMarketOrder(signal, apiMarket, positionSize)
         }
 
-        // 1. 지정가 주문 제출
-        val (orderResponse, limitPrice, quantity) = when (signal.action) {
-            SignalAction.BUY -> {
-                val limitPrice = bestAsk
-                val quantity = positionSize.divide(limitPrice, 8, RoundingMode.DOWN)
-                log.info("[${signal.market}] 지정가 매수: 가격=$limitPrice, 수량=$quantity")
-                Triple(bithumbPrivateApi.buyLimitOrder(apiMarket, limitPrice, quantity), limitPrice, quantity)
+        // 1. 지정가 주문 제출 (거래 정지 감지)
+        val (orderResponse, limitPrice, quantity) = try {
+            when (signal.action) {
+                SignalAction.BUY -> {
+                    val limitPrice = bestAsk
+                    val quantity = positionSize.divide(limitPrice, 8, RoundingMode.DOWN)
+                    log.info("[${signal.market}] 지정가 매수: 가격=$limitPrice, 수량=$quantity")
+                    Triple(bithumbPrivateApi.buyLimitOrder(apiMarket, limitPrice, quantity), limitPrice, quantity)
+                }
+                SignalAction.SELL -> {
+                    val limitPrice = bestBid
+                    val quantity = calculateQuantity(signal.price, positionSize)
+                    log.info("[${signal.market}] 지정가 매도: 가격=$limitPrice, 수량=$quantity")
+                    Triple(bithumbPrivateApi.sellLimitOrder(apiMarket, limitPrice, quantity), limitPrice, quantity)
+                }
+                SignalAction.HOLD -> return OrderSubmitResult(null, OrderType.LIMIT, null, null)
             }
-            SignalAction.SELL -> {
-                val limitPrice = bestBid
-                val quantity = calculateQuantity(signal.price, positionSize)
-                log.info("[${signal.market}] 지정가 매도: 가격=$limitPrice, 수량=$quantity")
-                Triple(bithumbPrivateApi.sellLimitOrder(apiMarket, limitPrice, quantity), limitPrice, quantity)
+        } catch (e: BithumbApiException) {
+            if (e.isMarketUnavailable()) {
+                log.error("[${signal.market}] 거래 정지 코인 감지: ${e.errorMessage}")
+                throw MarketSuspendedException(signal.market, e.errorMessage ?: "거래가 지원되지 않습니다")
             }
-            SignalAction.HOLD -> return OrderSubmitResult(null, OrderType.LIMIT, null, null)
+            throw e
         }
 
         if (orderResponse == null) {
@@ -506,25 +526,33 @@ class OrderExecutor(
         apiMarket: String,
         positionSize: BigDecimal
     ): OrderSubmitResult {
-        val response = when (signal.action) {
-            SignalAction.BUY -> {
-                log.info("[${signal.market}] 시장가 매수: $positionSize KRW")
-                bithumbPrivateApi.buyMarketOrder(apiMarket, positionSize)
-            }
-            SignalAction.SELL -> {
-                // 실제 잔고 확인 후 매도 수량 결정
-                val requestedQuantity = calculateQuantity(signal.price, positionSize)
-                val actualQuantity = getActualSellQuantity(signal.market, requestedQuantity)
-
-                if (actualQuantity <= BigDecimal.ZERO) {
-                    log.warn("[${signal.market}] 매도 가능 잔고 없음")
-                    return OrderSubmitResult(null, OrderType.MARKET, null, null)
+        val response = try {
+            when (signal.action) {
+                SignalAction.BUY -> {
+                    log.info("[${signal.market}] 시장가 매수: $positionSize KRW")
+                    bithumbPrivateApi.buyMarketOrder(apiMarket, positionSize)
                 }
+                SignalAction.SELL -> {
+                    // 실제 잔고 확인 후 매도 수량 결정
+                    val requestedQuantity = calculateQuantity(signal.price, positionSize)
+                    val actualQuantity = getActualSellQuantity(signal.market, requestedQuantity)
 
-                log.info("[${signal.market}] 시장가 매도: 요청수량=$requestedQuantity, 실제수량=$actualQuantity")
-                bithumbPrivateApi.sellMarketOrder(apiMarket, actualQuantity)
+                    if (actualQuantity <= BigDecimal.ZERO) {
+                        log.warn("[${signal.market}] 매도 가능 잔고 없음")
+                        return OrderSubmitResult(null, OrderType.MARKET, null, null)
+                    }
+
+                    log.info("[${signal.market}] 시장가 매도: 요청수량=$requestedQuantity, 실제수량=$actualQuantity")
+                    bithumbPrivateApi.sellMarketOrder(apiMarket, actualQuantity)
+                }
+                SignalAction.HOLD -> null
             }
-            SignalAction.HOLD -> null
+        } catch (e: BithumbApiException) {
+            if (e.isMarketUnavailable()) {
+                log.error("[${signal.market}] 거래 정지 코인 감지: ${e.errorMessage}")
+                throw MarketSuspendedException(signal.market, e.errorMessage ?: "거래가 지원되지 않습니다")
+            }
+            throw e
         }
 
         return OrderSubmitResult(response, OrderType.MARKET, null, null)
@@ -934,5 +962,14 @@ enum class OrderRejectionReason {
     NO_FILL,                // 체결 없음
     EXCEPTION,              // 예외 발생
     CIRCUIT_BREAKER,        // 서킷 브레이커 발동
-    BELOW_MIN_ORDER_AMOUNT  // 최소 주문 금액 미달 (빗썸 5000원)
+    BELOW_MIN_ORDER_AMOUNT, // 최소 주문 금액 미달 (빗썸 5000원)
+    MARKET_SUSPENDED        // 거래 정지/상장 폐지 코인
 }
+
+/**
+ * 거래 정지 코인 예외
+ */
+class MarketSuspendedException(
+    val market: String,
+    message: String
+) : RuntimeException("[$market] $message")

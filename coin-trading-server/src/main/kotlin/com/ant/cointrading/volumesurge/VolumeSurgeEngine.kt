@@ -628,16 +628,21 @@ class VolumeSurgeEngine(
         val maxTotalAttempts = TradingConstants.MAX_CLOSE_ATTEMPTS + 3  // 원래 시도 + 재시도 3회
 
         if (totalAttempts >= maxTotalAttempts) {
-            log.warn("[$market] ABANDONED 재시도 ${maxTotalAttempts}회 초과 - 수동 개입 필요")
+            log.warn("[$market] ABANDONED 재시도 ${maxTotalAttempts}회 초과 - FAILED로 변경")
             slackNotifier.sendWarning(
                 market,
                 """
-                ABANDONED 포지션 재시도 실패 (${maxTotalAttempts}회 초과)
+                ABANDONED 포지션 재시도 실패 (${maxTotalAttempts}회 초과) - 최종 FAILED
                 진입가: ${position.entryPrice}원
                 수량: ${position.quantity}
-                수동으로 빗썸에서 매도 필요
+                수동으로 빗썸에서 매도 필요 (DB 상태: FAILED)
                 """.trimIndent()
             )
+            // 상태를 FAILED로 변경하여 더 이상 재시도되지 않도록 함
+            position.status = "FAILED"
+            position.exitReason = "ABANDONED_MAX_RETRIES"
+            position.exitTime = Instant.now()
+            tradeRepository.save(position)
             return false
         }
 

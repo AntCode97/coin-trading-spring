@@ -187,4 +187,29 @@ class BithumbApiException(
     fun isInvalidOrder() = errorName in listOf("invalid_volume", "invalid_price", "under_min_total")
     fun isAuthError() = errorName in listOf("invalid_access_key", "jwt_verification", "expired_access_key", "no_authorization_ip")
     fun isOrderNotFound() = errorName == "order_not_found"
+
+    /**
+     * 거래 정지 여부 확인
+     *
+     * 거래 정지 코인 에러 메시지 패턴:
+     * - "입출금이 중지되었습니다"
+     * - "거래가 중지되었습니다"
+     * - "거래 지원 종료"
+     * - "거래가 일시 중단"
+     */
+    fun isTradingSuspended(): Boolean {
+        return errorMessage?.contains("입출금이 중지") == true ||
+                errorMessage?.contains("거래가 중지") == true ||
+                errorMessage?.contains("거래 지원 종료") == true ||
+                errorMessage?.contains("거래가 일시 중단") == true ||
+                errorMessage?.contains("거래가 지원되지 않습니다") == true
+    }
+
+    /**
+     * 마켓 거래 불가능 여부 확인 (종합)
+     */
+    fun isMarketUnavailable(): Boolean {
+        return isTradingSuspended() ||
+                errorName in listOf("market_not_available", "market_closed", "invalid_market")
+    }
 }
