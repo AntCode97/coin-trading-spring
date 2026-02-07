@@ -107,23 +107,21 @@ class StrategySelector(
      * 레짐 확인 없이 최적 전략 결정 (내부 로직)
      */
     private fun determineOptimalStrategy(regime: RegimeAnalysis): TradingStrategy {
-        // 신뢰도가 낮으면 보수적으로 DCA 사용
         if (regime.confidence < 50.0) {
-            return dcaStrategy
+            return gridStrategy
         }
 
         return when (regime.regime) {
-            MarketRegime.BULL_TREND -> breakoutStrategy  // 상승 추세에서는 Breakout 전략
-            MarketRegime.BEAR_TREND -> dcaStrategy  // 하락장에서도 DCA (금액 조절은 리스크 관리에서)
+            MarketRegime.BULL_TREND -> breakoutStrategy
+            MarketRegime.BEAR_TREND -> dcaStrategy
             MarketRegime.SIDEWAYS -> {
-                // 횡보장에서는 변동성에 따라 선택
                 if (regime.atrPercent < 2.0) {
                     gridStrategy
                 } else {
-                    meanReversionStrategy
+                    breakoutStrategy
                 }
             }
-            MarketRegime.HIGH_VOLATILITY -> breakoutStrategy  // 고변동성에서도 Breakout
+            MarketRegime.HIGH_VOLATILITY -> breakoutStrategy
         }
     }
 

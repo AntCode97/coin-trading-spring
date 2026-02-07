@@ -4,6 +4,7 @@ import com.ant.cointrading.api.binance.FundingOpportunity
 import com.ant.cointrading.config.FundingArbitrageProperties
 import com.ant.cointrading.fundingarb.FundingMonitorStatus
 import com.ant.cointrading.fundingarb.FundingRateMonitor
+import com.ant.cointrading.repository.FundingArbPositionEntity
 import com.ant.cointrading.repository.FundingArbPositionRepository
 import com.ant.cointrading.repository.FundingDailyStatsRepository
 import com.ant.cointrading.repository.FundingPaymentRepository
@@ -21,6 +22,11 @@ import java.time.temporal.ChronoUnit
  * - 펀딩 비율 조회
  * - 수동 스캔
  * - 기회 목록 조회
+ *
+ * Phase 2: 엔진 제어 API
+ * - 자동/수동 모드 토글
+ * - 수동 포지션 진입/청산
+ * - 리스크 모니터링
  */
 @RestController
 @RequestMapping("/api/funding")
@@ -30,7 +36,10 @@ class FundingArbitrageController(
     private val fundingRateRepository: FundingRateRepository,
     private val positionRepository: FundingArbPositionRepository,
     private val paymentRepository: FundingPaymentRepository,
-    private val dailyStatsRepository: FundingDailyStatsRepository
+    private val dailyStatsRepository: FundingDailyStatsRepository,
+    private val engine: com.ant.cointrading.fundingarb.FundingRateArbitrageEngine,
+    private val positionManager: com.ant.cointrading.fundingarb.FundingPositionManager,
+    private val riskChecker: com.ant.cointrading.fundingarb.FundingRiskChecker
 ) {
 
     /**
@@ -249,6 +258,107 @@ class FundingArbitrageController(
             } else 0.0
         )
     }
+
+    @PostMapping("/toggle-auto-trading")
+    fun toggleAutoTrading(@RequestBody request: ToggleRequest): Map<String, Any> {
+        properties.autoTradingEnabled = request.enabled
+
+        if (request.enabled) {
+            engine.init()
+        }
+
+        return mapOf(
+            "success" to true,
+            "autoTradingEnabled" to properties.autoTradingEnabled,
+            "message" to if (request.enabled) "자동 거래 활성화" else "자동 거래 비활성화"
+        )
+    }
+
+    @PostMapping("/manual-entry")
+    fun manualEntry(@RequestBody request: ManualEntryRequest): Map<String, Any> {
+        val position = FundingArbPositionEntity(
+            symbol = request.symbol.uppercase(),
+            spotExchange = "BITHUMB",
+            perpExchange = "BINANCE",
+            spotQuantity = request.quantity,
+            perpQuantity = request.quantity,
+            spotEntryPrice = request.spotPrice,
+            perpEntryPrice = request.perpPrice,
+            entryFundingRate = request.fundingRate,
+            entryTime = Instant.now(),
+            status = "OPEN"
+        )
+
+        val result = positionManager.enterPosition(position)
+
+        return mapOf(
+            "success" to result.success,
+            "message" to if (result.success) "수동 진입 완료" else (result.errorMessage ?: "알 수 없는 오류"),
+            "positionId" to (result.orderId ?: "")
+        )
+    }
+
+    @PostMapping("/manual-close")
+    fun manualClose(@RequestBody request: ManualCloseRequest): Map<String, Any> {
+        val position = positionRepository.findById(request.positionId).orElse(null)
+
+        if (position == null) {
+            return mapOf(
+                "success" to false,
+                "message" to "포지션을 찾을 수 없습니다"
+            )
+        }
+
+        val result = positionManager.closePosition(position)
+
+        return mapOf(
+            "success" to result.success,
+            "message" to if (result.success) "수동 청산 완료" else (result.errorMessage ?: "알 수 없는 오류"),
+            "totalPnl" to result.totalPnl,
+            "pnlPercent" to result.pnlPercent
+        )
+    }
+
+    @GetMapping("/risk-check/{positionId}")
+    fun getRiskCheck(@PathVariable positionId: Long): Map<String, Any> {
+        val position = positionRepository.findById(positionId).orElse(null)
+
+        if (position == null) {
+            return mapOf(
+                "error" to "Position not found"
+            )
+        }
+
+        val riskScore = riskChecker.getPositionRiskScore(position)
+        val riskEvents = riskChecker.checkPosition(position)
+
+        return mapOf(
+            "positionId" to positionId,
+            "symbol" to position.symbol,
+            "riskScore" to riskScore,
+            "riskEvents" to riskEvents.map { event ->
+                mapOf(
+                    "type" to event.type,
+                    "severity" to event.severity,
+                    "message" to event.message,
+                    "timestamp" to event.timestamp.toString()
+                )
+            },
+            "shouldClose" to riskChecker.shouldClosePosition(position)
+        )
+    }
+
+    data class ToggleRequest(val enabled: Boolean)
+
+    data class ManualEntryRequest(
+        val symbol: String,
+        val quantity: Double,
+        val spotPrice: Double,
+        val perpPrice: Double,
+        val fundingRate: Double
+    )
+
+    data class ManualCloseRequest(val positionId: Long)
 }
 
 /**

@@ -149,16 +149,11 @@ volumesurge:
   polling-interval-ms: ${VOLUME_SURGE_POLLING_MS:30000}
   position-size-krw: ${VOLUME_SURGE_POSITION_SIZE:10000}
   max-positions: ${VOLUME_SURGE_MAX_POSITIONS:5}
-  # 손절/익절 (수수료 0.08% 고려)
-  # - 손절 -1.5%: 실제 -1.58%
-  # - 익절 +2.5%: 실제 +2.42%
-  # - R:R = 2.42 / 1.58 = 1.53
   stop-loss-percent: ${VOLUME_SURGE_STOP_LOSS:-1.5}
-  take-profit-percent: ${VOLUME_SURGE_TAKE_PROFIT:2.5}
-  trailing-stop-trigger: ${VOLUME_SURGE_TRAILING_TRIGGER:2.5}
+  take-profit-percent: ${VOLUME_SURGE_TAKE_PROFIT:4.0}
+  trailing-stop-trigger: ${VOLUME_SURGE_TRAILING_TRIGGER:1.5}
   trailing-stop-offset: ${VOLUME_SURGE_TRAILING_OFFSET:0.8}
-  # 타임아웃 단축: 더 빠른 회전
-  position-timeout-min: ${VOLUME_SURGE_TIMEOUT_MIN:30}
+  position-timeout-min: ${VOLUME_SURGE_TIMEOUT_MIN:60}
   llm-filter-enabled: ${VOLUME_SURGE_LLM_FILTER:true}
   reflection-cron: ${VOLUME_SURGE_REFLECTION_CRON:0 0 1 * * *}
   # 쿨다운 완화: 5분 → 3분
@@ -168,9 +163,9 @@ volumesurge:
   max-consecutive-losses: ${VOLUME_SURGE_MAX_LOSSES:5}
   daily-max-loss-krw: ${VOLUME_SURGE_DAILY_MAX_LOSS:50000}
   # 진입 조건 완화 (모멘텀 전략)
-  min-confluence-score: ${VOLUME_SURGE_MIN_CONFLUENCE:40}
+  min-confluence-score: ${VOLUME_SURGE_MIN_CONFLUENCE:30}
   max-rsi: ${VOLUME_SURGE_MAX_RSI:80}
-  min-volume-ratio: ${VOLUME_SURGE_MIN_VOLUME_RATIO:1.5}
+  min-volume-ratio: ${VOLUME_SURGE_MIN_VOLUME_RATIO:1.3}
   # 경보 신선도 완화: 5분 → 10분
   alert-freshness-min: ${VOLUME_SURGE_ALERT_FRESHNESS:10}
 
@@ -192,18 +187,12 @@ breakout:
 memescalper:
   enabled: ${MEME_SCALPER_ENABLED:true}
   polling-interval-ms: ${MEME_SCALPER_POLLING_MS:5000}
-  position-size-krw: ${MEME_SCALPER_POSITION_SIZE:6000}
+  position-size-krw: ${MEME_SCALPER_POSITION_SIZE:10000}
   max-positions: ${MEME_SCALPER_MAX_POSITIONS:3}
-  # 손절/익절 (수수료 0.08% 고려: R:R 2:1 달성)
-  # - 손절 -1.3%: 실제 -1.38% (수수료 포함)
-  # - 익절 +1.8%: 실제 +1.72% (수수료 포함)
-  # - R:R = 1.72 / 1.38 = 1.25 (보수적, 높은 승률 목표)
-  stop-loss-percent: ${MEME_SCALPER_STOP_LOSS:-1.3}
-  take-profit-percent: ${MEME_SCALPER_TAKE_PROFIT:1.8}
-  # 타임아웃 단축: 익절 목표 낮춰서 더 빠른 회전
-  position-timeout-min: ${MEME_SCALPER_TIMEOUT_MIN:10}
-  # 트레일링 스탑 (익절 도달 후만 활성화)
-  trailing-stop-trigger: ${MEME_SCALPER_TRAILING_TRIGGER:1.8}
+  stop-loss-percent: ${MEME_SCALPER_STOP_LOSS:-1.5}
+  take-profit-percent: ${MEME_SCALPER_TAKE_PROFIT:2.5}
+  position-timeout-min: ${MEME_SCALPER_TIMEOUT_MIN:20}
+  trailing-stop-trigger: ${MEME_SCALPER_TRAILING_TRIGGER:1.5}
   trailing-stop-offset: ${MEME_SCALPER_TRAILING_OFFSET:0.5}
   # 펌프 감지 조건
   volume-spike-ratio: ${MEME_SCALPER_VOLUME_SPIKE:5.0}

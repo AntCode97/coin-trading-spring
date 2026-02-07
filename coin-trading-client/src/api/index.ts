@@ -150,6 +150,35 @@ export const systemControlApi = {
   scanFundingOpportunities: (): Promise<SystemControlResult> =>
     api.post('/funding/scan').then(res => res.data),
 
+  getFundingStatus: (): Promise<any> =>
+    api.get('/funding/status'),
+
+  toggleFundingAutoTrading: (enabled: boolean): Promise<any> =>
+    api.post('/funding/toggle-auto-trading', null, {
+      params: new URLSearchParams({ enabled: enabled.toString() })
+    }).then(res => res.data),
+
+  manualFundingEntry: (symbol: string, quantity: number, spotPrice: number, perpPrice: number, fundingRate: number): Promise<any> =>
+    api.post('/funding/manual-entry', null, {
+      params: new URLSearchParams({
+        symbol, quantity: quantity.toString(),
+        spotPrice: spotPrice.toString(),
+        perpPrice: perpPrice.toString(),
+        fundingRate: fundingRate.toString()
+      })
+    }).then(res => res.data),
+
+  manualFundingClose: (positionId: number): Promise<any> =>
+    api.post('/funding/manual-close', null, {
+      params: new URLSearchParams({ positionId: positionId.toString() })
+    }).then(res => res.data),
+
+  getFundingRiskCheck: (positionId: number): Promise<any> =>
+    api.get(`/funding/risk-check/${positionId}`),
+
+  getFundingConfig: (): Promise<any> =>
+    api.get('/funding/config'),
+
   // Settings
   refreshCache: (): Promise<SystemControlResult> =>
     api.post('/settings/cache/refresh').then(res => res.data),

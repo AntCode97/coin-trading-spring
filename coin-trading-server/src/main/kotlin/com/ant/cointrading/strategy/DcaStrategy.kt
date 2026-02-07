@@ -125,16 +125,28 @@ class DcaStrategy(
         }
 
         // 2. 매수 조건 체크
+        // 하락장/고변동성에서는 DCA 매수 완전 차단 (손실 방지)
+        if (regime.regime == MarketRegime.BEAR_TREND || regime.regime == MarketRegime.HIGH_VOLATILITY) {
+            return TradingSignal(
+                market = market,
+                action = SignalAction.HOLD,
+                confidence = 100.0,
+                price = currentPrice,
+                reason = "DCA 매수 차단: ${regime.regime.name} 레짐에서는 매수하지 않음",
+                strategy = name,
+                regime = regime.regime.name
+            )
+        }
+
         val shouldBuy = lastBuy == null ||
                 now.toEpochMilli() - lastBuy.toEpochMilli() >= interval
 
         return if (shouldBuy) {
-            // 하락장에서는 신뢰도를 낮춤
             val confidence = when (regime.regime) {
                 MarketRegime.BULL_TREND -> 85.0
                 MarketRegime.SIDEWAYS -> 70.0
-                MarketRegime.BEAR_TREND -> 50.0
-                MarketRegime.HIGH_VOLATILITY -> 40.0
+                MarketRegime.BEAR_TREND -> 0.0
+                MarketRegime.HIGH_VOLATILITY -> 0.0
             }
 
             TradingSignal(
@@ -196,8 +208,8 @@ class DcaStrategy(
                 lastPrice = price,
                 lastPriceUpdate = now,
                 currentPnlPercent = 0.0,
-                takeProfitPercent = 15.0,
-                stopLossPercent = -10.0
+                takeProfitPercent = 8.0,
+                stopLossPercent = -3.0
             )
             dcaPositionRepository.save(position)
             log.info("[$market] DCA 신규 포지션 생성: 수량=${quantity}원, 가격=${price}원")

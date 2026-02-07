@@ -89,9 +89,8 @@ class TradingEngine(
     // 마켓별 상태
     private val marketStates = ConcurrentHashMap<String, MarketState>()
 
-    // 마켓별 마지막 리스크 경고 시간 (중복 알림 방지)
-    // [BUG FIX] compute 메서드로 원자적 업데이트하여 race condition 방지
-    private val lastRiskAlertTime = ConcurrentHashMap<String, Instant>()
+    // 리스크 경고 추적器
+    private val riskAlertTracker = RiskAlertTracker()
 
     // [무한 루프 방지] 마켓별 마지막 매수 시간 (최소 보유 시간 체크용)
     private val lastBuyTime = ConcurrentHashMap<String, Instant>()
@@ -255,16 +254,9 @@ class TradingEngine(
         if (!riskCheck.canTrade) {
             log.warn("[$market] 리스크 체크 실패: ${riskCheck.reason}")
 
-            // [BUG FIX] 원자적 업데이트로 중복 알림 race condition 방지
-            val reason = riskCheck.reason
-            lastRiskAlertTime.compute(market) { _, lastAlert ->
-                val now = Instant.now()
-                if (lastAlert == null || Duration.between(lastAlert, now).toMinutes() >= ALERT_COOLDOWN_MINUTES) {
-                    slackNotifier.sendWarning(market, "리스크 체크 실패: $reason")
-                    now
-                } else {
-                    lastAlert
-                }
+            if (!riskAlertTracker.isInCooldown(market)) {
+                slackNotifier.sendWarning(market, "리스크 체크 실패: ${riskCheck.reason}")
+                riskAlertTracker.recordAlert(market)
             }
             return
         }
