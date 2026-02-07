@@ -11,7 +11,7 @@ import java.nio.charset.StandardCharsets
 
 @Component
 class BinanceFuturesPrivateApi(
-    private val restClient: RestClient,
+    private val binanceRestClient: RestClient,
     private val auth: BinanceFuturesAuth,
     private val properties: BinanceFuturesProperties
 ) {
@@ -47,7 +47,7 @@ class BinanceFuturesPrivateApi(
             val signature = auth.generateSignature(buildQueryString(requestBody))
             val queryString = buildQueryString(requestBody) + "&signature=$signature"
 
-            val result = restClient.post()
+            val result = binanceRestClient.post()
                 .uri("${properties.baseUrl}/fapi/v1/order?$queryString")
                 .headers { headers ->
                     headers.add("X-MBX-APIKEY", properties.apiKey)
@@ -73,7 +73,7 @@ class BinanceFuturesPrivateApi(
             val signature = auth.generateSignature(buildQueryString(requestBody))
             val queryString = buildQueryString(requestBody) + "&signature=$signature"
 
-            restClient.delete()
+            binanceRestClient.delete()
                 .uri("${properties.baseUrl}/fapi/v1/order?$queryString")
                 .headers { headers ->
                     headers.add("X-MBX-APIKEY", properties.apiKey)
@@ -95,7 +95,7 @@ class BinanceFuturesPrivateApi(
             val signature = auth.generateSignature(buildQueryString(requestBody))
             val queryString = buildQueryString(requestBody) + "&signature=$signature"
 
-            restClient.get()
+            binanceRestClient.get()
                 .uri("${properties.baseUrl}/fapi/v1/order?$queryString")
                 .headers { headers ->
                     headers.add("X-MBX-APIKEY", properties.apiKey)
