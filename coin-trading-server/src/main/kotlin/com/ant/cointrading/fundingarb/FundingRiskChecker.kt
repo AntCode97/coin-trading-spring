@@ -256,4 +256,9 @@ class FundingRiskChecker(
             0.0
         }
     }
+
+    fun calculatePositionConfidence(position: FundingArbPositionEntity): Double {
+        val riskScore = getPositionRiskScore(position)
+        return (100.0 - riskScore).coerceIn(0.0, 100.0)
+    }
 }

@@ -1,6 +1,7 @@
 package com.ant.cointrading.fundingarb
 
 import com.ant.cointrading.api.binance.BinanceFuturesApi
+import com.ant.cointrading.api.binance.BinanceFuturesPrivateApi
 import com.ant.cointrading.api.bithumb.BithumbPrivateApi
 import com.ant.cointrading.api.bithumb.TickerInfo
 import com.ant.cointrading.config.FundingArbitrageProperties
@@ -16,6 +17,7 @@ import java.math.BigDecimal
 import java.time.Duration
 import java.time.Instant
 import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.atomic.AtomicInteger
 
 /**
  * 펀딩 차익거래 포지션 관리자
@@ -32,6 +34,7 @@ class FundingPositionManager(
     private val bithumbPrivateApi: BithumbPrivateApi,
     private val bithumbPublicApi: com.ant.cointrading.api.bithumb.BithumbPublicApi,
     private val binanceFuturesApi: BinanceFuturesApi,
+    private val binanceFuturesPrivateApi: BinanceFuturesPrivateApi,
     private val positionRepository: FundingArbPositionRepository,
     private val paymentRepository: FundingPaymentRepository,
     private val properties: FundingArbitrageProperties,
@@ -41,6 +44,10 @@ class FundingPositionManager(
     private val log = LoggerFactory.getLogger(javaClass)
 
     private val activePositions = ConcurrentHashMap<Long, FundingArbPositionEntity>()
+    private val consecutiveFailures = AtomicInteger(0)
+    private val maxConsecutiveFailures = 3
+    @Volatile
+    private var circuitBreakerTrippedUntil: Instant? = null
 
     @Scheduled(fixedDelay = 30_000)
     fun monitorPositions() {
@@ -69,6 +76,11 @@ class FundingPositionManager(
 
     fun enterPosition(position: FundingArbPositionEntity): PositionResult {
         val symbol = position.symbol
+
+        if (isCircuitBreakerOpen()) {
+            return PositionResult.failure(symbol, "서킷 브레이커 발동 중")
+        }
+
         val bithumbMarket = symbol.replace("USDT", "_KRW")
 
         log.info("[$symbol] 델타 뉴트럴 포지션 진입 시작")
@@ -83,6 +95,7 @@ class FundingPositionManager(
         }
 
         if (!perpOrderResult.success) {
+            recordFailure("선물 진입 실패: ${perpOrderResult.errorMessage}")
             return PositionResult.failure(symbol, perpOrderResult.errorMessage ?: "알 수 없는 오류")
         }
 
@@ -101,11 +114,13 @@ class FundingPositionManager(
             log.warn("[$symbol] 선물 포지션 롤백 중...")
             closePerpPosition(symbol, position.perpQuantity ?: position.spotQuantity)
 
+            recordFailure("현물 매수 실패: ${e.message}")
             return PositionResult.failure(symbol, "현물 매수 실패: ${e.message}")
         }
 
         val savedPosition = positionRepository.save(position)
         activePositions[savedPosition.id!!] = savedPosition
+        recordSuccess()
 
         log.info("[$symbol] 델타 뉴트럴 포지션 진입 완료")
         slackNotifier.sendSystemNotification(
@@ -128,6 +143,7 @@ class FundingPositionManager(
             closePerpPosition(symbol, position.perpQuantity ?: position.spotQuantity)
         } catch (e: Exception) {
             log.error("[$symbol] 선물 포지션 청산 실패: ${e.message}")
+            recordFailure("선물 청산 실패: ${e.message}")
             return CloseResult.failure(symbol, "선물 청산 실패: ${e.message}")
         }
 
@@ -163,8 +179,9 @@ class FundingPositionManager(
 
         positionRepository.save(position)
         activePositions.remove(position.id)
+        recordSuccess()
 
-        val pnlPercent = (totalPnL / position.totalTradingCost) * 100
+        val pnlPercent = if (position.totalTradingCost != 0.0) (totalPnL / position.totalTradingCost) * 100 else 0.0
 
         log.info("[$symbol] 포지션 청산 완료")
         log.info("  - 현물 PnL: $spotPnl")
@@ -264,15 +281,43 @@ class FundingPositionManager(
     private fun openPerpShortPosition(symbol: String, quantity: Double, price: Double): OrderExecutionResult {
         log.info("[$symbol] 선물 숏 포지션 진입: 수량=$quantity, 가격=$price")
 
-        // TODO: BinanceFuturesApi에 숏 포지션 메서드 추가 필요
-        return OrderExecutionResult.success(symbol, "SIMULATED")
+        if (!checkSlippage(symbol, price)) {
+            return OrderExecutionResult.failure(symbol, "슬리피지 초과")
+        }
+
+        val qty = BigDecimal.valueOf(quantity).setScale(4, java.math.RoundingMode.DOWN)
+        val result = binanceFuturesPrivateApi.placeOrderWithPartialFill(
+            symbol = symbol,
+            side = "SELL",
+            quantity = qty,
+            orderType = "MARKET"
+        )
+
+        if (result == null || !result.success) {
+            return OrderExecutionResult.failure(symbol, result?.errorMessage ?: "주문 실패")
+        }
+
+        log.info("[$symbol] 선물 숏 진입 완료: executedQty=${result.totalExecutedQty}, orderIds=${result.orderIds}")
+        return OrderExecutionResult.success(symbol, result.orderIds.firstOrNull()?.toString() ?: "N/A")
     }
 
     private fun closePerpPosition(symbol: String, quantity: Double): OrderExecutionResult {
         log.info("[$symbol] 선물 숏 포지션 청산: 수량=$quantity")
 
-        // TODO: BinanceFuturesApi에 선물 청산 메서드 추가 필요
-        return OrderExecutionResult.success(symbol, "SIMULATED")
+        val qty = BigDecimal.valueOf(quantity).setScale(4, java.math.RoundingMode.DOWN)
+        val result = binanceFuturesPrivateApi.placeOrderWithPartialFill(
+            symbol = symbol,
+            side = "BUY",
+            quantity = qty,
+            orderType = "MARKET"
+        )
+
+        if (result == null || !result.success) {
+            return OrderExecutionResult.failure(symbol, result?.errorMessage ?: "청산 실패")
+        }
+
+        log.info("[$symbol] 선물 숏 청산 완료: executedQty=${result.totalExecutedQty}")
+        return OrderExecutionResult.success(symbol, result.orderIds.firstOrNull()?.toString() ?: "N/A")
     }
 
     private fun getCurrentSpotPrice(market: String): Double {
@@ -283,6 +328,79 @@ class FundingPositionManager(
     private fun getPerpPrice(symbol: String): Double {
         val premiumIndex = binanceFuturesApi.getPremiumIndex(symbol)
         return premiumIndex?.indexPrice?.toDouble() ?: 0.0
+    }
+
+    private fun checkSlippage(symbol: String, expectedPrice: Double): Boolean {
+        val currentPrice = getPerpPrice(symbol)
+        if (currentPrice == 0.0) return false
+
+        val slippagePercent = kotlin.math.abs(currentPrice - expectedPrice) / expectedPrice * 100
+        val maxSlippage = properties.slippageBuffer
+
+        if (slippagePercent > maxSlippage) {
+            log.warn("[$symbol] 슬리피지 초과: ${slippagePercent}% > ${maxSlippage}% (expected=$expectedPrice, current=$currentPrice)")
+            return false
+        }
+        return true
+    }
+
+    private fun isCircuitBreakerOpen(): Boolean {
+        val trippedUntil = circuitBreakerTrippedUntil ?: return false
+        if (Instant.now().isAfter(trippedUntil)) {
+            circuitBreakerTrippedUntil = null
+            consecutiveFailures.set(0)
+            log.info("Funding Arbitrage 서킷 브레이커 해제")
+            return false
+        }
+        return true
+    }
+
+    private fun recordSuccess() {
+        consecutiveFailures.set(0)
+    }
+
+    private fun recordFailure(reason: String) {
+        val count = consecutiveFailures.incrementAndGet()
+        if (count >= maxConsecutiveFailures) {
+            circuitBreakerTrippedUntil = Instant.now().plus(Duration.ofHours(1))
+            log.error("Funding Arbitrage 서킷 브레이커 발동: 연속 ${count}회 실패 ($reason). 1시간 거래 중단")
+            slackNotifier.sendSystemNotification(
+                "Funding Arbitrage 서킷 브레이커",
+                "연속 ${count}회 실패로 1시간 거래 중단\n사유: $reason"
+            )
+        }
+    }
+
+    @Scheduled(fixedDelay = 300_000)
+    fun reconcilePositions() {
+        if (!properties.enabled) return
+
+        val openPositions = positionRepository.findByStatus("OPEN")
+        if (openPositions.isEmpty()) return
+
+        openPositions.forEach { position ->
+            try {
+                val currency = position.symbol.replace("USDT", "")
+
+                val spotBalance = bithumbPrivateApi.getBalance(currency)
+                val expectedSpotQty = BigDecimal.valueOf(position.spotQuantity)
+                val spotDiff = spotBalance.subtract(expectedSpotQty).abs()
+                val spotDiffPercent = if (expectedSpotQty > BigDecimal.ZERO) {
+                    spotDiff.divide(expectedSpotQty, 4, java.math.RoundingMode.HALF_UP)
+                        .multiply(BigDecimal(100)).toDouble()
+                } else 0.0
+
+                if (spotDiffPercent > 5.0) {
+                    log.warn("[${position.symbol}] 포지션 불일치: DB=${position.spotQuantity}, 실제=$spotBalance (${spotDiffPercent}%)")
+                    slackNotifier.sendSystemNotification(
+                        "Funding Arbitrage 포지션 불일치",
+                        "[${position.symbol}] 현물 수량 불일치\nDB: ${position.spotQuantity}\n실제: $spotBalance\n차이: ${spotDiffPercent}%"
+                    )
+                }
+            } catch (e: Exception) {
+                log.error("[${position.symbol}] 리콘실리에이션 실패: ${e.message}")
+            }
+        }
     }
 }
 

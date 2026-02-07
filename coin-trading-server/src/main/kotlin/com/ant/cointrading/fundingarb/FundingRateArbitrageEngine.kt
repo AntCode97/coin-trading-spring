@@ -2,6 +2,7 @@ package com.ant.cointrading.fundingarb
 
 import com.ant.cointrading.api.binance.BinanceFuturesApi
 import com.ant.cointrading.api.binance.BinancePremiumIndex
+import com.ant.cointrading.api.bithumb.BithumbPrivateApi
 import com.ant.cointrading.api.bithumb.BithumbPublicApi
 import com.ant.cointrading.api.bithumb.TickerInfo
 import com.ant.cointrading.config.FundingArbitrageProperties
@@ -21,6 +22,7 @@ import java.util.concurrent.ConcurrentHashMap
 @Component
 class FundingRateArbitrageEngine(
     private val bithumbPublicApi: BithumbPublicApi,
+    private val bithumbPrivateApi: BithumbPrivateApi,
     private val binanceFuturesApi: BinanceFuturesApi,
     private val fundingRateRepository: FundingRateRepository,
     private val positionRepository: FundingArbPositionRepository,
@@ -192,13 +194,23 @@ class FundingRateArbitrageEngine(
     }
 
     private fun calculatePositionSize(annualizedRate: Double, spotPrice: Double): Long {
-        val capitalKrw = 10_000_000.0
+        val capitalKrw = try {
+            bithumbPrivateApi.getBalance("KRW").toDouble()
+        } catch (e: Exception) {
+            log.warn("KRW 잔고 조회 실패, 기본값 사용: ${e.message}")
+            0.0
+        }
 
-        val kellyFraction = annualizedRate / 100.0 * properties.maxCapitalRatio
-        val maxPositionKrw = capitalKrw * properties.maxCapitalRatio
+        if (capitalKrw <= 0) {
+            log.warn("사용 가능한 KRW 잔고 없음: $capitalKrw")
+            return 0
+        }
+
+        val maxPositionKrw = capitalKrw * (properties.maxCapitalRatio / 100.0)
+        val rateRatio = (annualizedRate / 100.0).coerceIn(0.0, 1.0)
 
         val positionKrw = minOf(
-            capitalKrw * kellyFraction,
+            capitalKrw * rateRatio * 0.5,
             maxPositionKrw,
             properties.maxSinglePositionKrw.toDouble()
         ).toLong()
