@@ -98,11 +98,63 @@ export interface SyncAction {
   actualQuantity: number;
 }
 
-// System Control API Responses
 export interface SystemControlResult {
   success: boolean;
   message: string;
   data?: Record<string, any>;
+}
+
+export interface FundingStatus {
+  enabled: boolean;
+  autoTradingEnabled: boolean;
+  openPositionsCount: number;
+  openPositions: FundingPositionInfo[];
+  totalPnl: number;
+  lastCheckTime: string;
+}
+
+export interface FundingPositionInfo {
+  id: number;
+  symbol: string;
+  spotPrice: number | null;
+  perpPrice: number | null;
+  entryTime: string;
+  fundingRate: number | null;
+  totalFundingReceived: number;
+  netPnl: number | null;
+  status: string;
+}
+
+export interface FundingOpportunity {
+  exchange: string;
+  symbol: string;
+  fundingRate: string;
+  annualizedRate: string;
+  nextFundingTime: string;
+  minutesUntilFunding: number;
+  markPrice: number;
+  indexPrice: number;
+  isRecommendedEntry: boolean;
+}
+
+export interface FundingScanResult {
+  scanTime: string;
+  totalOpportunities: number;
+  opportunities: FundingOpportunity[];
+}
+
+export interface FundingConfig {
+  enabled: boolean;
+  autoTradingEnabled: boolean;
+  monitoringIntervalMs: number;
+  minAnnualizedRate: number;
+  maxMinutesUntilFunding: number;
+  maxCapitalRatio: number;
+  maxSinglePositionKrw: number;
+  maxPositions: number;
+  maxLeverage: number;
+  highRateAlertThreshold: number;
+  symbols: string[];
 }
 
 export const dashboardApi = {
@@ -147,37 +199,32 @@ export const systemControlApi = {
     api.post('/kimchi-premium/exchange-rate/refresh').then(res => res.data),
 
   // Funding Rate
-  scanFundingOpportunities: (): Promise<SystemControlResult> =>
+  scanFundingOpportunities: (): Promise<FundingScanResult> =>
     api.post('/funding/scan').then(res => res.data),
 
-  getFundingStatus: (): Promise<any> =>
-    api.get('/funding/status'),
+  getFundingStatus: (): Promise<FundingStatus> =>
+    api.get('/funding/status').then(res => res.data),
 
   toggleFundingAutoTrading: (enabled: boolean): Promise<any> =>
-    api.post('/funding/toggle-auto-trading', null, {
-      params: new URLSearchParams({ enabled: enabled.toString() })
-    }).then(res => res.data),
+    api.post('/funding/toggle-auto-trading', { enabled }).then(res => res.data),
 
   manualFundingEntry: (symbol: string, quantity: number, spotPrice: number, perpPrice: number, fundingRate: number): Promise<any> =>
-    api.post('/funding/manual-entry', null, {
-      params: new URLSearchParams({
-        symbol, quantity: quantity.toString(),
-        spotPrice: spotPrice.toString(),
-        perpPrice: perpPrice.toString(),
-        fundingRate: fundingRate.toString()
-      })
+    api.post('/funding/manual-entry', {
+      symbol,
+      quantity,
+      spotPrice,
+      perpPrice,
+      fundingRate
     }).then(res => res.data),
 
   manualFundingClose: (positionId: number): Promise<any> =>
-    api.post('/funding/manual-close', null, {
-      params: new URLSearchParams({ positionId: positionId.toString() })
-    }).then(res => res.data),
+    api.post('/funding/manual-close', { positionId }).then(res => res.data),
 
   getFundingRiskCheck: (positionId: number): Promise<any> =>
-    api.get(`/funding/risk-check/${positionId}`),
+    api.get(`/funding/risk-check/${positionId}`).then(res => res.data),
 
-  getFundingConfig: (): Promise<any> =>
-    api.get('/funding/config'),
+  getFundingConfig: (): Promise<FundingConfig> =>
+    api.get('/funding/config').then(res => res.data),
 
   // Settings
   refreshCache: (): Promise<SystemControlResult> =>

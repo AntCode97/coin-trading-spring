@@ -217,7 +217,7 @@ class FundingRiskChecker(
 
     private fun calculateSpotPnl(position: FundingArbPositionEntity, spotPrice: Double, perpPrice: Double): Double {
         val entryPrice = position.spotEntryPrice ?: 0.0
-        return (perpPrice - entryPrice) * position.spotQuantity
+        return (spotPrice - entryPrice) * position.spotQuantity
     }
 
     private fun calculatePerpPnl(position: FundingArbPositionEntity, perpPrice: Double): Double {

@@ -1811,3 +1811,261 @@ body {
   }
 }
 
+/* ==========================================
+   Funding Arbitrage Panel Styles
+   ========================================== */
+.toss-funding-toggle {
+  padding: 6px 12px;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  color: var(--text-primary);
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all var(--transition-fast);
+}
+
+.toss-funding-toggle.expanded {
+  background: var(--accent-primary);
+  border-color: var(--accent-secondary);
+  color: var(--text-primary);
+}
+
+.funding-arbitrage-panel {
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-lg);
+  padding: var(--space-lg);
+  margin-bottom: var(--space-lg);
+  animation: fadeIn var(--transition-medium);
+}
+
+.funding-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: var(--space-lg);
+  padding-bottom: var(--space-md);
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.funding-title {
+  font-size: 20px;
+  font-weight: 600;
+  color: var(--text-primary);
+  margin: 0;
+}
+
+.funding-toggle-btn {
+  padding: 8px 16px;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-md);
+  color: var(--text-primary);
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all var(--transition-fast);
+}
+
+.funding-toggle-btn.enabled {
+  background: var(--success-primary);
+  border-color: var(--success-secondary);
+  color: var(--text-primary);
+}
+
+.funding-toggle-btn.disabled {
+  background: var(--bg-secondary);
+  border-color: var(--border-default);
+  color: var(--text-secondary);
+}
+
+.funding-status-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: var(--space-md);
+  margin-bottom: var(--space-lg);
+}
+
+.funding-status-item {
+  background: var(--bg-secondary);
+  padding: var(--space-md);
+  border-radius: var(--radius-md);
+}
+
+.funding-label {
+  font-size: 12px;
+  color: var(--text-secondary);
+  display: block;
+  margin-bottom: 4px;
+}
+
+.funding-value {
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.funding-value.status-active {
+  color: var(--success-primary);
+}
+
+.funding-value.status-inactive {
+  color: var(--text-secondary);
+}
+
+.funding-value.pnl-profit {
+  color: var(--success-primary);
+}
+
+.funding-value.pnl-loss {
+  color: var(--danger-primary);
+}
+
+.funding-controls {
+  display: flex;
+  gap: var(--space-md);
+  margin-bottom: var(--space-lg);
+}
+
+.funding-control-btn {
+  flex: 1;
+  padding: 10px;
+  background: var(--accent-primary);
+  border: none;
+  border-radius: var(--radius-md);
+  color: var(--text-primary);
+  font-size: 14px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all var(--transition-fast);
+}
+
+.funding-control-btn:hover:not(:disabled) {
+  background: var(--accent-secondary);
+}
+
+.funding-control-btn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.funding-positions-section,
+.funding-opportunities-section {
+  margin-top: var(--space-lg);
+}
+
+.funding-section-title {
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--text-primary);
+  margin-bottom: var(--space-md);
+}
+
+.funding-positions-list,
+.funding-opportunities-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-md);
+}
+
+.funding-position-card,
+.funding-opp-card {
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-md);
+  padding: var(--space-md);
+  transition: all var(--transition-fast);
+}
+
+.funding-opp-card.recommended {
+  border-color: var(--success-primary);
+  box-shadow: 0 0 10px var(--success-secondary);
+}
+
+.fp-header,
+.fo-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: var(--space-sm);
+}
+
+.fp-symbol,
+.fo-symbol {
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.fp-status {
+  font-size: 11px;
+  font-weight: 500;
+  padding: 4px 8px;
+  border-radius: var(--radius-sm);
+}
+
+.fp-status.OPEN {
+  background: var(--info-secondary);
+  color: var(--info-primary);
+}
+
+.fp-status.CLOSED {
+  background: var(--success-secondary);
+  color: var(--success-primary);
+}
+
+.fp-status.LIQUIDATED {
+  background: var(--danger-secondary);
+  color: var(--danger-primary);
+}
+
+.fo-rate,
+.fo-annualized {
+  font-size: 12px;
+  font-weight: 600;
+  padding: 4px 8px;
+  border-radius: var(--radius-sm);
+  background: var(--bg-tertiary);
+  color: var(--text-primary);
+  margin-left: var(--space-sm);
+}
+
+.fo-annualized {
+  background: var(--warning-secondary);
+  color: var(--warning-primary);
+}
+
+.fp-details,
+.fo-details {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-sm);
+}
+
+.fp-detail,
+.fo-label {
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.fp-value,
+.fo-label:last-child {
+  color: var(--text-primary);
+}
+
+@media (max-width: 768px) {
+  .funding-arbitrage-panel {
+    padding: var(--space-md);
+  }
+
+  .funding-status-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .funding-controls {
+    flex-direction: column;
+  }
+}
+

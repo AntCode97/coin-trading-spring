@@ -2,7 +2,7 @@ package com.ant.cointrading.controller
 
 import com.ant.cointrading.api.binance.FundingOpportunity
 import com.ant.cointrading.config.FundingArbitrageProperties
-import com.ant.cointrading.fundingarb.FundingMonitorStatus
+import com.ant.cointrading.fundingarb.ArbitrageEngineStatus
 import com.ant.cointrading.fundingarb.FundingRateMonitor
 import com.ant.cointrading.repository.FundingArbPositionEntity
 import com.ant.cointrading.repository.FundingArbPositionRepository
@@ -46,8 +46,8 @@ class FundingArbitrageController(
      * 모니터링 상태 조회
      */
     @GetMapping("/status")
-    fun getStatus(): FundingMonitorStatus {
-        return fundingRateMonitor.getStatus()
+    fun getStatus(): ArbitrageEngineStatus {
+        return engine.getStatus()
     }
 
     /**

@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { dashboardApi, systemControlApi } from '../api';
+import { dashboardApi, systemControlApi, type FundingStatus } from '../api';
+
 import './Dashboard.css';
 
 // YYYY-MM-DD 형식으로 날짜 변환
@@ -19,15 +20,28 @@ function addDays(date: Date, days: number): Date {
 }
 
 export default function Dashboard() {
-  const [requestDate, setRequestDate] = useState<string | null>(null); // null = 오늘
+  const [requestDate, setRequestDate] = useState<string | null>(null);
   const [syncing, setSyncing] = useState(false);
   const [systemControlExpanded, setSystemControlExpanded] = useState(false);
   const [executingAction, setExecutingAction] = useState<string | null>(null);
+  const [fundingExpanded, setFundingExpanded] = useState(false);
 
   const { data, isLoading, error, refetch } = useQuery({
     queryKey: ['dashboard', requestDate],
     queryFn: () => dashboardApi.getData(requestDate),
-    refetchInterval: 10000, // 10초마다 새로고침 (긴급 대응용)
+    refetchInterval: 10000,
+  });
+
+  const { data: fundingStatus, refetch: refetchFunding } = useQuery<FundingStatus>({
+    queryKey: ['funding-status'],
+    queryFn: () => systemControlApi.getFundingStatus(),
+    refetchInterval: 30000,
+  });
+
+  const { data: fundingScanResult, refetch: refetchOpportunities } = useQuery<{scanTime: string, totalOpportunities: number, opportunities: any[]}>({
+    queryKey: ['funding-opportunities'],
+    queryFn: () => systemControlApi.scanFundingOpportunities(),
+    enabled: fundingExpanded,
   });
 
   // 현재 조회 중인 날짜 (null이면 오늘)
@@ -127,6 +141,35 @@ export default function Dashboard() {
 
   const isActionExecuting = (actionName: string) => executingAction === actionName;
 
+  const handleFundingToggle = async () => {
+    const newState = !fundingStatus?.autoTradingEnabled;
+    if (!confirm(`자동 거래를 ${newState ? '활성화' : '비활성화'}하시겠습니까?`)) {
+      return;
+    }
+
+    try {
+      await systemControlApi.toggleFundingAutoTrading(newState);
+      alert(newState ? '자동 거래 활성화!' : '자동 거래 비활성화!');
+      refetchFunding();
+    } catch (e: any) {
+      alert('토글 오류: ' + e.message);
+    }
+  };
+
+  const handleFundingScan = async () => {
+    if (!confirm('펀딩 기회를 스캔하시겠습니까?')) {
+      return;
+    }
+
+    try {
+      const result = await systemControlApi.scanFundingOpportunities();
+      alert(`스캔 완료!\n총 ${result.totalOpportunities}개 기회 발견`);
+      refetchOpportunities();
+    } catch (e: any) {
+      alert('스캔 오류: ' + e.message);
+    }
+  };
+
   if (isLoading) {
     return (
       <div className="toss-loading-container">
@@ -217,6 +260,13 @@ export default function Dashboard() {
             >
               ⚙️ 시스템 제어
               <span className={`toss-toggle-arrow ${systemControlExpanded ? 'open' : ''}`}>▼</span>
+            </button>
+            <button
+              className={`toss-funding-toggle ${fundingExpanded ? 'expanded' : ''}`}
+              onClick={() => setFundingExpanded(!fundingExpanded)}
+            >
+              💰 펀딩 차익
+              <span className={`toss-toggle-arrow ${fundingExpanded ? 'open' : ''}`}>▼</span>
             </button>
             <button className="toss-refresh-btn" onClick={() => refetch()}>
               새로고침
@@ -595,6 +645,112 @@ export default function Dashboard() {
           </div>
         </div>
       </div>
+
+      {/* Funding Arbitrage Section */}
+      {fundingExpanded && fundingStatus && (
+        <div className="funding-arbitrage-panel">
+          <div className="funding-header">
+            <h2 className="funding-title">💰 펀딩 비율 차익거래</h2>
+            <button
+              className={`funding-toggle-btn ${fundingStatus.autoTradingEnabled ? 'enabled' : 'disabled'}`}
+              onClick={handleFundingToggle}
+            >
+              {fundingStatus.autoTradingEnabled ? '자동 ON' : '자동 OFF'}
+            </button>
+          </div>
+
+          <div className="funding-status-grid">
+            <div className="funding-status-item">
+              <span className="funding-label">상태</span>
+              <span className={`funding-value ${fundingStatus.enabled ? 'status-active' : 'status-inactive'}`}>
+                {fundingStatus.enabled ? '활성' : '비활성'}
+              </span>
+            </div>
+            <div className="funding-status-item">
+              <span className="funding-label">오픈 포지션</span>
+              <span className="funding-value">{fundingStatus.openPositionsCount}개</span>
+            </div>
+            <div className="funding-status-item">
+              <span className="funding-label">총 PnL</span>
+              <span className={`funding-value ${fundingStatus.totalPnl >= 0 ? 'pnl-profit' : 'pnl-loss'}`}>
+                {fundingStatus.totalPnl.toLocaleString()}원
+              </span>
+            </div>
+          </div>
+
+          <div className="funding-controls">
+            <button
+              className="funding-control-btn"
+              onClick={handleFundingScan}
+              disabled={isActionExecuting('funding-scan')}
+            >
+              {isActionExecuting('funding-scan') ? '스캔 중...' : '📊 기회 스캔'}
+            </button>
+          </div>
+
+          {fundingStatus.openPositionsCount > 0 && (
+            <div className="funding-positions-section">
+              <h3 className="funding-section-title">진입 포지션 ({fundingStatus.openPositionsCount})</h3>
+              <div className="funding-positions-list">
+                {fundingStatus.openPositions.map((position: any) => (
+                  <div key={position.id} className="funding-position-card">
+                    <div className="fp-header">
+                      <span className="fp-symbol">{position.symbol}</span>
+                      <span className={`fp-status ${position.status}`}>{position.status}</span>
+                    </div>
+                    <div className="fp-details">
+                      <div className="fp-detail">
+                        <span className="fp-label">진입가:</span>
+                        <span className="fp-value">
+                          현물 {position.spotPrice?.toLocaleString()} / 선물 {position.perpPrice?.toLocaleString()}
+                        </span>
+                      </div>
+                      <div className="fp-detail">
+                        <span className="fp-label">펀딩 비율:</span>
+                        <span className="fp-value">{position.fundingRate?.toFixed(6)}%</span>
+                      </div>
+                      <div className="fp-detail">
+                        <span className="fp-label">수령 펀딩:</span>
+                        <span className="fp-value">{position.totalFundingReceived.toLocaleString()}원</span>
+                      </div>
+                      {position.netPnl !== null && (
+                        <div className="fp-detail">
+                          <span className="fp-label">PnL:</span>
+                          <span className={`fp-value ${position.netPnl >= 0 ? 'pnl-profit' : 'pnl-loss'}`}>
+                            {position.netPnl.toLocaleString()}원
+                          </span>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {fundingScanResult && fundingScanResult.opportunities.length > 0 && (
+            <div className="funding-opportunities-section">
+              <h3 className="funding-section-title">현재 기회 ({fundingScanResult.opportunities.length})</h3>
+              <div className="funding-opportunities-list">
+                {fundingScanResult.opportunities.map((opp: any, idx: number) => (
+                  <div key={idx} className={`funding-opp-card ${opp.isRecommendedEntry ? 'recommended' : ''}`}>
+                    <div className="fo-header">
+                      <span className="fo-symbol">{opp.symbol}</span>
+                      <span className="fo-rate">{opp.fundingRate}</span>
+                      <span className="fo-annualized">{opp.annualizedRate}</span>
+                    </div>
+                    <div className="fo-details">
+                      <span className="fo-label">{opp.minutesUntilFunding}분 후 펀딩</span>
+                      <span className="fo-label">현물 {opp.markPrice.toLocaleString()}</span>
+                      <span className="fo-label">선물 {opp.indexPrice.toLocaleString()}</span>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
+      )}
     </div>
   );
 }

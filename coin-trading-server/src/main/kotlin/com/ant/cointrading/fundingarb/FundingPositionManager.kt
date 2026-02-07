@@ -246,9 +246,11 @@ class FundingPositionManager(
 
         val currentPerpPrice = getPerpPrice(position.symbol)
         val perpEntryPrice = position.perpEntryPrice ?: return
+        val perpQuantity = position.perpQuantity ?: position.spotQuantity
 
-        val perpPnl = (perpEntryPrice - currentPerpPrice) * (position.perpQuantity ?: position.spotQuantity)
-        val pnlPercent = (perpPnl / (perpEntryPrice * position.perpQuantity!!)) * 100
+        val perpPnl = (perpEntryPrice - currentPerpPrice) * perpQuantity
+        val positionValue = perpEntryPrice * perpQuantity
+        val pnlPercent = if (positionValue != 0.0) (perpPnl / positionValue) * 100 else 0.0
 
         if (pnlPercent < -10) {
             log.error("[$position.symbol] 마진 청산 리스크: 선물 PnL ${pnlPercent}%")
