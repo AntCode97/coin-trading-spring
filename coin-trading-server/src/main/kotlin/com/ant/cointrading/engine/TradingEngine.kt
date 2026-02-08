@@ -10,6 +10,7 @@ import com.ant.cointrading.order.OrderExecutor
 import com.ant.cointrading.order.OrderRejectionReason
 import com.ant.cointrading.regime.HmmRegimeDetector
 import com.ant.cointrading.regime.RegimeDetector
+import com.ant.cointrading.repository.TradeRepository
 import com.ant.cointrading.risk.CircuitBreaker
 import com.ant.cointrading.risk.DailyLossLimitService
 import com.ant.cointrading.service.KeyValueService
@@ -60,6 +61,7 @@ class TradingEngine(
     private val orderExecutor: OrderExecutor,
     private val slackNotifier: SlackNotifier,
     private val globalPositionManager: GlobalPositionManager,
+    private val tradeRepository: TradeRepository,
     private val dailyLossLimitService: DailyLossLimitService
 ) {
 
@@ -371,13 +373,9 @@ class TradingEngine(
 
             slackNotifier.sendTradeNotification(signal, result)
 
-            // 일일 손실 한도에 체결금액 기록 (매도만)
-            // Note: 실제 PnL은 포지션 레벨에서 계산됨
+            // 일일 손실 한도에 실제 실현손익 기록 (매도만)
             if (signal.action == SignalAction.SELL) {
-                val executedValue = (result.executedQuantity?.toDouble() ?: 0.0) * (result.price?.toDouble() ?: 0.0)
-                // 단일 주문 시점에서는 진입가를 알 수 없으므로 체결금액을 기록
-                // 실제 PnL은 포지션 청산 시 계산되어 TradeEntity에 저장됨
-                dailyLossLimitService.recordPnl(0.0)
+                recordDailyPnlFromExecutedTrade(market, result)
             }
         } else {
             // 실패 사유별 처리
@@ -427,6 +425,29 @@ class TradingEngine(
         }
 
         return totalKrw.toDouble()
+    }
+
+    private fun recordDailyPnlFromExecutedTrade(market: String, result: com.ant.cointrading.order.OrderResult) {
+        val orderId = result.orderId
+        if (orderId.isNullOrBlank()) {
+            log.warn("[$market] orderId 없음 - 일일 손익 기록 스킵")
+            return
+        }
+
+        val executedTrade = tradeRepository.findTopByOrderIdOrderByCreatedAtDesc(orderId)
+        if (executedTrade == null) {
+            log.warn("[$market] 체결 거래 레코드 없음(orderId=$orderId) - 일일 손익 기록 스킵")
+            return
+        }
+
+        val pnl = executedTrade.pnl
+        if (pnl == null) {
+            log.warn("[$market] 거래 PnL 없음(orderId=$orderId) - 일일 손익 기록 스킵")
+            return
+        }
+
+        dailyLossLimitService.recordPnl(pnl)
+        log.info("[$market] 일일 손익 반영: pnl=${String.format("%.0f", pnl)}원, orderId=$orderId")
     }
 
     /**

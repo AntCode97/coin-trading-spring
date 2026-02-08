@@ -14,6 +14,7 @@ interface TradeRepository : JpaRepository<TradeEntity, Long> {
     fun findByCreatedAtBetween(start: Instant, end: Instant): List<TradeEntity>
     fun findTop100ByOrderByCreatedAtDesc(): List<TradeEntity>
     fun findBySimulated(simulated: Boolean): List<TradeEntity>
+    fun findTopByOrderIdOrderByCreatedAtDesc(orderId: String): TradeEntity?
     fun findByStrategy(strategy: String): List<TradeEntity>
     fun findByStrategyAndCreatedAtBetween(strategy: String, start: Instant, end: Instant): List<TradeEntity>
 
