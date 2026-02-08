@@ -50,6 +50,12 @@ class OrderExecutor(
 
     private val log = LoggerFactory.getLogger(OrderExecutor::class.java)
 
+    private data class OpenLot(
+        val price: Double,
+        var quantity: Double,
+        val feePerUnit: Double
+    )
+
     companion object {
         // 주문 상태 확인 설정 (OrderExecutor 전용)
         const val MAX_STATUS_CHECK_RETRIES = 3
@@ -425,10 +431,6 @@ class OrderExecutor(
                 throw MarketSuspendedException(signal.market, e.errorMessage ?: "거래가 지원되지 않습니다")
             }
             throw e
-        }
-
-        if (orderResponse == null) {
-            return OrderSubmitResult(null, OrderType.LIMIT, limitPrice, quantity)
         }
 
         // 2. 빠른 체결 확인 (500ms x 2회)
@@ -831,30 +833,26 @@ class OrderExecutor(
             var pnlPercent: Double? = null
 
             if (isSell) {
-                val lastBuy = tradeRepository.findLastBuyByMarket(signal.market)
-                if (lastBuy != null && lastBuy.price > 0) {
-                    val buyPrice = lastBuy.price
-                    val buyFee = lastBuy.fee
+                val pnlResult = calculateSellPnlFromOpenLots(
+                    market = signal.market,
+                    sellPrice = tradePrice,
+                    sellQuantity = sellQuantity,
+                    sellFee = sellFee
+                )
 
-                    // PnL 계산 (수수료 포함)
-                    val pnlResult = PnlCalculator.calculate(
-                        entryPrice = buyPrice,
-                        exitPrice = tradePrice,
-                        quantity = sellQuantity,
-                        entryFee = buyFee,
-                        exitFee = sellFee
-                    )
-
+                if (pnlResult != null) {
                     pnl = pnlResult.pnlAmount
                     pnlPercent = pnlResult.pnlPercent
 
-                    log.info("[${signal.market}] PnL 계산 완료: 매수가=${buyPrice}, 매도가=${tradePrice}, " +
-                            "PnL=${String.format("%.0f", pnl)}원 (${String.format("%.2f", pnlPercent)}%)")
+                    log.info(
+                        "[${signal.market}] PnL 계산 완료(FIFO): " +
+                            "매도가=${tradePrice}, PnL=${String.format("%.0f", pnl)}원 (${String.format("%.2f", pnlPercent)}%)"
+                    )
 
                     // CircuitBreaker에 거래 결과 기록
                     circuitBreaker.recordTradeResult(signal.market, pnlPercent)
                 } else {
-                    log.warn("[${signal.market}] 매칭되는 BUY 거래를 찾을 수 없음 - PnL 계산 불가")
+                    log.warn("[${signal.market}] 오픈 BUY 수량 없음 - PnL 계산 불가")
                 }
             }
 
@@ -896,6 +894,81 @@ class OrderExecutor(
         } else {
             BigDecimal.ZERO
         }
+    }
+
+    /**
+     * SELL 체결의 실현손익 계산 (FIFO 원가 기준)
+     */
+    private fun calculateSellPnlFromOpenLots(
+        market: String,
+        sellPrice: Double,
+        sellQuantity: Double,
+        sellFee: Double
+    ): PnlCalculator.PnlResult? {
+        if (sellQuantity <= 0.0 || sellPrice <= 0.0) return null
+
+        val records = tradeRepository.findByMarketOrderByCreatedAtDesc(market).asReversed()
+        val openLots = mutableListOf<OpenLot>()
+
+        records.forEach { trade ->
+            val qty = trade.quantity
+            if (qty <= 0.0) return@forEach
+
+            when (trade.side.uppercase()) {
+                "BUY" -> {
+                    val feePerUnit = if (qty > 0.0) trade.fee / qty else 0.0
+                    openLots.add(OpenLot(price = trade.price, quantity = qty, feePerUnit = feePerUnit))
+                }
+                "SELL" -> {
+                    var remainToMatch = qty
+                    var lotIndex = 0
+                    while (remainToMatch > 0.0 && lotIndex < openLots.size) {
+                        val lot = openLots[lotIndex]
+                        val consumed = minOf(lot.quantity, remainToMatch)
+                        lot.quantity -= consumed
+                        remainToMatch -= consumed
+                        if (lot.quantity <= 0.0) {
+                            openLots.removeAt(lotIndex)
+                        } else {
+                            lotIndex++
+                        }
+                    }
+                }
+            }
+        }
+
+        var remainSellQty = sellQuantity
+        var matchedQty = 0.0
+        var entryAmount = 0.0
+        var entryFee = 0.0
+        var lotIndex = 0
+
+        while (remainSellQty > 0.0 && lotIndex < openLots.size) {
+            val lot = openLots[lotIndex]
+            if (lot.quantity <= 0.0) {
+                lotIndex++
+                continue
+            }
+
+            val consumed = minOf(lot.quantity, remainSellQty)
+            matchedQty += consumed
+            entryAmount += lot.price * consumed
+            entryFee += lot.feePerUnit * consumed
+            remainSellQty -= consumed
+            lotIndex++
+        }
+
+        if (matchedQty <= 0.0) return null
+
+        val weightedEntryPrice = entryAmount / matchedQty
+        val matchedExitFee = if (sellQuantity > 0.0) sellFee * (matchedQty / sellQuantity) else 0.0
+        return PnlCalculator.calculate(
+            entryPrice = weightedEntryPrice,
+            exitPrice = sellPrice,
+            quantity = matchedQty,
+            entryFee = entryFee,
+            exitFee = matchedExitFee
+        )
     }
 
 }
