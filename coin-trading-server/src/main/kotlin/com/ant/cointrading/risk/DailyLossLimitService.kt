@@ -31,6 +31,8 @@ class DailyLossLimitService(
     companion object {
         private const val KEY_DAILY_LOSS = "risk.daily_loss"
         private const val KEY_DAILY_LOSS_DATE = "risk.daily_loss_date"
+        private const val KEY_INITIAL_CAPITAL = "risk.initial_capital"
+        private const val KEY_INITIAL_CAPITAL_DATE = "risk.initial_capital_date"
         private const val KEY_TRADING_HALTED = "risk.trading_halted"
         private const val KEY_TRADING_HALTED_REASON = "risk.trading_halted_reason"
         private const val DEFAULT_DAILY_LOSS_LIMIT_PERCENT = 5.0  // 자본의 5%
@@ -68,6 +70,8 @@ class DailyLossLimitService(
     private fun restoreState() {
         val savedDate = keyValueService.get(KEY_DAILY_LOSS_DATE)
         val savedLoss = keyValueService.get(KEY_DAILY_LOSS)
+        val savedInitialCapital = keyValueService.get(KEY_INITIAL_CAPITAL)
+        val savedInitialCapitalDate = keyValueService.get(KEY_INITIAL_CAPITAL_DATE)
         val savedHalted = keyValueService.get(KEY_TRADING_HALTED)
         val savedReason = keyValueService.get(KEY_TRADING_HALTED_REASON)
 
@@ -76,6 +80,9 @@ class DailyLossLimitService(
         if (savedDate == today) {
             // 오늘 데이터면 복원
             currentDailyLoss = savedLoss?.toDoubleOrNull() ?: 0.0
+            if (savedInitialCapitalDate == today) {
+                initialCapital = savedInitialCapital?.toDoubleOrNull() ?: initialCapital
+            }
             isTradingHalted = savedHalted?.toBoolean() ?: false
             tradingHaltedReason = savedReason
             todayDate = today
@@ -168,6 +175,27 @@ class DailyLossLimitService(
     fun setInitialCapital(capital: Double) {
         initialCapital = capital
         log.info("초기 자본 설정: ${String.format("%.0f", capital)}원")
+    }
+
+    /**
+     * 금일 기준자본 동기화 (최초 1회)
+     */
+    fun syncInitialCapitalForToday(capital: Double) {
+        if (capital <= 0.0) return
+
+        val today = todayString()
+        val savedDate = keyValueService.get(KEY_INITIAL_CAPITAL_DATE)
+        val savedCapital = keyValueService.get(KEY_INITIAL_CAPITAL)?.toDoubleOrNull()
+
+        if (savedDate == today && savedCapital != null && savedCapital > 0.0) {
+            initialCapital = savedCapital
+            return
+        }
+
+        initialCapital = capital
+        keyValueService.set(KEY_INITIAL_CAPITAL, capital.toString(), "risk", "일일 손실 기준 자본")
+        keyValueService.set(KEY_INITIAL_CAPITAL_DATE, today, "risk", "일일 손실 기준 자본 날짜")
+        log.info("일일 손실 기준자본 동기화: ${String.format("%.0f", capital)}원 ($today)")
     }
 
     /**

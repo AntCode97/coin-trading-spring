@@ -257,6 +257,7 @@ class TradingEngine(
         // 1.5 총 자산 기록 (CircuitBreaker 낙폭 추적용)
         val totalAssetKrw = calculateTotalAssetKrw(balances, state.currentPrice, market)
         circuitBreaker.recordTotalAsset(totalAssetKrw)
+        dailyLossLimitService.syncInitialCapitalForToday(totalAssetKrw)
 
         // 2. 리스크 체크
         val riskCheck = riskManager.canTrade(market, krwBalance)
