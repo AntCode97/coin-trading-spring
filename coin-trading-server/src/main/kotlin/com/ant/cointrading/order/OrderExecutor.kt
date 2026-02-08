@@ -536,7 +536,8 @@ class OrderExecutor(
                 }
                 SignalAction.SELL -> {
                     // 실제 잔고 확인 후 매도 수량 결정
-                    val requestedQuantity = calculateQuantity(signal.price, positionSize)
+                    val priceForSizing = resolveSellSizingPrice(signal, positionSize)
+                    val requestedQuantity = calculateQuantity(priceForSizing, positionSize)
                     val actualQuantity = getActualSellQuantity(signal.market, requestedQuantity)
 
                     if (actualQuantity <= BigDecimal.ZERO) {
@@ -558,6 +559,20 @@ class OrderExecutor(
         }
 
         return OrderSubmitResult(response, OrderType.MARKET, null, null)
+    }
+
+    private fun resolveSellSizingPrice(signal: TradingSignal, positionSize: BigDecimal): BigDecimal {
+        if (signal.price > BigDecimal.ZERO) return signal.price
+
+        return try {
+            marketConditionChecker.checkMarketCondition(signal.market, positionSize)
+                .midPrice
+                ?.takeIf { it > BigDecimal.ZERO }
+                ?: BigDecimal.ONE
+        } catch (e: Exception) {
+            log.warn("[${signal.market}] 매도 수량 산정용 가격 조회 실패: ${e.message}")
+            BigDecimal.ONE
+        }
     }
 
     /**
