@@ -4,10 +4,12 @@ import com.ant.cointrading.config.TradingProperties
 import com.ant.cointrading.model.*
 import com.ant.cointrading.repository.TradeEntity
 import com.ant.cointrading.repository.TradeRepository
+import com.ant.cointrading.util.DateTimeUtils.SEOUL_ZONE
 import org.springframework.stereotype.Component
 import java.math.BigDecimal
 import java.math.RoundingMode
 import java.time.Instant
+import java.time.LocalDate
 import java.time.temporal.ChronoUnit
 import java.util.concurrent.ConcurrentHashMap
 import kotlin.math.max
@@ -288,7 +290,7 @@ class RiskManager(
     }
 
     private fun calculateDailyPnl(market: String): BigDecimal {
-        val today = Instant.now().truncatedTo(ChronoUnit.DAYS)
+        val today = LocalDate.now(SEOUL_ZONE).atStartOfDay(SEOUL_ZONE).toInstant()
 
         return try {
             val todayRecords = tradeRepository.findByMarketAndCreatedAtAfter(market, today)
