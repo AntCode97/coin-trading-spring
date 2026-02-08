@@ -7,6 +7,8 @@ import com.ant.cointrading.model.Candle
 import com.ant.cointrading.strategy.MeanReversionStrategy
 import org.springframework.web.bind.annotation.*
 import java.time.Instant
+import java.time.ZoneId
+import java.time.format.DateTimeFormatter
 
 /**
  * 백테스팅 API (Jim Simons 스타일 검증)
@@ -18,6 +20,12 @@ class BacktestController(
     private val backtestEngine: BacktestEngine,
     private val meanReversionStrategy: MeanReversionStrategy
 ) {
+    companion object {
+        private const val MAX_CANDLES_PER_CALL = 200
+        private const val MAX_PAGINATION_ROUNDS = 20
+        private val BITHUMB_TO_FORMATTER: DateTimeFormatter =
+            DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss").withZone(ZoneId.of("Asia/Seoul"))
+    }
 
     /**
      * 평균 회귀 전략 백테스팅
@@ -32,9 +40,7 @@ class BacktestController(
     ): Map<String, Any?> {
         val normalizedMarket = PositionHelper.convertToApiMarket(market)
         val requestedHours = days.coerceAtLeast(1) * 24
-        val lookbackHours = requestedHours.coerceAtMost(200)
-        val isCapped = requestedHours > lookbackHours
-        val rawCandles = bithumbPublicApi.getOhlcv(normalizedMarket, "minute60", lookbackHours)
+        val rawCandles = fetchHourlyCandles(normalizedMarket, requestedHours)
 
         if (rawCandles.isNullOrEmpty() || rawCandles.size < 100) {
             return mapOf(
@@ -43,8 +49,8 @@ class BacktestController(
                 "strategy" to "MEAN_REVERSION",
                 "period" to "${days}days",
                 "requestedHours" to requestedHours,
-                "usedHours" to lookbackHours,
-                "isCappedByApiLimit" to isCapped,
+                "usedHours" to (rawCandles?.size ?: 0),
+                "isCappedByApiLimit" to ((rawCandles?.size ?: 0) < requestedHours),
                 "message" to "백테스트 데이터 부족 (필요 최소 100개, 현재 ${rawCandles?.size ?: 0}개)"
             )
         }
@@ -72,10 +78,40 @@ class BacktestController(
             "strategy" to "MEAN_REVERSION",
             "period" to "${days}days",
             "requestedHours" to requestedHours,
-            "usedHours" to lookbackHours,
-            "isCappedByApiLimit" to isCapped,
+            "usedHours" to rawCandles.size,
+            "isCappedByApiLimit" to (rawCandles.size < requestedHours),
             "candles" to candles.size,
             "result" to result
         )
+    }
+
+    private fun fetchHourlyCandles(market: String, requestedHours: Int): List<com.ant.cointrading.api.bithumb.CandleResponse>? {
+        val all = mutableListOf<com.ant.cointrading.api.bithumb.CandleResponse>()
+        var cursorTo: String? = null
+        var remaining = requestedHours
+        var rounds = 0
+
+        while (remaining > 0 && rounds < MAX_PAGINATION_ROUNDS) {
+            rounds++
+            val count = remaining.coerceAtMost(MAX_CANDLES_PER_CALL)
+            val batch = bithumbPublicApi.getOhlcv(market, "minute60", count, cursorTo) ?: break
+            if (batch.isEmpty()) break
+
+            all.addAll(batch)
+            remaining -= batch.size
+
+            val oldest = batch.last()
+            cursorTo = BITHUMB_TO_FORMATTER.format(Instant.ofEpochMilli(oldest.timestamp).minusSeconds(1))
+
+            if (batch.size < count) break
+        }
+
+        if (all.isEmpty()) return null
+
+        return all
+            .groupBy { it.timestamp }
+            .values
+            .map { it.first() }
+            .sortedByDescending { it.timestamp }
     }
 }
