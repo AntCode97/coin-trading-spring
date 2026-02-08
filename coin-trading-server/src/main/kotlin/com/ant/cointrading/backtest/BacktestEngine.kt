@@ -91,8 +91,9 @@ class BacktestEngine(
                 // 손절
                 if (pnlPercent <= pos.stopLossPercent) {
                     val exitPrice = currentPrice.toDouble()
+                    val exitValue = exitPrice * pos.quantity
                     val pnl = (exitPrice - pos.entryPrice) * pos.quantity
-                    capital += pnl
+                    capital += exitValue
 
                     trades.add(BacktestTrade(
                         entryTime = pos.entryTime,
@@ -110,8 +111,9 @@ class BacktestEngine(
                 // 익절
                 else if (pnlPercent >= pos.takeProfitPercent) {
                     val exitPrice = currentPrice.toDouble()
+                    val exitValue = exitPrice * pos.quantity
                     val pnl = (exitPrice - pos.entryPrice) * pos.quantity
-                    capital += pnl
+                    capital += exitValue
 
                     trades.add(BacktestTrade(
                         entryTime = pos.entryTime,
@@ -172,7 +174,9 @@ class BacktestEngine(
         position?.let { pos ->
             val lastCandle = candles.last()
             val exitPrice = lastCandle.close.toDouble()
+            val exitValue = exitPrice * pos.quantity
             val pnl = (exitPrice - pos.entryPrice) * pos.quantity
+            capital += exitValue
 
             trades.add(BacktestTrade(
                 entryTime = pos.entryTime,
