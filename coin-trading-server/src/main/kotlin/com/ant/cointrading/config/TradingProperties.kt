@@ -38,5 +38,6 @@ enum class StrategyType {
     MEAN_REVERSION,         // Mean Reversion - Sharpe Ratio 2.3
     ORDER_BOOK_IMBALANCE,   // Order Book Imbalance - 초단기 호가창 불균형 전략
     BREAKOUT,               // Breakout - 볼린저 밴드 돌파 전략
-    BREAKOUT_ENHANCED       // Enhanced Breakout - 4지표 컨플루언스 + ATR 동적 손절
+    BREAKOUT_ENHANCED,      // Enhanced Breakout - 4지표 컨플루언스 + ATR 동적 손절
+    VOLATILITY_SURVIVAL     // Volatility Survival - 급락/급등 장세 전용 반등 생존 전략
 }

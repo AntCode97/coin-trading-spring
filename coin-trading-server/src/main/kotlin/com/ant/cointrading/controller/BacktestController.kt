@@ -5,6 +5,8 @@ import com.ant.cointrading.backtest.BacktestEngine
 import com.ant.cointrading.engine.PositionHelper
 import com.ant.cointrading.model.Candle
 import com.ant.cointrading.strategy.MeanReversionStrategy
+import com.ant.cointrading.strategy.TradingStrategy
+import com.ant.cointrading.strategy.VolatilitySurvivalStrategy
 import org.springframework.web.bind.annotation.*
 import java.time.Instant
 import java.time.ZoneId
@@ -18,7 +20,8 @@ import java.time.format.DateTimeFormatter
 class BacktestController(
     private val bithumbPublicApi: BithumbPublicApi,
     private val backtestEngine: BacktestEngine,
-    private val meanReversionStrategy: MeanReversionStrategy
+    private val meanReversionStrategy: MeanReversionStrategy,
+    private val volatilitySurvivalStrategy: VolatilitySurvivalStrategy
 ) {
     companion object {
         private const val MAX_CANDLES_PER_CALL = 200
@@ -38,6 +41,36 @@ class BacktestController(
         @PathVariable market: String,
         @RequestParam(defaultValue = "30") days: Int
     ): Map<String, Any?> {
+        return runBacktest(
+            market = market,
+            days = days,
+            strategy = meanReversionStrategy
+        )
+    }
+
+    /**
+     * 고변동성 생존 전략 백테스팅
+     *
+     * @param market 마켓 (예: KRW-BTC)
+     * @param days 과거 일수 (기본 30일)
+     */
+    @GetMapping("/volatility-survival/{market}")
+    fun backtestVolatilitySurvival(
+        @PathVariable market: String,
+        @RequestParam(defaultValue = "30") days: Int
+    ): Map<String, Any?> {
+        return runBacktest(
+            market = market,
+            days = days,
+            strategy = volatilitySurvivalStrategy
+        )
+    }
+
+    private fun runBacktest(
+        market: String,
+        days: Int,
+        strategy: TradingStrategy
+    ): Map<String, Any?> {
         val normalizedMarket = PositionHelper.convertToApiMarket(market)
         val requestedHours = days.coerceAtLeast(1) * 24
         val rawCandles = fetchHourlyCandles(normalizedMarket, requestedHours)
@@ -46,7 +79,7 @@ class BacktestController(
             return mapOf(
                 "success" to false,
                 "market" to normalizedMarket,
-                "strategy" to "MEAN_REVERSION",
+                "strategy" to strategy.name,
                 "period" to "${days}days",
                 "requestedHours" to requestedHours,
                 "usedHours" to (rawCandles?.size ?: 0),
@@ -67,7 +100,7 @@ class BacktestController(
         }.reversed()
 
         val result = backtestEngine.runBacktest(
-            strategy = meanReversionStrategy,
+            strategy = strategy,
             market = normalizedMarket,
             candles = candles
         )
@@ -75,7 +108,7 @@ class BacktestController(
         return mapOf(
             "success" to true,
             "market" to normalizedMarket,
-            "strategy" to "MEAN_REVERSION",
+            "strategy" to strategy.name,
             "period" to "${days}days",
             "requestedHours" to requestedHours,
             "usedHours" to rawCandles.size,

@@ -28,7 +28,8 @@ class StrategySelector(
     private val meanReversionStrategy: MeanReversionStrategy,
     private val orderBookImbalanceStrategy: OrderBookImbalanceStrategy,
     private val breakoutStrategy: BreakoutStrategy,
-    private val enhancedBreakoutStrategy: EnhancedBreakoutStrategy
+    private val enhancedBreakoutStrategy: EnhancedBreakoutStrategy,
+    private val volatilitySurvivalStrategy: VolatilitySurvivalStrategy
 ) {
 
     private val log = LoggerFactory.getLogger(StrategySelector::class.java)
@@ -62,6 +63,7 @@ class StrategySelector(
             StrategyType.ORDER_BOOK_IMBALANCE -> orderBookImbalanceStrategy
             StrategyType.BREAKOUT -> breakoutStrategy
             StrategyType.BREAKOUT_ENHANCED -> enhancedBreakoutStrategy
+            StrategyType.VOLATILITY_SURVIVAL -> volatilitySurvivalStrategy
         }
     }
 
@@ -113,7 +115,13 @@ class StrategySelector(
 
         return when (regime.regime) {
             MarketRegime.BULL_TREND -> breakoutStrategy
-            MarketRegime.BEAR_TREND -> dcaStrategy
+            MarketRegime.BEAR_TREND -> {
+                if (regime.atrPercent >= 2.0) {
+                    volatilitySurvivalStrategy
+                } else {
+                    dcaStrategy
+                }
+            }
             MarketRegime.SIDEWAYS -> {
                 if (regime.atrPercent < 2.0) {
                     gridStrategy
@@ -121,7 +129,7 @@ class StrategySelector(
                     breakoutStrategy
                 }
             }
-            MarketRegime.HIGH_VOLATILITY -> breakoutStrategy
+            MarketRegime.HIGH_VOLATILITY -> volatilitySurvivalStrategy
         }
     }
 
@@ -199,7 +207,15 @@ class StrategySelector(
      * 모든 전략 목록
      */
     fun getAllStrategies(): List<TradingStrategy> {
-        return listOf(dcaStrategy, gridStrategy, meanReversionStrategy, orderBookImbalanceStrategy, breakoutStrategy, enhancedBreakoutStrategy)
+        return listOf(
+            dcaStrategy,
+            gridStrategy,
+            meanReversionStrategy,
+            orderBookImbalanceStrategy,
+            breakoutStrategy,
+            enhancedBreakoutStrategy,
+            volatilitySurvivalStrategy
+        )
     }
 
     /**

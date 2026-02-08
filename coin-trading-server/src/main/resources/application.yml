@@ -113,7 +113,7 @@ trading:
   max-drawdown-percent: ${MAX_DRAWDOWN_PERCENT:10.0}
   risk-per-trade-percent: ${RISK_PER_TRADE_PERCENT:1.0}
   strategy:
-    type: ${STRATEGY_TYPE:MEAN_REVERSION}
+    type: ${STRATEGY_TYPE:MEAN_REVERSION} # 대폭락/고변동성 장에서는 VOLATILITY_SURVIVAL 권장
     dca-interval: ${DCA_INTERVAL:86400000}
     grid-levels: ${GRID_LEVELS:5}
     grid-spacing-percent: ${GRID_SPACING_PERCENT:1.0}
@@ -181,6 +181,31 @@ breakout:
   trailing-stop-trigger: ${BREAKOUT_TRAILING_TRIGGER:3.0}
   trailing-stop-offset: ${BREAKOUT_TRAILING_OFFSET:1.0}
   cooldown-minutes: ${BREAKOUT_COOLDOWN:60}
+
+# Volatility Survival 전략 설정 (패닉 반등 선별 + 생존형 리스크 관리)
+volatility-survival:
+  enabled: ${VOLATILITY_SURVIVAL_ENABLED:true}
+  min-candles: ${VOLATILITY_SURVIVAL_MIN_CANDLES:50}
+  rsi-period: ${VOLATILITY_SURVIVAL_RSI_PERIOD:14}
+  rsi-entry-threshold: ${VOLATILITY_SURVIVAL_RSI_ENTRY:33.0}
+  rsi-exit-threshold: ${VOLATILITY_SURVIVAL_RSI_EXIT:67.0}
+  ema-fast-period: ${VOLATILITY_SURVIVAL_EMA_FAST:7}
+  ema-slow-period: ${VOLATILITY_SURVIVAL_EMA_SLOW:21}
+  bollinger-period: ${VOLATILITY_SURVIVAL_BB_PERIOD:20}
+  bollinger-std-dev: ${VOLATILITY_SURVIVAL_BB_STD:2.2}
+  volume-period: ${VOLATILITY_SURVIVAL_VOLUME_PERIOD:20}
+  min-volume-ratio: ${VOLATILITY_SURVIVAL_MIN_VOLUME:1.4}
+  min-atr-percent: ${VOLATILITY_SURVIVAL_MIN_ATR:1.8}
+  panic-lookback-candles: ${VOLATILITY_SURVIVAL_LOOKBACK:8}
+  min-panic-drop-percent: ${VOLATILITY_SURVIVAL_MIN_DROP:2.0}
+  min-rebound-percent: ${VOLATILITY_SURVIVAL_MIN_REBOUND:0.7}
+  lower-band-tolerance-percent: ${VOLATILITY_SURVIVAL_BAND_TOLERANCE:1.0}
+  stop-loss-percent: ${VOLATILITY_SURVIVAL_STOP_LOSS:2.2}
+  take-profit-percent: ${VOLATILITY_SURVIVAL_TAKE_PROFIT:3.8}
+  trailing-activation-percent: ${VOLATILITY_SURVIVAL_TRAIL_ACT:1.2}
+  trailing-offset-percent: ${VOLATILITY_SURVIVAL_TRAIL_OFFSET:1.1}
+  max-holding-minutes: ${VOLATILITY_SURVIVAL_MAX_HOLDING_MIN:240}
+  stop-loss-cooldown-minutes: ${VOLATILITY_SURVIVAL_COOLDOWN_MIN:45}
 
 # Meme Scalper 전략 설정 (세력 코인 초단타 - 펌프앤덤프 스캘핑)
 # Jim Simons 최적화: 수수료 고려, 익절 낮춤, 작은 수익 자주 반복

@@ -1,6 +1,5 @@
 package com.ant.cointrading.mcp.tool
 
-import com.ant.cointrading.config.StrategyConfig
 import com.ant.cointrading.config.StrategyType
 import com.ant.cointrading.config.TradingProperties
 import org.slf4j.LoggerFactory
@@ -104,9 +103,9 @@ class StrategyTools(
         )
     }
 
-    @McpTool(description = "활성 전략을 변경합니다. 사용 가능: DCA, GRID, MEAN_REVERSION")
+    @McpTool(description = "활성 전략을 변경합니다. 사용 가능: DCA, GRID, MEAN_REVERSION, VOLATILITY_SURVIVAL")
     fun setStrategy(
-        @McpToolParam(description = "전략 유형: DCA, GRID, MEAN_REVERSION") strategyType: String
+        @McpToolParam(description = "전략 유형: DCA, GRID, MEAN_REVERSION, VOLATILITY_SURVIVAL") strategyType: String
     ): StrategyChangeResult {
         return try {
             val type = StrategyType.valueOf(strategyType.uppercase())
@@ -120,7 +119,7 @@ class StrategyTools(
         } catch (e: Exception) {
             StrategyChangeResult(
                 success = false,
-                error = "잘못된 전략 유형: $strategyType. 사용 가능: DCA, GRID, MEAN_REVERSION"
+                error = "잘못된 전략 유형: $strategyType. 사용 가능: DCA, GRID, MEAN_REVERSION, VOLATILITY_SURVIVAL"
             )
         }
     }
@@ -261,13 +260,21 @@ class StrategyTools(
                     sharpeRatio = "2.3 (백테스트 기준)",
                     riskLevel = "중간~높음",
                     keyParameters = "meanReversionThreshold, rsiOversold, rsiOverbought"
+                ),
+                StrategyInfo(
+                    type = "VOLATILITY_SURVIVAL",
+                    name = "Volatility Survival",
+                    description = "급락 이후 반등 구간만 선별 진입하고 짧게 청산하는 생존형 전략",
+                    bestFor = "폭락/급등 반복의 고변동성 장세",
+                    riskLevel = "중간",
+                    keyParameters = "minPanicDropPercent, minReboundPercent, stopLossPercent, takeProfitPercent"
                 )
             ),
             recommendations = mapOf(
                 "bullMarket" to "DCA - 꾸준한 매수로 상승장 수익 극대화",
-                "bearMarket" to "DCA (소액) - 저점 매수 기회, 또는 현금 보유",
+                "bearMarket" to "VOLATILITY_SURVIVAL - 패닉 반등만 선별 진입",
                 "sidewaysMarket" to "GRID - 박스권에서 스윙 트레이딩으로 수익",
-                "highVolatility" to "MEAN_REVERSION - 급등/급락 시 역추세 매매"
+                "highVolatility" to "VOLATILITY_SURVIVAL - 손절 짧게, 익절 빠르게"
             )
         )
     }

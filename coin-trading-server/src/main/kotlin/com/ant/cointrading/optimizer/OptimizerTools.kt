@@ -54,7 +54,7 @@ class OptimizerTools(
         @ToolParam(description = "분석 기간 (일 단위, 기본값: 30)") days: Int = 30
     ): String {
         log.info("[Tool] getStrategyPerformance 호출: days=$days")
-        val strategies = listOf("DCA", "GRID", "MEAN_REVERSION")
+        val strategies = listOf("DCA", "GRID", "MEAN_REVERSION", "VOLATILITY_SURVIVAL")
         val result = strategies.associate { strategy ->
             strategy to performanceTools.getStrategyPerformance(strategy, days)
         }
@@ -110,11 +110,11 @@ class OptimizerTools(
 
     @Tool(description = """
         전략 유형을 변경합니다.
-        가능한 값: DCA, GRID, MEAN_REVERSION
+        가능한 값: DCA, GRID, MEAN_REVERSION, VOLATILITY_SURVIVAL
         주의: 전략 변경은 신중하게 결정해야 합니다.
     """)
     fun setStrategy(
-        @ToolParam(description = "새로운 전략 유형 (DCA, GRID, MEAN_REVERSION)") strategyType: String
+        @ToolParam(description = "새로운 전략 유형 (DCA, GRID, MEAN_REVERSION, VOLATILITY_SURVIVAL)") strategyType: String
     ): String {
         log.info("[Tool] setStrategy 호출: strategyType=$strategyType")
         return try {
@@ -122,7 +122,7 @@ class OptimizerTools(
             strategyTools.setStrategy(type.name)
             "전략이 ${type.name}(으)로 변경되었습니다."
         } catch (e: Exception) {
-            "전략 변경 실패: ${e.message}. 가능한 값: DCA, GRID, MEAN_REVERSION"
+            "전략 변경 실패: ${e.message}. 가능한 값: DCA, GRID, MEAN_REVERSION, VOLATILITY_SURVIVAL"
         }
     }
 
