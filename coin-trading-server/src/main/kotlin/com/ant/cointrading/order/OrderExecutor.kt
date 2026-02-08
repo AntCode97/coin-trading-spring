@@ -419,7 +419,7 @@ class OrderExecutor(
                 }
                 SignalAction.SELL -> {
                     val limitPrice = bestBid
-                    val quantity = calculateQuantity(signal.price, positionSize)
+                    val quantity = calculateQuantity(limitPrice, positionSize)
                     log.info("[${signal.market}] 지정가 매도: 가격=$limitPrice, 수량=$quantity")
                     Triple(bithumbPrivateApi.sellLimitOrder(apiMarket, limitPrice, quantity), limitPrice, quantity)
                 }
