@@ -2,6 +2,7 @@ package com.ant.cointrading.engine
 
 import com.ant.cointrading.api.bithumb.BithumbPublicApi
 import com.ant.cointrading.api.bithumb.BithumbPrivateApi
+import com.ant.cointrading.config.TradingConstants
 import com.ant.cointrading.config.TradingProperties
 import com.ant.cointrading.model.*
 import com.ant.cointrading.notification.SlackNotifier
@@ -268,18 +269,18 @@ class TradingEngine(
             return
         }
 
-        // 3. 포지션 사이징
-        val positionSize = riskManager.calculatePositionSize(market, krwBalance, signal.confidence)
+        // 3. 주문 금액 산정
+        val riskBasedPositionSize = riskManager.calculatePositionSize(market, krwBalance, signal.confidence)
+        var orderAmountKrw = riskBasedPositionSize
 
         // [BUG FIX] 매수/매도 모두 잔고 체크 + 중복 매수 방지
-        val parts = market.split("_")
-        val coinSymbol = if (parts.size == 2) parts[0] else market  // BTC_KRW -> BTC
+        val coinSymbol = PositionHelper.extractCoinSymbol(market)
         val coinBalance = balances.find { it.currency == coinSymbol }?.balance ?: BigDecimal.ZERO
 
         if (signal.action == SignalAction.BUY) {
             // KRW 잔고 확인
-            if (positionSize > krwBalance) {
-                log.warn("[$market] KRW 잔고 부족: 필요 $positionSize, 보유 $krwBalance")
+            if (orderAmountKrw > krwBalance) {
+                log.warn("[$market] KRW 잔고 부족: 필요 $orderAmountKrw, 보유 $krwBalance")
                 return
             }
 
@@ -302,10 +303,20 @@ class TradingEngine(
                 log.warn("[$market] $coinSymbol 잔고 없음: $coinBalance - 매도 취소")
                 return
             }
+
+            // SELL은 KRW 잔고가 아니라 보유 코인 가치 기준으로 주문 금액 산정
+            val sellableAmountKrw = coinBalance.multiply(state.currentPrice)
+            if (sellableAmountKrw < TradingConstants.MIN_ORDER_AMOUNT_KRW) {
+                log.warn(
+                    "[$market] 매도 가능 금액 최소 주문 미달: ${sellableAmountKrw}원 < ${TradingConstants.MIN_ORDER_AMOUNT_KRW}원"
+                )
+                return
+            }
+            orderAmountKrw = sellableAmountKrw
         }
 
         // 4. 주문 실행 (MarketConditionChecker는 OrderExecutor 내부에서 호출)
-        val result = orderExecutor.execute(signal, positionSize)
+        val result = orderExecutor.execute(signal, orderAmountKrw)
 
         // 5. 결과 처리
         if (result.success) {
@@ -441,15 +452,8 @@ class TradingEngine(
      */
     private fun fetchCandles(market: String): List<Candle> {
         return try {
-            // market 형식 통일: KRW-BTC, BTC_KRW 등 → KRW-BTC
-            val apiMarket = when {
-                market.contains("-") -> market // 이미 KRW-BTC 형식이면 그대로 사용
-                market.contains("_") -> {
-                    val parts = market.split("_")
-                    if (parts.size == 2) "${parts[1]}-${parts[0]}" else market // BTC_KRW → KRW-BTC
-                }
-                else -> market
-            }
+            // market 형식 통일: KRW-BTC, BTC_KRW, KRW_BTC 등 → KRW-BTC
+            val apiMarket = PositionHelper.convertToApiMarket(market)
 
             val response = bithumbPublicApi.getOhlcv(apiMarket, "minute60", 100)
 
