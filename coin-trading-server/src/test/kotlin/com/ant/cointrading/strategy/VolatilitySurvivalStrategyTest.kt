@@ -1,5 +1,6 @@
 package com.ant.cointrading.strategy
 
+import com.ant.cointrading.backtesting.BasicSimulator
 import com.ant.cointrading.config.VolatilitySurvivalProperties
 import com.ant.cointrading.model.Candle
 import com.ant.cointrading.model.MarketRegime
@@ -123,6 +124,26 @@ class VolatilitySurvivalStrategyTest {
         assertFalse(strategy.isSuitableFor(sideways))
     }
 
+    @Test
+    @DisplayName("합성 고변동성 장세 백테스트에서 양수 수익률을 낸다")
+    fun shouldProducePositiveReturnInSyntheticHighVolatilityBacktest() {
+        val simulator = BasicSimulator()
+        val candles = buildSyntheticWhipsawCandles()
+
+        val result = simulator.simulate(
+            strategy = strategy,
+            historicalData = candles,
+            initialCapital = 1_000_000.0,
+            commissionRate = 0.0004
+        )
+
+        assertTrue(result.totalTrades >= 2, "trades=${result.totalTrades}")
+        assertTrue(result.totalReturn > 0.0, "return=${result.totalReturn}")
+        if (result.profitFactor != null) {
+            assertTrue(result.profitFactor > 1.0, "profitFactor=${result.profitFactor}")
+        }
+    }
+
     private fun highVolatilityRegime(): RegimeAnalysis {
         return RegimeAnalysis(
             regime = MarketRegime.HIGH_VOLATILITY,
@@ -169,6 +190,58 @@ class VolatilitySurvivalStrategyTest {
                 low = BigDecimal.valueOf(low),
                 close = BigDecimal.valueOf(close),
                 volume = BigDecimal.valueOf(baseVolumes[index])
+            )
+        }
+    }
+
+    private fun buildSyntheticWhipsawCandles(): List<Candle> {
+        val closes = mutableListOf<Double>()
+        var price = 155.0
+
+        repeat(60) {
+            closes += price
+            price -= 0.35
+        }
+
+        repeat(5) { cycle ->
+            val cycleBase = 134.0 - (cycle * 3.2)
+            closes += listOf(
+                cycleBase,
+                cycleBase * 0.985,
+                cycleBase * 0.965,
+                cycleBase * 0.942,
+                cycleBase * 0.918,
+                cycleBase * 0.902,
+                cycleBase * 0.909,
+                cycleBase * 0.925,
+                cycleBase * 0.946,
+                cycleBase * 0.966,
+                cycleBase * 0.984,
+                cycleBase * 0.972,
+                cycleBase * 0.954
+            )
+        }
+
+        val start = Instant.parse("2025-12-01T00:00:00Z")
+
+        return closes.mapIndexed { index, close ->
+            val open = if (index == 0) close else closes[index - 1]
+            val high = maxOf(open, close) * 1.007
+            val low = minOf(open, close) * 0.993
+
+            val volume = when {
+                index == 0 -> 1000.0
+                close > closes[index - 1] -> 2600.0
+                else -> 1000.0
+            }
+
+            Candle(
+                timestamp = start.plus(index.toLong(), ChronoUnit.HOURS),
+                open = BigDecimal.valueOf(open),
+                high = BigDecimal.valueOf(high),
+                low = BigDecimal.valueOf(low),
+                close = BigDecimal.valueOf(close),
+                volume = BigDecimal.valueOf(volume)
             )
         }
     }
