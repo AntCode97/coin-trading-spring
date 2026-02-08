@@ -128,6 +128,10 @@ class TradingEngine(
      */
     @Scheduled(fixedDelay = 60_000)
     fun scheduledAnalysis() {
+        if (!isTradingEnabled()) {
+            log.debug("trading.enabled=false - 스케줄 분석 스킵")
+            return
+        }
         try {
             analyzeAllMarkets()
         } catch (e: Exception) {
@@ -199,7 +203,7 @@ class TradingEngine(
         """.trimIndent())
 
         // 운영 킬스위치: trading.enabled=false면 주문 차단
-        if (!keyValueService.getBoolean("trading.enabled", tradingProperties.enabled)) {
+        if (!isTradingEnabled()) {
             log.warn("[$market] trading.enabled=false - 주문 실행 차단")
             return
         }
@@ -591,6 +595,7 @@ class TradingEngine(
      * 수동 분석 트리거
      */
     fun triggerAnalysis(market: String): TradingSignal? {
+        if (!isTradingEnabled()) return null
         return analyzeMarket(market)
     }
 
@@ -710,5 +715,9 @@ class TradingEngine(
 
         log.info(message)
         slackNotifier.sendSystemNotification("레짐 기반 거래 재개", message)
+    }
+
+    private fun isTradingEnabled(): Boolean {
+        return keyValueService.getBoolean("trading.enabled", tradingProperties.enabled)
     }
 }
