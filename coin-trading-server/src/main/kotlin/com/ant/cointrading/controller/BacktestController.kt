@@ -31,7 +31,9 @@ class BacktestController(
         @RequestParam(defaultValue = "30") days: Int
     ): Map<String, Any?> {
         val normalizedMarket = PositionHelper.convertToApiMarket(market)
-        val lookbackHours = (days.coerceAtLeast(1) * 24).coerceAtMost(200)
+        val requestedHours = days.coerceAtLeast(1) * 24
+        val lookbackHours = requestedHours.coerceAtMost(200)
+        val isCapped = requestedHours > lookbackHours
         val rawCandles = bithumbPublicApi.getOhlcv(normalizedMarket, "minute60", lookbackHours)
 
         if (rawCandles.isNullOrEmpty() || rawCandles.size < 100) {
@@ -40,6 +42,9 @@ class BacktestController(
                 "market" to normalizedMarket,
                 "strategy" to "MEAN_REVERSION",
                 "period" to "${days}days",
+                "requestedHours" to requestedHours,
+                "usedHours" to lookbackHours,
+                "isCappedByApiLimit" to isCapped,
                 "message" to "백테스트 데이터 부족 (필요 최소 100개, 현재 ${rawCandles?.size ?: 0}개)"
             )
         }
@@ -66,6 +71,9 @@ class BacktestController(
             "market" to normalizedMarket,
             "strategy" to "MEAN_REVERSION",
             "period" to "${days}days",
+            "requestedHours" to requestedHours,
+            "usedHours" to lookbackHours,
+            "isCappedByApiLimit" to isCapped,
             "candles" to candles.size,
             "result" to result
         )
