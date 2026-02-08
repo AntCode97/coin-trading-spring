@@ -18,7 +18,10 @@ interface TradeRepository : JpaRepository<TradeEntity, Long> {
     fun findByStrategy(strategy: String): List<TradeEntity>
     fun findByStrategyAndCreatedAtBetween(strategy: String, start: Instant, end: Instant): List<TradeEntity>
 
-    @Query("SELECT t FROM TradeEntity t WHERE t.market = :market AND t.side = 'BUY' ORDER BY t.createdAt DESC LIMIT 1")
+    @Query(
+        value = "SELECT * FROM trades t WHERE t.market = :market AND t.side = 'BUY' ORDER BY t.created_at DESC LIMIT 1",
+        nativeQuery = true
+    )
     fun findLastBuyByMarket(@Param("market") market: String): TradeEntity?
 
     @Query("SELECT t.strategy, COUNT(t), SUM(CASE WHEN t.pnl > 0 THEN 1 ELSE 0 END), SUM(COALESCE(t.pnl, 0)) FROM TradeEntity t WHERE t.createdAt >= :since GROUP BY t.strategy")
