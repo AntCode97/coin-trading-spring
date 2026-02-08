@@ -119,6 +119,8 @@ class DailyLossLimitService(
      * @return true=트레이딩 가능, false=손실 한도 도달으로 트레이딩 중지
      */
     fun recordPnl(pnl: Double): Boolean {
+        ensureTodayState()
+
         if (pnl >= 0) {
             // 이익이면 그냥 기록
             if (currentDailyLoss > 0) {
@@ -155,6 +157,8 @@ class DailyLossLimitService(
      * 트레이딩 가능 여부 확인
      */
     fun canTrade(): Boolean {
+        ensureTodayState()
+
         if (isTradingHalted) {
             log.debug("트레이딩 중지됨: $tradingHaltedReason")
             return false
@@ -205,6 +209,13 @@ class DailyLossLimitService(
         val today = todayDate ?: todayString()
         keyValueService.set(KEY_DAILY_LOSS_DATE, today, "risk", "일일 손실 날짜")
         keyValueService.set(KEY_DAILY_LOSS, currentDailyLoss.toString(), "risk", "일일 손실액")
+    }
+
+    private fun ensureTodayState() {
+        val today = todayString()
+        if (todayDate != today) {
+            resetDailyLoss()
+        }
     }
 
     /**
