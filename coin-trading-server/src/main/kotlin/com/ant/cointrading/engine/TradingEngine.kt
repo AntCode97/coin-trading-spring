@@ -198,6 +198,12 @@ class TradingEngine(
             사유: ${signal.reason}
         """.trimIndent())
 
+        // 운영 킬스위치: trading.enabled=false면 주문 차단
+        if (!keyValueService.getBoolean("trading.enabled", tradingProperties.enabled)) {
+            log.warn("[$market] trading.enabled=false - 주문 실행 차단")
+            return
+        }
+
         // 0. 서킷 브레이커 체크 (안전장치)
         val circuitCheck = circuitBreaker.canTrade(market)
         if (!circuitCheck.canTrade) {
