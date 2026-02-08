@@ -265,14 +265,7 @@ class GlobalPositionManager(
 
     private fun doNormalizeMarket(market: String): String {
         // KRW-BTC, BTC_KRW, KRW_BTC 등 다양한 형식을 KRW-BTC로 통일
-        return when {
-            market.contains("-") -> market
-            market.contains("_") -> {
-                val parts = market.split("_")
-                if (parts.size == 2) "${parts[1]}-${parts[0]}" else market
-            }
-            else -> market
-        }
+        return PositionHelper.normalizeMarket(market)
     }
 
     /**

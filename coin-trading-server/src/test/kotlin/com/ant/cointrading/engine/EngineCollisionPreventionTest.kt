@@ -135,8 +135,8 @@ class EngineCollisionPreventionTest {
 
     @Test
     fun `마켓명 정규화가 제대로 작동해야 한다`() {
-        // Given: 다양한 형식의 마켓명 (알려진 한계: KRW_BTC는 BTC-KRW로 변환됨)
-        val markets = listOf("KRW-BTC", "BTC_KRW", "KRW-ETH", "ETH_KRW")
+        // Given: 다양한 형식의 마켓명
+        val markets = listOf("KRW-BTC", "BTC_KRW", "KRW_BTC", "KRW-ETH", "ETH_KRW")
 
         // When: 정규화
         val normalized = markets.map { globalPositionManager.normalizeMarket(it) }
@@ -150,6 +150,7 @@ class EngineCollisionPreventionTest {
         // 추가 검증: 표준 형식들은 KRW-XXX로 변환됨
         assertEquals("KRW-BTC", globalPositionManager.normalizeMarket("KRW-BTC"))
         assertEquals("KRW-BTC", globalPositionManager.normalizeMarket("BTC_KRW"))
+        assertEquals("KRW-BTC", globalPositionManager.normalizeMarket("KRW_BTC"))
     }
 
     @Test

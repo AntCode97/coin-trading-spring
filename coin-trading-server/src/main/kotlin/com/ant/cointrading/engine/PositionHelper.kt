@@ -116,18 +116,54 @@ object PositionHelper {
     }
 
     /**
-     * 코인 심볼 추출
+     * 마켓명 정규화
+     *
+     * 지원 형식:
+     * - KRW-BTC
+     * - BTC_KRW
+     * - KRW_BTC
      */
-    fun extractCoinSymbol(market: String): String = market.removePrefix("KRW-")
+    fun normalizeMarket(market: String): String {
+        val normalized = market.trim().uppercase().replace(" ", "")
 
-    /**
-     * 마켓 형식 변환 (BTC_KRW -> KRW-BTC)
-     */
-    fun convertToApiMarket(market: String): String {
-        return market.split("_").let { parts ->
-            if (parts.size == 2) "${parts[1]}-${parts[0]}" else market
+        fun normalizePair(base: String, quote: String): String {
+            return when {
+                base == "KRW" -> "KRW-$quote"
+                quote == "KRW" -> "KRW-$base"
+                else -> "$base-$quote"
+            }
+        }
+
+        return when {
+            normalized.contains("-") -> {
+                val parts = normalized.split("-")
+                if (parts.size == 2) normalizePair(parts[0], parts[1]) else normalized
+            }
+            normalized.contains("_") -> {
+                val parts = normalized.split("_")
+                if (parts.size == 2) normalizePair(parts[0], parts[1]) else normalized
+            }
+            else -> normalized
         }
     }
+
+    /**
+     * 코인 심볼 추출
+     */
+    fun extractCoinSymbol(market: String): String {
+        val normalized = normalizeMarket(market)
+        if (normalized.startsWith("KRW-")) {
+            return normalized.removePrefix("KRW-")
+        }
+
+        val parts = normalized.split("-")
+        return if (parts.size == 2) parts[0] else normalized
+    }
+
+    /**
+     * API 마켓 형식 변환 (Bithumb: KRW-BTC)
+     */
+    fun convertToApiMarket(market: String): String = normalizeMarket(market)
 
     /**
      * CLOSING 포지션 모니터링 (공통 로직)

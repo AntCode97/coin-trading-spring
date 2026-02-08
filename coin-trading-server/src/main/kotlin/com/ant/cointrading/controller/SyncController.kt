@@ -3,6 +3,7 @@ package com.ant.cointrading.controller
 import com.ant.cointrading.api.bithumb.BithumbPrivateApi
 import com.ant.cointrading.api.bithumb.BithumbPublicApi
 import com.ant.cointrading.dca.DcaEngine
+import com.ant.cointrading.engine.PositionHelper
 import com.ant.cointrading.memescalper.MemeScalperEngine
 import com.ant.cointrading.repository.DcaPositionRepository
 import com.ant.cointrading.repository.MemeScalperTradeRepository
@@ -479,7 +480,7 @@ class SyncController(
 
                 openOrders.forEach { order ->
                     results.add(SyncAction(
-                        market = order.market ?: "UNKNOWN",
+                        market = order.market,
                         strategy = "ORDER",
                         action = "OPEN_ORDER",
                         reason = "미체결 주문 존재",
@@ -510,15 +511,15 @@ class SyncController(
     }
 
     private fun extractCoinSymbol(market: String): String {
-        return market.removePrefix("KRW-")
+        return PositionHelper.extractCoinSymbol(market)
     }
 
     /**
      * DB 마켓 포맷을 API 마켓 포맷으로 변환
-     * DB: KRW-BTC, API: KRW_BTC
+     * DB: KRW-BTC/BTC_KRW/KRW_BTC, API: KRW-BTC
      */
     private fun convertToApiMarket(market: String): String {
-        return market.replace("-", "_")
+        return PositionHelper.convertToApiMarket(market)
     }
 
     /**
