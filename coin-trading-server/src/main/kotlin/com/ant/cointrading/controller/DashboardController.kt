@@ -71,17 +71,18 @@ class DashboardController(
             }
 
             if (currentPrice != null) {
+                val avgBuyPrice = balance.avgBuyPrice
                 val value = balance.balance.toDouble() * currentPrice
                 totalAssetKrw += value
                 CoinAsset(
                     symbol = balance.currency,
                     quantity = balance.balance.toDouble(),
-                    avgPrice = balance.avgBuyPrice?.toDouble() ?: 0.0,
+                    avgPrice = avgBuyPrice?.toDouble() ?: 0.0,
                     currentPrice = currentPrice,
                     value = value,
-                    pnl = (currentPrice - (balance.avgBuyPrice?.toDouble() ?: currentPrice)) * balance.balance.toDouble(),
-                    pnlPercent = if (balance.avgBuyPrice != null && balance.avgBuyPrice!! > BigDecimal.ZERO) {
-                        ((currentPrice - balance.avgBuyPrice.toDouble()) / balance.avgBuyPrice.toDouble()) * 100
+                    pnl = (currentPrice - (avgBuyPrice?.toDouble() ?: currentPrice)) * balance.balance.toDouble(),
+                    pnlPercent = if (avgBuyPrice != null && avgBuyPrice > BigDecimal.ZERO) {
+                        ((currentPrice - avgBuyPrice.toDouble()) / avgBuyPrice.toDouble()) * 100
                     } else 0.0
                 )
             } else null

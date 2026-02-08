@@ -41,7 +41,6 @@ class DailyLossTracker(
     private val log = LoggerFactory.getLogger(javaClass)
 
     companion object {
-        const val DEFAULT_MAX_DAILY_LOSS_PERCENT = 5.0  // 일일 최대 손실 5%
         val ZONE_ID = ZoneId.of("Asia/Seoul")
     }
 
@@ -71,7 +70,7 @@ class DailyLossTracker(
         // 총 PnL (Number를 BigDecimal로 변환)
         val totalPnlNumber = dailyStats?.totalPnl ?: BigDecimal.ZERO
         val totalPnl = when (totalPnlNumber) {
-            is BigDecimal -> totalPnlNumber as BigDecimal
+            is BigDecimal -> totalPnlNumber
             else -> BigDecimal(totalPnlNumber.toString())
         }
 
@@ -86,7 +85,7 @@ class DailyLossTracker(
         }
 
         // 최대 손실 한도
-        val maxLossLimit = tradingProperties.maxDrawdownPercent ?: DEFAULT_MAX_DAILY_LOSS_PERCENT
+        val maxLossLimit = tradingProperties.maxDrawdownPercent
 
         // 한도 초과 여부
         val isLimitExceeded = totalPnlPercent < -maxLossLimit

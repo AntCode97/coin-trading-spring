@@ -205,14 +205,14 @@ abstract class BasePositionEngine(
 
         if (orderResult.success) {
             val actualPrice = orderResult.price?.toDouble() ?: exitPrice
-            if (orderResult.executedQuantity != null && orderResult.executedQuantity!! > BigDecimal.ZERO) {
+            if (orderResult.executedQuantity != null && orderResult.executedQuantity > BigDecimal.ZERO) {
                 finalizeClose(position, actualPrice, reason)
             } else {
                 position.exitOrderId = orderResult.orderId
                 savePosition(position)
             }
         } else {
-            val errorMessage = orderResult.message ?: ""
+            val errorMessage = orderResult.message
 
             when {
                 errorMessage.contains("insufficient", ignoreCase = true) ||

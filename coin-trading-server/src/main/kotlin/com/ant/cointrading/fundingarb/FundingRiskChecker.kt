@@ -177,7 +177,7 @@ class FundingRiskChecker(
         if (spotPnl == 0.0 || perpPnl == 0.0) return false
 
         val totalPnl = spotPnl + perpPnl
-        val maxPnl = maxOf(spotPnl, perpPnl)
+        val maxPnl = maxOf(kotlin.math.abs(spotPnl), kotlin.math.abs(perpPnl))
 
         val imbalanceRatio = kotlin.math.abs(totalPnl) / maxPnl
         return imbalanceRatio > 0.15
@@ -187,7 +187,7 @@ class FundingRiskChecker(
         if (spotPnl == 0.0 || perpPnl == 0.0) return RiskSeverity.LOW
 
         val totalPnl = spotPnl + perpPnl
-        val maxPnl = maxOf(spotPnl, perpPnl)
+        val maxPnl = maxOf(kotlin.math.abs(spotPnl), kotlin.math.abs(perpPnl))
         val imbalanceRatio = kotlin.math.abs(totalPnl) / maxPnl
 
         return when {
@@ -222,7 +222,7 @@ class FundingRiskChecker(
 
     private fun calculatePerpPnl(position: FundingArbPositionEntity, perpPrice: Double): Double {
         val entryPrice = position.perpEntryPrice ?: 0.0
-        return (entryPrice - perpPrice) * (position.perpQuantity ?: position.spotQuantity)
+        return (entryPrice - perpPrice) * position.perpQuantity
     }
 
     private fun getCurrentSpotPrice(symbol: String): Double {

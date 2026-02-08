@@ -170,9 +170,10 @@ class VolumeSurgeProperties {
             restoredCount++
         }
 
-        keyValueService.getBoolean("volumesurge.useDynamicTakeProfit")?.let {
-            log.info("복원: useDynamicTakeProfit = $useDynamicTakeProfit -> $it")
-            useDynamicTakeProfit = it
+        if (keyValueService.exists("volumesurge.useDynamicTakeProfit")) {
+            val restored = keyValueService.getBoolean("volumesurge.useDynamicTakeProfit", useDynamicTakeProfit)
+            log.info("복원: useDynamicTakeProfit = $useDynamicTakeProfit -> $restored")
+            useDynamicTakeProfit = restored
             restoredCount++
         }
 

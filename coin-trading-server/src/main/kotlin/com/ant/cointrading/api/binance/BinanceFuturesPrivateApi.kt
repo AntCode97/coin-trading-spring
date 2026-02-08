@@ -231,7 +231,6 @@ class BinanceFuturesPrivateApi(
 
     private fun buildQueryString(params: Map<String, Any>): String {
         return params.entries
-            .filter { it.value != null }
-            .joinToString("&") { "${it.key}=${URLEncoder.encode(it.value!!.toString(), StandardCharsets.UTF_8)}" }
+            .joinToString("&") { "${it.key}=${URLEncoder.encode(it.value.toString(), StandardCharsets.UTF_8)}" }
     }
 }

@@ -159,7 +159,7 @@ class DcaStrategy(
                 regime = regime.regime.name
             )
         } else {
-            val remainingMs = interval - (now.toEpochMilli() - (lastBuy?.toEpochMilli() ?: 0))
+            val remainingMs = interval - (now.toEpochMilli() - lastBuy.toEpochMilli())
             val remainingHours = remainingMs / 3600000.0
 
             TradingSignal(

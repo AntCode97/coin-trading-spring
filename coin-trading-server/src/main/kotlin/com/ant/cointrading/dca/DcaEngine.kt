@@ -102,7 +102,7 @@ class DcaEngine(
         if (closingPositions.isNotEmpty()) {
             log.warn("CLOSING 포지션 ${closingPositions.size}건 복구 - 청산 재개 시도")
             closingPositions.forEach { position ->
-                log.warn("[${position.market}] CLOSING 포지션 복구: 시도=${position.closeAttemptCount ?: 0}")
+                log.warn("[${position.market}] CLOSING 포지션 복구: 시도=${position.closeAttemptCount}")
                 // CLOSING 상태이면 다음 모니터링 사이클에서 자동 처리됨
             }
         }
@@ -722,7 +722,7 @@ class DcaEngine(
             )
         } else {
             // 부분 체결 - 남은 수량을 위해 OPEN으로 복원 (다음 사이클에서 재청산)
-            val remainingQuantity = position.totalQuantity - (orderResult.actualQuantity ?: 0.0)
+            val remainingQuantity = position.totalQuantity - orderResult.actualQuantity
             log.warn("[$market] 부분 체결: ${orderResult.actualQuantity}/${position.totalQuantity}, 남은 수량=$remainingQuantity")
 
             position.totalQuantity = remainingQuantity.coerceAtLeast(0.0)

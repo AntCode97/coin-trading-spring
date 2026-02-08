@@ -48,7 +48,7 @@ class ManualTradingController(
                 "success" to true,
                 "market" to market,
                 "orderType" to orderType,
-                "orderId" to result?.uuid,
+                "orderId" to result.uuid,
                 "amountKrw" to amountKrw,
                 "quantity" to quantity,
                 "price" to price,
@@ -92,7 +92,7 @@ class ManualTradingController(
                 "success" to true,
                 "market" to market,
                 "orderType" to orderType,
-                "orderId" to result?.uuid,
+                "orderId" to result.uuid,
                 "quantity" to quantity,
                 "price" to price,
                 "message" to "매도 주문이 완료되었습니다"

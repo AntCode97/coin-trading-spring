@@ -76,6 +76,10 @@ class FundingPositionManager(
 
     fun enterPosition(position: FundingArbPositionEntity): PositionResult {
         val symbol = position.symbol
+        val perpEntryPrice = position.perpEntryPrice
+            ?: return PositionResult.failure(symbol, "선물 진입가 없음")
+        val spotEntryPrice = position.spotEntryPrice
+            ?: return PositionResult.failure(symbol, "현물 진입가 없음")
 
         if (isCircuitBreakerOpen()) {
             return PositionResult.failure(symbol, "서킷 브레이커 발동 중")
@@ -88,7 +92,7 @@ class FundingPositionManager(
         log.info("  - 선물: $symbol @ ${position.perpEntryPrice}")
 
         val perpOrderResult = try {
-            openPerpShortPosition(symbol, position.perpQuantity ?: position.spotQuantity, position.perpEntryPrice!!)
+            openPerpShortPosition(symbol, position.perpQuantity, perpEntryPrice)
         } catch (e: Exception) {
             log.error("[$symbol] 선물 포지션 진입 실패: ${e.message}")
             return PositionResult.failure(symbol, "선물 포지션 진입 실패: ${e.message}")
@@ -100,7 +104,7 @@ class FundingPositionManager(
         }
 
         val spotOrderResult = try {
-            val price = java.math.BigDecimal.valueOf(position.spotEntryPrice ?: 0.0)
+            val price = java.math.BigDecimal.valueOf(spotEntryPrice)
             val quantity = java.math.BigDecimal.valueOf(position.spotQuantity)
                 .setScale(8, java.math.RoundingMode.DOWN)
 
@@ -112,7 +116,7 @@ class FundingPositionManager(
             log.error("[$bithumbMarket] 현물 매수 주문 실패: ${e.message}", e)
 
             log.warn("[$symbol] 선물 포지션 롤백 중...")
-            closePerpPosition(symbol, position.perpQuantity ?: position.spotQuantity)
+            closePerpPosition(symbol, position.perpQuantity)
 
             recordFailure("현물 매수 실패: ${e.message}")
             return PositionResult.failure(symbol, "현물 매수 실패: ${e.message}")
@@ -140,7 +144,7 @@ class FundingPositionManager(
         log.info("[$symbol] 포지션 청산 시작")
 
         val perpCloseResult = try {
-            closePerpPosition(symbol, position.perpQuantity ?: position.spotQuantity)
+            closePerpPosition(symbol, position.perpQuantity)
         } catch (e: Exception) {
             log.error("[$symbol] 선물 포지션 청산 실패: ${e.message}")
             recordFailure("선물 청산 실패: ${e.message}")
@@ -165,8 +169,12 @@ class FundingPositionManager(
         }
 
         val currentPerpPrice = java.math.BigDecimal.valueOf(getPerpPrice(symbol))
-        val spotPnl = (currentPerpPrice.toDouble() - position.spotEntryPrice!!) * position.spotQuantity
-        val perpPnl = (position.perpEntryPrice!! - currentPerpPrice.toDouble()) * (position.perpQuantity ?: position.spotQuantity)
+        val spotEntryPrice = position.spotEntryPrice
+            ?: return CloseResult.failure(symbol, "현물 진입가 없음")
+        val perpEntryPrice = position.perpEntryPrice
+            ?: return CloseResult.failure(symbol, "선물 진입가 없음")
+        val spotPnl = (currentPerpPrice.toDouble() - spotEntryPrice) * position.spotQuantity
+        val perpPnl = (perpEntryPrice - currentPerpPrice.toDouble()) * position.perpQuantity
         val fundingPnl = position.totalFundingReceived
         val totalPnL = spotPnl + perpPnl + fundingPnl
 
@@ -235,8 +243,10 @@ class FundingPositionManager(
         val currentSpotPrice = getCurrentSpotPrice(bithumbMarket)
         val currentPerpPrice = getPerpPrice(symbol)
 
-        val spotPnl = (currentSpotPrice - position.spotEntryPrice!!) * position.spotQuantity
-        val perpPnl = (position.perpEntryPrice!! - currentPerpPrice) * (position.perpQuantity ?: position.spotQuantity)
+        val spotEntryPrice = position.spotEntryPrice ?: return
+        val perpEntryPrice = position.perpEntryPrice ?: return
+        val spotPnl = (currentSpotPrice - spotEntryPrice) * position.spotQuantity
+        val perpPnl = (perpEntryPrice - currentPerpPrice) * position.perpQuantity
         val deltaPnl = spotPnl + perpPnl
 
         val hoursHeld = Duration.between(position.entryTime, Instant.now()).toHours()
@@ -263,7 +273,7 @@ class FundingPositionManager(
 
         val currentPerpPrice = getPerpPrice(position.symbol)
         val perpEntryPrice = position.perpEntryPrice ?: return
-        val perpQuantity = position.perpQuantity ?: position.spotQuantity
+        val perpQuantity = position.perpQuantity
 
         val perpPnl = (perpEntryPrice - currentPerpPrice) * perpQuantity
         val positionValue = perpEntryPrice * perpQuantity

@@ -624,7 +624,7 @@ class VolumeSurgeEngine(
         val market = position.market
 
         // 최종 ABANDONED 도달 여부 체크 (closeAttemptCount + 재시도 횟수)
-        val totalAttempts = position.closeAttemptCount + (position.abandonRetryCount ?: 0)
+        val totalAttempts = position.closeAttemptCount + position.abandonRetryCount
         val maxTotalAttempts = TradingConstants.MAX_CLOSE_ATTEMPTS + 3  // 원래 시도 + 재시도 3회
 
         if (totalAttempts >= maxTotalAttempts) {
@@ -667,7 +667,7 @@ class VolumeSurgeEngine(
         // 재시도: closeAttemptCount 리셋 후 다시 청산 시도
         log.info("[$market] ABANDONED 포지션 재시도 #${totalAttempts + 1}")
         position.closeAttemptCount = 0  // 리셋
-        position.abandonRetryCount = (position.abandonRetryCount ?: 0) + 1
+        position.abandonRetryCount += 1
         position.status = "OPEN"  // OPEN으로 복귀하여 청산 로직 타도록
         tradeRepository.save(position)
 
@@ -837,9 +837,7 @@ class VolumeSurgeEngine(
         tradeRepository.save(position)
 
         // 트레일링 추적 제거
-        if (positionId != null) {
-            highestPrices.remove(positionId)
-        }
+        highestPrices.remove(positionId)
 
         // 서킷 브레이커 업데이트
         circuitBreaker.recordPnl(pnlResult.pnlAmount)
