@@ -1,8 +1,12 @@
 package com.ant.cointrading.controller
 
+import com.ant.cointrading.api.bithumb.BithumbPublicApi
 import com.ant.cointrading.backtest.BacktestEngine
+import com.ant.cointrading.engine.PositionHelper
+import com.ant.cointrading.model.Candle
 import com.ant.cointrading.strategy.MeanReversionStrategy
 import org.springframework.web.bind.annotation.*
+import java.time.Instant
 
 /**
  * 백테스팅 API (Jim Simons 스타일 검증)
@@ -10,6 +14,7 @@ import org.springframework.web.bind.annotation.*
 @RestController
 @RequestMapping("/api/backtest")
 class BacktestController(
+    private val bithumbPublicApi: BithumbPublicApi,
     private val backtestEngine: BacktestEngine,
     private val meanReversionStrategy: MeanReversionStrategy
 ) {
@@ -25,15 +30,44 @@ class BacktestController(
         @PathVariable market: String,
         @RequestParam(defaultValue = "30") days: Int
     ): Map<String, Any?> {
-        // TODO: 과거 데이터 가져오기 (Bithumb API or DB)
-        // 현재는 더미 데이터 반환
+        val normalizedMarket = PositionHelper.convertToApiMarket(market)
+        val lookbackHours = (days.coerceAtLeast(1) * 24).coerceAtMost(200)
+        val rawCandles = bithumbPublicApi.getOhlcv(normalizedMarket, "minute60", lookbackHours)
+
+        if (rawCandles.isNullOrEmpty() || rawCandles.size < 100) {
+            return mapOf(
+                "success" to false,
+                "market" to normalizedMarket,
+                "strategy" to "MEAN_REVERSION",
+                "period" to "${days}days",
+                "message" to "백테스트 데이터 부족 (필요 최소 100개, 현재 ${rawCandles?.size ?: 0}개)"
+            )
+        }
+
+        val candles = rawCandles.map {
+            Candle(
+                timestamp = Instant.ofEpochMilli(it.timestamp),
+                open = it.openingPrice,
+                high = it.highPrice,
+                low = it.lowPrice,
+                close = it.tradePrice,
+                volume = it.candleAccTradeVolume
+            )
+        }.reversed()
+
+        val result = backtestEngine.runBacktest(
+            strategy = meanReversionStrategy,
+            market = normalizedMarket,
+            candles = candles
+        )
 
         return mapOf(
-            "market" to market,
+            "success" to true,
+            "market" to normalizedMarket,
             "strategy" to "MEAN_REVERSION",
             "period" to "${days}days",
-            "status" to "TODO",
-            "message" to "과거 데이터 수집 기능 구현 필요"
+            "candles" to candles.size,
+            "result" to result
         )
     }
 }
