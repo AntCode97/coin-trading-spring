@@ -24,7 +24,7 @@ class FundingArbitrageProperties {
     var enabled: Boolean = true
 
     /** 자동 거래 활성화 (false = 모니터링만) */
-    var autoTradingEnabled: Boolean = false
+    var autoTradingEnabled: Boolean = true
 
     // === 모니터링 설정 ===
 
