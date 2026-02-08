@@ -346,7 +346,7 @@ class CircuitBreaker(
 
         for (market in circuitStates.keys) {
             try {
-                val trades = tradeRepository.findByMarketAndCreatedAtAfter(market, since)
+                val trades = tradeRepository.findByMarketAndSimulatedAndCreatedAtAfter(market, false, since)
                 val losses = trades.filter { (it.pnl ?: 0.0) < 0 }
 
                 if (losses.size >= MAX_DAILY_LOSS_COUNT) {

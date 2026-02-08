@@ -852,7 +852,8 @@ class OrderExecutor(
                     market = signal.market,
                     sellPrice = tradePrice,
                     sellQuantity = sellQuantity,
-                    sellFee = sellFee
+                    sellFee = sellFee,
+                    isSimulated = isSimulated
                 )
 
                 if (pnlResult != null) {
@@ -918,11 +919,12 @@ class OrderExecutor(
         market: String,
         sellPrice: Double,
         sellQuantity: Double,
-        sellFee: Double
+        sellFee: Double,
+        isSimulated: Boolean
     ): PnlCalculator.PnlResult? {
         if (sellQuantity <= 0.0 || sellPrice <= 0.0) return null
 
-        val records = tradeRepository.findByMarketOrderByCreatedAtDesc(market).asReversed()
+        val records = tradeRepository.findByMarketAndSimulatedOrderByCreatedAtDesc(market, isSimulated).asReversed()
         val openLots = mutableListOf<OpenLot>()
 
         records.forEach { trade ->

@@ -583,7 +583,7 @@ class TradingEngine(
                 .atStartOfDay(com.ant.cointrading.util.DateTimeUtils.SEOUL_ZONE)
                 .toInstant()
 
-            val trades = tradeRepository.findByMarketAndCreatedAtAfter(market, startOfDay)
+            val trades = tradeRepository.findByMarketAndSimulatedAndCreatedAtAfter(market, false, startOfDay)
             val totalPnl = trades
                 .mapNotNull { it.pnl }
                 .fold(BigDecimal.ZERO) { acc, pnl -> acc + BigDecimal.valueOf(pnl) }

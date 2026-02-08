@@ -268,7 +268,7 @@ class RiskManager(
         val stats = TradeStats()
 
         try {
-            val records = tradeRepository.findByMarketOrderByCreatedAtDesc(market)
+            val records = tradeRepository.findByMarketAndSimulatedOrderByCreatedAtDesc(market, false)
 
             records.forEach { record ->
                 stats.totalTrades++
@@ -293,7 +293,7 @@ class RiskManager(
         val today = LocalDate.now(SEOUL_ZONE).atStartOfDay(SEOUL_ZONE).toInstant()
 
         return try {
-            val todayRecords = tradeRepository.findByMarketAndCreatedAtAfter(market, today)
+            val todayRecords = tradeRepository.findByMarketAndSimulatedAndCreatedAtAfter(market, false, today)
             todayRecords.map { BigDecimal(it.pnl ?: 0.0) }.fold(BigDecimal.ZERO) { acc, pnl -> acc + pnl }
         } catch (e: Exception) {
             BigDecimal.ZERO

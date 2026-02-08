@@ -9,7 +9,9 @@ import java.time.Instant
 @Repository
 interface TradeRepository : JpaRepository<TradeEntity, Long> {
     fun findByMarketOrderByCreatedAtDesc(market: String): List<TradeEntity>
+    fun findByMarketAndSimulatedOrderByCreatedAtDesc(market: String, simulated: Boolean): List<TradeEntity>
     fun findByMarketAndCreatedAtAfter(market: String, after: Instant): List<TradeEntity>
+    fun findByMarketAndSimulatedAndCreatedAtAfter(market: String, simulated: Boolean, after: Instant): List<TradeEntity>
     fun findByMarketAndCreatedAtBetween(market: String, start: Instant, end: Instant): List<TradeEntity>
     fun findByCreatedAtBetween(start: Instant, end: Instant): List<TradeEntity>
     fun findTop100ByOrderByCreatedAtDesc(): List<TradeEntity>
@@ -23,6 +25,15 @@ interface TradeRepository : JpaRepository<TradeEntity, Long> {
         nativeQuery = true
     )
     fun findLastBuyByMarket(@Param("market") market: String): TradeEntity?
+
+    @Query(
+        value = "SELECT * FROM trades t WHERE t.market = :market AND t.side = 'BUY' AND t.simulated = :simulated ORDER BY t.created_at DESC LIMIT 1",
+        nativeQuery = true
+    )
+    fun findLastBuyByMarketAndSimulated(
+        @Param("market") market: String,
+        @Param("simulated") simulated: Boolean
+    ): TradeEntity?
 
     @Query("SELECT t.strategy, COUNT(t), SUM(CASE WHEN t.pnl > 0 THEN 1 ELSE 0 END), SUM(COALESCE(t.pnl, 0)) FROM TradeEntity t WHERE t.createdAt >= :since GROUP BY t.strategy")
     fun getStrategyStats(@Param("since") since: Instant): List<Array<Any>>

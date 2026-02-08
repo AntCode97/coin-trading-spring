@@ -51,7 +51,7 @@ class EngineCollisionPreventionTest {
         // Given: VolumeSurgeEngine이 BTC를 보유 중
         whenever(volumeSurgeRepository.findByMarketAndStatus(eq("KRW-BTC"), eq("OPEN")))
             .thenReturn(listOf(createVolumeSurgeTrade("KRW-BTC")))
-        whenever(tradeRepository.findLastBuyByMarket(eq("KRW-BTC")))
+        whenever(tradeRepository.findLastBuyByMarketAndSimulated(eq("KRW-BTC"), eq(false)))
             .thenReturn(null)
 
         // 캐시 초기화
@@ -68,7 +68,7 @@ class EngineCollisionPreventionTest {
 
         // 검증: 모든 Repository가 호출되었는지 확인
         verify(volumeSurgeRepository).findByMarketAndStatus(eq("KRW-BTC"), eq("OPEN"))
-        verify(tradeRepository).findLastBuyByMarket(eq("KRW-BTC"))
+        verify(tradeRepository).findLastBuyByMarketAndSimulated(eq("KRW-BTC"), eq(false))
     }
 
     @Test
@@ -76,7 +76,7 @@ class EngineCollisionPreventionTest {
         // Given: MemeScalperEngine이 ETH를 보유 중
         whenever(memeScalperRepository.findByMarketAndStatus(eq("KRW-ETH"), eq("OPEN")))
             .thenReturn(listOf(createMemeScalperTrade("KRW-ETH")))
-        whenever(tradeRepository.findLastBuyByMarket(eq("KRW-ETH")))
+        whenever(tradeRepository.findLastBuyByMarketAndSimulated(eq("KRW-ETH"), eq(false)))
             .thenReturn(null)
 
         globalPositionManager.invalidateCache()
@@ -94,7 +94,7 @@ class EngineCollisionPreventionTest {
     @Test
     fun `MemeScalperEngine은 TradingEngine의 포지션을 확인하고 진입을 차단해야 한다`() {
         // Given: TradingEngine이 XRP를 보유 중
-        whenever(tradeRepository.findLastBuyByMarket(eq("KRW-XRP")))
+        whenever(tradeRepository.findLastBuyByMarketAndSimulated(eq("KRW-XRP"), eq(false)))
             .thenReturn(mockk<TradeEntity>())
         whenever(volumeSurgeRepository.findByMarketAndStatus(eq("KRW-XRP"), eq("OPEN")))
             .thenReturn(emptyList())
@@ -116,7 +116,7 @@ class EngineCollisionPreventionTest {
     @Test
     fun `포지션이 없으면 모든 엔진이 진입 가능해야 한다`() {
         // Given: 모든 엔진에 포지션 없음
-        whenever(tradeRepository.findLastBuyByMarket(any())).thenReturn(null)
+        whenever(tradeRepository.findLastBuyByMarketAndSimulated(any(), eq(false))).thenReturn(null)
         whenever(volumeSurgeRepository.findByMarketAndStatus(any(), eq("OPEN"))).thenReturn(emptyList())
         whenever(memeScalperRepository.findByMarketAndStatus(any(), eq("OPEN"))).thenReturn(emptyList())
 
@@ -156,7 +156,7 @@ class EngineCollisionPreventionTest {
     @Test
     fun `캐시 무효화 후 다음 조회 시 DB를 다시 조회해야 한다`() {
         // Given: 처음 조회는 DB 호출
-        whenever(tradeRepository.findLastBuyByMarket(eq("KRW-BTC")))
+        whenever(tradeRepository.findLastBuyByMarketAndSimulated(eq("KRW-BTC"), eq(false)))
             .thenReturn(null)
         whenever(volumeSurgeRepository.findByMarketAndStatus(eq("KRW-BTC"), eq("OPEN")))
             .thenReturn(emptyList())
@@ -167,20 +167,22 @@ class EngineCollisionPreventionTest {
         val firstResult = globalPositionManager.hasOpenPosition("KRW-BTC")
 
         // Then: DB가 호출됨
-        verify(tradeRepository).findLastBuyByMarket(eq("KRW-BTC"))
+        verify(tradeRepository).findLastBuyByMarketAndSimulated(eq("KRW-BTC"), eq(false))
 
         // Given: 캐시 TTL 이내에 두 번째 조회
         val secondResult = globalPositionManager.hasOpenPosition("KRW-BTC")
 
         // Then: DB가 호출되지 않음 (캐시 사용)
-        verify(tradeRepository, org.mockito.Mockito.times(1)).findLastBuyByMarket(any())
+        verify(tradeRepository, org.mockito.Mockito.times(1))
+            .findLastBuyByMarketAndSimulated(any(), eq(false))
 
         // Given: 캐시 무효화 후 세 번째 조회
         globalPositionManager.invalidateCache("KRW-BTC")
         val thirdResult = globalPositionManager.hasOpenPosition("KRW-BTC")
 
         // Then: DB가 다시 호출됨
-        verify(tradeRepository, org.mockito.Mockito.times(2)).findLastBuyByMarket(eq("KRW-BTC"))
+        verify(tradeRepository, org.mockito.Mockito.times(2))
+            .findLastBuyByMarketAndSimulated(eq("KRW-BTC"), eq(false))
     }
 
     // Helper methods

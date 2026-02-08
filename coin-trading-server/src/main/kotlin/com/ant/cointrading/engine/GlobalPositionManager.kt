@@ -73,7 +73,7 @@ class GlobalPositionManager(
             }
 
             // DB에 포지션 존재 확인
-            val hasInTrades = tradeRepository.findLastBuyByMarket(normalizedMarket) != null
+            val hasInTrades = tradeRepository.findLastBuyByMarketAndSimulated(normalizedMarket, false) != null
             val hasInVolumeSurge = volumeSurgeRepository.findByMarketAndStatus(normalizedMarket, "OPEN").isNotEmpty()
             val hasInMemeScalper = memeScalperRepository.findByMarketAndStatus(normalizedMarket, "OPEN").isNotEmpty()
 
@@ -135,7 +135,7 @@ class GlobalPositionManager(
             }
 
             // TradingEngine: 마지막 BUY가 있는데 매칭되는 SELL이 없으면 포지션으로 간주
-            val hasInTrades = tradeRepository.findLastBuyByMarket(normalizedMarket) != null
+            val hasInTrades = tradeRepository.findLastBuyByMarketAndSimulated(normalizedMarket, false) != null
 
             val hasInVolumeSurge = volumeSurgeRepository.findByMarketAndStatus(normalizedMarket, "OPEN").isNotEmpty()
 
@@ -166,7 +166,7 @@ class GlobalPositionManager(
         val countInMemeScalper = memeScalperRepository.countByMarketAndStatus(normalizedMarket, "OPEN").toInt()
 
         // TradingEngine은 포지션당 하나만 가정 (복수 포지션 없음)
-        val hasInTrades = tradeRepository.findLastBuyByMarket(normalizedMarket) != null
+        val hasInTrades = tradeRepository.findLastBuyByMarketAndSimulated(normalizedMarket, false) != null
 
         return countInVolumeSurge + countInMemeScalper + if (hasInTrades) 1 else 0
     }
@@ -181,7 +181,7 @@ class GlobalPositionManager(
 
         // TradingEngine은 BUY 포지션 수
         val tradesCount = TRADING_ENGINE_MARKETS.count { market ->
-            tradeRepository.findLastBuyByMarket(market) != null
+            tradeRepository.findLastBuyByMarketAndSimulated(market, false) != null
         }
 
         return volumeSurgeCount + memeScalperCount + tradesCount
@@ -213,7 +213,7 @@ class GlobalPositionManager(
     fun hasOpenPositionInEngine(market: String, engine: EngineType): Boolean {
         val normalizedMarket = normalizeMarket(market)
         return when (engine) {
-            EngineType.TRADING -> tradeRepository.findLastBuyByMarket(normalizedMarket) != null
+            EngineType.TRADING -> tradeRepository.findLastBuyByMarketAndSimulated(normalizedMarket, false) != null
             EngineType.VOLUME_SURGE -> volumeSurgeRepository.findByMarketAndStatus(normalizedMarket, "OPEN").isNotEmpty()
             EngineType.MEME_SCALPER -> memeScalperRepository.findByMarketAndStatus(normalizedMarket, "OPEN").isNotEmpty()
         }
@@ -229,7 +229,7 @@ class GlobalPositionManager(
 
         // TradingEngine 포지션 (모든 마켓의 마지막 BUY)
         val tradesPositions = TRADING_ENGINE_MARKETS.filter { market ->
-            tradeRepository.findLastBuyByMarket(market) != null
+            tradeRepository.findLastBuyByMarketAndSimulated(market, false) != null
         }
 
         val byMarket = mutableMapOf<String, MutableList<String>>()
