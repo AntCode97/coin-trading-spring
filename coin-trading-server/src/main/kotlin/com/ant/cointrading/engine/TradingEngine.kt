@@ -26,6 +26,7 @@ import org.springframework.stereotype.Component
 import java.math.BigDecimal
 import java.time.Duration
 import java.time.Instant
+import java.time.LocalDate
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicLong
 
@@ -577,9 +578,38 @@ class TradingEngine(
      * 일별 PnL 계산
      */
     private fun calculateDailyPnl(market: String): Pair<BigDecimal, Double> {
-        // RiskManager에서 계산된 일별 통계 활용
-        val stats = riskManager.getRiskStats(market, BigDecimal("1000000"))
-        return Pair(BigDecimal.ZERO, 0.0) // 실제 구현은 TradeRepository에서 조회 필요
+        return try {
+            val startOfDay = LocalDate.now(com.ant.cointrading.util.DateTimeUtils.SEOUL_ZONE)
+                .atStartOfDay(com.ant.cointrading.util.DateTimeUtils.SEOUL_ZONE)
+                .toInstant()
+
+            val trades = tradeRepository.findByMarketAndCreatedAtAfter(market, startOfDay)
+            val totalPnl = trades
+                .mapNotNull { it.pnl }
+                .fold(BigDecimal.ZERO) { acc, pnl -> acc + BigDecimal.valueOf(pnl) }
+
+            val currentBalance = try {
+                bithumbPrivateApi.getBalances()
+                    ?.find { it.currency == "KRW" }
+                    ?.balance
+                    ?: BigDecimal.ZERO
+            } catch (_: Exception) {
+                BigDecimal.ZERO
+            }
+
+            val pnlPercent = if (currentBalance > BigDecimal.ZERO) {
+                totalPnl.divide(currentBalance, 6, java.math.RoundingMode.HALF_UP)
+                    .multiply(BigDecimal(100))
+                    .toDouble()
+            } else {
+                0.0
+            }
+
+            Pair(totalPnl, pnlPercent)
+        } catch (e: Exception) {
+            log.warn("[$market] 일별 PnL 계산 실패: ${e.message}")
+            Pair(BigDecimal.ZERO, 0.0)
+        }
     }
 
     /**
