@@ -34,6 +34,7 @@ class RiskManager(
         private const val STATS_CACHE_TTL_SECONDS = 30L
         private const val REALIZED_TRADE_SIDE = "SELL"
         private val MIN_ORDER_AMOUNT_KRW = TradingConstants.MIN_ORDER_AMOUNT_KRW
+        private const val ACCOUNT_PEAK_KEY = "__ACCOUNT__"
     }
 
 
@@ -72,9 +73,9 @@ class RiskManager(
         val config = tradingProperties
 
         // 1. 최대 낙폭 체크
-        val peak = peakCapital.getOrPut(market) { currentBalance }
+        val peak = peakCapital.getOrPut(ACCOUNT_PEAK_KEY) { currentBalance }
         if (currentBalance > peak) {
-            peakCapital[market] = currentBalance
+            peakCapital[ACCOUNT_PEAK_KEY] = currentBalance
         }
 
         val drawdown = if (peak > BigDecimal.ZERO) {
@@ -241,7 +242,7 @@ class RiskManager(
      */
     fun getRiskStats(market: String, currentBalance: BigDecimal): RiskStats {
         val stats = getStats(market)
-        val peak = peakCapital[market] ?: currentBalance
+        val peak = peakCapital[ACCOUNT_PEAK_KEY] ?: currentBalance
 
         val currentDrawdown = if (peak > BigDecimal.ZERO) {
             ((peak - currentBalance) / peak * BigDecimal(100)).toDouble()
