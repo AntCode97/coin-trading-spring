@@ -211,7 +211,7 @@ volatility-survival:
 # Jim Simons 최적화: 수수료 고려, 익절 낮춤, 작은 수익 자주 반복
 memescalper:
   enabled: ${MEME_SCALPER_ENABLED:true}
-  polling-interval-ms: ${MEME_SCALPER_POLLING_MS:5000}
+  polling-interval-ms: ${MEME_SCALPER_POLLING_MS:15000}
   position-size-krw: ${MEME_SCALPER_POSITION_SIZE:10000}
   max-positions: ${MEME_SCALPER_MAX_POSITIONS:3}
   stop-loss-percent: ${MEME_SCALPER_STOP_LOSS:-1.5}

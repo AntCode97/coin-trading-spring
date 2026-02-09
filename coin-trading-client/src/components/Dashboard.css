@@ -710,8 +710,8 @@ body {
 }
 
 .toss-risk-metric.critical {
-  border-color: rgba(239, 68, 68, 0.45);
-  background: rgba(239, 68, 68, 0.08);
+  border-color: rgba(239, 68, 68, 0.26);
+  background: rgba(239, 68, 68, 0.03);
 }
 
 .toss-risk-metric .metric-label {
@@ -780,8 +780,8 @@ body {
 }
 
 .toss-risk-chip.danger {
-  background: rgba(239, 68, 68, 0.18);
-  color: #F87171;
+  background: rgba(239, 68, 68, 0.12);
+  color: #FCA5A5;
 }
 
 .toss-empty-state.compact {
@@ -1746,9 +1746,9 @@ body {
 
 /* 큰 손실 포지션 강조 */
 .toss-position-danger {
-  background: var(--danger-secondary);
-  border-left: 3px solid var(--danger-primary);
-  animation: danger-flash 2s ease-in-out 3;
+  background: linear-gradient(90deg, rgba(239, 68, 68, 0.10) 0%, rgba(239, 68, 68, 0.03) 52%, transparent 100%);
+  border-left: 3px solid rgba(239, 68, 68, 0.66);
+  animation: none;
 }
 
 @keyframes danger-flash {
@@ -1757,9 +1757,10 @@ body {
 }
 
 .toss-pnl-box.toss-pnl-danger {
-  background: var(--danger-primary);
-  color: var(--text-inverse);
-  animation: pnl-pulse 1s ease-in-out infinite;
+  background: rgba(239, 68, 68, 0.12);
+  border-color: rgba(239, 68, 68, 0.45);
+  color: var(--text-primary);
+  animation: none;
 }
 
 @keyframes pnl-pulse {
