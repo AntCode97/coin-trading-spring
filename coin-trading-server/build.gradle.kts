@@ -111,7 +111,7 @@ tasks.register<Copy>("copyReactBuild") {
     description = "Copy React build output to Spring Boot static resources"
 
     val reactDistDir = file("${rootProject.projectDir}/coin-trading-client/dist")
-    val staticDir = file("${project.projectDir}/src/main/resources/static")
+    val generatedStaticDir = layout.buildDirectory.dir("generated/resources/react-static").get().asFile
 
     // React 빌드 output이 존재할 때만 복사
     onlyIf { reactDistDir.exists() }
@@ -119,7 +119,7 @@ tasks.register<Copy>("copyReactBuild") {
     from(reactDistDir) {
         include("**/*")
     }
-    into(staticDir)
+    into(generatedStaticDir)
 }
 
 // bootJar 전에 반드시 copyReactBuild 실행 (순서 중요!)
@@ -128,10 +128,17 @@ tasks.named("bootJar") {
 }
 
 // processResources도 copyReactBuild 후에 실행되도록 설정
-tasks.named("processResources") {
+tasks.named<org.gradle.language.jvm.tasks.ProcessResources>("processResources") {
     // copyReactBuild가 있다면 먼저 실행
     tasks.findByName("copyReactBuild")?.let {
         dependsOn(it)
     }
-}
 
+    // Git 추적 정적 디렉토리는 패킹에서 제외하고 generated 결과만 사용
+    exclude("static/**")
+
+    // Git 추적 디렉토리(src/main/resources/static)가 아니라 generated 리소스만 병합
+    from(layout.buildDirectory.dir("generated/resources/react-static")) {
+        into("static")
+    }
+}

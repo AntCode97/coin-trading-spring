@@ -55,3 +55,7 @@ bin/
 
 ### Playwright MCP ###
 .playwright-mcp/
+
+### Generated Static Assets ###
+coin-trading-server/src/main/resources/static/assets/
+coin-trading-server/src/main/resources/static/index.html
