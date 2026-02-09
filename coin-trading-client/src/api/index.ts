@@ -157,6 +157,30 @@ export interface FundingConfig {
   symbols: string[];
 }
 
+function normalizeFundingStatus(raw: any): FundingStatus {
+  const openPositions = Array.isArray(raw?.openPositions) ? raw.openPositions : [];
+  const totalPnlRaw = raw?.totalPnl ?? raw?.totalPnL ?? 0;
+
+  return {
+    enabled: Boolean(raw?.enabled),
+    autoTradingEnabled: Boolean(raw?.autoTradingEnabled),
+    openPositionsCount: Number(raw?.openPositionsCount ?? openPositions.length ?? 0),
+    openPositions: openPositions,
+    totalPnl: Number(totalPnlRaw ?? 0),
+    lastCheckTime: String(raw?.lastCheckTime ?? ''),
+  };
+}
+
+function normalizeFundingScanResult(raw: any): FundingScanResult {
+  const opportunities = Array.isArray(raw?.opportunities) ? raw.opportunities : [];
+
+  return {
+    scanTime: String(raw?.scanTime ?? ''),
+    totalOpportunities: Number(raw?.totalOpportunities ?? opportunities.length ?? 0),
+    opportunities,
+  };
+}
+
 export const dashboardApi = {
   getData: (date: string | null = null): Promise<DashboardData> =>
     api.get('/dashboard', { params: date ? { date } : {} }).then(res => res.data),
@@ -200,10 +224,10 @@ export const systemControlApi = {
 
   // Funding Rate
   scanFundingOpportunities: (): Promise<FundingScanResult> =>
-    api.post('/funding/scan').then(res => res.data),
+    api.post('/funding/scan').then(res => normalizeFundingScanResult(res.data)),
 
   getFundingStatus: (): Promise<FundingStatus> =>
-    api.get('/funding/status').then(res => res.data),
+    api.get('/funding/status').then(res => normalizeFundingStatus(res.data)),
 
   toggleFundingAutoTrading: (enabled: boolean): Promise<any> =>
     api.post('/funding/toggle-auto-trading', { enabled }).then(res => res.data),

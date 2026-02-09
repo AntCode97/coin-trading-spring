@@ -122,6 +122,13 @@ function extractActionMessage(result: ActionResponse): string {
   return '완료되었습니다.';
 }
 
+function safeNumber(value: unknown, fallback = 0): number {
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    return value;
+  }
+  return fallback;
+}
+
 export default function Dashboard() {
   const [requestDate, setRequestDate] = useState<string | null>(null);
   const [syncing, setSyncing] = useState(false);
@@ -1026,13 +1033,13 @@ export default function Dashboard() {
                         </div>
                         <div className="fp-detail">
                           <span className="fp-label">수령 펀딩:</span>
-                          <span className="fp-value">{position.totalFundingReceived.toLocaleString()}원</span>
+                          <span className="fp-value">{safeNumber(position.totalFundingReceived).toLocaleString()}원</span>
                         </div>
                         {position.netPnl !== null && (
                           <div className="fp-detail">
                             <span className="fp-label">PnL:</span>
-                            <span className={`fp-value ${position.netPnl >= 0 ? 'pnl-profit' : 'pnl-loss'}`}>
-                              {position.netPnl.toLocaleString()}원
+                            <span className={`fp-value ${safeNumber(position.netPnl) >= 0 ? 'pnl-profit' : 'pnl-loss'}`}>
+                              {safeNumber(position.netPnl).toLocaleString()}원
                             </span>
                           </div>
                         )}
