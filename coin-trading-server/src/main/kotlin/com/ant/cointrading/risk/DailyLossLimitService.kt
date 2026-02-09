@@ -139,7 +139,8 @@ class DailyLossLimitService(
         val lossLimit = initialCapital * (dailyLossLimitPercent / 100.0)
         if (currentDailyLoss >= lossLimit) {
             isTradingHalted = true
-            tradingHaltedReason = "일일 손실 한도 도달: ${String.format("%.0f", currentDailyLoss)}원 / ${String.format("%.0f", lossLimit)}원 (${String.format("%.1f", currentDailyLoss / initialCapital * 100)}%)"
+            val lossPercent = safeLossPercent(currentDailyLoss, initialCapital)
+            tradingHaltedReason = "일일 손실 한도 도달: ${String.format("%.0f", currentDailyLoss)}원 / ${String.format("%.0f", lossLimit)}원 (${String.format("%.1f", lossPercent)}%)"
 
             keyValueService.set(KEY_TRADING_HALTED, "true", "risk", "트레이딩 중지")
             keyValueService.set(KEY_TRADING_HALTED_REASON, tradingHaltedReason ?: "", "risk", "트레이딩 중지 사유")
@@ -166,7 +167,7 @@ class DailyLossLimitService(
 
         // 손실 한도 근접 경고 (80% 도달)
         val lossLimit = initialCapital * (dailyLossLimitPercent / 100.0)
-        if (currentDailyLoss >= lossLimit * 0.8) {
+        if (lossLimit > 0 && currentDailyLoss >= lossLimit * 0.8) {
             log.warn("일일 손실 한도 근접: ${String.format("%.0f", currentDailyLoss)}원 / ${String.format("%.0f", lossLimit)}원 (${String.format("%.1f", currentDailyLoss / lossLimit * 100)}%)")
         }
 
@@ -253,6 +254,7 @@ class DailyLossLimitService(
      * Slack 알림 (트레이딩 중지 시)
      */
     private fun slackNotifyHalted() {
+        val lossPercent = safeLossPercent(currentDailyLoss, initialCapital)
         slackNotifier.sendError(
             "TRADING HALTED",
             """
@@ -260,9 +262,14 @@ class DailyLossLimitService(
             사유: $tradingHaltedReason
             조치: 관리자가 수동 해제 전까지 트레이딩 중지
             일일 손실: ${String.format("%.0f", currentDailyLoss)}원
-            손실률: ${String.format("%.2f", (currentDailyLoss / initialCapital) * 100)}%
+            손실률: ${String.format("%.2f", lossPercent)}%
             =============================
             """.trimIndent()
         )
+    }
+
+    private fun safeLossPercent(lossAmount: Double, capital: Double): Double {
+        if (capital <= 0.0) return 0.0
+        return (lossAmount / capital) * 100
     }
 }
