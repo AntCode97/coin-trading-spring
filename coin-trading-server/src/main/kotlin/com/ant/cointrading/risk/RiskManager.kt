@@ -28,6 +28,12 @@ class RiskManager(
     private val tradingProperties: TradingProperties,
     private val tradeRepository: TradeRepository
 ) {
+    companion object {
+        private const val MIN_TRADES_FOR_KELLY = 10
+        private const val STATS_CACHE_TTL_SECONDS = 30L
+        private const val REALIZED_TRADE_SIDE = "SELL"
+    }
+
 
     // 마켓별 거래 통계 캐시
     private val statsCache = ConcurrentHashMap<String, TradeStats>()
@@ -48,6 +54,16 @@ class RiskManager(
         var maxConsecutiveLosses: Int = 0,
         var lastUpdated: Instant = Instant.now()
     )
+
+    /**
+     * 특정 마켓 통계를 즉시 DB 기준으로 갱신합니다.
+     * 주문 직후(특히 SELL 체결 후) 최신 리스크 통계를 반영할 때 사용합니다.
+     */
+    fun refreshStats(market: String): TradeStats {
+        val refreshed = loadStatsFromDb(market)
+        statsCache[market] = refreshed
+        return refreshed
+    }
 
     /**
      * 거래 가능 여부 체크
@@ -127,7 +143,7 @@ class RiskManager(
         val baseAmount = config.orderAmountKrw
 
         // 충분한 거래 기록이 없으면 기본 금액 사용
-        if (stats.totalTrades < 10) {
+        if (stats.totalTrades < MIN_TRADES_FOR_KELLY) {
             val size = baseAmount.multiply(BigDecimal(signalConfidence / 100))
                 .setScale(0, RoundingMode.DOWN)
                 .coerceAtLeast(BigDecimal(5100))  // 최소 주문 금액 보장
@@ -223,9 +239,9 @@ class RiskManager(
             stats.totalProfit / BigDecimal(stats.winCount)
         } else BigDecimal.ZERO
 
-        // [버그 수정] totalLoss는 음수이므로 절댈값 처리 필요
+        // totalLoss는 절대 손실 누적으로 저장됨 (항상 양수)
         val avgLoss = if (stats.lossCount > 0) {
-            stats.totalLoss.abs() / BigDecimal(stats.lossCount)
+            stats.totalLoss / BigDecimal(stats.lossCount)
         } else BigDecimal.ZERO
 
         val profitFactor = if (avgLoss > BigDecimal.ZERO) {
@@ -258,35 +274,85 @@ class RiskManager(
     }
 
     private fun getStats(market: String): TradeStats {
-        return statsCache.getOrPut(market) {
-            // DB에서 통계 로드
-            loadStatsFromDb(market)
+        val cached = statsCache[market]
+        if (cached == null || isStatsStale(cached.lastUpdated)) {
+            return refreshStats(market)
         }
+        return cached
+    }
+
+    private fun isStatsStale(lastUpdated: Instant): Boolean {
+        return lastUpdated.isBefore(Instant.now().minusSeconds(STATS_CACHE_TTL_SECONDS))
     }
 
     private fun loadStatsFromDb(market: String): TradeStats {
-        val stats = TradeStats()
-
         try {
             val records = tradeRepository.findByMarketAndSimulatedOrderByCreatedAtDesc(market, false)
-
-            records.forEach { record ->
-                stats.totalTrades++
-                val profit = BigDecimal(record.pnl ?: 0.0)
-
-                if (profit >= BigDecimal.ZERO) {
-                    stats.winCount++
-                    stats.totalProfit += profit
-                } else {
-                    stats.lossCount++
-                    stats.totalLoss += profit.abs()
-                }
-            }
+            val realizedTrades = records.filter(::isRealizedTrade)
+            return buildStatsFromTrades(realizedTrades)
         } catch (e: Exception) {
-            // DB 연결 실패 시 빈 통계 반환
+            // DB 조회 실패 시 안전하게 빈 통계 반환
+            return TradeStats(lastUpdated = Instant.now())
+        }
+    }
+
+    private fun isRealizedTrade(record: TradeEntity): Boolean {
+        return record.side.equals(REALIZED_TRADE_SIDE, ignoreCase = true) && record.pnl != null
+    }
+
+    private fun buildStatsFromTrades(latestFirstTrades: List<TradeEntity>): TradeStats {
+        if (latestFirstTrades.isEmpty()) {
+            return TradeStats(lastUpdated = Instant.now())
         }
 
+        val stats = TradeStats(lastUpdated = Instant.now())
+        stats.totalTrades = latestFirstTrades.size
+
+        latestFirstTrades.forEach { trade ->
+            val pnl = BigDecimal.valueOf(trade.pnl ?: 0.0)
+            when {
+                pnl > BigDecimal.ZERO -> {
+                    stats.winCount++
+                    stats.totalProfit += pnl
+                }
+                pnl < BigDecimal.ZERO -> {
+                    stats.lossCount++
+                    stats.totalLoss += pnl.abs()
+                }
+            }
+        }
+
+        stats.consecutiveLosses = calculateCurrentLossStreak(latestFirstTrades)
+        stats.maxConsecutiveLosses = calculateMaxLossStreak(latestFirstTrades.asReversed())
         return stats
+    }
+
+    private fun calculateCurrentLossStreak(latestFirstTrades: List<TradeEntity>): Int {
+        var streak = 0
+        for (trade in latestFirstTrades) {
+            val pnl = trade.pnl ?: continue
+            if (pnl < 0.0) {
+                streak++
+                continue
+            }
+            break
+        }
+        return streak
+    }
+
+    private fun calculateMaxLossStreak(oldestFirstTrades: List<TradeEntity>): Int {
+        var current = 0
+        var maxStreak = 0
+        for (trade in oldestFirstTrades) {
+            val pnl = trade.pnl ?: continue
+            if (pnl < 0.0) {
+                current++
+                maxStreak = max(maxStreak, current)
+            } else {
+                current = 0
+            }
+        }
+        return maxStreak
     }
 
     private fun calculateDailyPnl(market: String): BigDecimal {
@@ -301,7 +367,7 @@ class RiskManager(
     }
 
     private fun calculateKellyFraction(stats: TradeStats): Double {
-        if (stats.totalTrades < 10) return 0.0
+        if (stats.totalTrades < MIN_TRADES_FOR_KELLY) return 0.0
 
         val winRate = stats.winCount.toDouble() / stats.totalTrades
 

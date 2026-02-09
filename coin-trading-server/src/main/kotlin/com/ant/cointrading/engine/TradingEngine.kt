@@ -387,6 +387,8 @@ class TradingEngine(
             // 일일 손실 한도에 실제 실현손익 기록 (매도만)
             if (signal.action == SignalAction.SELL) {
                 recordDailyPnlFromExecutedTrade(market, result)
+                // SELL 체결 후 리스크 통계를 즉시 동기화해 다음 주문 사이징/차단 판단에 반영
+                riskManager.refreshStats(market)
             }
         } else {
             // 실패 사유별 처리
