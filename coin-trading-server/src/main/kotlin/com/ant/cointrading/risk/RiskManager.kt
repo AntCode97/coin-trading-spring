@@ -32,6 +32,7 @@ class RiskManager(
     companion object {
         private const val MIN_TRADES_FOR_KELLY = 10
         private const val STATS_CACHE_TTL_SECONDS = 30L
+        private const val MAX_TRADES_FOR_STATS = 500
         private const val REALIZED_TRADE_SIDE = "SELL"
         private val MIN_ORDER_AMOUNT_KRW = TradingConstants.MIN_ORDER_AMOUNT_KRW
         private const val ACCOUNT_PEAK_KEY = "__ACCOUNT__"
@@ -305,7 +306,12 @@ class RiskManager(
     private fun loadStatsFromDb(market: String): TradeStats {
         try {
             val records = tradeRepository.findByMarketAndSimulatedOrderByCreatedAtDesc(market, false)
-            val realizedTrades = records.filter(::isRealizedTrade)
+            // 최근 거래 위주로 통계를 산출해 실시간성/성능 균형 유지
+            val realizedTrades = records
+                .asSequence()
+                .filter(::isRealizedTrade)
+                .take(MAX_TRADES_FOR_STATS)
+                .toList()
             return buildStatsFromTrades(realizedTrades)
         } catch (e: Exception) {
             // DB 조회 실패 시 안전하게 빈 통계 반환
