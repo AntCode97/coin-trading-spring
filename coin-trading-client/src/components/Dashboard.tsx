@@ -954,119 +954,119 @@ export default function Dashboard() {
             </div>
           </div>
         </div>
-      </div>
 
-      {fundingExpanded && fundingStatus && (
-        <div className="funding-arbitrage-panel">
-          <div className="funding-header">
-            <h2 className="funding-title">💰 펀딩 비율 차익거래</h2>
-            <button
-              className={`funding-toggle-btn ${fundingStatus.autoTradingEnabled ? 'enabled' : 'disabled'}`}
-              type="button"
-              onClick={() => void handleFundingToggle()}
-              disabled={isActionExecuting('funding-toggle')}
-            >
-              {isActionExecuting('funding-toggle')
-                ? '변경 중...'
-                : fundingStatus.autoTradingEnabled ? '자동 ON' : '자동 OFF'}
-            </button>
-          </div>
-
-          <div className="funding-status-grid">
-            <div className="funding-status-item">
-              <span className="funding-label">상태</span>
-              <span className={`funding-value ${fundingStatus.enabled ? 'status-active' : 'status-inactive'}`}>
-                {fundingStatus.enabled ? '활성' : '비활성'}
-              </span>
+        {fundingExpanded && fundingStatus && (
+          <div className="funding-arbitrage-panel">
+            <div className="funding-header">
+              <h2 className="funding-title">💰 펀딩 비율 차익거래</h2>
+              <button
+                className={`funding-toggle-btn ${fundingStatus.autoTradingEnabled ? 'enabled' : 'disabled'}`}
+                type="button"
+                onClick={() => void handleFundingToggle()}
+                disabled={isActionExecuting('funding-toggle')}
+              >
+                {isActionExecuting('funding-toggle')
+                  ? '변경 중...'
+                  : fundingStatus.autoTradingEnabled ? '자동 ON' : '자동 OFF'}
+              </button>
             </div>
-            <div className="funding-status-item">
-              <span className="funding-label">오픈 포지션</span>
-              <span className="funding-value">{fundingStatus.openPositionsCount}개</span>
-            </div>
-            <div className="funding-status-item">
-              <span className="funding-label">총 PnL</span>
-              <span className={`funding-value ${fundingStatus.totalPnl >= 0 ? 'pnl-profit' : 'pnl-loss'}`}>
-                {fundingStatus.totalPnl.toLocaleString()}원
-              </span>
-            </div>
-          </div>
 
-          <div className="funding-controls">
-            <button
-              className="funding-control-btn"
-              type="button"
-              onClick={() => void handleFundingScan()}
-              disabled={isActionExecuting('funding-scan')}
-            >
-              {isActionExecuting('funding-scan') ? '스캔 중...' : '📊 기회 스캔'}
-            </button>
-          </div>
+            <div className="funding-status-grid">
+              <div className="funding-status-item">
+                <span className="funding-label">상태</span>
+                <span className={`funding-value ${fundingStatus.enabled ? 'status-active' : 'status-inactive'}`}>
+                  {fundingStatus.enabled ? '활성' : '비활성'}
+                </span>
+              </div>
+              <div className="funding-status-item">
+                <span className="funding-label">오픈 포지션</span>
+                <span className="funding-value">{fundingStatus.openPositionsCount}개</span>
+              </div>
+              <div className="funding-status-item">
+                <span className="funding-label">총 PnL</span>
+                <span className={`funding-value ${fundingStatus.totalPnl >= 0 ? 'pnl-profit' : 'pnl-loss'}`}>
+                  {fundingStatus.totalPnl.toLocaleString()}원
+                </span>
+              </div>
+            </div>
 
-          {fundingStatus.openPositionsCount > 0 && (
-            <div className="funding-positions-section">
-              <h3 className="funding-section-title">진입 포지션 ({fundingStatus.openPositionsCount})</h3>
-              <div className="funding-positions-list">
-                {fundingStatus.openPositions.map((position) => (
-                  <div key={position.id} className="funding-position-card">
-                    <div className="fp-header">
-                      <span className="fp-symbol">{position.symbol}</span>
-                      <span className={`fp-status ${position.status}`}>{position.status}</span>
-                    </div>
-                    <div className="fp-details">
-                      <div className="fp-detail">
-                        <span className="fp-label">진입가:</span>
-                        <span className="fp-value">
-                          현물 {position.spotPrice?.toLocaleString() ?? '-'} / 선물 {position.perpPrice?.toLocaleString() ?? '-'}
-                        </span>
+            <div className="funding-controls">
+              <button
+                className="funding-control-btn"
+                type="button"
+                onClick={() => void handleFundingScan()}
+                disabled={isActionExecuting('funding-scan')}
+              >
+                {isActionExecuting('funding-scan') ? '스캔 중...' : '📊 기회 스캔'}
+              </button>
+            </div>
+
+            {fundingStatus.openPositionsCount > 0 && (
+              <div className="funding-positions-section">
+                <h3 className="funding-section-title">진입 포지션 ({fundingStatus.openPositionsCount})</h3>
+                <div className="funding-positions-list">
+                  {fundingStatus.openPositions.map((position) => (
+                    <div key={position.id} className="funding-position-card">
+                      <div className="fp-header">
+                        <span className="fp-symbol">{position.symbol}</span>
+                        <span className={`fp-status ${position.status}`}>{position.status}</span>
                       </div>
-                      <div className="fp-detail">
-                        <span className="fp-label">펀딩 비율:</span>
-                        <span className="fp-value">
-                          {position.fundingRate !== null ? `${position.fundingRate.toFixed(6)}%` : '-'}
-                        </span>
-                      </div>
-                      <div className="fp-detail">
-                        <span className="fp-label">수령 펀딩:</span>
-                        <span className="fp-value">{position.totalFundingReceived.toLocaleString()}원</span>
-                      </div>
-                      {position.netPnl !== null && (
+                      <div className="fp-details">
                         <div className="fp-detail">
-                          <span className="fp-label">PnL:</span>
-                          <span className={`fp-value ${position.netPnl >= 0 ? 'pnl-profit' : 'pnl-loss'}`}>
-                            {position.netPnl.toLocaleString()}원
+                          <span className="fp-label">진입가:</span>
+                          <span className="fp-value">
+                            현물 {position.spotPrice?.toLocaleString() ?? '-'} / 선물 {position.perpPrice?.toLocaleString() ?? '-'}
                           </span>
                         </div>
-                      )}
+                        <div className="fp-detail">
+                          <span className="fp-label">펀딩 비율:</span>
+                          <span className="fp-value">
+                            {position.fundingRate !== null ? `${position.fundingRate.toFixed(6)}%` : '-'}
+                          </span>
+                        </div>
+                        <div className="fp-detail">
+                          <span className="fp-label">수령 펀딩:</span>
+                          <span className="fp-value">{position.totalFundingReceived.toLocaleString()}원</span>
+                        </div>
+                        {position.netPnl !== null && (
+                          <div className="fp-detail">
+                            <span className="fp-label">PnL:</span>
+                            <span className={`fp-value ${position.netPnl >= 0 ? 'pnl-profit' : 'pnl-loss'}`}>
+                              {position.netPnl.toLocaleString()}원
+                            </span>
+                          </div>
+                        )}
+                      </div>
                     </div>
-                  </div>
-                ))}
+                  ))}
+                </div>
               </div>
-            </div>
-          )}
+            )}
 
-          {fundingScanResult && fundingScanResult.opportunities.length > 0 && (
-            <div className="funding-opportunities-section">
-              <h3 className="funding-section-title">현재 기회 ({fundingScanResult.opportunities.length})</h3>
-              <div className="funding-opportunities-list">
-                {fundingScanResult.opportunities.map((opportunity, index) => (
-                  <div key={`${opportunity.symbol}-${index}`} className={`funding-opp-card ${opportunity.isRecommendedEntry ? 'recommended' : ''}`}>
-                    <div className="fo-header">
-                      <span className="fo-symbol">{opportunity.symbol}</span>
-                      <span className="fo-rate">{opportunity.fundingRate}</span>
-                      <span className="fo-annualized">{opportunity.annualizedRate}</span>
+            {fundingScanResult && fundingScanResult.opportunities.length > 0 && (
+              <div className="funding-opportunities-section">
+                <h3 className="funding-section-title">현재 기회 ({fundingScanResult.opportunities.length})</h3>
+                <div className="funding-opportunities-list">
+                  {fundingScanResult.opportunities.map((opportunity, index) => (
+                    <div key={`${opportunity.symbol}-${index}`} className={`funding-opp-card ${opportunity.isRecommendedEntry ? 'recommended' : ''}`}>
+                      <div className="fo-header">
+                        <span className="fo-symbol">{opportunity.symbol}</span>
+                        <span className="fo-rate">{opportunity.fundingRate}</span>
+                        <span className="fo-annualized">{opportunity.annualizedRate}</span>
+                      </div>
+                      <div className="fo-details">
+                        <span className="fo-label">{opportunity.minutesUntilFunding}분 후 펀딩</span>
+                        <span className="fo-label">현물 {opportunity.markPrice.toLocaleString()}</span>
+                        <span className="fo-label">선물 {opportunity.indexPrice.toLocaleString()}</span>
+                      </div>
                     </div>
-                    <div className="fo-details">
-                      <span className="fo-label">{opportunity.minutesUntilFunding}분 후 펀딩</span>
-                      <span className="fo-label">현물 {opportunity.markPrice.toLocaleString()}</span>
-                      <span className="fo-label">선물 {opportunity.indexPrice.toLocaleString()}</span>
-                    </div>
-                  </div>
-                ))}
+                  ))}
+                </div>
               </div>
-            </div>
-          )}
-        </div>
-      )}
+            )}
+          </div>
+        )}
+      </div>
 
       {feedbackUi}
     </div>
