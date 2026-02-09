@@ -432,6 +432,11 @@ class TradingEngine(
         market: String
     ): BigDecimal {
         var totalKrw = BigDecimal.ZERO
+        val knownPricesByCoin = marketStates
+            .asSequence()
+            .map { (knownMarket, state) -> PositionHelper.extractCoinSymbol(knownMarket) to state.currentPrice }
+            .filter { (_, price) -> price > BigDecimal.ZERO }
+            .toMap()
 
         for (balance in balances) {
             val amount = balance.balance
@@ -445,9 +450,12 @@ class TradingEngine(
                 if (coinMarket == market) {
                     totalKrw += amount.multiply(currentPrice)
                 } else {
-                    // 다른 코인은 평균 매수가로 환산
-                    val avgPrice = balance.avgBuyPrice ?: BigDecimal.ZERO
-                    totalKrw += amount.multiply(avgPrice)
+                    // 다른 코인은 최근 시세 캐시 우선, 없으면 평균 매수가로 환산
+                    val priceForValuation = knownPricesByCoin[balance.currency]
+                        ?.takeIf { it > BigDecimal.ZERO }
+                        ?: (balance.avgBuyPrice ?: BigDecimal.ZERO)
+
+                    totalKrw += amount.multiply(priceForValuation)
                 }
             }
         }
