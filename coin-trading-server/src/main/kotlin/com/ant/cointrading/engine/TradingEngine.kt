@@ -333,59 +333,66 @@ class TradingEngine(
 
         // 5. 결과 처리
         if (result.success) {
-            // [무한 루프 방지] 매수/매도 시간 기록
-            when (signal.action) {
-                SignalAction.BUY -> {
-                    lastBuyTime[market] = Instant.now()
-                    log.info("[$market] 매수 시간 기록 - 최소 ${MIN_HOLDING_SECONDS}초 보유 필요")
-                }
-                SignalAction.SELL -> {
-                    lastSellTime[market] = Instant.now()
-                    log.info("[$market] 매도 시간 기록 - 재매수 ${TRADE_COOLDOWN_SECONDS}초 쿨다운")
-                }
-                else -> {}
+            val hasExecutedFill = hasExecutedFill(result)
+            if (!hasExecutedFill && result.isPending) {
+                log.info("[$market] 주문 접수됨(미체결) - 체결 전까지 루프가드/실현손익 반영을 보류합니다")
             }
 
-            // DCA 전략인 경우 포지션 추적
-            if (signal.strategy == "DCA") {
+            // [무한 루프 방지] 체결 발생 시에만 매수/매도 시간 갱신
+            if (hasExecutedFill) {
+                recordExecutionTimestamp(market, signal.action)
+            }
+
+            // DCA 전략인 경우 포지션 추적 (실제 체결된 경우만 반영)
+            if (signal.strategy == "DCA" && hasExecutedFill) {
                 val quantity = result.executedQuantity?.toDouble() ?: 0.0
                 val price = result.price?.toDouble() ?: 0.0
                 val amount = quantity * price
 
-                when (signal.action) {
-                    SignalAction.BUY -> {
-                        (state.currentStrategy as? DcaStrategy)?.recordBuy(market, quantity, price, amount)
-                    }
-                    SignalAction.SELL -> {
-                        val exitReason = when {
-                            signal.reason.contains("익절") -> "TAKE_PROFIT"
-                            signal.reason.contains("손절") -> "STOP_LOSS"
-                            signal.reason.contains("타임아웃") -> "TIMEOUT"
-                            else -> "SIGNAL"
+                if (quantity > 0.0 && price > 0.0) {
+                    when (signal.action) {
+                        SignalAction.BUY -> {
+                            (state.currentStrategy as? DcaStrategy)?.recordBuy(market, quantity, price, amount)
                         }
-                        (state.currentStrategy as? DcaStrategy)?.recordSell(market, quantity, price, exitReason)
+                        SignalAction.SELL -> {
+                            val exitReason = when {
+                                signal.reason.contains("익절") -> "TAKE_PROFIT"
+                                signal.reason.contains("손절") -> "STOP_LOSS"
+                                signal.reason.contains("타임아웃") -> "TIMEOUT"
+                                else -> "SIGNAL"
+                            }
+                            (state.currentStrategy as? DcaStrategy)?.recordSell(market, quantity, price, exitReason)
+                        }
+                        else -> {}
                     }
-                    else -> {}
+                } else {
+                    log.warn("[$market] DCA 체결 데이터 불완전(수량=$quantity, 가격=$price) - 포지션 반영 스킵")
                 }
             }
 
             // 슬리피지 경고 포함 알림
             val notificationMessage = buildString {
-                append("체결 완료")
-                if (result.isPartialFill) {
-                    append(" (부분 ${String.format("%.1f", result.fillRatePercent)}%)")
+                if (hasExecutedFill) {
+                    append("체결 완료")
+                    if (result.isPartialFill) {
+                        append(" (부분 ${String.format("%.1f", result.fillRatePercent)}%)")
+                    }
+                    if (result.slippagePercent > 0.5) {
+                        append(" ⚠️슬리피지: ${String.format("%.2f", result.slippagePercent)}%")
+                    }
+                    result.fee?.let { append(" | 수수료: $it") }
+                } else if (result.isPending) {
+                    append("주문 접수됨 (PendingOrderManager에서 체결 관리 중)")
+                } else {
+                    append("주문 성공 응답 수신 (체결 수량 미확인)")
                 }
-                if (result.slippagePercent > 0.5) {
-                    append(" ⚠️슬리피지: ${String.format("%.2f", result.slippagePercent)}%")
-                }
-                result.fee?.let { append(" | 수수료: $it") }
             }
             log.info("[$market] $notificationMessage")
 
             slackNotifier.sendTradeNotification(signal, result)
 
-            // 일일 손실 한도에 실제 실현손익 기록 (매도만)
-            if (signal.action == SignalAction.SELL) {
+            // 일일 손실 한도에 실제 실현손익 기록 (매도 체결 건만)
+            if (signal.action == SignalAction.SELL && hasExecutedFill) {
                 recordDailyPnlFromExecutedTrade(market, result)
                 // SELL 체결 후 리스크 통계를 즉시 동기화해 다음 주문 사이징/차단 판단에 반영
                 riskManager.refreshStats(market)
@@ -461,6 +468,24 @@ class TradingEngine(
 
         dailyLossLimitService.recordPnl(pnl)
         log.info("[$market] 일일 손익 반영: pnl=${String.format("%.0f", pnl)}원, orderId=$orderId")
+    }
+
+    private fun hasExecutedFill(result: com.ant.cointrading.order.OrderResult): Boolean {
+        return result.executedQuantity?.let { it > BigDecimal.ZERO } == true
+    }
+
+    private fun recordExecutionTimestamp(market: String, action: SignalAction) {
+        when (action) {
+            SignalAction.BUY -> {
+                lastBuyTime[market] = Instant.now()
+                log.info("[$market] 매수 시간 기록 - 최소 ${MIN_HOLDING_SECONDS}초 보유 필요")
+            }
+            SignalAction.SELL -> {
+                lastSellTime[market] = Instant.now()
+                log.info("[$market] 매도 시간 기록 - 재매수 ${TRADE_COOLDOWN_SECONDS}초 쿨다운")
+            }
+            else -> {}
+        }
     }
 
     private fun shouldBlockBuyByCooldown(market: String, now: Instant): Boolean {
