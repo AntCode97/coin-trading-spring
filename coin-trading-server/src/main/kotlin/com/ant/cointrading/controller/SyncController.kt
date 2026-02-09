@@ -89,11 +89,15 @@ class SyncController(
             val openMemePositions = memeScalperRepository.findByStatus("OPEN")
             val openVolumeSurgePositions = volumeSurgeRepository.findByStatus("OPEN")
             val openDcaPositions = dcaPositionRepository.findByStatus("OPEN")
+            val closingDcaPositions = dcaPositionRepository.findByStatus("CLOSING")
+            val abandonedDcaPositions = dcaPositionRepository.findByStatus("ABANDONED")
+            val failedDcaPositions = dcaPositionRepository.findByStatus("FAILED")
+            val dcaHoldingPositions = openDcaPositions + closingDcaPositions + abandonedDcaPositions + failedDcaPositions
 
             val allOpenMarkets = mutableSetOf<String>()
             openMemePositions.forEach { allOpenMarkets.add(it.market) }
             openVolumeSurgePositions.forEach { allOpenMarkets.add(it.market) }
-            openDcaPositions.forEach { allOpenMarkets.add(it.market) }
+            dcaHoldingPositions.forEach { allOpenMarkets.add(it.market) }
 
             // 동기화 중 잔고가 존재하는 포지션은 코인 단위로 집계 후 한 번만 비교
             val expectedByCoin = mutableMapOf<String, CoinQuantityExpectation>()
@@ -349,6 +353,24 @@ class SyncController(
                     )
                 }
             }
+
+            // DCA 비-OPEN 상태(CLOSING/ABANDONED/FAILED)라도 실제 잔고가 남아있으면 기대 수량에 포함
+            dcaHoldingPositions
+                .asSequence()
+                .filter { it.status != "OPEN" }
+                .forEach { position ->
+                    val coinSymbol = extractCoinSymbol(position.market)
+                    val actualBalanceObj = coinsWithBalance[coinSymbol]
+                    if (actualBalanceObj != null && actualBalanceObj.total > BigDecimal.ZERO) {
+                        registerExpectedQuantity(
+                            expectedByCoin = expectedByCoin,
+                            coinSymbol = coinSymbol,
+                            market = position.market,
+                            strategy = "DCA",
+                            quantity = BigDecimal.valueOf(position.totalQuantity)
+                        )
+                    }
+                }
 
             // 코인 단위로 DB 기대 수량과 실제 수량(available + locked) 비교
             val openDcaByCoin = openDcaPositions.groupBy { extractCoinSymbol(it.market) }

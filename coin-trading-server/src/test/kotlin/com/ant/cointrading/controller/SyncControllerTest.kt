@@ -5,6 +5,7 @@ import com.ant.cointrading.api.bithumb.BithumbPrivateApi
 import com.ant.cointrading.api.bithumb.BithumbPublicApi
 import com.ant.cointrading.dca.DcaEngine
 import com.ant.cointrading.memescalper.MemeScalperEngine
+import com.ant.cointrading.repository.DcaPositionEntity
 import com.ant.cointrading.repository.DcaPositionRepository
 import com.ant.cointrading.repository.MemeScalperTradeEntity
 import com.ant.cointrading.repository.MemeScalperTradeRepository
@@ -67,6 +68,8 @@ class SyncControllerTest {
             volumeSurgeEngine = volumeSurgeEngine,
             dcaEngine = dcaEngine
         )
+
+        whenever(dcaPositionRepository.findByStatus(any())).thenReturn(emptyList())
     }
 
     @Test
@@ -159,6 +162,44 @@ class SyncControllerTest {
         assertEquals(1.2, mismatches.first().dbQuantity, 1e-9)
         assertEquals(0.95, mismatches.first().actualQuantity, 1e-9)
         assertTrue(mismatches.first().reason.contains("locked="))
+    }
+
+    @Test
+    @DisplayName("DCA CLOSING 상태의 잔고도 기대 수량에 포함한다")
+    fun includesClosingDcaPositionWhenBalanceStillExists() {
+        val openDca = DcaPositionEntity(
+            market = "KRW-XRP",
+            totalQuantity = 7.21060704,
+            averagePrice = 2100.0,
+            totalInvested = 15142.27,
+            status = "OPEN"
+        )
+        val closingDca = DcaPositionEntity(
+            market = "KRW-XRP",
+            totalQuantity = 7.18648084,
+            averagePrice = 2098.0,
+            totalInvested = 15078.43,
+            status = "CLOSING"
+        )
+
+        whenever(bithumbPrivateApi.getBalances()).thenReturn(
+            listOf(
+                balance(currency = "XRP", available = "14.39708788", locked = "0")
+            )
+        )
+        whenever(memeScalperRepository.findByStatus("OPEN")).thenReturn(emptyList())
+        whenever(volumeSurgeRepository.findByStatus("OPEN")).thenReturn(emptyList())
+        whenever(dcaPositionRepository.findByStatus("OPEN")).thenReturn(listOf(openDca))
+        whenever(dcaPositionRepository.findByStatus("CLOSING")).thenReturn(listOf(closingDca))
+        whenever(dcaPositionRepository.findByStatus("ABANDONED")).thenReturn(emptyList())
+        whenever(dcaPositionRepository.findByStatus("FAILED")).thenReturn(emptyList())
+        whenever(bithumbPrivateApi.getOrders("KRW-XRP", "done", 0, 500)).thenReturn(emptyList())
+
+        val result = syncController.syncPositions()
+
+        assertTrue(result.success)
+        assertEquals(0, result.actions.count { it.action == "QUANTITY_MISMATCH" })
+        assertEquals(2, result.verifiedCount)
     }
 
     private fun balance(currency: String, available: String, locked: String): Balance {
