@@ -329,6 +329,13 @@ class TradingEngine(
             orderAmountKrw = sellableAmountKrw
         }
 
+        if (orderAmountKrw < TradingConstants.MIN_ORDER_AMOUNT_KRW) {
+            log.info(
+                "[$market] 주문 금액 최소치 미달로 실행 스킵: amount=$orderAmountKrw, min=${TradingConstants.MIN_ORDER_AMOUNT_KRW}"
+            )
+            return
+        }
+
         // 4. 주문 실행 (MarketConditionChecker는 OrderExecutor 내부에서 호출)
         val result = orderExecutor.execute(signal, orderAmountKrw)
 
