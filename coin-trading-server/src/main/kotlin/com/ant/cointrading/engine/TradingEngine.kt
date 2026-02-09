@@ -599,7 +599,7 @@ class TradingEngine(
         val position = calculatePosition(market, state.currentPrice)
 
         // 일별 PnL 계산
-        val (dailyPnl, dailyPnlPercent) = calculateDailyPnl(market)
+        val (dailyPnl, dailyPnlPercent) = calculateDailyPnl(market, state.currentPrice)
 
         return MarketStatus(
             market = market,
@@ -651,7 +651,7 @@ class TradingEngine(
     /**
      * 일별 PnL 계산
      */
-    private fun calculateDailyPnl(market: String): Pair<BigDecimal, Double> {
+    private fun calculateDailyPnl(market: String, currentPrice: BigDecimal): Pair<BigDecimal, Double> {
         return try {
             val startOfDay = LocalDate.now(com.ant.cointrading.util.DateTimeUtils.SEOUL_ZONE)
                 .atStartOfDay(com.ant.cointrading.util.DateTimeUtils.SEOUL_ZONE)
@@ -662,17 +662,15 @@ class TradingEngine(
                 .mapNotNull { it.pnl }
                 .fold(BigDecimal.ZERO) { acc, pnl -> acc + BigDecimal.valueOf(pnl) }
 
-            val currentBalance = try {
-                bithumbPrivateApi.getBalances()
-                    ?.find { it.currency == "KRW" }
-                    ?.balance
-                    ?: BigDecimal.ZERO
+            val totalAsset = try {
+                val balances = bithumbPrivateApi.getBalances() ?: emptyList()
+                calculateTotalAssetKrw(balances, currentPrice, market)
             } catch (_: Exception) {
                 BigDecimal.ZERO
             }
 
-            val pnlPercent = if (currentBalance > BigDecimal.ZERO) {
-                totalPnl.divide(currentBalance, 6, java.math.RoundingMode.HALF_UP)
+            val pnlPercent = if (totalAsset > BigDecimal.ZERO) {
+                totalPnl.divide(totalAsset, 6, java.math.RoundingMode.HALF_UP)
                     .multiply(BigDecimal(100))
                     .toDouble()
             } else {
