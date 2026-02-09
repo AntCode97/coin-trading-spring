@@ -53,6 +53,7 @@ object TradingConstants {
 
     // === 시장가를 선호하는 전략들 (빠른 체결이 중요) ===
     val MARKET_ORDER_STRATEGIES = setOf(
+        "DCA",                   // 분할매수는 미체결 누적보다 즉시 체결 안정성이 중요
         "ORDER_BOOK_IMBALANCE",  // 초단기 전략
         "MOMENTUM",              // 모멘텀 전략
         "BREAKOUT",              // 돌파 전략

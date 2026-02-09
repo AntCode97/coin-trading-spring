@@ -5,6 +5,7 @@ import com.ant.cointrading.api.bithumb.BithumbPublicApi
 import com.ant.cointrading.dca.DcaEngine
 import com.ant.cointrading.engine.PositionHelper
 import com.ant.cointrading.memescalper.MemeScalperEngine
+import com.ant.cointrading.repository.DcaPositionEntity
 import com.ant.cointrading.repository.DcaPositionRepository
 import com.ant.cointrading.repository.MemeScalperTradeRepository
 import com.ant.cointrading.repository.VolumeSurgeTradeRepository
@@ -85,10 +86,14 @@ class SyncController(
             log.info("실제 잔고 코인: ${coinsWithBalance.keys}")
 
             // 모든 OPEN 포지션의 마켓 목록 수집
+            val openMemePositions = memeScalperRepository.findByStatus("OPEN")
+            val openVolumeSurgePositions = volumeSurgeRepository.findByStatus("OPEN")
+            val openDcaPositions = dcaPositionRepository.findByStatus("OPEN")
+
             val allOpenMarkets = mutableSetOf<String>()
-            memeScalperRepository.findByStatus("OPEN").forEach { allOpenMarkets.add(it.market) }
-            volumeSurgeRepository.findByStatus("OPEN").forEach { allOpenMarkets.add(it.market) }
-            dcaPositionRepository.findByStatus("OPEN").forEach { allOpenMarkets.add(it.market) }
+            openMemePositions.forEach { allOpenMarkets.add(it.market) }
+            openVolumeSurgePositions.forEach { allOpenMarkets.add(it.market) }
+            openDcaPositions.forEach { allOpenMarkets.add(it.market) }
 
             // 동기화 중 잔고가 존재하는 포지션은 코인 단위로 집계 후 한 번만 비교
             val expectedByCoin = mutableMapOf<String, CoinQuantityExpectation>()
@@ -113,7 +118,7 @@ class SyncController(
             }
 
             // Meme Scalper 포지션 체크
-            memeScalperRepository.findByStatus("OPEN").forEach { position ->
+            openMemePositions.forEach { position ->
                 val coinSymbol = extractCoinSymbol(position.market)
                 val actualBalanceObj = coinsWithBalance[coinSymbol]
 
@@ -192,7 +197,7 @@ class SyncController(
             }
 
             // Volume Surge 포지션 체크
-            volumeSurgeRepository.findByStatus("OPEN").forEach { position ->
+            openVolumeSurgePositions.forEach { position ->
                 val coinSymbol = extractCoinSymbol(position.market)
                 val actualBalanceObj = coinsWithBalance[coinSymbol]
 
@@ -269,7 +274,7 @@ class SyncController(
             }
 
             // DCA 포지션 체크
-            dcaPositionRepository.findByStatus("OPEN").forEach { position ->
+            openDcaPositions.forEach { position ->
                 val coinSymbol = extractCoinSymbol(position.market)
                 val actualBalanceObj = coinsWithBalance[coinSymbol]
 
@@ -346,6 +351,7 @@ class SyncController(
             }
 
             // 코인 단위로 DB 기대 수량과 실제 수량(available + locked) 비교
+            val openDcaByCoin = openDcaPositions.groupBy { extractCoinSymbol(it.market) }
             expectedByCoin.forEach { (coinSymbol, expectation) ->
                 val actualSnapshot = coinsWithBalance[coinSymbol]
                 val actualQuantity = actualSnapshot?.total ?: BigDecimal.ZERO
@@ -358,6 +364,20 @@ class SyncController(
                     val strategyLabel = expectation.strategies.sorted().joinToString(" + ")
                     val available = actualSnapshot?.available ?: BigDecimal.ZERO
                     val locked = actualSnapshot?.locked ?: BigDecimal.ZERO
+
+                    val reconciledAction = tryAutoReconcileDcaQuantity(
+                        coinSymbol = coinSymbol,
+                        expectation = expectation,
+                        dbQuantity = dbQuantity,
+                        actualQuantity = actualQuantity,
+                        diff = diff,
+                        openDcaByCoin = openDcaByCoin
+                    )
+                    if (reconciledAction != null) {
+                        results.add(reconciledAction)
+                        fixedCount++
+                        return@forEach
+                    }
 
                     log.warn(
                         "[Sync] 수량 불일치 coin={}, markets={}, DB={}, 실제={}, available={}, locked={}, diff={}, tolerance={}",
@@ -375,7 +395,7 @@ class SyncController(
                             market = marketLabel,
                             strategy = strategyLabel,
                             action = "QUANTITY_MISMATCH",
-                            reason = "수량 불일치(coin=$coinSymbol, available=${available.stripTrailingZeros().toPlainString()}, locked=${locked.stripTrailingZeros().toPlainString()}, tolerance=${tolerance.stripTrailingZeros().toPlainString()})",
+                            reason = "수량 불일치(coin=$coinSymbol, db=${dbQuantity.stripTrailingZeros().toPlainString()}, actual=${actualQuantity.stripTrailingZeros().toPlainString()}, diff=${diff.stripTrailingZeros().toPlainString()}, available=${available.stripTrailingZeros().toPlainString()}, locked=${locked.stripTrailingZeros().toPlainString()}, tolerance=${tolerance.stripTrailingZeros().toPlainString()})",
                             dbQuantity = dbQuantity.toDouble(),
                             actualQuantity = actualQuantity.toDouble()
                         )
@@ -582,6 +602,66 @@ class SyncController(
         expectation.positionCount += 1
         expectation.markets.add(market)
         expectation.strategies.add(strategy)
+    }
+
+    /**
+     * DCA 단일 코인에서 소량 드리프트가 발생한 경우 DB 수량을 실제 잔고로 보정합니다.
+     * - 대상: DCA 단일 전략 + 단일 마켓 + 단일 OPEN 포지션
+     * - 안전장치: 차이 비율 15% 초과 시 자동 보정하지 않음 (수동 매수/이체 가능성)
+     */
+    private fun tryAutoReconcileDcaQuantity(
+        coinSymbol: String,
+        expectation: CoinQuantityExpectation,
+        dbQuantity: BigDecimal,
+        actualQuantity: BigDecimal,
+        diff: BigDecimal,
+        openDcaByCoin: Map<String, List<DcaPositionEntity>>
+    ): SyncAction? {
+        if (actualQuantity <= BigDecimal.ZERO) return null
+        if (expectation.strategies.size != 1 || !expectation.strategies.contains("DCA")) return null
+        if (expectation.markets.size != 1) return null
+
+        val positions = openDcaByCoin[coinSymbol] ?: return null
+        if (positions.size != 1) return null
+
+        val position = positions.first()
+        if (position.status != "OPEN") return null
+
+        val denominator = dbQuantity.max(actualQuantity)
+        if (denominator <= BigDecimal.ZERO) return null
+
+        val relativeDiff = diff.divide(denominator, 8, java.math.RoundingMode.HALF_UP)
+        val maxAutoReconcileRatio = BigDecimal("0.15")
+        if (relativeDiff > maxAutoReconcileRatio) {
+            return null
+        }
+
+        val beforeQty = position.totalQuantity
+        val afterQty = actualQuantity.toDouble()
+        if (beforeQty <= 0.0 || kotlin.math.abs(beforeQty - afterQty) < 0.00000001) return null
+
+        // 평균 단가를 유지한 채 수량/총투자금만 실제 잔고 기준으로 정합성 보정
+        position.totalQuantity = afterQty
+        position.totalInvested = position.averagePrice * afterQty
+        dcaPositionRepository.save(position)
+
+        log.info(
+            "[Sync] DCA 수량 자동 보정 coin={}, market={}, before={}, after={}, diffRatio={}",
+            coinSymbol,
+            position.market,
+            beforeQty,
+            afterQty,
+            relativeDiff
+        )
+
+        return SyncAction(
+            market = position.market,
+            strategy = "DCA",
+            action = "QUANTITY_RECONCILED",
+            reason = "DCA 수량 자동 보정(coin=$coinSymbol, before=${BigDecimal.valueOf(beforeQty).stripTrailingZeros().toPlainString()}, after=${actualQuantity.stripTrailingZeros().toPlainString()}, diffRatio=${relativeDiff.multiply(BigDecimal(100)).setScale(2, java.math.RoundingMode.HALF_UP)}%)",
+            dbQuantity = beforeQty,
+            actualQuantity = afterQty
+        )
     }
 
     private fun calculateQuantityTolerance(dbQuantity: BigDecimal, actualQuantity: BigDecimal): BigDecimal {
