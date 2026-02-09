@@ -476,6 +476,11 @@ class TradingEngine(
             return
         }
 
+        if (!executedTrade.side.equals("SELL", ignoreCase = true)) {
+            log.info("[$market] SELL 체결이 아님(side=${executedTrade.side}, orderId=$orderId) - 일일 손익 반영 스킵")
+            return
+        }
+
         val pnl = executedTrade.pnl
         if (pnl == null) {
             log.warn("[$market] 거래 PnL 없음(orderId=$orderId) - 일일 손익 기록 스킵")
