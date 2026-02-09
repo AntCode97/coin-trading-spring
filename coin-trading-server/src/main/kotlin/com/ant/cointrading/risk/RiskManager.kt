@@ -1,5 +1,6 @@
 package com.ant.cointrading.risk
 
+import com.ant.cointrading.config.TradingConstants
 import com.ant.cointrading.config.TradingProperties
 import com.ant.cointrading.model.*
 import com.ant.cointrading.repository.TradeEntity
@@ -32,14 +33,12 @@ class RiskManager(
         private const val MIN_TRADES_FOR_KELLY = 10
         private const val STATS_CACHE_TTL_SECONDS = 30L
         private const val REALIZED_TRADE_SIDE = "SELL"
+        private val MIN_ORDER_AMOUNT_KRW = TradingConstants.MIN_ORDER_AMOUNT_KRW
     }
 
 
     // 마켓별 거래 통계 캐시
     private val statsCache = ConcurrentHashMap<String, TradeStats>()
-
-    // 초기 자본 (최초 잔고 기록용)
-    private val initialCapital = ConcurrentHashMap<String, BigDecimal>()
 
     // 최고 자본 (Drawdown 계산용)
     private val peakCapital = ConcurrentHashMap<String, BigDecimal>()
@@ -136,6 +135,10 @@ class RiskManager(
         currentBalance: BigDecimal,
         signalConfidence: Double
     ): BigDecimal {
+        if (currentBalance < MIN_ORDER_AMOUNT_KRW) {
+            return BigDecimal.ZERO
+        }
+
         val stats = getStats(market)
         val config = tradingProperties
 
@@ -144,12 +147,12 @@ class RiskManager(
 
         // 충분한 거래 기록이 없으면 기본 금액 사용
         if (stats.totalTrades < MIN_TRADES_FOR_KELLY) {
-            val size = baseAmount.multiply(BigDecimal(signalConfidence / 100))
-                .setScale(0, RoundingMode.DOWN)
-                .coerceAtLeast(BigDecimal(5100))  // 최소 주문 금액 보장
-                .coerceAtMost(baseAmount)
-                .coerceAtMost(currentBalance)     // 잔고 초과 방지
-            return size
+            val confidenceWeighted = baseAmount.multiply(BigDecimal(signalConfidence / 100))
+            return clampToTradableRange(
+                rawSize = confidenceWeighted,
+                maxAllowed = baseAmount,
+                currentBalance = currentBalance
+            )
         }
 
         // 승률 계산
@@ -163,7 +166,7 @@ class RiskManager(
         } else BigDecimal.ZERO
 
         val avgLoss = if (stats.lossCount > 0) {
-            stats.totalLoss.abs() / BigDecimal(stats.lossCount)
+            stats.totalLoss / BigDecimal(stats.lossCount)
         } else BigDecimal.ONE
 
         val profitRatio = if (avgLoss > BigDecimal.ZERO) {
@@ -182,13 +185,26 @@ class RiskManager(
 
         // 최종 포지션 크기
         val positionSize = currentBalance.multiply(BigDecimal(adjustedKelly))
-            .setScale(0, RoundingMode.DOWN)
 
-        // 최소/최대 제한 (수수료 0.04% 고려하여 5100원)
-        return positionSize
-            .coerceAtLeast(BigDecimal(5100))  // 최소 5100원 (수수료 여유)
-            .coerceAtMost(baseAmount.multiply(BigDecimal(2)))  // 최대 기본 금액의 2배
-            .coerceAtMost(currentBalance)     // 잔고 초과 방지
+        // 최소/최대 제한
+        return clampToTradableRange(
+            rawSize = positionSize,
+            maxAllowed = baseAmount.multiply(BigDecimal(2)),
+            currentBalance = currentBalance
+        )
+    }
+
+    private fun clampToTradableRange(
+        rawSize: BigDecimal,
+        maxAllowed: BigDecimal,
+        currentBalance: BigDecimal
+    ): BigDecimal {
+        val candidate = rawSize
+            .setScale(0, RoundingMode.DOWN)
+            .coerceAtMost(maxAllowed)
+            .coerceAtMost(currentBalance)
+
+        return if (candidate >= MIN_ORDER_AMOUNT_KRW) candidate else BigDecimal.ZERO
     }
 
     /**
