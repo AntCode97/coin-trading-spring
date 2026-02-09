@@ -13,7 +13,8 @@ Bithumb 암호화폐 자동 트레이딩 시스템 (Spring Boot + Kotlin)
 5. [시작하기](#시작하기)
 6. [설정 관리](#설정-관리)
 7. [API 엔드포인트](#api-엔드포인트)
-8. [트러블슈팅](#트러블슈팅)
+8. [최근 개선사항](#최근-개선사항)
+9. [트러블슈팅](#트러블슈팅)
 
 ---
 
@@ -56,6 +57,7 @@ Bithumb 암호화폐 자동 트레이딩 시스템 (Spring Boot + Kotlin)
 │  │       │         │  Simple │         │  DCA    │                  │   │
 │  │       │         │   HMM   │         │  Grid   │                  │   │
 │  │       │         └─────────┘         │  Mean   │                  │   │
+│  │       │                             │  VolSur │                  │   │
 │  │       │                             │  OBI    │                  │   │
 │  │       │                             └────┬────┘                  │   │
 │  │       ▼                                  ▼                       │   │
@@ -110,6 +112,7 @@ coin-trading-spring/
 │   │   │   ├── DcaStrategy.kt            # 분할 매수
 │   │   │   ├── GridStrategy.kt           # 격자 매매
 │   │   │   ├── MeanReversionStrategy.kt  # 평균 회귀
+│   │   │   ├── VolatilitySurvivalStrategy.kt  # 급락/급등장 생존형 반등 전략
 │   │   │   ├── OrderBookImbalanceStrategy.kt  # 호가 불균형
 │   │   │   └── StrategySelector.kt       # 레짐별 전략 선택
 │   │   │
@@ -195,10 +198,13 @@ coin-trading-spring/
 
 3. 전략 선택
    └─▶ StrategySelector가 레짐에 맞는 전략 선택:
-       • 상승장 → MeanReversion (평균 회귀)
-       • 하락장 → DCA (분할 매수)
-       • 횡보장 → Grid (격자 매매)
-       • 고변동성 → 거래 중단
+       • 레짐 신뢰도 < 50% → Grid (보수 운용)
+       • 상승장 (BULL) → Breakout (추세 돌파)
+       • 하락장 (BEAR, ATR < 2.0%) → DCA (분할 매수)
+       • 하락장 (BEAR, ATR >= 2.0%) → VolatilitySurvival (패닉 반등)
+       • 횡보장 (SIDEWAYS, ATR < 2.0%) → Grid (격자 매매)
+       • 횡보장 (SIDEWAYS, ATR >= 2.0%) → Breakout (변동성 돌파)
+       • 고변동성 (HIGH_VOLATILITY) → VolatilitySurvival
 
 4. 신호 생성
    └─▶ 선택된 전략이 BUY/SELL/HOLD 신호 생성
@@ -291,9 +297,11 @@ curl -X POST http://localhost:8080/api/settings/regime \
 
 | 전략 | 적용 레짐 | 동작 방식 |
 |------|----------|----------|
-| DCA | 하락장 | 일정 간격으로 분할 매수 |
-| Grid | 횡보장 | 가격대별 격자 주문 |
-| MeanReversion | 상승장 | RSI 과매도 시 매수, 과매수 시 매도 |
+| DCA | 하락장(저~중변동) | 일정 간격으로 분할 매수 |
+| Grid | 횡보장 / 레짐 신뢰도 낮음 | 가격대별 격자 주문 |
+| Breakout | 상승장 / 고변동 횡보장 | 추세 돌파 시 진입 |
+| VolatilitySurvival | 고변동성 / 급락형 하락장 | 패닉 하락 후 반등만 선별 진입, 짧은 손절·빠른 익절 |
+| MeanReversion | 수동 운영 / 백테스트 | RSI 과매도 시 매수, 과매수 시 매도 |
 | OrderBookImbalance | 전체 | 호가 불균형 감지 시 단타 |
 | VolumeSurge | 전체 | 거래량 급등 감지 → LLM 필터 → 단타 |
 | MemeScalper | 전체 | 밈코인 급등 감지 → 초단기 스캘핑 |
@@ -401,7 +409,7 @@ SLACK_WEBHOOK_URL=https://hooks.slack.com/...
 
 3. **마켓 분석 테스트** (거래 없이 분석만)
    ```bash
-   curl http://localhost:8080/api/trading/analyze/BTC_KRW
+   curl -X POST http://localhost:8080/api/trading/analyze/BTC_KRW
    # 레짐, 전략, 신호 확인
    ```
 
@@ -476,9 +484,9 @@ curl -X POST http://localhost:8080/api/settings/regime \
 | Method | Endpoint | 설명 |
 |--------|----------|------|
 | GET | `/api/trading/status` | 전체 마켓 상태 |
-| GET | `/api/trading/analyze/{market}` | 특정 마켓 분석 |
-| GET | `/api/trading/circuit-breaker/status` | 서킷브레이커 상태 |
-| POST | `/api/trading/trigger/{market}` | 수동 분석 트리거 |
+| POST | `/api/trading/analyze/{market}` | 특정 마켓 수동 분석 |
+| GET | `/api/trading/strategies` | 사용 가능한 전략 목록 |
+| GET | `/api/trading/strategy/config` | 현재 전략 설정 |
 
 ### 설정
 
@@ -492,12 +500,38 @@ curl -X POST http://localhost:8080/api/settings/regime \
 | GET | `/api/settings/regime` | 레짐 감지기 상태 |
 | POST | `/api/settings/regime` | 레짐 감지기 변경 |
 
+### 백테스트
+
+| Method | Endpoint | 설명 |
+|--------|----------|------|
+| GET | `/api/backtest/mean-reversion/{market}` | 평균 회귀 전략 백테스트 |
+| GET | `/api/backtest/volatility-survival/{market}` | 고변동성 생존 전략 백테스트 |
+
 ### 시스템
 
 | Method | Endpoint | 설명 |
 |--------|----------|------|
 | GET | `/actuator/health` | 헬스 체크 |
 | POST | `/mcp` | MCP 도구 호출 (LLM용) |
+
+---
+
+## 최근 개선사항
+
+### 서버 전략 개선 (고변동성 대응)
+
+1. `VOLATILITY_SURVIVAL` 전략 추가: 패닉 급락 후 반등 구간만 선별 진입하고, 손절/익절/트레일링/타임아웃/손절 후 쿨다운을 내장했습니다.
+2. `StrategySelector` 레짐 매핑 강화: `HIGH_VOLATILITY`와 `ATR >= 2.0%` 베어 구간에서 `VOLATILITY_SURVIVAL`을 자동 선택하도록 반영했습니다.
+3. 백테스트 API 확장: `/api/backtest/mean-reversion/{market}`, `/api/backtest/volatility-survival/{market}` 엔드포인트를 추가했습니다.
+4. 회귀 방지 테스트 추가: `VolatilitySurvivalStrategyTest`로 급락-반등(whipsaw) 시나리오를 검증하도록 보강했습니다.
+
+### 프론트 대시보드 개선
+
+1. 인라인 확인 모달/토스트 피드백 도입: 위험 액션(수동 매도, 동기화, 자동거래 토글 등)에 확인 단계를 추가했습니다.
+2. 포지션 탐색성 강화: 마켓/전략 검색, 손익/위험도 필터, 정렬(위험도/손익/규모) 기능을 추가했습니다.
+3. 리스크 오버뷰 카드 추가: 고위험 포지션 수, 손절선 이탈 건수, 손실 노출 금액을 상단에서 즉시 확인할 수 있습니다.
+4. 동기화 결과 리포트 추가: 최근 잔고 동기화에서 수정된 포지션과 사유를 요약 표시합니다.
+5. 펀딩 차익거래 운영 UX 개선: 자동 ON/OFF 전환과 기회 스캔 흐름에 확인/상태 반영을 강화했습니다.
 
 ---
 
@@ -511,16 +545,16 @@ curl -X POST http://localhost:8080/api/settings/regime \
    # "false"이면 거래 비활성화 상태
    ```
 
-2. **서킷브레이커 확인**
+2. **현재 마켓 상태 확인**
    ```bash
-   curl http://localhost:8080/api/trading/circuit-breaker/status
-   # 발동된 마켓 확인
+   curl http://localhost:8080/api/trading/status
+   # strategy, lastSignal.reason, dailyPnlPercent 확인
    ```
 
 3. **시장 상태 확인**
    ```bash
-   curl http://localhost:8080/api/trading/analyze/BTC_KRW
-   # regime이 HIGH_VOLATILITY면 거래 중단 상태
+   curl -X POST http://localhost:8080/api/trading/analyze/BTC_KRW
+   # strategy/reason을 확인해 HOLD 사유(손절 쿨다운, 진입 조건 미달 등) 파악
    ```
 
 ### LLM 최적화가 실행되지 않음
@@ -551,7 +585,7 @@ curl -X POST http://localhost:8080/api/settings/regime \
 
 1. **스프레드 확인**
    ```bash
-   curl http://localhost:8080/api/trading/analyze/BTC_KRW
+   curl -X POST http://localhost:8080/api/trading/analyze/BTC_KRW
    # spread 값 확인 (0.5% 이상이면 위험)
    ```
 
