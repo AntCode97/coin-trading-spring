@@ -260,11 +260,12 @@ class TradingEngine(
 
         // 1.5 총 자산 기록 (CircuitBreaker 낙폭 추적용)
         val totalAssetKrw = calculateTotalAssetKrw(balances, state.currentPrice, market)
-        circuitBreaker.recordTotalAsset(totalAssetKrw)
-        dailyLossLimitService.syncInitialCapitalForToday(totalAssetKrw)
+        circuitBreaker.recordTotalAsset(totalAssetKrw.toDouble())
+        dailyLossLimitService.syncInitialCapitalForToday(totalAssetKrw.toDouble())
 
         // 2. 리스크 체크
-        val riskCheck = riskManager.canTrade(market, krwBalance)
+        // 실질 리스크는 KRW 가용잔고가 아닌 총자산 기준으로 평가해야 왜곡이 없다.
+        val riskCheck = riskManager.canTrade(market, totalAssetKrw)
         if (!riskCheck.canTrade) {
             log.warn("[$market] 리스크 체크 실패: ${riskCheck.reason}")
 
@@ -422,7 +423,7 @@ class TradingEngine(
         balances: List<com.ant.cointrading.api.bithumb.Balance>,
         currentPrice: BigDecimal,
         market: String
-    ): Double {
+    ): BigDecimal {
         var totalKrw = BigDecimal.ZERO
 
         for (balance in balances) {
@@ -444,7 +445,7 @@ class TradingEngine(
             }
         }
 
-        return totalKrw.toDouble()
+        return totalKrw
     }
 
     private fun recordDailyPnlFromExecutedTrade(market: String, result: com.ant.cointrading.order.OrderResult) {
