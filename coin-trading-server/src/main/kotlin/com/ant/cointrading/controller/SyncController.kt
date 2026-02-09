@@ -66,10 +66,21 @@ class SyncController(
                 )
             }
 
-            // 실제로 잔고가 있는 코인만 필터링 (수량 > 0)
+            // balance(주문 가능) + locked(주문 묶임)을 실제 총 보유 수량으로 간주
             val coinsWithBalance = actualBalances
-                .filter { it.currency != "KRW" && it.balance > BigDecimal.ZERO }
-                .associateBy { it.currency }
+                .asSequence()
+                .filter { it.currency != "KRW" }
+                .groupBy { it.currency }
+                .mapValues { (_, balances) ->
+                    val available = balances.fold(BigDecimal.ZERO) { acc, balance -> acc + balance.balance }
+                    val locked = balances.fold(BigDecimal.ZERO) { acc, balance -> acc + (balance.locked ?: BigDecimal.ZERO) }
+                    BalanceSnapshot(
+                        available = available,
+                        locked = locked,
+                        total = available + locked
+                    )
+                }
+                .filterValues { it.total > BigDecimal.ZERO }
 
             log.info("실제 잔고 코인: ${coinsWithBalance.keys}")
 
@@ -78,6 +89,9 @@ class SyncController(
             memeScalperRepository.findByStatus("OPEN").forEach { allOpenMarkets.add(it.market) }
             volumeSurgeRepository.findByStatus("OPEN").forEach { allOpenMarkets.add(it.market) }
             dcaPositionRepository.findByStatus("OPEN").forEach { allOpenMarkets.add(it.market) }
+
+            // 동기화 중 잔고가 존재하는 포지션은 코인 단위로 집계 후 한 번만 비교
+            val expectedByCoin = mutableMapOf<String, CoinQuantityExpectation>()
 
             // 각 마켓별로 체결된 매도 주문 조회 (최근 500개 - 오래된 수기 매도 대응)
             val sellOrdersByMarket = mutableMapOf<String, List<com.ant.cointrading.api.bithumb.OrderResponse>>()
@@ -167,23 +181,13 @@ class SyncController(
                         fixedCount++
                     }
                 } else {
-                    // 잔고 있음 -> 검증
-                    val dbQuantity = BigDecimal(position.quantity)
-                    val actualQuantity = actualBalanceObj.balance
-
-                    if ((dbQuantity - actualQuantity).abs() > BigDecimal("0.0001")) {
-                        log.warn("[Meme Scalper] ${position.market} 수량 불일치 DB=$dbQuantity, 실제=$actualQuantity")
-                        results.add(SyncAction(
-                            market = position.market,
-                            strategy = "Meme Scalper",
-                            action = "QUANTITY_MISMATCH",
-                            reason = "수량 불일치",
-                            dbQuantity = position.quantity,
-                            actualQuantity = actualQuantity.toDouble()
-                        ))
-                    } else {
-                        verifiedCount++
-                    }
+                    registerExpectedQuantity(
+                        expectedByCoin = expectedByCoin,
+                        coinSymbol = coinSymbol,
+                        market = position.market,
+                        strategy = "Meme Scalper",
+                        quantity = BigDecimal.valueOf(position.quantity)
+                    )
                 }
             }
 
@@ -254,21 +258,13 @@ class SyncController(
                         fixedCount++
                     }
                 } else {
-                    val dbQuantity = BigDecimal(position.quantity)
-                    val actualQuantity = actualBalanceObj.balance
-
-                    if ((dbQuantity - actualQuantity).abs() > BigDecimal("0.0001")) {
-                        results.add(SyncAction(
-                            market = position.market,
-                            strategy = "Volume Surge",
-                            action = "QUANTITY_MISMATCH",
-                            reason = "수량 불일치",
-                            dbQuantity = position.quantity,
-                            actualQuantity = actualQuantity.toDouble()
-                        ))
-                    } else {
-                        verifiedCount++
-                    }
+                    registerExpectedQuantity(
+                        expectedByCoin = expectedByCoin,
+                        coinSymbol = coinSymbol,
+                        market = position.market,
+                        strategy = "Volume Surge",
+                        quantity = BigDecimal.valueOf(position.quantity)
+                    )
                 }
             }
 
@@ -339,21 +335,53 @@ class SyncController(
                         fixedCount++
                     }
                 } else {
-                    val dbQuantity = BigDecimal(position.totalQuantity)
-                    val actualQuantity = actualBalanceObj.balance
+                    registerExpectedQuantity(
+                        expectedByCoin = expectedByCoin,
+                        coinSymbol = coinSymbol,
+                        market = position.market,
+                        strategy = "DCA",
+                        quantity = BigDecimal.valueOf(position.totalQuantity)
+                    )
+                }
+            }
 
-                    if ((dbQuantity - actualQuantity).abs() > BigDecimal("0.0001")) {
-                        results.add(SyncAction(
-                            market = position.market,
-                            strategy = "DCA",
+            // 코인 단위로 DB 기대 수량과 실제 수량(available + locked) 비교
+            expectedByCoin.forEach { (coinSymbol, expectation) ->
+                val actualSnapshot = coinsWithBalance[coinSymbol]
+                val actualQuantity = actualSnapshot?.total ?: BigDecimal.ZERO
+                val dbQuantity = expectation.expectedQuantity
+                val diff = (dbQuantity - actualQuantity).abs()
+                val tolerance = calculateQuantityTolerance(dbQuantity, actualQuantity)
+
+                if (diff > tolerance) {
+                    val marketLabel = expectation.markets.sorted().joinToString(",")
+                    val strategyLabel = expectation.strategies.sorted().joinToString(" + ")
+                    val available = actualSnapshot?.available ?: BigDecimal.ZERO
+                    val locked = actualSnapshot?.locked ?: BigDecimal.ZERO
+
+                    log.warn(
+                        "[Sync] 수량 불일치 coin={}, markets={}, DB={}, 실제={}, available={}, locked={}, diff={}, tolerance={}",
+                        coinSymbol,
+                        marketLabel,
+                        dbQuantity,
+                        actualQuantity,
+                        available,
+                        locked,
+                        diff,
+                        tolerance
+                    )
+                    results.add(
+                        SyncAction(
+                            market = marketLabel,
+                            strategy = strategyLabel,
                             action = "QUANTITY_MISMATCH",
-                            reason = "수량 불일치",
-                            dbQuantity = position.totalQuantity,
+                            reason = "수량 불일치(coin=$coinSymbol, available=${available.stripTrailingZeros().toPlainString()}, locked=${locked.stripTrailingZeros().toPlainString()}, tolerance=${tolerance.stripTrailingZeros().toPlainString()})",
+                            dbQuantity = dbQuantity.toDouble(),
                             actualQuantity = actualQuantity.toDouble()
-                        ))
-                    } else {
-                        verifiedCount++
-                    }
+                        )
+                    )
+                } else {
+                    verifiedCount += expectation.positionCount
                 }
             }
 
@@ -409,7 +437,10 @@ class SyncController(
      */
     private fun isMatchingOrder(order: com.ant.cointrading.api.bithumb.OrderResponse, positionQty: Double): Boolean {
         val executedQty = order.executedVolume ?: return false
-        val positionQty = BigDecimal(positionQty)
+        if (positionQty <= 0.0) return false
+
+        val positionQty = BigDecimal.valueOf(positionQty)
+        if (positionQty <= BigDecimal.ZERO) return false
 
         // 수량이 10% 이내로 일치하면 같은 주문으로 간주
         val diff = (executedQty - positionQty).abs()
@@ -528,11 +559,50 @@ class SyncController(
      */
     private fun isMatchingOrderForDca(order: com.ant.cointrading.api.bithumb.OrderResponse, positionQty: Double): Boolean {
         val executedQty = order.executedVolume ?: return false
-        val positionQty = BigDecimal(positionQty)
+        if (positionQty <= 0.0) return false
+
+        val positionQty = BigDecimal.valueOf(positionQty)
+        if (positionQty <= BigDecimal.ZERO) return false
 
         // DCA는 총 수량보다 크거나 같으면 일치로 간주 (부분 청산 가능)
         return executedQty >= positionQty.multiply(BigDecimal("0.9"))
     }
+
+    private fun registerExpectedQuantity(
+        expectedByCoin: MutableMap<String, CoinQuantityExpectation>,
+        coinSymbol: String,
+        market: String,
+        strategy: String,
+        quantity: BigDecimal
+    ) {
+        if (quantity <= BigDecimal.ZERO) return
+
+        val expectation = expectedByCoin.getOrPut(coinSymbol) { CoinQuantityExpectation() }
+        expectation.expectedQuantity = expectation.expectedQuantity + quantity
+        expectation.positionCount += 1
+        expectation.markets.add(market)
+        expectation.strategies.add(strategy)
+    }
+
+    private fun calculateQuantityTolerance(dbQuantity: BigDecimal, actualQuantity: BigDecimal): BigDecimal {
+        val base = dbQuantity.max(actualQuantity).abs()
+        val relativeTolerance = base.multiply(BigDecimal("0.001")) // 0.1%
+        val absoluteTolerance = BigDecimal("0.0001")
+        return relativeTolerance.max(absoluteTolerance)
+    }
+
+    private data class BalanceSnapshot(
+        val available: BigDecimal,
+        val locked: BigDecimal,
+        val total: BigDecimal
+    )
+
+    private data class CoinQuantityExpectation(
+        var expectedQuantity: BigDecimal = BigDecimal.ZERO,
+        var positionCount: Int = 0,
+        val markets: MutableSet<String> = mutableSetOf(),
+        val strategies: MutableSet<String> = mutableSetOf()
+    )
 }
 
 data class SyncResult(
