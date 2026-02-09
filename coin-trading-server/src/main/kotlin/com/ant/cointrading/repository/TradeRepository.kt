@@ -19,6 +19,7 @@ interface TradeRepository : JpaRepository<TradeEntity, Long> {
     fun findTopByOrderIdOrderByCreatedAtDesc(orderId: String): TradeEntity?
     fun findByStrategy(strategy: String): List<TradeEntity>
     fun findByStrategyAndCreatedAtBetween(strategy: String, start: Instant, end: Instant): List<TradeEntity>
+    fun findTopByMarketAndSimulatedOrderByCreatedAtDesc(market: String, simulated: Boolean): TradeEntity?
 
     @Query(
         value = "SELECT * FROM trades t WHERE t.market = :market AND t.side = 'BUY' ORDER BY t.created_at DESC LIMIT 1",

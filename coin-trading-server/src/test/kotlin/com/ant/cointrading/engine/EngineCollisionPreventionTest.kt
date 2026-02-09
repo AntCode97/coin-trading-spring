@@ -1,5 +1,6 @@
 package com.ant.cointrading.engine
 
+import com.ant.cointrading.config.TradingProperties
 import com.ant.cointrading.repository.MemeScalperTradeEntity
 import com.ant.cointrading.repository.MemeScalperTradeRepository
 import com.ant.cointrading.repository.TradeRepository
@@ -12,7 +13,6 @@ import org.mockito.kotlin.eq
 import org.mockito.kotlin.mock
 import org.mockito.kotlin.verify
 import org.mockito.kotlin.whenever
-import io.mockk.mockk
 import com.ant.cointrading.repository.TradeEntity
 import java.time.Instant
 import kotlin.test.assertTrue
@@ -29,17 +29,21 @@ import kotlin.test.assertEquals
 class EngineCollisionPreventionTest {
 
     private lateinit var globalPositionManager: GlobalPositionManager
+    private lateinit var tradingProperties: TradingProperties
     private lateinit var tradeRepository: TradeRepository
     private lateinit var volumeSurgeRepository: VolumeSurgeTradeRepository
     private lateinit var memeScalperRepository: MemeScalperTradeRepository
 
     @BeforeEach
     fun setUp() {
+        tradingProperties = mock()
         tradeRepository = mock()
         volumeSurgeRepository = mock()
         memeScalperRepository = mock()
+        whenever(tradingProperties.markets).thenReturn(listOf("KRW-BTC", "KRW-ETH", "KRW-XRP"))
 
         globalPositionManager = GlobalPositionManager(
+            tradingProperties,
             tradeRepository,
             volumeSurgeRepository,
             memeScalperRepository
@@ -51,7 +55,7 @@ class EngineCollisionPreventionTest {
         // Given: VolumeSurgeEngine이 BTC를 보유 중
         whenever(volumeSurgeRepository.findByMarketAndStatus(eq("KRW-BTC"), eq("OPEN")))
             .thenReturn(listOf(createVolumeSurgeTrade("KRW-BTC")))
-        whenever(tradeRepository.findLastBuyByMarketAndSimulated(eq("KRW-BTC"), eq(false)))
+        whenever(tradeRepository.findTopByMarketAndSimulatedOrderByCreatedAtDesc(eq("KRW-BTC"), eq(false)))
             .thenReturn(null)
 
         // 캐시 초기화
@@ -68,7 +72,7 @@ class EngineCollisionPreventionTest {
 
         // 검증: 모든 Repository가 호출되었는지 확인
         verify(volumeSurgeRepository).findByMarketAndStatus(eq("KRW-BTC"), eq("OPEN"))
-        verify(tradeRepository).findLastBuyByMarketAndSimulated(eq("KRW-BTC"), eq(false))
+        verify(tradeRepository).findTopByMarketAndSimulatedOrderByCreatedAtDesc(eq("KRW-BTC"), eq(false))
     }
 
     @Test
@@ -76,7 +80,7 @@ class EngineCollisionPreventionTest {
         // Given: MemeScalperEngine이 ETH를 보유 중
         whenever(memeScalperRepository.findByMarketAndStatus(eq("KRW-ETH"), eq("OPEN")))
             .thenReturn(listOf(createMemeScalperTrade("KRW-ETH")))
-        whenever(tradeRepository.findLastBuyByMarketAndSimulated(eq("KRW-ETH"), eq(false)))
+        whenever(tradeRepository.findTopByMarketAndSimulatedOrderByCreatedAtDesc(eq("KRW-ETH"), eq(false)))
             .thenReturn(null)
 
         globalPositionManager.invalidateCache()
@@ -94,8 +98,8 @@ class EngineCollisionPreventionTest {
     @Test
     fun `MemeScalperEngine은 TradingEngine의 포지션을 확인하고 진입을 차단해야 한다`() {
         // Given: TradingEngine이 XRP를 보유 중
-        whenever(tradeRepository.findLastBuyByMarketAndSimulated(eq("KRW-XRP"), eq(false)))
-            .thenReturn(mockk<TradeEntity>())
+        whenever(tradeRepository.findTopByMarketAndSimulatedOrderByCreatedAtDesc(eq("KRW-XRP"), eq(false)))
+            .thenReturn(createTradingTrade("KRW-XRP", "BUY"))
         whenever(volumeSurgeRepository.findByMarketAndStatus(eq("KRW-XRP"), eq("OPEN")))
             .thenReturn(emptyList())
         whenever(memeScalperRepository.findByMarketAndStatus(eq("KRW-XRP"), eq("OPEN")))
@@ -116,7 +120,7 @@ class EngineCollisionPreventionTest {
     @Test
     fun `포지션이 없으면 모든 엔진이 진입 가능해야 한다`() {
         // Given: 모든 엔진에 포지션 없음
-        whenever(tradeRepository.findLastBuyByMarketAndSimulated(any(), eq(false))).thenReturn(null)
+        whenever(tradeRepository.findTopByMarketAndSimulatedOrderByCreatedAtDesc(any(), eq(false))).thenReturn(null)
         whenever(volumeSurgeRepository.findByMarketAndStatus(any(), eq("OPEN"))).thenReturn(emptyList())
         whenever(memeScalperRepository.findByMarketAndStatus(any(), eq("OPEN"))).thenReturn(emptyList())
 
@@ -156,7 +160,7 @@ class EngineCollisionPreventionTest {
     @Test
     fun `캐시 무효화 후 다음 조회 시 DB를 다시 조회해야 한다`() {
         // Given: 처음 조회는 DB 호출
-        whenever(tradeRepository.findLastBuyByMarketAndSimulated(eq("KRW-BTC"), eq(false)))
+        whenever(tradeRepository.findTopByMarketAndSimulatedOrderByCreatedAtDesc(eq("KRW-BTC"), eq(false)))
             .thenReturn(null)
         whenever(volumeSurgeRepository.findByMarketAndStatus(eq("KRW-BTC"), eq("OPEN")))
             .thenReturn(emptyList())
@@ -167,14 +171,14 @@ class EngineCollisionPreventionTest {
         val firstResult = globalPositionManager.hasOpenPosition("KRW-BTC")
 
         // Then: DB가 호출됨
-        verify(tradeRepository).findLastBuyByMarketAndSimulated(eq("KRW-BTC"), eq(false))
+        verify(tradeRepository).findTopByMarketAndSimulatedOrderByCreatedAtDesc(eq("KRW-BTC"), eq(false))
 
         // Given: 캐시 TTL 이내에 두 번째 조회
         val secondResult = globalPositionManager.hasOpenPosition("KRW-BTC")
 
         // Then: DB가 호출되지 않음 (캐시 사용)
         verify(tradeRepository, org.mockito.Mockito.times(1))
-            .findLastBuyByMarketAndSimulated(any(), eq(false))
+            .findTopByMarketAndSimulatedOrderByCreatedAtDesc(any(), eq(false))
 
         // Given: 캐시 무효화 후 세 번째 조회
         globalPositionManager.invalidateCache("KRW-BTC")
@@ -182,7 +186,7 @@ class EngineCollisionPreventionTest {
 
         // Then: DB가 다시 호출됨
         verify(tradeRepository, org.mockito.Mockito.times(2))
-            .findLastBuyByMarketAndSimulated(eq("KRW-BTC"), eq(false))
+            .findTopByMarketAndSimulatedOrderByCreatedAtDesc(eq("KRW-BTC"), eq(false))
     }
 
     // Helper methods
@@ -208,6 +212,24 @@ class EngineCollisionPreventionTest {
             status = "OPEN",
             entryRsi = 55.0,
             trailingActive = false
+        )
+    }
+
+    private fun createTradingTrade(market: String, side: String): TradeEntity {
+        return TradeEntity(
+            orderId = "order-$side",
+            market = market,
+            side = side,
+            type = "MARKET",
+            price = 100.0,
+            quantity = 1.0,
+            totalAmount = 100.0,
+            fee = 0.04,
+            strategy = "TEST",
+            confidence = 80.0,
+            reason = "test",
+            simulated = false,
+            createdAt = Instant.now()
         )
     }
 }

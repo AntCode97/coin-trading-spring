@@ -55,7 +55,7 @@ class BreakoutStrategy(
         regime: RegimeAnalysis
     ): TradingSignal {
         if (candles.size < properties.bollingerPeriod) {
-            return createHoldSignal(market, "데이터 부족 (필요: ${properties.bollingerPeriod}개)")
+            return createHoldSignal(market, currentPrice, "데이터 부족 (필요: ${properties.bollingerPeriod}개)")
         }
 
         // 볼린저 밴드 계산
@@ -93,6 +93,7 @@ class BreakoutStrategy(
 
             else -> createHoldSignal(
                 market,
+                currentPrice,
                 "Breakout 미달: " +
                         "상단돌파=$isBreakoutUp, " +
                         "하단돌파=$isBreakoutDown, " +
@@ -198,12 +199,12 @@ class BreakoutStrategy(
         )
     }
 
-    private fun createHoldSignal(market: String, reason: String): TradingSignal {
+    private fun createHoldSignal(market: String, price: BigDecimal, reason: String): TradingSignal {
         return TradingSignal(
             market = market,
             action = SignalAction.HOLD,
             confidence = 0.0,
-            price = BigDecimal.ZERO,
+            price = price,
             reason = reason,
             strategy = name
         )

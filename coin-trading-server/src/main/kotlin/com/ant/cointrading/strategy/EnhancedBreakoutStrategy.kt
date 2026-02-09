@@ -75,7 +75,7 @@ class EnhancedBreakoutStrategy(
         regime: RegimeAnalysis
     ): TradingSignal {
         if (candles.size < 50) {
-            return createHoldSignal(market, "데이터 부족 (최소 50개 캔들 필요)")
+            return createHoldSignal(market, currentPrice, "데이터 부족 (최소 50개 캔들 필요)")
         }
 
         // 1. 컨플루언스 분석
@@ -140,6 +140,7 @@ class EnhancedBreakoutStrategy(
 
         return createHoldSignal(
             market = market,
+            price = currentPrice,
             reason = "컨플루언스 점수 부족 (${confluence.score}/75)\n${confluence.details}"
         )
     }
@@ -348,12 +349,12 @@ class EnhancedBreakoutStrategy(
         )
     }
 
-    private fun createHoldSignal(market: String, reason: String): TradingSignal {
+    private fun createHoldSignal(market: String, price: BigDecimal, reason: String): TradingSignal {
         return TradingSignal(
             market = market,
             action = SignalAction.HOLD,
             confidence = 0.0,
-            price = BigDecimal.ZERO,
+            price = price,
             reason = reason,
             strategy = name
         )

@@ -3,6 +3,8 @@ package com.ant.cointrading.engine
 import org.junit.jupiter.api.DisplayName
 import org.junit.jupiter.api.Nested
 import org.junit.jupiter.api.Test
+import com.ant.cointrading.model.SignalAction
+import com.ant.cointrading.model.TradingSignal
 import java.math.BigDecimal
 import java.time.Duration
 import java.time.Instant
@@ -88,6 +90,56 @@ class TradingEngineLoopPreventionTest {
             val canSell = lastBuy == null || Duration.between(lastBuy, Instant.now()).seconds >= MIN_HOLDING_SECONDS
 
             assertTrue(canSell, "Should allow sell if no buy record exists")
+        }
+    }
+
+    @Nested
+    @DisplayName("Emergency Exit Bypass Tests")
+    inner class EmergencyExitBypassTest {
+
+        @Test
+        @DisplayName("Stop-loss sell bypasses minimum holding time")
+        fun stopLossBypassesHoldingGuard() {
+            val signal = TradingSignal(
+                market = "BTC_KRW",
+                action = SignalAction.SELL,
+                confidence = 95.0,
+                price = BigDecimal("60000000"),
+                reason = "손절 청산 -2.3%",
+                strategy = "VOLATILITY_SURVIVAL"
+            )
+
+            assertTrue(TradingEngine.shouldBypassMinHoldingForSell(signal))
+        }
+
+        @Test
+        @DisplayName("Trailing stop sell bypasses minimum holding time")
+        fun trailingStopBypassesHoldingGuard() {
+            val signal = TradingSignal(
+                market = "BTC_KRW",
+                action = SignalAction.SELL,
+                confidence = 84.0,
+                price = BigDecimal("63000000"),
+                reason = "트레일링 청산 +1.5%",
+                strategy = "VOLATILITY_SURVIVAL"
+            )
+
+            assertTrue(TradingEngine.shouldBypassMinHoldingForSell(signal))
+        }
+
+        @Test
+        @DisplayName("Take-profit sell does not bypass minimum holding time")
+        fun takeProfitDoesNotBypassHoldingGuard() {
+            val signal = TradingSignal(
+                market = "BTC_KRW",
+                action = SignalAction.SELL,
+                confidence = 80.0,
+                price = BigDecimal("65500000"),
+                reason = "목표가 청산 +3.8%",
+                strategy = "VOLATILITY_SURVIVAL"
+            )
+
+            assertFalse(TradingEngine.shouldBypassMinHoldingForSell(signal))
         }
     }
 

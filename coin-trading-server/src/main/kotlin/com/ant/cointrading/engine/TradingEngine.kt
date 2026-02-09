@@ -86,6 +86,23 @@ class TradingEngine(
         const val BEAR_TREND_THRESHOLD = 0.8  // 80% 이상 마켓이 하락 추세면 중지
         const val BULL_TREND_THRESHOLD = 0.5  // 50% 이상 상승/횡보면 재개
         const val MIN_BEAR_DURATION_MINUTES = 30L  // 최소 30분간 하락 추세 유지 시 중지
+
+        private val EMERGENCY_EXIT_KEYWORDS = listOf(
+            "손절",
+            "stop_loss",
+            "stop-loss",
+            "stop loss",
+            "리스크 오프",
+            "risk off",
+            "트레일링",
+            "trailing"
+        )
+
+        internal fun shouldBypassMinHoldingForSell(signal: TradingSignal): Boolean {
+            if (signal.action != SignalAction.SELL) return false
+            val normalizedReason = signal.reason.lowercase()
+            return EMERGENCY_EXIT_KEYWORDS.any { normalizedReason.contains(it) }
+        }
     }
 
     private val log = LoggerFactory.getLogger(TradingEngine::class.java)
@@ -218,29 +235,11 @@ class TradingEngine(
 
         // 0.5 [무한 루프 방지] 쿨다운 및 최소 보유 시간 체크
         val now = Instant.now()
-
-        if (signal.action == SignalAction.BUY) {
-            // 매수 시: 마지막 매도 후 쿨다운 체크
-            val lastSell = lastSellTime[market]
-            if (lastSell != null) {
-                val secondsSinceSell = Duration.between(lastSell, now).seconds
-                if (secondsSinceSell < TRADE_COOLDOWN_SECONDS) {
-                    val remaining = TRADE_COOLDOWN_SECONDS - secondsSinceSell
-                    log.info("[$market] 재매수 쿨다운 중: ${remaining}초 남음")
-                    return
-                }
-            }
-        } else if (signal.action == SignalAction.SELL) {
-            // 매도 시: 최소 보유 시간 체크
-            val lastBuy = lastBuyTime[market]
-            if (lastBuy != null) {
-                val secondsSinceBuy = Duration.between(lastBuy, now).seconds
-                if (secondsSinceBuy < MIN_HOLDING_SECONDS) {
-                    val remaining = MIN_HOLDING_SECONDS - secondsSinceBuy
-                    log.info("[$market] 최소 보유 시간 미충족: ${remaining}초 남음 (수수료 손실 방지)")
-                    return
-                }
-            }
+        if (signal.action == SignalAction.BUY && shouldBlockBuyByCooldown(market, now)) {
+            return
+        }
+        if (signal.action == SignalAction.SELL && shouldBlockSellByHolding(market, signal, now)) {
+            return
         }
 
         // 1. 잔고 조회
@@ -306,9 +305,9 @@ class TradingEngine(
                 return
             }
 
-            // 2. 다른 엔진(VolumeSurge, MemeScalper)에서 해당 마켓에 포지션이 있는지 확인
-            if (globalPositionManager.hasOpenPosition(market)) {
-                log.warn("[$market] 다른 엔진에서 열린 포지션 존재 - TradingEngine 진입 차단")
+            // 2. 다른 엔진(VolumeSurge, MemeScalper)에서 해당 마켓을 점유 중인지 확인
+            if (isOccupiedByOtherEngines(market)) {
+                log.warn("[$market] 다른 엔진 점유 중 - TradingEngine 진입 차단")
                 return
             }
         } else if (signal.action == SignalAction.SELL) {
@@ -460,6 +459,38 @@ class TradingEngine(
 
         dailyLossLimitService.recordPnl(pnl)
         log.info("[$market] 일일 손익 반영: pnl=${String.format("%.0f", pnl)}원, orderId=$orderId")
+    }
+
+    private fun shouldBlockBuyByCooldown(market: String, now: Instant): Boolean {
+        val lastSell = lastSellTime[market] ?: return false
+        val secondsSinceSell = Duration.between(lastSell, now).seconds
+        if (secondsSinceSell >= TRADE_COOLDOWN_SECONDS) return false
+
+        val remaining = TRADE_COOLDOWN_SECONDS - secondsSinceSell
+        log.info("[$market] 재매수 쿨다운 중: ${remaining}초 남음")
+        return true
+    }
+
+    private fun shouldBlockSellByHolding(market: String, signal: TradingSignal, now: Instant): Boolean {
+        val lastBuy = lastBuyTime[market] ?: return false
+        val secondsSinceBuy = Duration.between(lastBuy, now).seconds
+        if (secondsSinceBuy >= MIN_HOLDING_SECONDS) return false
+
+        if (shouldBypassMinHoldingForSell(signal)) {
+            val remaining = MIN_HOLDING_SECONDS - secondsSinceBuy
+            log.warn("[$market] 보호성 매도 감지로 최소 보유 시간 우회: ${remaining}초 단축")
+            return false
+        }
+
+        val remaining = MIN_HOLDING_SECONDS - secondsSinceBuy
+        log.info("[$market] 최소 보유 시간 미충족: ${remaining}초 남음 (수수료 손실 방지)")
+        return true
+    }
+
+    private fun isOccupiedByOtherEngines(market: String): Boolean {
+        val occupiedByVolumeSurge = globalPositionManager.hasOpenPositionInEngine(market, EngineType.VOLUME_SURGE)
+        val occupiedByMemeScalper = globalPositionManager.hasOpenPositionInEngine(market, EngineType.MEME_SCALPER)
+        return occupiedByVolumeSurge || occupiedByMemeScalper
     }
 
     /**

@@ -3,6 +3,7 @@ package com.ant.cointrading.engine
 import com.ant.cointrading.repository.MemeScalperTradeRepository
 import com.ant.cointrading.repository.VolumeSurgeTradeRepository
 import com.ant.cointrading.repository.TradeRepository
+import com.ant.cointrading.config.TradingProperties
 import org.slf4j.LoggerFactory
 import org.springframework.stereotype.Component
 import java.util.concurrent.ConcurrentHashMap
@@ -23,16 +24,12 @@ import java.util.concurrent.locks.ReentrantLock
  */
 @Component
 class GlobalPositionManager(
+    private val tradingProperties: TradingProperties,
     private val tradeRepository: TradeRepository,
     private val volumeSurgeRepository: VolumeSurgeTradeRepository,
     private val memeScalperRepository: MemeScalperTradeRepository
 ) {
     private val log = LoggerFactory.getLogger(javaClass)
-
-    // [버그 수정] 하드코딩된 마켓 목록 상수로 추출 (중복 제거)
-    companion object {
-        val TRADING_ENGINE_MARKETS = listOf("KRW-BTC", "KRW-ETH", "KRW-XRP", "KRW-SOL")
-    }
 
     // 동시성 제어를 위한 락
     private val lock = ReentrantLock()
@@ -73,7 +70,7 @@ class GlobalPositionManager(
             }
 
             // DB에 포지션 존재 확인
-            val hasInTrades = tradeRepository.findLastBuyByMarketAndSimulated(normalizedMarket, false) != null
+            val hasInTrades = hasTradingEngineOpenPosition(normalizedMarket)
             val hasInVolumeSurge = volumeSurgeRepository.findByMarketAndStatus(normalizedMarket, "OPEN").isNotEmpty()
             val hasInMemeScalper = memeScalperRepository.findByMarketAndStatus(normalizedMarket, "OPEN").isNotEmpty()
 
@@ -135,7 +132,7 @@ class GlobalPositionManager(
             }
 
             // TradingEngine: 마지막 BUY가 있는데 매칭되는 SELL이 없으면 포지션으로 간주
-            val hasInTrades = tradeRepository.findLastBuyByMarketAndSimulated(normalizedMarket, false) != null
+            val hasInTrades = hasTradingEngineOpenPosition(normalizedMarket)
 
             val hasInVolumeSurge = volumeSurgeRepository.findByMarketAndStatus(normalizedMarket, "OPEN").isNotEmpty()
 
@@ -166,22 +163,21 @@ class GlobalPositionManager(
         val countInMemeScalper = memeScalperRepository.countByMarketAndStatus(normalizedMarket, "OPEN").toInt()
 
         // TradingEngine은 포지션당 하나만 가정 (복수 포지션 없음)
-        val hasInTrades = tradeRepository.findLastBuyByMarketAndSimulated(normalizedMarket, false) != null
+        val hasInTrades = hasTradingEngineOpenPosition(normalizedMarket)
 
         return countInVolumeSurge + countInMemeScalper + if (hasInTrades) 1 else 0
     }
 
     /**
      * 전체 열린 포지션 수 (모든 마켓, 모든 엔진 합산)
-     * [버그 수정] 하드코딩된 마켓 목록을 상수로 변경 (중복 제거)
      */
     fun getTotalOpenPositions(): Int {
         val volumeSurgeCount = volumeSurgeRepository.countByStatus("OPEN").toInt()
         val memeScalperCount = memeScalperRepository.countByStatus("OPEN")
 
-        // TradingEngine은 BUY 포지션 수
-        val tradesCount = TRADING_ENGINE_MARKETS.count { market ->
-            tradeRepository.findLastBuyByMarketAndSimulated(market, false) != null
+        // TradingEngine은 설정된 마켓 기준 최신 거래 side로 포지션 여부 판단
+        val tradesCount = configuredTradingMarkets().count { market ->
+            hasTradingEngineOpenPosition(market)
         }
 
         return volumeSurgeCount + memeScalperCount + tradesCount
@@ -213,7 +209,7 @@ class GlobalPositionManager(
     fun hasOpenPositionInEngine(market: String, engine: EngineType): Boolean {
         val normalizedMarket = normalizeMarket(market)
         return when (engine) {
-            EngineType.TRADING -> tradeRepository.findLastBuyByMarketAndSimulated(normalizedMarket, false) != null
+            EngineType.TRADING -> hasTradingEngineOpenPosition(normalizedMarket)
             EngineType.VOLUME_SURGE -> volumeSurgeRepository.findByMarketAndStatus(normalizedMarket, "OPEN").isNotEmpty()
             EngineType.MEME_SCALPER -> memeScalperRepository.findByMarketAndStatus(normalizedMarket, "OPEN").isNotEmpty()
         }
@@ -221,15 +217,14 @@ class GlobalPositionManager(
 
     /**
      * 포지션 상태 요약 (모니터링용)
-     * [버그 수정] 하드코딩된 마켓 목록을 상수로 변경 (중복 제거)
      */
     fun getPositionSummary(): Map<String, Any> {
         val volumeSurgePositions = volumeSurgeRepository.findByStatus("OPEN")
         val memeScalperPositions = memeScalperRepository.findByStatus("OPEN")
 
-        // TradingEngine 포지션 (모든 마켓의 마지막 BUY)
-        val tradesPositions = TRADING_ENGINE_MARKETS.filter { market ->
-            tradeRepository.findLastBuyByMarketAndSimulated(market, false) != null
+        // TradingEngine 포지션 (설정된 마켓 기준 최신 거래 side=BUY)
+        val tradesPositions = configuredTradingMarkets().filter { market ->
+            hasTradingEngineOpenPosition(market)
         }
 
         val byMarket = mutableMapOf<String, MutableList<String>>()
@@ -266,6 +261,19 @@ class GlobalPositionManager(
     private fun doNormalizeMarket(market: String): String {
         // KRW-BTC, BTC_KRW, KRW_BTC 등 다양한 형식을 KRW-BTC로 통일
         return PositionHelper.normalizeMarket(market)
+    }
+
+    private fun configuredTradingMarkets(): List<String> {
+        return tradingProperties.markets.map(::normalizeMarket).distinct()
+    }
+
+    /**
+     * TradingEngine 포지션 판정:
+     * 최신 실거래 기록의 side가 BUY면 OPEN, SELL이면 CLOSED.
+     */
+    private fun hasTradingEngineOpenPosition(normalizedMarket: String): Boolean {
+        val latestTrade = tradeRepository.findTopByMarketAndSimulatedOrderByCreatedAtDesc(normalizedMarket, false)
+        return latestTrade?.side?.equals("BUY", ignoreCase = true) == true
     }
 
     /**
