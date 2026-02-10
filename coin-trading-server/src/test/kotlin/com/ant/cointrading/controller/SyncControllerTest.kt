@@ -24,6 +24,7 @@ import org.mockito.kotlin.verify
 import org.mockito.kotlin.whenever
 import java.math.BigDecimal
 import kotlin.test.assertEquals
+import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
 
 @ExtendWith(MockitoExtension::class)
@@ -232,6 +233,46 @@ class SyncControllerTest {
         assertTrue(result.success)
         assertEquals(0, result.actions.count { it.action == "QUANTITY_MISMATCH" })
         assertEquals(2, result.verifiedCount)
+    }
+
+    @Test
+    @DisplayName("CLOSED(ABANDONED_*) 잔량이 남아 있으면 OPEN DCA 수량으로 흡수 보정한다")
+    fun reconcilesClosedCarryOverIntoOpenDcaQuantity() {
+        val openDca = DcaPositionEntity(
+            id = 10L,
+            market = "KRW-XRP",
+            totalQuantity = 7.21060704,
+            averagePrice = 2149.3336,
+            totalInvested = 15497.99,
+            status = "OPEN"
+        )
+        val closedCarryOver = DcaPositionEntity(
+            id = 8L,
+            market = "KRW-XRP",
+            totalQuantity = 7.18648084,
+            averagePrice = 2101.0,
+            totalInvested = 15097.59,
+            status = "CLOSED",
+            exitReason = "ABANDONED_MIN_AMOUNT"
+        )
+
+        whenever(bithumbPrivateApi.getBalances()).thenReturn(
+            listOf(
+                balance(currency = "XRP", available = "14.39708788", locked = "0")
+            )
+        )
+        whenever(memeScalperRepository.findByStatus("OPEN")).thenReturn(emptyList())
+        whenever(volumeSurgeRepository.findByStatus("OPEN")).thenReturn(emptyList())
+        whenever(dcaPositionRepository.findAll()).thenReturn(listOf(openDca, closedCarryOver))
+        whenever(bithumbPrivateApi.getOrders("KRW-XRP", "done", 0, 500)).thenReturn(emptyList())
+
+        val result = syncController.syncPositions()
+
+        assertTrue(result.success)
+        assertEquals(0, result.actions.count { it.action == "QUANTITY_MISMATCH" })
+        val reconciled = result.actions.firstOrNull { it.action == "QUANTITY_RECONCILED" }
+        assertNotNull(reconciled)
+        assertTrue(reconciled.reason.contains("carryIds=8"))
     }
 
     private fun balance(currency: String, available: String, locked: String): Balance {

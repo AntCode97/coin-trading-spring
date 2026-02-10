@@ -374,6 +374,7 @@ class SyncController(
 
             // 코인 단위로 DB 기대 수량과 실제 수량(available + locked) 비교
             val openDcaByCoin = openDcaPositions.groupBy { extractCoinSymbol(it.market) }
+            val allDcaByCoin = allDcaPositions.groupBy { extractCoinSymbol(it.market) }
             expectedByCoin.forEach { (coinSymbol, expectation) ->
                 val actualSnapshot = coinsWithBalance[coinSymbol]
                 val actualQuantity = actualSnapshot?.total ?: BigDecimal.ZERO
@@ -397,6 +398,19 @@ class SyncController(
                     )
                     if (reconciledAction != null) {
                         results.add(reconciledAction)
+                        fixedCount++
+                        return@forEach
+                    }
+
+                    val carryOverReconciledAction = tryAutoReconcileDcaClosedCarryOver(
+                        coinSymbol = coinSymbol,
+                        expectation = expectation,
+                        dbQuantity = dbQuantity,
+                        actualQuantity = actualQuantity,
+                        allDcaByCoin = allDcaByCoin
+                    )
+                    if (carryOverReconciledAction != null) {
+                        results.add(carryOverReconciledAction)
                         fixedCount++
                         return@forEach
                     }
@@ -686,6 +700,84 @@ class SyncController(
         )
     }
 
+    /**
+     * CLOSED로 종료됐지만 수량이 남아있는 DCA 이력(예: ABANDONED_MIN_AMOUNT 잔량)을
+     * OPEN 포지션으로 흡수해 실제 잔고와 정합성을 맞춥니다.
+     */
+    private fun tryAutoReconcileDcaClosedCarryOver(
+        coinSymbol: String,
+        expectation: CoinQuantityExpectation,
+        dbQuantity: BigDecimal,
+        actualQuantity: BigDecimal,
+        allDcaByCoin: Map<String, List<DcaPositionEntity>>
+    ): SyncAction? {
+        if (actualQuantity <= dbQuantity) return null
+        if (expectation.strategies.size != 1 || !expectation.strategies.contains("DCA")) return null
+
+        val positions = allDcaByCoin[coinSymbol] ?: return null
+        val openPositions = positions.filter { normalizeStatus(it.status) == "OPEN" }
+        if (openPositions.size != 1) return null
+
+        val closedCarryOver = positions.filter { position ->
+            normalizeStatus(position.status) == "CLOSED" &&
+                position.totalQuantity > 0.0 &&
+                isCarryOverCandidate(position.exitReason)
+        }
+        if (closedCarryOver.isEmpty()) return null
+
+        val neededQuantity = actualQuantity - dbQuantity
+        val carryOverQuantity = closedCarryOver
+            .map { BigDecimal.valueOf(it.totalQuantity) }
+            .fold(BigDecimal.ZERO) { acc, qty -> acc + qty }
+        if (carryOverQuantity <= BigDecimal.ZERO) return null
+
+        // CLOSED 잔량 합계가 부족/과다하면 흡수하지 않음 (의도치 않은 수동 입금 보호)
+        val allowedGap = neededQuantity.multiply(BigDecimal("0.2")).max(BigDecimal("0.0005"))
+        val quantityGap = (carryOverQuantity - neededQuantity).abs()
+        if (quantityGap > allowedGap) return null
+
+        val openPosition = openPositions.first()
+        val originalOpenQty = openPosition.totalQuantity
+
+        val openCost = BigDecimal.valueOf(openPosition.averagePrice)
+            .multiply(BigDecimal.valueOf(openPosition.totalQuantity))
+        val carryOverCost = closedCarryOver.fold(BigDecimal.ZERO) { acc, position ->
+            acc + BigDecimal.valueOf(position.averagePrice).multiply(BigDecimal.valueOf(position.totalQuantity))
+        }
+
+        val blendedQuantity = BigDecimal.valueOf(openPosition.totalQuantity) + carryOverQuantity
+        if (blendedQuantity <= BigDecimal.ZERO) return null
+
+        val blendedAveragePrice = (openCost + carryOverCost)
+            .divide(blendedQuantity, 12, java.math.RoundingMode.HALF_UP)
+            .toDouble()
+
+        openPosition.totalQuantity = actualQuantity.toDouble()
+        openPosition.averagePrice = blendedAveragePrice
+        openPosition.totalInvested = blendedAveragePrice * openPosition.totalQuantity
+        dcaPositionRepository.save(openPosition)
+
+        val carryOverIds = closedCarryOver.mapNotNull { it.id }.sorted().joinToString(",")
+        log.info(
+            "[Sync] DCA CLOSED 잔량 흡수 coin={}, market={}, openBefore={}, carryOver={}, after={}, carryIds={}",
+            coinSymbol,
+            openPosition.market,
+            originalOpenQty,
+            carryOverQuantity,
+            openPosition.totalQuantity,
+            carryOverIds
+        )
+
+        return SyncAction(
+            market = openPosition.market,
+            strategy = "DCA",
+            action = "QUANTITY_RECONCILED",
+            reason = "CLOSED 잔량 흡수 보정(coin=$coinSymbol, openBefore=${BigDecimal.valueOf(originalOpenQty).stripTrailingZeros().toPlainString()}, carryOver=${carryOverQuantity.stripTrailingZeros().toPlainString()}, after=${actualQuantity.stripTrailingZeros().toPlainString()}, carryIds=$carryOverIds)",
+            dbQuantity = originalOpenQty,
+            actualQuantity = openPosition.totalQuantity
+        )
+    }
+
     private fun calculateQuantityTolerance(dbQuantity: BigDecimal, actualQuantity: BigDecimal): BigDecimal {
         val base = dbQuantity.max(actualQuantity).abs()
         val relativeTolerance = base.multiply(BigDecimal("0.001")) // 0.1%
@@ -703,6 +795,11 @@ class SyncController(
             normalized == "CLOSING" ||
             normalized.startsWith("ABANDONED") ||
             normalized.startsWith("FAILED")
+    }
+
+    private fun isCarryOverCandidate(exitReason: String?): Boolean {
+        val normalized = exitReason?.trim()?.uppercase() ?: return false
+        return normalized.startsWith("ABANDONED") || normalized == "SYNC_NO_BALANCE"
     }
 
     private data class BalanceSnapshot(
