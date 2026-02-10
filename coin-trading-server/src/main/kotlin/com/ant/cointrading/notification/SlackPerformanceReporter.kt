@@ -1,13 +1,14 @@
 package com.ant.cointrading.notification
 
+import com.ant.cointrading.repository.MemeScalperTradeEntity
 import com.ant.cointrading.repository.MemeScalperTradeRepository
+import com.ant.cointrading.repository.VolumeSurgeTradeEntity
 import com.ant.cointrading.repository.VolumeSurgeTradeRepository
 import com.ant.cointrading.stats.SharpeRatioCalculator
 import org.slf4j.LoggerFactory
 import org.springframework.scheduling.annotation.Scheduled
 import org.springframework.stereotype.Component
 import java.time.Instant
-import java.time.LocalDate
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 import java.time.temporal.ChronoUnit
@@ -30,11 +31,21 @@ class SlackPerformanceReporter(
     private val memeScalperRepository: MemeScalperTradeRepository,
     private val volumeSurgeRepository: VolumeSurgeTradeRepository
 ) {
+    private companion object {
+        const val MEME_SCALPER = "MEME_SCALPER"
+        const val VOLUME_SURGE = "VOLUME_SURGE"
+        const val CLOSED = "CLOSED"
+    }
 
     private val log = LoggerFactory.getLogger(javaClass)
 
     private val dateFormatter = DateTimeFormatter.ofPattern("MM-dd HH:mm")
         .withZone(ZoneId.of("Asia/Seoul"))
+
+    private data class ClosedTrade(
+        val entryTime: Instant?,
+        val pnlAmount: Double
+    )
 
     /**
      * 매일 정기 보고 (새벽 1시)
@@ -43,8 +54,8 @@ class SlackPerformanceReporter(
     fun sendDailyReport() {
         log.info("일일 성과 보고 전송 시작")
 
-        val memeStats = calculateStrategyStats("MEME_SCALPER", memeScalperRepository)
-        val volumeStats = calculateStrategyStats("VOLUME_SURGE", volumeSurgeRepository)
+        val memeStats = calculateStrategyStats(MEME_SCALPER, loadClosedMemeTrades())
+        val volumeStats = calculateStrategyStats(VOLUME_SURGE, loadClosedVolumeSurgeTrades())
 
         val report = formatDailyReport(memeStats, volumeStats)
         slackNotifier.sendSystemNotification("일일 성과 보고", report)
@@ -77,6 +88,7 @@ class SlackPerformanceReporter(
             | 마켓 | $market |
             | 진입가 | ${String.format("%.0f", entryPrice)}원 |
             | 청산가 | ${String.format("%.0f", exitPrice)}원 |
+            | 수량 | ${String.format("%.6f", quantity)} |
             | 수익률 | ${pnlSign}${String.format("%.2f", pnlPercent)}% |
             | 손익 | ${pnlSign}${String.format("%.0f", pnlAmount)}원 |
             | 사유 | $exitReason |
@@ -125,14 +137,8 @@ class SlackPerformanceReporter(
      */
     private fun calculateStrategyStats(
         strategyName: String,
-        repository: Any
+        trades: List<ClosedTrade>
     ): StrategyStats {
-        val trades = when (repository) {
-            is MemeScalperTradeRepository -> repository.findByStatus("CLOSED")
-            is VolumeSurgeTradeRepository -> repository.findByStatus("CLOSED")
-            else -> emptyList()
-        }
-
         if (trades.isEmpty()) {
             return StrategyStats(
                 name = strategyName,
@@ -147,10 +153,10 @@ class SlackPerformanceReporter(
         }
 
         val totalTrades = trades.size
-        val winningTrades = trades.count { getPnlAmount(it) > 0 }
+        val winningTrades = trades.count { it.pnlAmount > 0 }
         val winRate = winningTrades.toDouble() / totalTrades
 
-        val pnls = trades.map { getPnlAmount(it) }
+        val pnls = trades.map { it.pnlAmount }
         val totalPnl = pnls.sum()
         val avgPnl = pnls.average()
 
@@ -194,16 +200,10 @@ class SlackPerformanceReporter(
     /**
      * 거래 기간 계산 (일)
      */
-    private fun calculatePeriodDays(trades: List<Any>): Int {
+    private fun calculatePeriodDays(trades: List<ClosedTrade>): Int {
         if (trades.isEmpty()) return 1
 
-        val timestamps = trades.mapNotNull {
-            when (it) {
-                is com.ant.cointrading.repository.MemeScalperTradeEntity -> it.entryTime
-                is com.ant.cointrading.repository.VolumeSurgeTradeEntity -> it.entryTime
-                else -> null
-            }
-        }.sorted()
+        val timestamps = trades.mapNotNull { it.entryTime }.sorted()
 
         if (timestamps.size < 2) return 1
 
@@ -226,8 +226,6 @@ class SlackPerformanceReporter(
         val totalTrades = memeStats.totalTrades + volumeStats.totalTrades
         val totalWins = memeStats.winningTrades + volumeStats.winningTrades
         val winRate = if (totalTrades > 0) totalWins.toDouble() / totalTrades else 0.0
-
-        val headerColor = if (totalPnl >= 0) "초록" else "빨강"
 
         return """
             📊 *일일 성과 보고* (_${dateFormatter.format(Instant.now())}_)
@@ -277,12 +275,26 @@ class SlackPerformanceReporter(
         return criteria.joinToString("\n")
     }
 
-    private fun getPnlAmount(trade: Any): Double {
-        return when (trade) {
-            is com.ant.cointrading.repository.MemeScalperTradeEntity -> trade.pnlAmount ?: 0.0
-            is com.ant.cointrading.repository.VolumeSurgeTradeEntity -> trade.pnlAmount ?: 0.0
-            else -> 0.0
-        }
+    private fun loadClosedMemeTrades(): List<ClosedTrade> {
+        return memeScalperRepository.findByStatus(CLOSED).map { it.toClosedTrade() }
+    }
+
+    private fun loadClosedVolumeSurgeTrades(): List<ClosedTrade> {
+        return volumeSurgeRepository.findByStatus(CLOSED).map { it.toClosedTrade() }
+    }
+
+    private fun MemeScalperTradeEntity.toClosedTrade(): ClosedTrade {
+        return ClosedTrade(
+            entryTime = entryTime,
+            pnlAmount = pnlAmount ?: 0.0
+        )
+    }
+
+    private fun VolumeSurgeTradeEntity.toClosedTrade(): ClosedTrade {
+        return ClosedTrade(
+            entryTime = entryTime,
+            pnlAmount = pnlAmount ?: 0.0
+        )
     }
 
     private fun formatHoldingTime(minutes: Long): String {
