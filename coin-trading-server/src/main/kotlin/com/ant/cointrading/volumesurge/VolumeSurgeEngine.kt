@@ -994,9 +994,7 @@ class VolumeSurgeEngine(
      */
     private fun canTrade(): Boolean = circuitBreaker.canTrade()
 
-    private fun isMaxPositionReached(openPositions: Long): Boolean {
-        return openPositions >= properties.maxPositions
-    }
+    private fun isMaxPositionReached(openPositions: Long): Boolean = openPositions >= properties.maxPositions
 
     private fun persistFilterResult(alert: VolumeSurgeAlertEntity, filterResult: FilterResult) {
         alert.llmFilterResult = filterResult.decision
@@ -1049,7 +1047,7 @@ class VolumeSurgeEngine(
 
         val validationError = validateManualTriggerPreconditions(market)
         if (validationError != null) {
-            return manualTriggerFailure(market, validationError)
+            return apiFailure(validationError, "market" to market)
         }
 
         val savedAlert = createManualTriggerAlert(market)
@@ -1087,19 +1085,15 @@ class VolumeSurgeEngine(
         return null
     }
 
-    private fun manualTriggerFailure(market: String, error: String): Map<String, Any?> {
-        return apiFailure(error, "market" to market)
-    }
-
-    private fun createManualTriggerAlert(market: String): VolumeSurgeAlertEntity {
-        val manualAlert = VolumeSurgeAlertEntity(
+    private fun createManualTriggerAlert(market: String): VolumeSurgeAlertEntity =
+        alertRepository.save(
+            VolumeSurgeAlertEntity(
             market = market,
             alertType = "MANUAL_TRIGGER",
             detectedAt = Instant.now(),
             processed = false
         )
-        return alertRepository.save(manualAlert)
-    }
+        )
 
     private fun notifyManualTriggerStart(
         market: String,
