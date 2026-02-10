@@ -1,5 +1,6 @@
 package com.ant.cointrading.config
 
+import org.slf4j.LoggerFactory
 import org.springframework.aop.interceptor.AsyncUncaughtExceptionHandler
 import org.springframework.context.annotation.Bean
 import org.springframework.context.annotation.Configuration
@@ -7,7 +8,6 @@ import org.springframework.scheduling.annotation.AsyncConfigurer
 import org.springframework.scheduling.annotation.EnableAsync
 import org.springframework.scheduling.concurrent.ThreadPoolTaskScheduler
 import org.springframework.scheduling.TaskScheduler
-import java.util.concurrent.Executors
 
 /**
  * Spring 스케줄러 설정
@@ -17,6 +17,7 @@ import java.util.concurrent.Executors
 @Configuration
 @EnableAsync
 class SchedulerConfig : AsyncConfigurer {
+    private val log = LoggerFactory.getLogger(javaClass)
 
     @Bean
     fun taskScheduler(): TaskScheduler {
@@ -32,8 +33,7 @@ class SchedulerConfig : AsyncConfigurer {
         return AsyncUncaughtExceptionHandler { throwable, method, args ->
             val className = method.declaringClass.simpleName
             val methodName = method.name
-            println("Exception in async method: $className.$methodName() - ${throwable.message}")
-            throwable.printStackTrace()
+            log.error("Exception in async method: {}.{}() - {}", className, methodName, throwable.message, throwable)
         }
     }
 }

@@ -23,7 +23,7 @@ import java.time.Instant
  *
  * Slack 알림 제외 대상:
  * - Jackson 역직렬화 에러 (Bithumb API 응답 필드 변경 등 일시적 이슈)
- * - BithumbPublicApi 데이터 조회 (getOhlcv, getCurrentPrice, getOrderbook, getTrades)
+ * - BithumbPublicApi 데이터 조회 (getOhlcv, getCurrentPrice, getOrderbook, getTradesTicks)
  */
 @Component
 class ErrorEventHandler(
@@ -44,7 +44,7 @@ class ErrorEventHandler(
         "BithumbPublicApi:getOhlcv",
         "BithumbPublicApi:getCurrentPrice",
         "BithumbPublicApi:getOrderbook",
-        "BithumbPublicApi:getTrades",
+        "BithumbPublicApi:getTradesTicks",
     )
 
     @Async

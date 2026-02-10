@@ -101,7 +101,7 @@ export interface SyncAction {
 export interface SystemControlResult {
   success: boolean;
   message: string;
-  data?: Record<string, any>;
+  data?: Record<string, unknown>;
 }
 
 export interface FundingStatus {
@@ -157,29 +157,108 @@ export interface FundingConfig {
   symbols: string[];
 }
 
-function normalizeFundingStatus(raw: any): FundingStatus {
-  const openPositions = Array.isArray(raw?.openPositions) ? raw.openPositions : [];
-  const totalPnlRaw = raw?.totalPnl ?? raw?.totalPnL ?? 0;
+type ApiObject = Record<string, unknown>;
 
+function asApiObject(value: unknown): ApiObject {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+    return {};
+  }
+  return value as ApiObject;
+}
+
+function toNumber(value: unknown, fallback = 0): number {
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    return value;
+  }
+  if (typeof value === 'string' && value.trim().length > 0) {
+    const parsed = Number(value);
+    if (Number.isFinite(parsed)) {
+      return parsed;
+    }
+  }
+  return fallback;
+}
+
+function toNullableNumber(value: unknown): number | null {
+  if (value === null || value === undefined) {
+    return null;
+  }
+  return toNumber(value, 0);
+}
+
+function toBoolean(value: unknown, fallback = false): boolean {
+  if (typeof value === 'boolean') {
+    return value;
+  }
+  return fallback;
+}
+
+function toStringValue(value: unknown, fallback = ''): string {
+  if (typeof value === 'string') {
+    return value;
+  }
+  return fallback;
+}
+
+function normalizeFundingPosition(raw: unknown): FundingPositionInfo {
+  const position = asApiObject(raw);
   return {
-    enabled: Boolean(raw?.enabled),
-    autoTradingEnabled: Boolean(raw?.autoTradingEnabled),
-    openPositionsCount: Number(raw?.openPositionsCount ?? openPositions.length ?? 0),
-    openPositions: openPositions,
-    totalPnl: Number(totalPnlRaw ?? 0),
-    lastCheckTime: String(raw?.lastCheckTime ?? ''),
+    id: toNumber(position.id, 0),
+    symbol: toStringValue(position.symbol),
+    spotPrice: toNullableNumber(position.spotPrice),
+    perpPrice: toNullableNumber(position.perpPrice),
+    entryTime: toStringValue(position.entryTime),
+    fundingRate: toNullableNumber(position.fundingRate),
+    totalFundingReceived: toNumber(position.totalFundingReceived, 0),
+    netPnl: toNullableNumber(position.netPnl),
+    status: toStringValue(position.status),
   };
 }
 
-function normalizeFundingScanResult(raw: any): FundingScanResult {
-  const opportunities = Array.isArray(raw?.opportunities) ? raw.opportunities : [];
+function normalizeFundingOpportunity(raw: unknown): FundingOpportunity {
+  const opportunity = asApiObject(raw);
+  return {
+    exchange: toStringValue(opportunity.exchange),
+    symbol: toStringValue(opportunity.symbol),
+    fundingRate: toStringValue(opportunity.fundingRate),
+    annualizedRate: toStringValue(opportunity.annualizedRate),
+    nextFundingTime: toStringValue(opportunity.nextFundingTime),
+    minutesUntilFunding: toNumber(opportunity.minutesUntilFunding, 0),
+    markPrice: toNumber(opportunity.markPrice, 0),
+    indexPrice: toNumber(opportunity.indexPrice, 0),
+    isRecommendedEntry: toBoolean(opportunity.isRecommendedEntry, false),
+  };
+}
+
+function normalizeFundingStatus(raw: unknown): FundingStatus {
+  const status = asApiObject(raw);
+  const openPositionsRaw = Array.isArray(status.openPositions) ? status.openPositions : [];
+  const openPositions = openPositionsRaw.map((position) => normalizeFundingPosition(position));
+  const totalPnlRaw = status.totalPnl ?? status.totalPnL ?? 0;
 
   return {
-    scanTime: String(raw?.scanTime ?? ''),
-    totalOpportunities: Number(raw?.totalOpportunities ?? opportunities.length ?? 0),
+    enabled: toBoolean(status.enabled),
+    autoTradingEnabled: toBoolean(status.autoTradingEnabled),
+    openPositionsCount: toNumber(status.openPositionsCount, openPositions.length),
+    openPositions: openPositions,
+    totalPnl: toNumber(totalPnlRaw, 0),
+    lastCheckTime: toStringValue(status.lastCheckTime),
+  };
+}
+
+function normalizeFundingScanResult(raw: unknown): FundingScanResult {
+  const result = asApiObject(raw);
+  const opportunitiesRaw = Array.isArray(result.opportunities) ? result.opportunities : [];
+  const opportunities = opportunitiesRaw.map((opportunity) => normalizeFundingOpportunity(opportunity));
+
+  return {
+    scanTime: toStringValue(result.scanTime),
+    totalOpportunities: toNumber(result.totalOpportunities, opportunities.length),
     opportunities,
   };
 }
+
+export type GenericApiResult = Record<string, unknown>;
 
 export const dashboardApi = {
   getData: (date: string | null = null): Promise<DashboardData> =>
@@ -209,14 +288,14 @@ export const systemControlApi = {
 
   // Meme Scalper (장기 실행 - 10분 타임아웃)
   runMemeScalperReflection: (): Promise<SystemControlResult> =>
-    longRunningApi.post('/meme-scaler/reflect').then(res => res.data),
+    longRunningApi.post('/meme-scalper/reflect').then(res => res.data),
 
   // 나머지는 기본 api 사용 (10초 타임아웃)
   resetVolumeSurgeCircuitBreaker: (): Promise<SystemControlResult> =>
     api.post('/volume-surge/reset-circuit-breaker').then(res => res.data),
 
   resetMemeScalperCircuitBreaker: (): Promise<SystemControlResult> =>
-    api.post('/meme-scaler/reset').then(res => res.data),
+    api.post('/meme-scalper/reset').then(res => res.data),
 
   // Kimchi Premium
   refreshExchangeRate: (): Promise<SystemControlResult> =>
@@ -229,10 +308,10 @@ export const systemControlApi = {
   getFundingStatus: (): Promise<FundingStatus> =>
     api.get('/funding/status').then(res => normalizeFundingStatus(res.data)),
 
-  toggleFundingAutoTrading: (enabled: boolean): Promise<any> =>
+  toggleFundingAutoTrading: (enabled: boolean): Promise<GenericApiResult> =>
     api.post('/funding/toggle-auto-trading', { enabled }).then(res => res.data),
 
-  manualFundingEntry: (symbol: string, quantity: number, spotPrice: number, perpPrice: number, fundingRate: number): Promise<any> =>
+  manualFundingEntry: (symbol: string, quantity: number, spotPrice: number, perpPrice: number, fundingRate: number): Promise<GenericApiResult> =>
     api.post('/funding/manual-entry', {
       symbol,
       quantity,
@@ -241,10 +320,10 @@ export const systemControlApi = {
       fundingRate
     }).then(res => res.data),
 
-  manualFundingClose: (positionId: number): Promise<any> =>
+  manualFundingClose: (positionId: number): Promise<GenericApiResult> =>
     api.post('/funding/manual-close', { positionId }).then(res => res.data),
 
-  getFundingRiskCheck: (positionId: number): Promise<any> =>
+  getFundingRiskCheck: (positionId: number): Promise<GenericApiResult> =>
     api.get(`/funding/risk-check/${positionId}`).then(res => res.data),
 
   getFundingConfig: (): Promise<FundingConfig> =>
