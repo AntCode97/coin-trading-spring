@@ -45,6 +45,7 @@ import java.time.temporal.ChronoUnit
 class LlmOptimizer(
     private val llmProperties: LlmProperties,
     private val optimizerTools: OptimizerTools,
+    private val optimizationValidationService: OptimizationValidationService,
     private val slackNotifier: SlackNotifier,
     private val auditLogRepository: AuditLogRepository,
     private val objectMapper: ObjectMapper,
@@ -132,6 +133,18 @@ class LlmOptimizer(
             return "변경 속도 제한: ${daysRemaining}일 후 파라미터 변경 가능"
         }
 
+        val gateStatus = optimizationValidationService.getGateStatus()
+        if (!gateStatus.canApplyChanges) {
+            return """
+                전략 변경 차단 (수익성 검증 실패):
+                - 이유: ${gateStatus.reason}
+                - 마켓: ${gateStatus.market}
+                - OOS Sharpe: ${String.format("%.2f", gateStatus.avgOutOfSampleSharpe)}
+                - OOS 평균 거래수: ${String.format("%.1f", gateStatus.avgOutOfSampleTrades)}
+                - Sharpe Decay: ${String.format("%.1f", gateStatus.decayPercent)}%
+            """.trimIndent()
+        }
+
         val systemPrompt = buildSystemPrompt()
         val userPrompt = buildUserPrompt()
 
@@ -212,6 +225,7 @@ class LlmOptimizer(
      */
     fun getLastOptimizationResult(): Map<String, Any?> {
         val modelStatus = modelSelector.getStatus()
+        val gateStatus = optimizationValidationService.getGateStatus()
         return mapOf(
             "lastOptimizationTime" to lastOptimizationTime?.toString(),
             "lastParameterChangeTime" to lastParameterChangeTime?.toString(),
@@ -221,7 +235,8 @@ class LlmOptimizer(
             "currentProvider" to modelStatus["currentProvider"],
             "currentModel" to modelStatus["currentModelName"],
             "availableProviders" to modelStatus["availableProviders"],
-            "canApplyChanges" to canApplyChanges()
+            "canApplyChanges" to canApplyChanges(),
+            "validationGate" to gateStatus
         )
     }
 

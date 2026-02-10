@@ -31,7 +31,8 @@ class OptimizerTools(
     private val tradingProperties: TradingProperties,
     private val tradeRepository: TradeRepository,
     private val objectMapper: ObjectMapper,
-    private val llmPromptService: LlmPromptService
+    private val llmPromptService: LlmPromptService,
+    private val optimizationValidationService: OptimizationValidationService
 ) {
 
     private val log = LoggerFactory.getLogger(OptimizerTools::class.java)
@@ -86,6 +87,19 @@ class OptimizerTools(
         return objectMapper.writeValueAsString(result)
     }
 
+    @Tool(description = """
+        전략 변경 가능 여부를 검증합니다.
+        Walk-Forward Out-of-Sample 성과, Sharpe decay, 거래 수, 손실 구간을 점검합니다.
+        forceRefresh=true면 캐시를 무시하고 즉시 재검증합니다.
+    """)
+    fun getValidationGateStatus(
+        @ToolParam(description = "캐시를 무시하고 재검증할지 여부 (기본값: false)") forceRefresh: Boolean = false
+    ): String {
+        log.info("[Tool] getValidationGateStatus 호출: forceRefresh=$forceRefresh")
+        val status = optimizationValidationService.getGateStatus(forceRefresh = forceRefresh)
+        return objectMapper.writeValueAsString(status)
+    }
+
     // ===========================================
     // 전략 조회 도구
     // ===========================================
@@ -117,12 +131,14 @@ class OptimizerTools(
         @ToolParam(description = "새로운 전략 유형 (DCA, GRID, MEAN_REVERSION, VOLATILITY_SURVIVAL)") strategyType: String
     ): String {
         log.info("[Tool] setStrategy 호출: strategyType=$strategyType")
-        return try {
-            val type = StrategyType.valueOf(strategyType.uppercase())
-            strategyTools.setStrategy(type.name)
-            "전략이 ${type.name}(으)로 변경되었습니다."
-        } catch (e: Exception) {
-            "전략 변경 실패: ${e.message}. 가능한 값: DCA, GRID, MEAN_REVERSION, VOLATILITY_SURVIVAL"
+        return withValidationGate("setStrategy") {
+            try {
+                val type = StrategyType.valueOf(strategyType.uppercase())
+                strategyTools.setStrategy(type.name)
+                "전략이 ${type.name}(으)로 변경되었습니다."
+            } catch (e: Exception) {
+                "전략 변경 실패: ${e.message}. 가능한 값: DCA, GRID, MEAN_REVERSION, VOLATILITY_SURVIVAL"
+            }
         }
     }
 
@@ -138,8 +154,10 @@ class OptimizerTools(
         if (threshold !in 1.0..4.0) {
             return "임계값은 1.0 ~ 4.0 범위여야 합니다. 입력값: $threshold"
         }
-        strategyTools.setMeanReversionThreshold(threshold)
-        return "Mean Reversion 임계값이 $threshold(으)로 변경되었습니다."
+        return withValidationGate("setMeanReversionThreshold") {
+            strategyTools.setMeanReversionThreshold(threshold)
+            "Mean Reversion 임계값이 $threshold(으)로 변경되었습니다."
+        }
     }
 
     @Tool(description = """
@@ -161,8 +179,10 @@ class OptimizerTools(
         if (oversold >= overbought) {
             return "과매도 값($oversold)은 과매수 값($overbought)보다 작아야 합니다."
         }
-        strategyTools.setRsiThresholds(oversold, overbought)
-        return "RSI 임계값이 과매도=$oversold, 과매수=$overbought(으)로 변경되었습니다."
+        return withValidationGate("setRsiThresholds") {
+            strategyTools.setRsiThresholds(oversold, overbought)
+            "RSI 임계값이 과매도=$oversold, 과매수=$overbought(으)로 변경되었습니다."
+        }
     }
 
     @Tool(description = """
@@ -181,8 +201,10 @@ class OptimizerTools(
         if (stdDev !in 1.5..3.0) {
             return "표준편차 배수는 1.5 ~ 3.0 범위여야 합니다. 입력값: $stdDev"
         }
-        strategyTools.setBollingerParams(period, stdDev)
-        return "볼린저 밴드 파라미터가 기간=$period, 표준편차=$stdDev(으)로 변경되었습니다."
+        return withValidationGate("setBollingerParams") {
+            strategyTools.setBollingerParams(period, stdDev)
+            "볼린저 밴드 파라미터가 기간=$period, 표준편차=$stdDev(으)로 변경되었습니다."
+        }
     }
 
     @Tool(description = """
@@ -197,8 +219,10 @@ class OptimizerTools(
         if (levels !in 3..10) {
             return "그리드 레벨은 3 ~ 10 범위여야 합니다. 입력값: $levels"
         }
-        strategyTools.setGridLevels(levels)
-        return "그리드 레벨이 ${levels}개로 변경되었습니다."
+        return withValidationGate("setGridLevels") {
+            strategyTools.setGridLevels(levels)
+            "그리드 레벨이 ${levels}개로 변경되었습니다."
+        }
     }
 
     @Tool(description = """
@@ -213,8 +237,10 @@ class OptimizerTools(
         if (spacingPercent !in 0.5..3.0) {
             return "그리드 간격은 0.5 ~ 3.0% 범위여야 합니다. 입력값: $spacingPercent"
         }
-        strategyTools.setGridSpacing(spacingPercent)
-        return "그리드 간격이 ${spacingPercent}%로 변경되었습니다."
+        return withValidationGate("setGridSpacing") {
+            strategyTools.setGridSpacing(spacingPercent)
+            "그리드 간격이 ${spacingPercent}%로 변경되었습니다."
+        }
     }
 
     @Tool(description = """
@@ -229,9 +255,11 @@ class OptimizerTools(
         if (intervalMs !in 3600000..604800000) {
             return "DCA 간격은 1시간(3600000ms) ~ 7일(604800000ms) 범위여야 합니다. 입력값: $intervalMs"
         }
-        strategyTools.setDcaInterval(intervalMs)
-        val hours = intervalMs / 3600000.0
-        return "DCA 매수 간격이 ${String.format("%.1f", hours)}시간으로 변경되었습니다."
+        return withValidationGate("setDcaInterval") {
+            strategyTools.setDcaInterval(intervalMs)
+            val hours = intervalMs / 3600000.0
+            "DCA 매수 간격이 ${String.format("%.1f", hours)}시간으로 변경되었습니다."
+        }
     }
 
     // ===========================================
@@ -301,5 +329,24 @@ class OptimizerTools(
         } else {
             "프롬프트 업데이트 실패: ${result.message}"
         }
+    }
+
+    private inline fun withValidationGate(actionName: String, block: () -> String): String {
+        val gateStatus = optimizationValidationService.getGateStatus()
+        if (!gateStatus.canApplyChanges) {
+            val blockedMessage = """
+                변경 차단됨 ($actionName):
+                - 이유: ${gateStatus.reason}
+                - 마켓: ${gateStatus.market}
+                - OOS Sharpe: ${String.format("%.2f", gateStatus.avgOutOfSampleSharpe)}
+                - OOS 평균 거래수: ${String.format("%.1f", gateStatus.avgOutOfSampleTrades)}
+                - Sharpe Decay: ${String.format("%.1f", gateStatus.decayPercent)}%
+                - 재검증: getValidationGateStatus(forceRefresh=true)
+            """.trimIndent()
+            log.warn("[Tool] $actionName 차단: $blockedMessage")
+            return blockedMessage
+        }
+
+        return block()
     }
 }

@@ -25,9 +25,14 @@ class BasicSimulator : Simulator {
         strategy: BacktestableStrategy,
         historicalData: List<Candle>,
         initialCapital: Double,
-        commissionRate: Double
+        commissionRate: Double,
+        slippageRate: Double
     ): BacktestResult {
-        log.info("백테스트 시작: ${strategy.name}, 데이터: ${historicalData.size}개 캔들")
+        log.info(
+            "백테스트 시작: ${strategy.name}, 데이터: ${historicalData.size}개 캔들, " +
+                "수수료=${String.format("%.4f", commissionRate * 100)}%, " +
+                "슬리피지=${String.format("%.4f", slippageRate * 100)}%"
+        )
 
         val trades = mutableListOf<BacktestTrade>()
         val equityCurve = mutableListOf(initialCapital)
@@ -59,25 +64,30 @@ class BasicSimulator : Simulator {
                 BacktestAction.BUY -> {
                     // 포지션이 없을 때만 진입
                     if (!hasPosition) {
-                        val maxQuantity = (capital * (1 - commissionRate)) / currentPrice
+                        val executedBuyPrice = currentPrice * (1 + slippageRate)
+                        val maxQuantity = capital / (executedBuyPrice * (1 + commissionRate))
                         if (maxQuantity > 0) {
                             val quantity = maxQuantity
-                            val fee = quantity * currentPrice * commissionRate
+                            val fee = quantity * executedBuyPrice * commissionRate
 
-                            capital -= (quantity * currentPrice + fee)
+                            capital -= (quantity * executedBuyPrice + fee)
                             position = quantity
-                            entryPrice = currentPrice
+                            entryPrice = executedBuyPrice
                             entryIndex = index
                             entryReason = signal.reason
 
-                            log.debug("[$index] 진입: 가격=$currentPrice, 수량=$quantity, 사유=${signal.reason}")
+                            log.debug(
+                                "[$index] 진입: 시장가=$currentPrice, 체결가=$executedBuyPrice, " +
+                                    "수량=$quantity, 사유=${signal.reason}"
+                            )
                         }
                     }
                 }
                 BacktestAction.SELL -> {
                     // 포지션이 있을 때만 청산
                     if (hasPosition) {
-                        val revenue = position * currentPrice
+                        val executedSellPrice = currentPrice * (1 - slippageRate)
+                        val revenue = position * executedSellPrice
                         val fee = revenue * commissionRate
                         val netRevenue = revenue - fee
                         val entryCost = position * entryPrice
@@ -92,7 +102,7 @@ class BasicSimulator : Simulator {
                                 entryIndex = entryIndex,
                                 exitIndex = index,
                                 entryPrice = entryPrice,
-                                exitPrice = currentPrice,
+                                exitPrice = executedSellPrice,
                                 quantity = position,
                                 pnl = pnl,
                                 pnlPercent = pnlPercent,
@@ -103,7 +113,8 @@ class BasicSimulator : Simulator {
                         )
 
                         log.debug(
-                            "[$index] 청산: 가격=$currentPrice, 손익=$pnl (${String.format("%.2f", pnlPercent)}%), " +
+                            "[$index] 청산: 시장가=$currentPrice, 체결가=$executedSellPrice, " +
+                                    "손익=$pnl (${String.format("%.2f", pnlPercent)}%), " +
                                     "보유=${index - entryIndex}캔들"
                         )
 
@@ -127,7 +138,8 @@ class BasicSimulator : Simulator {
         // 최종 정산 (남은 포지션이 있으면 마지막 가격으로 청산)
         if (position > 0) {
             val finalPrice = historicalData.last().close.toDouble()
-            val revenue = position * finalPrice
+            val executedFinalSellPrice = finalPrice * (1 - slippageRate)
+            val revenue = position * executedFinalSellPrice
             val fee = revenue * commissionRate
             val netRevenue = revenue - fee
             val entryCost = position * entryPrice
@@ -141,7 +153,7 @@ class BasicSimulator : Simulator {
                     entryIndex = entryIndex,
                     exitIndex = historicalData.size - 1,
                     entryPrice = entryPrice,
-                    exitPrice = finalPrice,
+                    exitPrice = executedFinalSellPrice,
                     quantity = position,
                     pnl = pnl,
                     pnlPercent = pnlPercent,
@@ -151,7 +163,10 @@ class BasicSimulator : Simulator {
                 )
             )
 
-            log.debug("최종 정산: 가격=$finalPrice, 손익=$pnl (${String.format("%.2f", pnlPercent)}%)")
+            log.debug(
+                "최종 정산: 시장가=$finalPrice, 체결가=$executedFinalSellPrice, " +
+                    "손익=$pnl (${String.format("%.2f", pnlPercent)}%)"
+            )
         }
 
         val finalCapital = capital

@@ -1,6 +1,8 @@
 package com.ant.cointrading.controller
 
 import com.ant.cointrading.optimizer.LlmOptimizer
+import com.ant.cointrading.optimizer.OptimizationGateStatus
+import com.ant.cointrading.optimizer.OptimizationValidationService
 import com.ant.cointrading.repository.AuditLogEntity
 import com.ant.cointrading.service.ModelSelector
 import org.slf4j.LoggerFactory
@@ -15,6 +17,7 @@ import org.springframework.web.bind.annotation.*
 @RequestMapping("/api/optimizer")
 class OptimizerController(
     private val llmOptimizer: LlmOptimizer,
+    private val optimizationValidationService: OptimizationValidationService,
     private val modelSelector: ModelSelector
 ) {
     private val log = LoggerFactory.getLogger(OptimizerController::class.java)
@@ -49,6 +52,13 @@ class OptimizerController(
         return llmOptimizer.getLastOptimizationResult() + mapOf(
             "llmServiceAvailable" to modelSelector.isAvailable()
         )
+    }
+
+    @GetMapping("/validation-gate")
+    fun getValidationGate(
+        @RequestParam(defaultValue = "false") forceRefresh: Boolean
+    ): OptimizationGateStatus {
+        return optimizationValidationService.getGateStatus(forceRefresh = forceRefresh)
     }
 
     /**

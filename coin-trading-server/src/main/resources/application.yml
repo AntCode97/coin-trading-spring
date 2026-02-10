@@ -131,6 +131,16 @@ llm:
   optimizer:
     enabled: true  # LLM 최적화 활성화
     cron: 0 0 0 * * *  # 매일 자정
+    validation:
+      enabled: ${LLM_OPT_VALIDATION_ENABLED:true}
+      market: ${LLM_OPT_VALIDATION_MARKET:KRW-BTC}
+      cache-minutes: ${LLM_OPT_VALIDATION_CACHE_MINUTES:180}
+      min-valid-windows: ${LLM_OPT_MIN_VALID_WINDOWS:6}
+      min-out-of-sample-sharpe: ${LLM_OPT_MIN_OOS_SHARPE:0.5}
+      min-out-of-sample-trades: ${LLM_OPT_MIN_OOS_TRADES:1.0}
+      max-sharpe-decay-percent: ${LLM_OPT_MAX_SHARPE_DECAY:35.0}
+      max-out-of-sample-drawdown-percent: ${LLM_OPT_MAX_OOS_DRAWDOWN:25.0}
+      execution-slippage-bps: ${LLM_OPT_EXECUTION_SLIPPAGE_BPS:8.0}
 
 # Logging 설정
 logging:

@@ -164,6 +164,7 @@ class WalkForwardOptimizer(
         endDate: LocalDate,
         interval: String,
         parameterGrid: Map<String, List<*>>,
+        slippageRate: Double = 0.0,
         strategyFactory: (Map<String, Any>) -> BacktestableStrategy
     ): OptimizationResult {
         // 1. 과거 데이터 조회
@@ -201,7 +202,8 @@ class WalkForwardOptimizer(
                     strategy = strategy,
                     historicalData = candles,
                     initialCapital = 100_000.0,  // 실전 1만원의 10배 (백테스트 합리적 크기)
-                    commissionRate = tradingProperties.feeRate.toDouble()
+                    commissionRate = tradingProperties.feeRate.toDouble(),
+                    slippageRate = slippageRate
                 )
 
                 log.debug(
@@ -355,7 +357,8 @@ class WalkForwardOptimizer(
     fun runWalkForwardAnalysis(
         market: String = "KRW-BTC",
         strategyName: String = "BREAKOUT",
-        parameterGrid: Map<String, List<*>>? = null
+        parameterGrid: Map<String, List<*>>? = null,
+        slippageRate: Double = 0.0
     ): WalkForwardAnalysisResult {
         log.info("=== Walk-Forward Analysis 시작 ($market) ===")
 
@@ -393,6 +396,8 @@ class WalkForwardOptimizer(
         val windowResults = mutableListOf<WalkForwardWindowResult>()
         var inSampleSharpeSum = 0.0
         var outOfSampleSharpeSum = 0.0
+        var outOfSampleTradesSum = 0
+        var outOfSampleReturnSum = 0.0
 
         // 4. 각 윈도우 분석
         for ((index, window) in windows.withIndex()) {
@@ -404,17 +409,21 @@ class WalkForwardOptimizer(
                 // In-sample 최적화
                 val inSampleResult = optimizeInSample(
                     trainCandles = window.trainCandles,
-                    parameterGrid = grid
+                    parameterGrid = grid,
+                    slippageRate = slippageRate
                 )
 
                 // Out-of-sample 테스트
                 val outOfSampleResult = testOutOfSample(
                     testCandles = window.testCandles,
-                    bestParams = inSampleResult.bestParams
+                    bestParams = inSampleResult.bestParams,
+                    slippageRate = slippageRate
                 )
 
                 inSampleSharpeSum += inSampleResult.sharpeRatio
                 outOfSampleSharpeSum += outOfSampleResult.sharpeRatio
+                outOfSampleTradesSum += outOfSampleResult.totalTrades
+                outOfSampleReturnSum += outOfSampleResult.totalReturn
 
                 windowResults.add(
                     WalkForwardWindowResult(
@@ -423,12 +432,16 @@ class WalkForwardOptimizer(
                         testPeriod = Pair(window.testStartDate, window.testEndDate),
                         inSampleSharpe = inSampleResult.sharpeRatio,
                         outOfSampleSharpe = outOfSampleResult.sharpeRatio,
+                        outOfSampleReturn = outOfSampleResult.totalReturn,
+                        outOfSampleTrades = outOfSampleResult.totalTrades,
                         bestParams = inSampleResult.bestParams
                     )
                 )
 
                 log.info("In-Sample Sharpe: ${String.format("%.3f", inSampleResult.sharpeRatio)}")
                 log.info("Out-of-Sample Sharpe: ${String.format("%.3f", outOfSampleResult.sharpeRatio)}")
+                log.info("Out-of-Sample Return: ${String.format("%.2f", outOfSampleResult.totalReturn)}%")
+                log.info("Out-of-Sample Trades: ${outOfSampleResult.totalTrades}건")
                 log.info("최적 파라미터: ${inSampleResult.bestParams}")
 
             } catch (e: Exception) {
@@ -440,6 +453,8 @@ class WalkForwardOptimizer(
         val validWindows = windowResults.size
         val avgInSampleSharpe = if (validWindows > 0) inSampleSharpeSum / validWindows else 0.0
         val avgOutOfSampleSharpe = if (validWindows > 0) outOfSampleSharpeSum / validWindows else 0.0
+        val avgOutOfSampleReturn = if (validWindows > 0) outOfSampleReturnSum / validWindows else 0.0
+        val avgOutOfSampleTrades = if (validWindows > 0) outOfSampleTradesSum.toDouble() / validWindows else 0.0
 
         // Sharpe Decay (과적합 지표)
         val sharpeDecay = avgInSampleSharpe - avgOutOfSampleSharpe
@@ -456,6 +471,8 @@ class WalkForwardOptimizer(
             validWindows = validWindows,
             avgInSampleSharpe = avgInSampleSharpe,
             avgOutOfSampleSharpe = avgOutOfSampleSharpe,
+            avgOutOfSampleReturn = avgOutOfSampleReturn,
+            avgOutOfSampleTrades = avgOutOfSampleTrades,
             sharpeDecay = sharpeDecay,
             decayPercent = decayPercent,
             isOverfitted = decayPercent > 20.0,  // Renaissance 기준: 20% 이상 decay = 과적합
@@ -467,6 +484,8 @@ class WalkForwardOptimizer(
             유효 윈도우: ${validWindows}/${windows.size}
             In-Sample 평균 Sharpe: ${String.format("%.3f", avgInSampleSharpe)}
             Out-of-Sample 평균 Sharpe: ${String.format("%.3f", avgOutOfSampleSharpe)}
+            Out-of-Sample 평균 Return: ${String.format("%.2f", avgOutOfSampleReturn)}%
+            Out-of-Sample 평균 Trades: ${String.format("%.1f", avgOutOfSampleTrades)}건
             Sharpe Decay: ${String.format("%.3f", sharpeDecay)} (${String.format("%.1f", decayPercent)}%)
             과적합 여부: ${if (result.isOverfitted) "⚠️ YES (20%+ decay, Renaissance 기준)" else "✓ NO"}
             ========================
@@ -531,7 +550,8 @@ class WalkForwardOptimizer(
      */
     private fun optimizeInSample(
         trainCandles: List<Candle>,
-        parameterGrid: Map<String, List<*>>
+        parameterGrid: Map<String, List<*>>,
+        slippageRate: Double
     ): InSampleOptimizationResult {
         val combinations = generateCombinations(parameterGrid)
 
@@ -551,7 +571,8 @@ class WalkForwardOptimizer(
                     strategy = strategy,
                     historicalData = trainCandles,
                     initialCapital = 100_000.0,  // 실전 1만원의 10배 (백테스트 합리적 크기)
-                    commissionRate = tradingProperties.feeRate.toDouble()
+                    commissionRate = tradingProperties.feeRate.toDouble(),
+                    slippageRate = slippageRate
                 )
 
                 if (result.sharpeRatio > bestSharpe) {
@@ -574,7 +595,8 @@ class WalkForwardOptimizer(
      */
     private fun testOutOfSample(
         testCandles: List<Candle>,
-        bestParams: Map<String, Any>
+        bestParams: Map<String, Any>,
+        slippageRate: Double
     ): OutOfSampleTestResult {
         val strategy = DynamicBreakoutStrategy(
             bollingerPeriod = bestParams["bollingerPeriod"] as Int,
@@ -587,7 +609,8 @@ class WalkForwardOptimizer(
             strategy = strategy,
             historicalData = testCandles,
             initialCapital = 100_000.0,  // 실전 1만원의 10배 (백테스트 합리적 크기)
-            commissionRate = tradingProperties.feeRate.toDouble()
+            commissionRate = tradingProperties.feeRate.toDouble(),
+            slippageRate = slippageRate
         )
 
         return OutOfSampleTestResult(
@@ -620,6 +643,8 @@ data class WalkForwardAnalysisResult(
     val validWindows: Int,
     val avgInSampleSharpe: Double,
     val avgOutOfSampleSharpe: Double,
+    val avgOutOfSampleReturn: Double,
+    val avgOutOfSampleTrades: Double,
     val sharpeDecay: Double,
     val decayPercent: Double,
     val isOverfitted: Boolean,
@@ -635,6 +660,8 @@ data class WalkForwardWindowResult(
     val testPeriod: Pair<LocalDate, LocalDate>,
     val inSampleSharpe: Double,
     val outOfSampleSharpe: Double,
+    val outOfSampleReturn: Double,
+    val outOfSampleTrades: Int,
     val bestParams: Map<String, Any>
 )
 

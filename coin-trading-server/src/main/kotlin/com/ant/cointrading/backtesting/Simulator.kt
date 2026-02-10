@@ -16,13 +16,15 @@ interface Simulator {
      * @param historicalData 과거 캔들 데이터
      * @param initialCapital 초기 자본
      * @param commissionRate 수수료율 (기본값: 빗썸 0.04%)
+     * @param slippageRate 체결 슬리피지율 (예: 0.001 = 0.1%)
      * @return 백테스트 결과
      */
     fun simulate(
         strategy: BacktestableStrategy,
         historicalData: List<Candle>,
         initialCapital: Double,
-        commissionRate: Double = TradingConstants.BITHUMB_FEE_RATE.toDouble()
+        commissionRate: Double = TradingConstants.BITHUMB_FEE_RATE.toDouble(),
+        slippageRate: Double = 0.0
     ): BacktestResult
 }
 
