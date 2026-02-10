@@ -131,6 +131,7 @@ export interface RiskThrottleStatus {
   blockNewBuys: boolean;
   reason: string;
   sampleSize: number;
+  recentConsecutiveLosses: number;
   winRate: number;
   avgPnlPercent: number;
   enabled: boolean;
@@ -338,6 +339,7 @@ function normalizeRiskThrottleStatus(raw: unknown): RiskThrottleStatus {
     blockNewBuys: toBoolean(status.blockNewBuys, false),
     reason: toStringValue(status.reason),
     sampleSize: toNumber(status.sampleSize, 0),
+    recentConsecutiveLosses: toNumber(status.recentConsecutiveLosses, 0),
     winRate: toNumber(status.winRate, 0),
     avgPnlPercent: toNumber(status.avgPnlPercent, 0),
     enabled: toBoolean(status.enabled, false),

@@ -49,6 +49,7 @@ class RiskThrottleServiceTest {
         assertEquals(1.0, decision.multiplier)
         assertEquals("INSUFFICIENT_DATA", decision.severity)
         assertFalse(decision.blockNewBuys)
+        assertEquals(0, decision.recentConsecutiveLosses)
         assertTrue(decision.reason.contains("샘플 부족"))
         assertFalse(decision.cached)
     }
@@ -92,6 +93,7 @@ class RiskThrottleServiceTest {
         assertEquals(0.7, decision.multiplier)
         assertEquals("WEAK", decision.severity)
         assertFalse(decision.blockNewBuys)
+        assertEquals(0, decision.recentConsecutiveLosses)
         assertTrue(decision.reason.contains("완화 축소"))
     }
 
@@ -134,7 +136,50 @@ class RiskThrottleServiceTest {
         assertEquals(0.45, decision.multiplier)
         assertEquals("CRITICAL", decision.severity)
         assertTrue(decision.blockNewBuys)
+        assertEquals(3, decision.recentConsecutiveLosses)
         assertTrue(decision.reason.contains("강한 축소"))
+    }
+
+    @Test
+    @DisplayName("연속 손실이 임계치를 넘으면 즉시 CRITICAL 처리된다")
+    fun turnsCriticalWhenConsecutiveLossesHigh() {
+        val service = RiskThrottleService(
+            tradeRepository = tradeRepository,
+            tradingProperties = TradingProperties(
+                riskThrottle = RiskThrottleProperties(
+                    enabled = true,
+                    lookbackTrades = 8,
+                    minClosedTrades = 8,
+                    weakWinRate = 0.2,
+                    weakAvgPnlPercent = -2.0,
+                    weakMultiplier = 0.8,
+                    criticalWinRate = 0.1,
+                    criticalAvgPnlPercent = -3.0,
+                    criticalConsecutiveLosses = 4,
+                    criticalMultiplier = 0.45
+                )
+            )
+        )
+
+        whenever(tradeRepository.findTop200ByMarketAndSimulatedOrderByCreatedAtDesc("KRW-BTC", false))
+            .thenReturn(
+                listOf(
+                    trade(strategy = "GRID", pnlPercent = -0.4),
+                    trade(strategy = "GRID", pnlPercent = -0.3),
+                    trade(strategy = "GRID", pnlPercent = -0.2),
+                    trade(strategy = "GRID", pnlPercent = -0.6),
+                    trade(strategy = "GRID", pnlPercent = 0.5),
+                    trade(strategy = "GRID", pnlPercent = 0.4),
+                    trade(strategy = "GRID", pnlPercent = 0.2),
+                    trade(strategy = "GRID", pnlPercent = -0.1)
+                )
+            )
+
+        val decision = service.getDecision("KRW-BTC", "GRID", forceRefresh = true)
+
+        assertEquals("CRITICAL", decision.severity)
+        assertTrue(decision.blockNewBuys)
+        assertEquals(4, decision.recentConsecutiveLosses)
     }
 
     @Test
@@ -152,6 +197,7 @@ class RiskThrottleServiceTest {
         assertEquals(1.0, decision.multiplier)
         assertEquals("DISABLED", decision.severity)
         assertFalse(decision.blockNewBuys)
+        assertEquals(0, decision.recentConsecutiveLosses)
         assertFalse(decision.enabled)
     }
 

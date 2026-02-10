@@ -121,6 +121,7 @@ trading:
     weak-multiplier: ${RISK_THROTTLE_WEAK_MULTIPLIER:0.70}
     critical-win-rate: ${RISK_THROTTLE_CRITICAL_WIN_RATE:0.35}
     critical-avg-pnl-percent: ${RISK_THROTTLE_CRITICAL_AVG_PNL_PERCENT:-0.8}
+    critical-consecutive-losses: ${RISK_THROTTLE_CRITICAL_CONSECUTIVE_LOSSES:4}
     critical-multiplier: ${RISK_THROTTLE_CRITICAL_MULTIPLIER:0.45}
     block-new-buys-on-critical: ${RISK_THROTTLE_BLOCK_NEW_BUYS_ON_CRITICAL:true}
     block-multiplier-threshold: ${RISK_THROTTLE_BLOCK_MULTIPLIER_THRESHOLD:0.50}

@@ -27,6 +27,7 @@ data class RiskThrottleProperties(
     val weakMultiplier: Double = 0.70,
     val criticalWinRate: Double = 0.35,
     val criticalAvgPnlPercent: Double = -0.8,
+    val criticalConsecutiveLosses: Int = 4,
     val criticalMultiplier: Double = 0.45,
     val blockNewBuysOnCritical: Boolean = true,
     val blockMultiplierThreshold: Double = 0.50,

@@ -15,6 +15,7 @@ data class RiskThrottleDecision(
     val blockNewBuys: Boolean,
     val reason: String,
     val sampleSize: Int,
+    val recentConsecutiveLosses: Int,
     val winRate: Double,
     val avgPnlPercent: Double,
     val enabled: Boolean,
@@ -48,6 +49,7 @@ class RiskThrottleService(
                 blockNewBuys = false,
                 reason = "리스크 스로틀 비활성화",
                 sampleSize = 0,
+                recentConsecutiveLosses = 0,
                 winRate = 0.0,
                 avgPnlPercent = 0.0,
                 enabled = false,
@@ -91,6 +93,7 @@ class RiskThrottleService(
                 blockNewBuys = false,
                 reason = "샘플 부족(${sampleSize}/${config.minClosedTrades}) - 기본 크기 유지",
                 sampleSize = sampleSize,
+                recentConsecutiveLosses = 0,
                 winRate = 0.0,
                 avgPnlPercent = 0.0,
                 enabled = true,
@@ -99,21 +102,26 @@ class RiskThrottleService(
         }
 
         val winCount = closedTrades.count { it > 0.0 }
+        val recentConsecutiveLosses = closedTrades.takeWhile { it <= 0.0 }.size
         val winRate = winCount.toDouble() / sampleSize
         val avgPnlPercent = closedTrades.average()
         val weakMultiplier = config.weakMultiplier.coerceIn(0.2, 1.0)
         val criticalMultiplier = config.criticalMultiplier.coerceIn(0.1, weakMultiplier)
         val blockThreshold = config.blockMultiplierThreshold.coerceIn(0.1, 1.0)
+        val hasCriticalConsecutiveLosses = recentConsecutiveLosses >= config.criticalConsecutiveLosses
 
         val decision = when {
-            winRate <= config.criticalWinRate || avgPnlPercent <= config.criticalAvgPnlPercent -> {
+            winRate <= config.criticalWinRate ||
+                avgPnlPercent <= config.criticalAvgPnlPercent ||
+                hasCriticalConsecutiveLosses -> {
                 val shouldBlockNewBuys = config.blockNewBuysOnCritical && criticalMultiplier <= blockThreshold
                 RiskThrottleDecision(
                     multiplier = criticalMultiplier,
                     severity = "CRITICAL",
                     blockNewBuys = shouldBlockNewBuys,
-                    reason = "최근 성과 악화(강한 축소): win=${formatPercent(winRate * 100)}, avg=${formatPercent(avgPnlPercent)}",
+                    reason = "최근 성과 악화(강한 축소): win=${formatPercent(winRate * 100)}, avg=${formatPercent(avgPnlPercent)}, 연속손실=${recentConsecutiveLosses}회",
                     sampleSize = sampleSize,
+                    recentConsecutiveLosses = recentConsecutiveLosses,
                     winRate = winRate,
                     avgPnlPercent = avgPnlPercent,
                     enabled = true,
@@ -125,8 +133,9 @@ class RiskThrottleService(
                     multiplier = weakMultiplier,
                     severity = "WEAK",
                     blockNewBuys = false,
-                    reason = "최근 성과 둔화(완화 축소): win=${formatPercent(winRate * 100)}, avg=${formatPercent(avgPnlPercent)}",
+                    reason = "최근 성과 둔화(완화 축소): win=${formatPercent(winRate * 100)}, avg=${formatPercent(avgPnlPercent)}, 연속손실=${recentConsecutiveLosses}회",
                     sampleSize = sampleSize,
+                    recentConsecutiveLosses = recentConsecutiveLosses,
                     winRate = winRate,
                     avgPnlPercent = avgPnlPercent,
                     enabled = true,
@@ -138,8 +147,9 @@ class RiskThrottleService(
                     multiplier = 1.0,
                     severity = "NORMAL",
                     blockNewBuys = false,
-                    reason = "최근 성과 양호: win=${formatPercent(winRate * 100)}, avg=${formatPercent(avgPnlPercent)}",
+                    reason = "최근 성과 양호: win=${formatPercent(winRate * 100)}, avg=${formatPercent(avgPnlPercent)}, 연속손실=${recentConsecutiveLosses}회",
                     sampleSize = sampleSize,
+                    recentConsecutiveLosses = recentConsecutiveLosses,
                     winRate = winRate,
                     avgPnlPercent = avgPnlPercent,
                     enabled = true,
@@ -150,13 +160,14 @@ class RiskThrottleService(
 
         if (decision.multiplier < 1.0) {
             log.warn(
-                "[{}][{}] 리스크 스로틀 적용: x{}, severity={}, blockNewBuys={}, sample={}, reason={}",
+                "[{}][{}] 리스크 스로틀 적용: x{}, severity={}, blockNewBuys={}, sample={}, consecutiveLosses={}, reason={}",
                 market,
                 strategy,
                 String.format("%.2f", decision.multiplier),
                 decision.severity,
                 decision.blockNewBuys,
                 sampleSize,
+                decision.recentConsecutiveLosses,
                 decision.reason
             )
         }

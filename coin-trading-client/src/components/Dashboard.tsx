@@ -587,10 +587,10 @@ export default function Dashboard() {
                     </div>
                     <div className="optimizer-throttle-reason">{riskThrottleStatus.reason}</div>
                     <div className="optimizer-throttle-meta">
-                      상태 {riskThrottleStatus.severity} · 표본 {riskThrottleStatus.sampleSize}건 · 승률 {(riskThrottleStatus.winRate * 100).toFixed(1)}% · 평균 {riskThrottleStatus.avgPnlPercent.toFixed(2)}%
+                      상태 {riskThrottleStatus.severity} · 표본 {riskThrottleStatus.sampleSize}건 · 연속손실 {riskThrottleStatus.recentConsecutiveLosses}회
                     </div>
                     <div className="optimizer-throttle-meta">
-                      신규 매수 {riskThrottleStatus.blockNewBuys ? '차단' : '허용'}
+                      승률 {(riskThrottleStatus.winRate * 100).toFixed(1)}% · 평균 {riskThrottleStatus.avgPnlPercent.toFixed(2)}% · 신규 매수 {riskThrottleStatus.blockNewBuys ? '차단' : '허용'}
                     </div>
                   </div>
                 )}
