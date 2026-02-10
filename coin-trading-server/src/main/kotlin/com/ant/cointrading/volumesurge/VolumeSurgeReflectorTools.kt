@@ -44,6 +44,13 @@ class VolumeSurgeReflectorTools(
         val accessor: ParamAccessor
     )
 
+    private fun paramConfig(name: String, accessor: ParamAccessor): Pair<String, ParamConfig> {
+        return name to ParamConfig(
+            keyValueKey = "volumesurge.$name",
+            accessor = accessor
+        )
+    }
+
     private fun doubleParam(getter: () -> Double, setter: (Double) -> Unit) = object : ParamAccessor {
         override fun get() = getter()
         override fun set(value: Double) = setter(value)
@@ -56,58 +63,19 @@ class VolumeSurgeReflectorTools(
 
     private val paramConfigs by lazy {
         mapOf(
-            "minVolumeRatio" to ParamConfig(
-                keyValueKey = "volumesurge.minVolumeRatio",
-                accessor = doubleParam({ volumeSurgeProperties.minVolumeRatio }) { volumeSurgeProperties.minVolumeRatio = it }
-            ),
-            "maxRsi" to ParamConfig(
-                keyValueKey = "volumesurge.maxRsi",
-                accessor = doubleParam({ volumeSurgeProperties.maxRsi }) { volumeSurgeProperties.maxRsi = it }
-            ),
-            "minConfluenceScore" to ParamConfig(
-                keyValueKey = "volumesurge.minConfluenceScore",
-                accessor = intParam({ volumeSurgeProperties.minConfluenceScore }) { volumeSurgeProperties.minConfluenceScore = it }
-            ),
-            "stopLossPercent" to ParamConfig(
-                keyValueKey = "volumesurge.stopLossPercent",
-                accessor = doubleParam({ volumeSurgeProperties.stopLossPercent }) { volumeSurgeProperties.stopLossPercent = it }
-            ),
-            "takeProfitPercent" to ParamConfig(
-                keyValueKey = "volumesurge.takeProfitPercent",
-                accessor = doubleParam({ volumeSurgeProperties.takeProfitPercent }) { volumeSurgeProperties.takeProfitPercent = it }
-            ),
-            "trailingStopTrigger" to ParamConfig(
-                keyValueKey = "volumesurge.trailingStopTrigger",
-                accessor = doubleParam({ volumeSurgeProperties.trailingStopTrigger }) { volumeSurgeProperties.trailingStopTrigger = it }
-            ),
-            "trailingStopOffset" to ParamConfig(
-                keyValueKey = "volumesurge.trailingStopOffset",
-                accessor = doubleParam({ volumeSurgeProperties.trailingStopOffset }) { volumeSurgeProperties.trailingStopOffset = it }
-            ),
-            "positionTimeoutMin" to ParamConfig(
-                keyValueKey = "volumesurge.positionTimeoutMin",
-                accessor = intParam({ volumeSurgeProperties.positionTimeoutMin }) { volumeSurgeProperties.positionTimeoutMin = it }
-            ),
-            "cooldownMin" to ParamConfig(
-                keyValueKey = "volumesurge.cooldownMin",
-                accessor = intParam({ volumeSurgeProperties.cooldownMin }) { volumeSurgeProperties.cooldownMin = it }
-            ),
-            "maxConsecutiveLosses" to ParamConfig(
-                keyValueKey = "volumesurge.maxConsecutiveLosses",
-                accessor = intParam({ volumeSurgeProperties.maxConsecutiveLosses }) { volumeSurgeProperties.maxConsecutiveLosses = it }
-            ),
-            "dailyMaxLossKrw" to ParamConfig(
-                keyValueKey = "volumesurge.dailyMaxLossKrw",
-                accessor = intParam({ volumeSurgeProperties.dailyMaxLossKrw }) { volumeSurgeProperties.dailyMaxLossKrw = it }
-            ),
-            "positionSizeKrw" to ParamConfig(
-                keyValueKey = "volumesurge.positionSizeKrw",
-                accessor = intParam({ volumeSurgeProperties.positionSizeKrw }) { volumeSurgeProperties.positionSizeKrw = it }
-            ),
-            "alertFreshnessMin" to ParamConfig(
-                keyValueKey = "volumesurge.alertFreshnessMin",
-                accessor = intParam({ volumeSurgeProperties.alertFreshnessMin }) { volumeSurgeProperties.alertFreshnessMin = it }
-            )
+            paramConfig("minVolumeRatio", doubleParam({ volumeSurgeProperties.minVolumeRatio }) { volumeSurgeProperties.minVolumeRatio = it }),
+            paramConfig("maxRsi", doubleParam({ volumeSurgeProperties.maxRsi }) { volumeSurgeProperties.maxRsi = it }),
+            paramConfig("minConfluenceScore", intParam({ volumeSurgeProperties.minConfluenceScore }) { volumeSurgeProperties.minConfluenceScore = it }),
+            paramConfig("stopLossPercent", doubleParam({ volumeSurgeProperties.stopLossPercent }) { volumeSurgeProperties.stopLossPercent = it }),
+            paramConfig("takeProfitPercent", doubleParam({ volumeSurgeProperties.takeProfitPercent }) { volumeSurgeProperties.takeProfitPercent = it }),
+            paramConfig("trailingStopTrigger", doubleParam({ volumeSurgeProperties.trailingStopTrigger }) { volumeSurgeProperties.trailingStopTrigger = it }),
+            paramConfig("trailingStopOffset", doubleParam({ volumeSurgeProperties.trailingStopOffset }) { volumeSurgeProperties.trailingStopOffset = it }),
+            paramConfig("positionTimeoutMin", intParam({ volumeSurgeProperties.positionTimeoutMin }) { volumeSurgeProperties.positionTimeoutMin = it }),
+            paramConfig("cooldownMin", intParam({ volumeSurgeProperties.cooldownMin }) { volumeSurgeProperties.cooldownMin = it }),
+            paramConfig("maxConsecutiveLosses", intParam({ volumeSurgeProperties.maxConsecutiveLosses }) { volumeSurgeProperties.maxConsecutiveLosses = it }),
+            paramConfig("dailyMaxLossKrw", intParam({ volumeSurgeProperties.dailyMaxLossKrw }) { volumeSurgeProperties.dailyMaxLossKrw = it }),
+            paramConfig("positionSizeKrw", intParam({ volumeSurgeProperties.positionSizeKrw }) { volumeSurgeProperties.positionSizeKrw = it }),
+            paramConfig("alertFreshnessMin", intParam({ volumeSurgeProperties.alertFreshnessMin }) { volumeSurgeProperties.alertFreshnessMin = it })
         )
     }
 

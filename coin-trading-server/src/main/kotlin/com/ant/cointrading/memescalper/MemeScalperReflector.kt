@@ -317,6 +317,13 @@ class MemeScalperReflectorTools(
         val accessor: ParamAccessor
     )
 
+    private fun paramConfig(name: String, accessor: ParamAccessor): Pair<String, ParamConfig> {
+        return name to ParamConfig(
+            keyValueKey = "memescalper.$name",
+            accessor = accessor
+        )
+    }
+
     private fun doubleParam(getter: () -> Double, setter: (Double) -> Unit) = object : ParamAccessor {
         override fun get() = getter()
         override fun set(value: Double) = setter(value)
@@ -329,62 +336,20 @@ class MemeScalperReflectorTools(
 
     private val paramConfigs by lazy {
         mapOf(
-            "stopLossPercent" to ParamConfig(
-                keyValueKey = "memescalper.stopLossPercent",
-                accessor = doubleParam({ properties.stopLossPercent }) { properties.stopLossPercent = it }
-            ),
-            "takeProfitPercent" to ParamConfig(
-                keyValueKey = "memescalper.takeProfitPercent",
-                accessor = doubleParam({ properties.takeProfitPercent }) { properties.takeProfitPercent = it }
-            ),
-            "trailingStopTrigger" to ParamConfig(
-                keyValueKey = "memescalper.trailingStopTrigger",
-                accessor = doubleParam({ properties.trailingStopTrigger }) { properties.trailingStopTrigger = it }
-            ),
-            "trailingStopOffset" to ParamConfig(
-                keyValueKey = "memescalper.trailingStopOffset",
-                accessor = doubleParam({ properties.trailingStopOffset }) { properties.trailingStopOffset = it }
-            ),
-            "positionTimeoutMin" to ParamConfig(
-                keyValueKey = "memescalper.positionTimeoutMin",
-                accessor = intParam({ properties.positionTimeoutMin }) { properties.positionTimeoutMin = it }
-            ),
-            "volumeSpikeRatio" to ParamConfig(
-                keyValueKey = "memescalper.volumeSpikeRatio",
-                accessor = doubleParam({ properties.volumeSpikeRatio }) { properties.volumeSpikeRatio = it }
-            ),
-            "priceSpikePercent" to ParamConfig(
-                keyValueKey = "memescalper.priceSpikePercent",
-                accessor = doubleParam({ properties.priceSpikePercent }) { properties.priceSpikePercent = it }
-            ),
-            "minBidImbalance" to ParamConfig(
-                keyValueKey = "memescalper.minBidImbalance",
-                accessor = doubleParam({ properties.minBidImbalance }) { properties.minBidImbalance = it }
-            ),
-            "maxRsi" to ParamConfig(
-                keyValueKey = "memescalper.maxRsi",
-                accessor = intParam({ properties.maxRsi }) { properties.maxRsi = it }
-            ),
-            "volumeDropRatio" to ParamConfig(
-                keyValueKey = "memescalper.volumeDropRatio",
-                accessor = doubleParam({ properties.volumeDropRatio }) { properties.volumeDropRatio = it }
-            ),
-            "cooldownSec" to ParamConfig(
-                keyValueKey = "memescalper.cooldownSec",
-                accessor = intParam({ properties.cooldownSec }) { properties.cooldownSec = it }
-            ),
-            "maxConsecutiveLosses" to ParamConfig(
-                keyValueKey = "memescalper.maxConsecutiveLosses",
-                accessor = intParam({ properties.maxConsecutiveLosses }) { properties.maxConsecutiveLosses = it }
-            ),
-            "dailyMaxLossKrw" to ParamConfig(
-                keyValueKey = "memescalper.dailyMaxLossKrw",
-                accessor = intParam({ properties.dailyMaxLossKrw }) { properties.dailyMaxLossKrw = it }
-            ),
-            "positionSizeKrw" to ParamConfig(
-                keyValueKey = "memescalper.positionSizeKrw",
-                accessor = intParam({ properties.positionSizeKrw }) { properties.positionSizeKrw = it }
-            )
+            paramConfig("stopLossPercent", doubleParam({ properties.stopLossPercent }) { properties.stopLossPercent = it }),
+            paramConfig("takeProfitPercent", doubleParam({ properties.takeProfitPercent }) { properties.takeProfitPercent = it }),
+            paramConfig("trailingStopTrigger", doubleParam({ properties.trailingStopTrigger }) { properties.trailingStopTrigger = it }),
+            paramConfig("trailingStopOffset", doubleParam({ properties.trailingStopOffset }) { properties.trailingStopOffset = it }),
+            paramConfig("positionTimeoutMin", intParam({ properties.positionTimeoutMin }) { properties.positionTimeoutMin = it }),
+            paramConfig("volumeSpikeRatio", doubleParam({ properties.volumeSpikeRatio }) { properties.volumeSpikeRatio = it }),
+            paramConfig("priceSpikePercent", doubleParam({ properties.priceSpikePercent }) { properties.priceSpikePercent = it }),
+            paramConfig("minBidImbalance", doubleParam({ properties.minBidImbalance }) { properties.minBidImbalance = it }),
+            paramConfig("maxRsi", intParam({ properties.maxRsi }) { properties.maxRsi = it }),
+            paramConfig("volumeDropRatio", doubleParam({ properties.volumeDropRatio }) { properties.volumeDropRatio = it }),
+            paramConfig("cooldownSec", intParam({ properties.cooldownSec }) { properties.cooldownSec = it }),
+            paramConfig("maxConsecutiveLosses", intParam({ properties.maxConsecutiveLosses }) { properties.maxConsecutiveLosses = it }),
+            paramConfig("dailyMaxLossKrw", intParam({ properties.dailyMaxLossKrw }) { properties.dailyMaxLossKrw = it }),
+            paramConfig("positionSizeKrw", intParam({ properties.positionSizeKrw }) { properties.positionSizeKrw = it })
         )
     }
 
