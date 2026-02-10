@@ -112,6 +112,17 @@ trading:
   order-amount-krw: 10000
   max-drawdown-percent: ${MAX_DRAWDOWN_PERCENT:10.0}
   risk-per-trade-percent: ${RISK_PER_TRADE_PERCENT:1.0}
+  risk-throttle:
+    enabled: ${RISK_THROTTLE_ENABLED:true}
+    lookback-trades: ${RISK_THROTTLE_LOOKBACK_TRADES:30}
+    min-closed-trades: ${RISK_THROTTLE_MIN_CLOSED_TRADES:8}
+    weak-win-rate: ${RISK_THROTTLE_WEAK_WIN_RATE:0.45}
+    weak-avg-pnl-percent: ${RISK_THROTTLE_WEAK_AVG_PNL_PERCENT:-0.2}
+    weak-multiplier: ${RISK_THROTTLE_WEAK_MULTIPLIER:0.70}
+    critical-win-rate: ${RISK_THROTTLE_CRITICAL_WIN_RATE:0.35}
+    critical-avg-pnl-percent: ${RISK_THROTTLE_CRITICAL_AVG_PNL_PERCENT:-0.8}
+    critical-multiplier: ${RISK_THROTTLE_CRITICAL_MULTIPLIER:0.45}
+    cache-minutes: ${RISK_THROTTLE_CACHE_MINUTES:10}
   strategy:
     type: ${STRATEGY_TYPE:MEAN_REVERSION} # 대폭락/고변동성 장에서는 VOLATILITY_SURVIVAL 권장
     dca-interval: ${DCA_INTERVAL:86400000}

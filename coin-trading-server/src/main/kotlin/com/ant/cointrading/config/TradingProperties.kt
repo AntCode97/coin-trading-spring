@@ -14,7 +14,21 @@ data class TradingProperties(
     val maxDrawdownPercent: Double = 10.0,
     val riskPerTradePercent: Double = 1.0,
     val feeRate: BigDecimal = TradingConstants.BITHUMB_FEE_RATE,
+    val riskThrottle: RiskThrottleProperties = RiskThrottleProperties(),
     val strategy: StrategyConfig = StrategyConfig()
+)
+
+data class RiskThrottleProperties(
+    val enabled: Boolean = true,
+    val lookbackTrades: Int = 30,
+    val minClosedTrades: Int = 8,
+    val weakWinRate: Double = 0.45,
+    val weakAvgPnlPercent: Double = -0.2,
+    val weakMultiplier: Double = 0.70,
+    val criticalWinRate: Double = 0.35,
+    val criticalAvgPnlPercent: Double = -0.8,
+    val criticalMultiplier: Double = 0.45,
+    val cacheMinutes: Long = 10
 )
 
 /**

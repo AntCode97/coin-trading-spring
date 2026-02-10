@@ -10,6 +10,7 @@ import java.time.Instant
 interface TradeRepository : JpaRepository<TradeEntity, Long> {
     fun findByMarketOrderByCreatedAtDesc(market: String): List<TradeEntity>
     fun findByMarketAndSimulatedOrderByCreatedAtDesc(market: String, simulated: Boolean): List<TradeEntity>
+    fun findTop200ByMarketAndSimulatedOrderByCreatedAtDesc(market: String, simulated: Boolean): List<TradeEntity>
     fun findByMarketAndCreatedAtAfter(market: String, after: Instant): List<TradeEntity>
     fun findByMarketAndSimulatedAndCreatedAtAfter(market: String, simulated: Boolean, after: Instant): List<TradeEntity>
     fun findByMarketAndCreatedAtBetween(market: String, start: Instant, end: Instant): List<TradeEntity>

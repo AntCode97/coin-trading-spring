@@ -14,6 +14,8 @@ import com.ant.cointrading.risk.CircuitBreaker
 import com.ant.cointrading.risk.ConditionSeverity
 import com.ant.cointrading.risk.MarketConditionChecker
 import com.ant.cointrading.risk.MarketConditionResult
+import com.ant.cointrading.risk.RiskThrottleDecision
+import com.ant.cointrading.risk.RiskThrottleService
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Disabled
 import org.junit.jupiter.api.DisplayName
@@ -66,6 +68,9 @@ class OrderExecutorTest {
     private lateinit var marketConditionChecker: MarketConditionChecker
 
     @Mock
+    private lateinit var riskThrottleService: RiskThrottleService
+
+    @Mock
     private lateinit var slackNotifier: SlackNotifier
 
     @Mock
@@ -78,6 +83,17 @@ class OrderExecutorTest {
         // TradingProperties 기본 mock 설정
         whenever(tradingProperties.feeRate).thenReturn(BigDecimal("0.0004"))
         whenever(tradingProperties.enabled).thenReturn(false) // 기본 시뮬레이션 모드
+        whenever(riskThrottleService.getDecision(any(), any(), any())).thenReturn(
+            RiskThrottleDecision(
+                multiplier = 1.0,
+                reason = "테스트 기본값",
+                sampleSize = 0,
+                winRate = 0.0,
+                avgPnlPercent = 0.0,
+                enabled = true,
+                cached = false
+            )
+        )
 
         orderExecutor = OrderExecutor(
             bithumbPrivateApi,
@@ -85,6 +101,7 @@ class OrderExecutorTest {
             tradeRepository,
             circuitBreaker,
             marketConditionChecker,
+            riskThrottleService,
             slackNotifier,
             pendingOrderManager
         )

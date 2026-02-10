@@ -14,6 +14,8 @@ import com.ant.cointrading.risk.CircuitBreaker
 import com.ant.cointrading.risk.MarketConditionChecker
 import com.ant.cointrading.risk.MarketConditionResult
 import com.ant.cointrading.risk.PnlCalculator
+import com.ant.cointrading.risk.RiskThrottleDecision
+import com.ant.cointrading.risk.RiskThrottleService
 import org.slf4j.LoggerFactory
 import org.springframework.stereotype.Component
 import java.math.BigDecimal
@@ -44,6 +46,7 @@ class OrderExecutor(
     private val tradeRepository: TradeRepository,
     private val circuitBreaker: CircuitBreaker,
     private val marketConditionChecker: MarketConditionChecker,
+    private val riskThrottleService: RiskThrottleService,
     private val slackNotifier: SlackNotifier,
     private val pendingOrderManager: PendingOrderManager
 ) {
@@ -83,19 +86,59 @@ class OrderExecutor(
      */
     fun execute(signal: TradingSignal, positionSize: BigDecimal): OrderResult {
         val side = signal.toOrderSide()
+        val throttleDecision = if (side == OrderSide.BUY) {
+            riskThrottleService.getDecision(signal.market, signal.strategy)
+        } else {
+            null
+        }
+        val effectivePositionSize = applyRiskThrottle(positionSize, throttleDecision, signal.market, signal.strategy)
 
-        validateMinimumOrderAmount(signal, side, positionSize)?.let { return it }
+        validateMinimumOrderAmount(signal, side, effectivePositionSize)?.let { return it }
 
         if (!tradingProperties.enabled) {
-            return executeSimulated(signal, positionSize)
+            return executeSimulated(signal, effectivePositionSize)
         }
 
-        val marketCondition = marketConditionChecker.checkMarketCondition(signal.market, positionSize)
+        val marketCondition = marketConditionChecker.checkMarketCondition(signal.market, effectivePositionSize)
         if (!marketCondition.canTrade) {
             return createMarketConditionFailure(signal, side, marketCondition)
         }
 
-        return executeReal(signal, positionSize, marketCondition)
+        return executeReal(signal, effectivePositionSize, marketCondition)
+    }
+
+    private fun applyRiskThrottle(
+        requestedPositionSize: BigDecimal,
+        throttleDecision: RiskThrottleDecision?,
+        market: String,
+        strategy: String
+    ): BigDecimal {
+        if (throttleDecision == null || throttleDecision.multiplier >= 0.999) {
+            return requestedPositionSize
+        }
+
+        val reduced = requestedPositionSize
+            .multiply(BigDecimal.valueOf(throttleDecision.multiplier))
+            .setScale(0, RoundingMode.DOWN)
+
+        val adjusted = when {
+            requestedPositionSize < TradingConstants.MIN_ORDER_AMOUNT_KRW -> requestedPositionSize
+            reduced < TradingConstants.MIN_ORDER_AMOUNT_KRW -> TradingConstants.MIN_ORDER_AMOUNT_KRW
+            else -> reduced
+        }
+
+        log.warn(
+            "[{}][{}] 주문 금액 스로틀: {}원 -> {}원 (x{}, sample={}, reason={})",
+            market,
+            strategy,
+            requestedPositionSize,
+            adjusted,
+            String.format("%.2f", throttleDecision.multiplier),
+            throttleDecision.sampleSize,
+            throttleDecision.reason
+        )
+
+        return adjusted
     }
 
     private fun validateMinimumOrderAmount(
