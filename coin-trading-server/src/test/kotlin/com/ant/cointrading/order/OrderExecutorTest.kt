@@ -86,6 +86,8 @@ class OrderExecutorTest {
         whenever(riskThrottleService.getDecision(any(), any(), any())).thenReturn(
             RiskThrottleDecision(
                 multiplier = 1.0,
+                severity = "NORMAL",
+                blockNewBuys = false,
                 reason = "테스트 기본값",
                 sampleSize = 0,
                 winRate = 0.0,
@@ -206,6 +208,43 @@ class OrderExecutorTest {
             // then
             assertFalse(result.success)
             assertEquals(OrderRejectionReason.BELOW_MIN_ORDER_AMOUNT, result.rejectionReason)
+        }
+
+        @Test
+        @DisplayName("리스크 스로틀 임계 구간이면 신규 매수는 차단된다")
+        fun blockBuyWhenRiskThrottleCritical() {
+            // given
+            val signal = TradingSignal(
+                market = "BTC_KRW",
+                action = SignalAction.BUY,
+                confidence = 80.0,
+                price = BigDecimal("65000000"),
+                reason = "테스트",
+                strategy = "TEST"
+            )
+            val positionSize = BigDecimal("10000")
+
+            whenever(riskThrottleService.getDecision("BTC_KRW", "TEST", false)).thenReturn(
+                RiskThrottleDecision(
+                    multiplier = 0.45,
+                    severity = "CRITICAL",
+                    blockNewBuys = true,
+                    reason = "최근 성과 악화(강한 축소)",
+                    sampleSize = 20,
+                    winRate = 0.3,
+                    avgPnlPercent = -1.0,
+                    enabled = true,
+                    cached = false
+                )
+            )
+
+            // when
+            val result = orderExecutor.execute(signal, positionSize)
+
+            // then
+            assertFalse(result.success)
+            assertEquals(OrderRejectionReason.RISK_THROTTLE_BLOCK, result.rejectionReason)
+            assertTrue(result.message.contains("리스크 스로틀 차단"))
         }
     }
 

@@ -127,6 +127,8 @@ export interface ValidationGateStatus {
 
 export interface RiskThrottleStatus {
   multiplier: number;
+  severity: string;
+  blockNewBuys: boolean;
   reason: string;
   sampleSize: number;
   winRate: number;
@@ -332,6 +334,8 @@ function normalizeRiskThrottleStatus(raw: unknown): RiskThrottleStatus {
 
   return {
     multiplier: toNumber(status.multiplier, 1),
+    severity: toStringValue(status.severity, 'NORMAL'),
+    blockNewBuys: toBoolean(status.blockNewBuys, false),
     reason: toStringValue(status.reason),
     sampleSize: toNumber(status.sampleSize, 0),
     winRate: toNumber(status.winRate, 0),

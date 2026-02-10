@@ -581,13 +581,16 @@ export default function Dashboard() {
                   </div>
                 )}
                 {riskThrottleStatus && (
-                  <div className={`optimizer-throttle-banner ${riskThrottleStatus.multiplier < 1 ? 'active' : 'normal'}`}>
+                  <div className={`optimizer-throttle-banner ${riskThrottleStatus.blockNewBuys ? 'blocked' : riskThrottleStatus.multiplier < 1 ? 'active' : 'normal'}`}>
                     <div className="optimizer-throttle-title">
                       포지션 스로틀: x{riskThrottleStatus.multiplier.toFixed(2)}
                     </div>
                     <div className="optimizer-throttle-reason">{riskThrottleStatus.reason}</div>
                     <div className="optimizer-throttle-meta">
-                      표본 {riskThrottleStatus.sampleSize}건 · 승률 {(riskThrottleStatus.winRate * 100).toFixed(1)}% · 평균 {riskThrottleStatus.avgPnlPercent.toFixed(2)}%
+                      상태 {riskThrottleStatus.severity} · 표본 {riskThrottleStatus.sampleSize}건 · 승률 {(riskThrottleStatus.winRate * 100).toFixed(1)}% · 평균 {riskThrottleStatus.avgPnlPercent.toFixed(2)}%
+                    </div>
+                    <div className="optimizer-throttle-meta">
+                      신규 매수 {riskThrottleStatus.blockNewBuys ? '차단' : '허용'}
                     </div>
                   </div>
                 )}

@@ -28,6 +28,8 @@ data class RiskThrottleProperties(
     val criticalWinRate: Double = 0.35,
     val criticalAvgPnlPercent: Double = -0.8,
     val criticalMultiplier: Double = 0.45,
+    val blockNewBuysOnCritical: Boolean = true,
+    val blockMultiplierThreshold: Double = 0.50,
     val cacheMinutes: Long = 10
 )
 

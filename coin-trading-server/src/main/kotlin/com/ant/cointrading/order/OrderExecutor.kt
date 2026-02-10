@@ -91,6 +91,22 @@ class OrderExecutor(
         } else {
             null
         }
+        if (side == OrderSide.BUY && throttleDecision?.blockNewBuys == true) {
+            log.warn(
+                "[{}][{}] 신규 매수 차단: severity={}, multiplier={}, reason={}",
+                signal.market,
+                signal.strategy,
+                throttleDecision.severity,
+                String.format("%.2f", throttleDecision.multiplier),
+                throttleDecision.reason
+            )
+            return createFailureResult(
+                signal = signal,
+                side = side,
+                message = "리스크 스로틀 차단: ${throttleDecision.reason}",
+                rejectionReason = OrderRejectionReason.RISK_THROTTLE_BLOCK
+            )
+        }
         val effectivePositionSize = applyRiskThrottle(positionSize, throttleDecision, signal.market, signal.strategy)
 
         validateMinimumOrderAmount(signal, side, effectivePositionSize)?.let { return it }
@@ -1382,6 +1398,7 @@ enum class OrderRejectionReason {
     NO_FILL,                // 체결 없음
     EXCEPTION,              // 예외 발생
     CIRCUIT_BREAKER,        // 서킷 브레이커 발동
+    RISK_THROTTLE_BLOCK,    // 리스크 스로틀 임계 구간으로 신규 매수 차단
     BELOW_MIN_ORDER_AMOUNT, // 최소 주문 금액 미달 (빗썸 5000원)
     MARKET_SUSPENDED        // 거래 정지/상장 폐지 코인
 }

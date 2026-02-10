@@ -11,6 +11,8 @@ import java.util.concurrent.ConcurrentHashMap
 
 data class RiskThrottleDecision(
     val multiplier: Double,
+    val severity: String,
+    val blockNewBuys: Boolean,
     val reason: String,
     val sampleSize: Int,
     val winRate: Double,
@@ -42,6 +44,8 @@ class RiskThrottleService(
         if (!config.enabled) {
             return RiskThrottleDecision(
                 multiplier = 1.0,
+                severity = "DISABLED",
+                blockNewBuys = false,
                 reason = "리스크 스로틀 비활성화",
                 sampleSize = 0,
                 winRate = 0.0,
@@ -83,6 +87,8 @@ class RiskThrottleService(
         if (sampleSize < config.minClosedTrades) {
             return RiskThrottleDecision(
                 multiplier = 1.0,
+                severity = "INSUFFICIENT_DATA",
+                blockNewBuys = false,
                 reason = "샘플 부족(${sampleSize}/${config.minClosedTrades}) - 기본 크기 유지",
                 sampleSize = sampleSize,
                 winRate = 0.0,
@@ -97,11 +103,15 @@ class RiskThrottleService(
         val avgPnlPercent = closedTrades.average()
         val weakMultiplier = config.weakMultiplier.coerceIn(0.2, 1.0)
         val criticalMultiplier = config.criticalMultiplier.coerceIn(0.1, weakMultiplier)
+        val blockThreshold = config.blockMultiplierThreshold.coerceIn(0.1, 1.0)
 
         val decision = when {
             winRate <= config.criticalWinRate || avgPnlPercent <= config.criticalAvgPnlPercent -> {
+                val shouldBlockNewBuys = config.blockNewBuysOnCritical && criticalMultiplier <= blockThreshold
                 RiskThrottleDecision(
                     multiplier = criticalMultiplier,
+                    severity = "CRITICAL",
+                    blockNewBuys = shouldBlockNewBuys,
                     reason = "최근 성과 악화(강한 축소): win=${formatPercent(winRate * 100)}, avg=${formatPercent(avgPnlPercent)}",
                     sampleSize = sampleSize,
                     winRate = winRate,
@@ -113,6 +123,8 @@ class RiskThrottleService(
             winRate <= config.weakWinRate || avgPnlPercent <= config.weakAvgPnlPercent -> {
                 RiskThrottleDecision(
                     multiplier = weakMultiplier,
+                    severity = "WEAK",
+                    blockNewBuys = false,
                     reason = "최근 성과 둔화(완화 축소): win=${formatPercent(winRate * 100)}, avg=${formatPercent(avgPnlPercent)}",
                     sampleSize = sampleSize,
                     winRate = winRate,
@@ -124,6 +136,8 @@ class RiskThrottleService(
             else -> {
                 RiskThrottleDecision(
                     multiplier = 1.0,
+                    severity = "NORMAL",
+                    blockNewBuys = false,
                     reason = "최근 성과 양호: win=${formatPercent(winRate * 100)}, avg=${formatPercent(avgPnlPercent)}",
                     sampleSize = sampleSize,
                     winRate = winRate,
@@ -136,10 +150,12 @@ class RiskThrottleService(
 
         if (decision.multiplier < 1.0) {
             log.warn(
-                "[{}][{}] 리스크 스로틀 적용: x{}, sample={}, reason={}",
+                "[{}][{}] 리스크 스로틀 적용: x{}, severity={}, blockNewBuys={}, sample={}, reason={}",
                 market,
                 strategy,
                 String.format("%.2f", decision.multiplier),
+                decision.severity,
+                decision.blockNewBuys,
                 sampleSize,
                 decision.reason
             )

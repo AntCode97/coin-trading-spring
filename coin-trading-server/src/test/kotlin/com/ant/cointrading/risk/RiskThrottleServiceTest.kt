@@ -47,6 +47,8 @@ class RiskThrottleServiceTest {
         val decision = service.getDecision("KRW-BTC", "DCA", forceRefresh = true)
 
         assertEquals(1.0, decision.multiplier)
+        assertEquals("INSUFFICIENT_DATA", decision.severity)
+        assertFalse(decision.blockNewBuys)
         assertTrue(decision.reason.contains("샘플 부족"))
         assertFalse(decision.cached)
     }
@@ -88,6 +90,8 @@ class RiskThrottleServiceTest {
         val decision = service.getDecision("KRW-BTC", "GRID", forceRefresh = true)
 
         assertEquals(0.7, decision.multiplier)
+        assertEquals("WEAK", decision.severity)
+        assertFalse(decision.blockNewBuys)
         assertTrue(decision.reason.contains("완화 축소"))
     }
 
@@ -128,6 +132,8 @@ class RiskThrottleServiceTest {
         val decision = service.getDecision("KRW-BTC", "MEAN_REVERSION", forceRefresh = true)
 
         assertEquals(0.45, decision.multiplier)
+        assertEquals("CRITICAL", decision.severity)
+        assertTrue(decision.blockNewBuys)
         assertTrue(decision.reason.contains("강한 축소"))
     }
 
@@ -144,6 +150,8 @@ class RiskThrottleServiceTest {
         val decision = service.getDecision("KRW-BTC", "DCA")
 
         assertEquals(1.0, decision.multiplier)
+        assertEquals("DISABLED", decision.severity)
+        assertFalse(decision.blockNewBuys)
         assertFalse(decision.enabled)
     }
 
