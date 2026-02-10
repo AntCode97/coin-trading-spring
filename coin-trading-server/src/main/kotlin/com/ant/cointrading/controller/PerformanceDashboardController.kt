@@ -39,6 +39,26 @@ class PerformanceDashboardController(
         val pnlAmount: Double
     )
 
+    private data class StrategyStats(
+        val strategy: String,
+        val totalTrades: Int,
+        val winningTrades: Int,
+        val losingTrades: Int,
+        val totalPnl: Double,
+        val avgPnl: Double,
+        val avgWin: Double,
+        val avgLoss: Double,
+        val sharpeRatio: Double,
+        val recent7DaysPnl: Double,
+        val recent7DaysTrades: Int
+    ) {
+        val winRate: Double
+            get() = if (totalTrades > 0) winningTrades.toDouble() / totalTrades else 0.0
+
+        val isValidForLive: Boolean
+            get() = totalTrades >= 100 && sharpeRatio > 1.0 && winRate >= 0.5
+    }
+
     /**
      * 종합 대시보드
      */
@@ -50,8 +70,8 @@ class PerformanceDashboardController(
         return mapOf(
             "timestamp" to Instant.now(),
             "strategies" to mapOf(
-                MEME_SCALPER to memeStats,
-                VOLUME_SURGE to volumeStats
+                MEME_SCALPER to toResponseMap(memeStats),
+                VOLUME_SURGE to toResponseMap(volumeStats)
             ),
             "summary" to calculateSummary(memeStats, volumeStats)
         )
@@ -62,7 +82,8 @@ class PerformanceDashboardController(
      */
     @GetMapping("/strategy/{strategy}")
     fun getStrategyPerformance(@PathVariable strategy: String): Map<String, Any?> {
-        return strategyStats(strategy) ?: mapOf("error" to "Unknown strategy")
+        val stats = strategyStats(strategy) ?: return mapOf("error" to "Unknown strategy")
+        return toResponseMap(stats)
     }
 
     /**
@@ -72,10 +93,10 @@ class PerformanceDashboardController(
     fun getKellyCriterion(@PathVariable strategy: String): Map<String, Any?> {
         val stats = strategyStats(strategy) ?: return mapOf("error" to "Unknown strategy")
 
-        val totalTrades = parseInt(stats["totalTrades"])
-        val winningTrades = parseInt(stats["winningTrades"])
-        val avgWin = parseDouble(stats["avgWin"])
-        val avgLoss = parseDouble(stats["avgLoss"])
+        val totalTrades = stats.totalTrades
+        val winningTrades = stats.winningTrades
+        val avgWin = stats.avgWin
+        val avgLoss = stats.avgLoss
 
         if (totalTrades < 30 || avgLoss == 0.0) {
             return mapOf(
@@ -113,7 +134,7 @@ class PerformanceDashboardController(
         )
     }
 
-    private fun strategyStats(strategy: String): Map<String, Any?>? {
+    private fun strategyStats(strategy: String): StrategyStats? {
         return when (strategy) {
             MEME_SCALPER -> calculateStrategyStats(strategy, loadClosedMemeTrades())
             VOLUME_SURGE -> calculateStrategyStats(strategy, loadClosedVolumeSurgeTrades())
@@ -151,23 +172,30 @@ class PerformanceDashboardController(
     private fun calculateStrategyStats(
         strategyName: String,
         trades: List<ClosedTrade>
-    ): Map<String, Any?> {
+    ): StrategyStats {
         if (trades.isEmpty()) {
-            return mapOf(
-                "strategy" to strategyName,
-                "totalTrades" to 0,
-                "message" to "거래 기록 없음"
+            return StrategyStats(
+                strategy = strategyName,
+                totalTrades = 0,
+                winningTrades = 0,
+                losingTrades = 0,
+                totalPnl = 0.0,
+                avgPnl = 0.0,
+                avgWin = 0.0,
+                avgLoss = 0.0,
+                sharpeRatio = 0.0,
+                recent7DaysPnl = 0.0,
+                recent7DaysTrades = 0
             )
         }
 
         val totalTrades = trades.size
         val winningTrades = trades.count { it.pnlAmount > 0 }
         val losingTrades = trades.count { it.pnlAmount < 0 }
-        val winRate = if (totalTrades > 0) winningTrades.toDouble() / totalTrades else 0.0
 
         val pnls = trades.map { it.pnlAmount }
         val totalPnl = pnls.sum()
-        val avgPnl = if (totalTrades > 0) pnls.average() else 0.0
+        val avgPnl = pnls.average()
 
         val winningPnls = pnls.filter { it > 0 }
         val losingPnls = pnls.filter { it < 0 }.map { kotlin.math.abs(it) }
@@ -188,22 +216,18 @@ class PerformanceDashboardController(
         val recentTrades = trades.filter { it.createdAt?.isAfter(sevenDaysAgo) == true }
         val recentPnl = recentTrades.sumOf { it.pnlAmount }
 
-        return mapOf(
-            "strategy" to strategyName,
-            "totalTrades" to totalTrades,
-            "winningTrades" to winningTrades,
-            "losingTrades" to losingTrades,
-            "winRate" to String.format("%.1f", winRate * 100) + "%",
-            "totalPnl" to String.format("%.0f", totalPnl),
-            "avgPnl" to String.format("%.0f", avgPnl),
-            "avgWin" to String.format("%.0f", avgWin),
-            "avgLoss" to String.format("%.0f", avgLoss),
-            "sharpeRatio" to String.format("%.2f", sharpeRatio),
-            "sharpeGrade" to SharpeRatioCalculator.getGrade(sharpeRatio),
-            "sharpeInterpretation" to SharpeRatioCalculator.interpret(sharpeRatio, totalTrades),
-            "recent7DaysPnl" to String.format("%.0f", recentPnl),
-            "recent7DaysTrades" to recentTrades.size,
-            "isValidForLive" to (totalTrades >= 100 && sharpeRatio > 1.0 && winRate >= 0.5)
+        return StrategyStats(
+            strategy = strategyName,
+            totalTrades = totalTrades,
+            winningTrades = winningTrades,
+            losingTrades = losingTrades,
+            totalPnl = totalPnl,
+            avgPnl = avgPnl,
+            avgWin = avgWin,
+            avgLoss = avgLoss,
+            sharpeRatio = sharpeRatio,
+            recent7DaysPnl = recentPnl,
+            recent7DaysTrades = recentTrades.size
         )
     }
 
@@ -228,11 +252,11 @@ class PerformanceDashboardController(
      * 종합 요약
      */
     private fun calculateSummary(
-        memeStats: Map<String, Any?>,
-        volumeStats: Map<String, Any?>
+        memeStats: StrategyStats,
+        volumeStats: StrategyStats
     ): Map<String, Any?> {
-        val totalTrades = parseInt(memeStats["totalTrades"]) + parseInt(volumeStats["totalTrades"])
-        val totalPnl = parseDouble(memeStats["totalPnl"]) + parseDouble(volumeStats["totalPnl"])
+        val totalTrades = memeStats.totalTrades + volumeStats.totalTrades
+        val totalPnl = memeStats.totalPnl + volumeStats.totalPnl
 
         return mapOf(
             "totalTrades" to totalTrades,
@@ -241,19 +265,31 @@ class PerformanceDashboardController(
         )
     }
 
-    private fun parseInt(value: Any?): Int {
-        return when (value) {
-            is Number -> value.toInt()
-            is String -> value.replace("[^0-9-]".toRegex(), "").toIntOrNull() ?: 0
-            else -> 0
-        }
-    }
-
-    private fun parseDouble(value: Any?): Double {
-        return when (value) {
-            is Number -> value.toDouble()
-            is String -> value.replace("[^0-9.-]".toRegex(), "").toDoubleOrNull() ?: 0.0
-            else -> 0.0
+    private fun toResponseMap(stats: StrategyStats): Map<String, Any?> {
+        return if (stats.totalTrades == 0) {
+            mapOf(
+                "strategy" to stats.strategy,
+                "totalTrades" to 0,
+                "message" to "거래 기록 없음"
+            )
+        } else {
+            mapOf(
+                "strategy" to stats.strategy,
+                "totalTrades" to stats.totalTrades,
+                "winningTrades" to stats.winningTrades,
+                "losingTrades" to stats.losingTrades,
+                "winRate" to String.format("%.1f", stats.winRate * 100) + "%",
+                "totalPnl" to String.format("%.0f", stats.totalPnl),
+                "avgPnl" to String.format("%.0f", stats.avgPnl),
+                "avgWin" to String.format("%.0f", stats.avgWin),
+                "avgLoss" to String.format("%.0f", stats.avgLoss),
+                "sharpeRatio" to String.format("%.2f", stats.sharpeRatio),
+                "sharpeGrade" to SharpeRatioCalculator.getGrade(stats.sharpeRatio),
+                "sharpeInterpretation" to SharpeRatioCalculator.interpret(stats.sharpeRatio, stats.totalTrades),
+                "recent7DaysPnl" to String.format("%.0f", stats.recent7DaysPnl),
+                "recent7DaysTrades" to stats.recent7DaysTrades,
+                "isValidForLive" to stats.isValidForLive
+            )
         }
     }
 }
