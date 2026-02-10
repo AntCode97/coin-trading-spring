@@ -52,7 +52,6 @@ class SyncController(
         val results = mutableListOf<SyncAction>()
         var fixedCount = 0
         var verifiedCount = 0
-        var skippedCount = 0
 
         try {
             val actualBalances = fetchActualBalances().getOrElse { e ->
@@ -412,9 +411,6 @@ class SyncController(
                 append("동기화 완료: ")
                 append("${fixedCount}개 체결 확인, ")
                 append("${verifiedCount}개 검증")
-                if (skippedCount > 0) {
-                    append(", ${skippedCount}개 수동 확인 필요")
-                }
             }
 
             return syncResult(
@@ -542,17 +538,13 @@ class SyncController(
         }
     }
 
-    private fun extractCoinSymbol(market: String): String {
-        return PositionHelper.extractCoinSymbol(market)
-    }
+    private fun extractCoinSymbol(market: String): String = PositionHelper.extractCoinSymbol(market)
 
     /**
      * DB 마켓 포맷을 API 마켓 포맷으로 변환
      * DB: KRW-BTC/BTC_KRW/KRW_BTC, API: KRW-BTC
      */
-    private fun convertToApiMarket(market: String): String {
-        return PositionHelper.convertToApiMarket(market)
-    }
+    private fun convertToApiMarket(market: String): String = PositionHelper.convertToApiMarket(market)
 
     /**
      * DCA용 주문 일치 확인
@@ -744,13 +736,11 @@ class SyncController(
         return normalized.startsWith("ABANDONED") || normalized == "SYNC_NO_BALANCE"
     }
 
-    private fun fetchActualBalances(): Result<List<Balance>> {
-        return runCatching { bithumbPrivateApi.getBalances() ?: emptyList() }
-    }
+    private fun fetchActualBalances(): Result<List<Balance>> =
+        runCatching { bithumbPrivateApi.getBalances() ?: emptyList() }
 
-    private fun fetchOpenOrders(): Result<List<OrderResponse>> {
-        return runCatching { bithumbPrivateApi.getOrders(null, "wait", 0, 100) ?: emptyList() }
-    }
+    private fun fetchOpenOrders(): Result<List<OrderResponse>> =
+        runCatching { bithumbPrivateApi.getOrders(null, "wait", 0, 100) ?: emptyList() }
 
     private fun loadSellOrdersByMarket(markets: Set<String>): Map<String, List<OrderResponse>> {
         val sellOrdersByMarket = mutableMapOf<String, List<OrderResponse>>()
@@ -822,15 +812,14 @@ class SyncController(
         actions: List<SyncAction> = emptyList(),
         fixedCount: Int = 0,
         verifiedCount: Int = 0
-    ): SyncResult {
-        return SyncResult(
+    ): SyncResult =
+        SyncResult(
             success = success,
             message = message,
             actions = actions,
             fixedCount = fixedCount,
             verifiedCount = verifiedCount
         )
-    }
 
     private data class BalanceSnapshot(
         val available: BigDecimal,
