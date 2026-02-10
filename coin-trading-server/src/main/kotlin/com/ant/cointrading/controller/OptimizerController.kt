@@ -18,6 +18,8 @@ class OptimizerController(
     private val modelSelector: ModelSelector
 ) {
     private val log = LoggerFactory.getLogger(OptimizerController::class.java)
+    private val unavailableMessage = "LLM 서비스 사용 불가: API 키가 설정되지 않았습니다. " +
+            "SPRING_AI_ANTHROPIC_API_KEY 또는 SPRING_AI_OPENAI_API_KEY 환경변수를 설정하세요."
 
     /**
      * 수동 최적화 실행
@@ -26,32 +28,17 @@ class OptimizerController(
     fun runOptimization(): ResponseEntity<OptimizationResult> {
         // ChatClient 가용 여부 확인
         if (!modelSelector.isAvailable()) {
-            return ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE).body(
-                OptimizationResult(
-                    success = false,
-                    result = "LLM 서비스 사용 불가: API 키가 설정되지 않았습니다. " +
-                            "SPRING_AI_ANTHROPIC_API_KEY 또는 SPRING_AI_OPENAI_API_KEY 환경변수를 설정하세요."
-                )
-            )
+            return failure(HttpStatus.SERVICE_UNAVAILABLE, unavailableMessage)
         }
 
-        return try {
-            val result = llmOptimizer.optimize()
-            ResponseEntity.ok(
-                OptimizationResult(
-                    success = true,
-                    result = result
-                )
+        return runCatching { llmOptimizer.optimize() }
+            .fold(
+                onSuccess = { success(it) },
+                onFailure = { e ->
+                    log.error("최적화 실행 실패: ${e.message}", e)
+                    failure(HttpStatus.INTERNAL_SERVER_ERROR, "최적화 실행 실패: ${e.message}")
+                }
             )
-        } catch (e: Exception) {
-            log.error("최적화 실행 실패: ${e.message}", e)
-            ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body(
-                OptimizationResult(
-                    success = false,
-                    result = "최적화 실행 실패: ${e.message}"
-                )
-            )
-        }
     }
 
     /**
@@ -72,6 +59,24 @@ class OptimizerController(
         @RequestParam(defaultValue = "100") limit: Int
     ): List<AuditLogEntity> {
         return llmOptimizer.getAuditLogs(limit)
+    }
+
+    private fun success(result: String): ResponseEntity<OptimizationResult> {
+        return ResponseEntity.ok(
+            OptimizationResult(
+                success = true,
+                result = result
+            )
+        )
+    }
+
+    private fun failure(status: HttpStatus, result: String): ResponseEntity<OptimizationResult> {
+        return ResponseEntity.status(status).body(
+            OptimizationResult(
+                success = false,
+                result = result
+            )
+        )
     }
 }
 
