@@ -62,6 +62,11 @@ class OrderExecutor(
         val entryFee: Double
     )
 
+    private data class TradePnlSnapshot(
+        val pnlAmount: Double?,
+        val pnlPercent: Double?
+    )
+
     companion object {
         // 주문 상태 확인 설정 (OrderExecutor 전용)
         const val MAX_STATUS_CHECK_RETRIES = 3
@@ -1038,61 +1043,17 @@ class OrderExecutor(
     ) {
         try {
             val isSell = signal.action == SignalAction.SELL
-            var tradePrice = (executedPrice ?: signal.price).toDouble()
-
-            // [버그 수정] 가격이 0 이하면 marketConditionChecker를 통해 현재가 조회
-            if (tradePrice <= 0) {
-                log.warn("[${signal.market}] 거래 가격이 0 - executedPrice=${executedPrice}, signal.price=${signal.price}")
-                try {
-                    val marketCondition = marketConditionChecker.checkMarketCondition(signal.market, positionSize)
-                    val midPrice = marketCondition.midPrice
-                    if (midPrice != null && midPrice > BigDecimal.ZERO) {
-                        tradePrice = midPrice.toDouble()
-                        log.info("[${signal.market}] 시장 중간가로 대체: ${tradePrice}")
-                    }
-                } catch (e: Exception) {
-                    log.error("[${signal.market}] 시장 상태 조회 실패: ${e.message}")
-                }
-
-                // 여전히 0이면 저장 스킵 (잘못된 데이터가 DB에 들어가는 것 방지)
-                if (tradePrice <= 0) {
-                    log.error("[${signal.market}] 유효하지 않은 거래 가격 - orderId=$orderId, strategy=${signal.strategy}")
-                    log.error("[${signal.market}] 거래 기록 저장 스킵 (price=0 방지)")
-                    return
-                }
-            }
-
+            val tradePrice = resolveTradePriceOrNull(signal, positionSize, executedPrice, orderId) ?: return
             val sellQuantity = (executedQuantity ?: calculateQuantity(signal.price, positionSize)).toDouble()
             val sellFee = fee.toDouble()
-
-            // SELL 시 PnL 계산
-            var pnl: Double? = null
-            var pnlPercent: Double? = null
-
-            if (isSell) {
-                val pnlResult = calculateSellPnlFromOpenLots(
-                    market = signal.market,
-                    sellPrice = tradePrice,
-                    sellQuantity = sellQuantity,
-                    sellFee = sellFee,
-                    isSimulated = isSimulated
-                )
-
-                if (pnlResult != null) {
-                    pnl = pnlResult.pnlAmount
-                    pnlPercent = pnlResult.pnlPercent
-
-                    log.info(
-                        "[${signal.market}] PnL 계산 완료(FIFO): " +
-                            "매도가=${tradePrice}, PnL=${String.format("%.0f", pnl)}원 (${String.format("%.2f", pnlPercent)}%)"
-                    )
-
-                    // CircuitBreaker에 거래 결과 기록
-                    circuitBreaker.recordTradeResult(signal.market, pnlPercent)
-                } else {
-                    log.warn("[${signal.market}] 오픈 BUY 수량 없음 - PnL 계산 불가")
-                }
-            }
+            val pnlSnapshot = calculateTradePnlSnapshot(
+                signal = signal,
+                isSell = isSell,
+                tradePrice = tradePrice,
+                sellQuantity = sellQuantity,
+                sellFee = sellFee,
+                isSimulated = isSimulated
+            )
 
             val entity = TradeEntity(
                 orderId = orderId,
@@ -1105,8 +1066,8 @@ class OrderExecutor(
                 fee = sellFee,
                 slippage = slippagePercent,
                 isPartialFill = isPartialFill,
-                pnl = pnl,
-                pnlPercent = pnlPercent,
+                pnl = pnlSnapshot.pnlAmount,
+                pnlPercent = pnlSnapshot.pnlPercent,
                 strategy = signal.strategy,
                 regime = signal.regime,
                 confidence = signal.confidence,
@@ -1115,12 +1076,88 @@ class OrderExecutor(
             )
 
             tradeRepository.save(entity)
-            log.debug("[${signal.market}] 거래 기록 저장: orderId=$orderId, type=$orderType, pnl=$pnl")
+            log.debug(
+                "[${signal.market}] 거래 기록 저장: orderId=$orderId, type=$orderType, pnl=${pnlSnapshot.pnlAmount}"
+            )
 
         } catch (e: Exception) {
             log.error("[${signal.market}] 거래 기록 저장 실패: ${e.message}", e)
             // 기록 실패는 거래 실패로 처리하지 않음 (best effort)
         }
+    }
+
+    private fun resolveTradePriceOrNull(
+        signal: TradingSignal,
+        positionSize: BigDecimal,
+        executedPrice: BigDecimal?,
+        orderId: String
+    ): Double? {
+        var tradePrice = (executedPrice ?: signal.price).toDouble()
+        if (tradePrice > 0) {
+            return tradePrice
+        }
+
+        log.warn("[${signal.market}] 거래 가격이 0 - executedPrice=${executedPrice}, signal.price=${signal.price}")
+        tradePrice = resolveFallbackTradePrice(signal, positionSize)
+        if (tradePrice > 0) {
+            return tradePrice
+        }
+
+        log.error("[${signal.market}] 유효하지 않은 거래 가격 - orderId=$orderId, strategy=${signal.strategy}")
+        log.error("[${signal.market}] 거래 기록 저장 스킵 (price=0 방지)")
+        return null
+    }
+
+    private fun resolveFallbackTradePrice(signal: TradingSignal, positionSize: BigDecimal): Double {
+        return try {
+            val marketCondition = marketConditionChecker.checkMarketCondition(signal.market, positionSize)
+            val midPrice = marketCondition.midPrice
+            if (midPrice != null && midPrice > BigDecimal.ZERO) {
+                val resolvedPrice = midPrice.toDouble()
+                log.info("[${signal.market}] 시장 중간가로 대체: ${resolvedPrice}")
+                resolvedPrice
+            } else {
+                0.0
+            }
+        } catch (e: Exception) {
+            log.error("[${signal.market}] 시장 상태 조회 실패: ${e.message}")
+            0.0
+        }
+    }
+
+    private fun calculateTradePnlSnapshot(
+        signal: TradingSignal,
+        isSell: Boolean,
+        tradePrice: Double,
+        sellQuantity: Double,
+        sellFee: Double,
+        isSimulated: Boolean
+    ): TradePnlSnapshot {
+        if (!isSell) {
+            return TradePnlSnapshot(pnlAmount = null, pnlPercent = null)
+        }
+
+        val pnlResult = calculateSellPnlFromOpenLots(
+            market = signal.market,
+            sellPrice = tradePrice,
+            sellQuantity = sellQuantity,
+            sellFee = sellFee,
+            isSimulated = isSimulated
+        ) ?: run {
+            log.warn("[${signal.market}] 오픈 BUY 수량 없음 - PnL 계산 불가")
+            return TradePnlSnapshot(pnlAmount = null, pnlPercent = null)
+        }
+
+        log.info(
+            "[${signal.market}] PnL 계산 완료(FIFO): " +
+                "매도가=${tradePrice}, PnL=${String.format("%.0f", pnlResult.pnlAmount)}원 " +
+                "(${String.format("%.2f", pnlResult.pnlPercent)}%)"
+        )
+        circuitBreaker.recordTradeResult(signal.market, pnlResult.pnlPercent)
+        return TradePnlSnapshot(
+            pnlAmount = pnlResult.pnlAmount,
+            pnlPercent = pnlResult.pnlPercent
+        )
     }
 
     /**
