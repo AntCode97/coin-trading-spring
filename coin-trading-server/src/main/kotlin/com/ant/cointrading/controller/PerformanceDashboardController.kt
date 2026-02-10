@@ -33,6 +33,13 @@ class PerformanceDashboardController(
         const val CLOSED = "CLOSED"
     }
 
+    private val strategyTradeLoaders by lazy {
+        mapOf<String, () -> List<ClosedTrade>>(
+            MEME_SCALPER to ::loadClosedMemeTrades,
+            VOLUME_SURGE to ::loadClosedVolumeSurgeTrades
+        )
+    }
+
     private data class ClosedTrade(
         val entryTime: Instant?,
         val createdAt: Instant?,
@@ -64,16 +71,12 @@ class PerformanceDashboardController(
      */
     @GetMapping("/dashboard")
     fun getDashboard(): Map<String, Any?> {
-        val memeStats = calculateStrategyStats(MEME_SCALPER, loadClosedMemeTrades())
-        val volumeStats = calculateStrategyStats(VOLUME_SURGE, loadClosedVolumeSurgeTrades())
+        val strategyStats = loadAllStrategyStats()
 
         return mapOf(
             "timestamp" to Instant.now(),
-            "strategies" to mapOf(
-                MEME_SCALPER to toResponseMap(memeStats),
-                VOLUME_SURGE to toResponseMap(volumeStats)
-            ),
-            "summary" to calculateSummary(memeStats, volumeStats)
+            "strategies" to strategyStats.mapValues { (_, stats) -> toResponseMap(stats) },
+            "summary" to calculateSummary(strategyStats)
         )
     }
 
@@ -135,10 +138,13 @@ class PerformanceDashboardController(
     }
 
     private fun strategyStats(strategy: String): StrategyStats? {
-        return when (strategy) {
-            MEME_SCALPER -> calculateStrategyStats(strategy, loadClosedMemeTrades())
-            VOLUME_SURGE -> calculateStrategyStats(strategy, loadClosedVolumeSurgeTrades())
-            else -> null
+        val loader = strategyTradeLoaders[strategy] ?: return null
+        return calculateStrategyStats(strategy, loader())
+    }
+
+    private fun loadAllStrategyStats(): Map<String, StrategyStats> {
+        return strategyTradeLoaders.mapValues { (strategy, loader) ->
+            calculateStrategyStats(strategy, loader())
         }
     }
 
@@ -251,17 +257,14 @@ class PerformanceDashboardController(
     /**
      * 종합 요약
      */
-    private fun calculateSummary(
-        memeStats: StrategyStats,
-        volumeStats: StrategyStats
-    ): Map<String, Any?> {
-        val totalTrades = memeStats.totalTrades + volumeStats.totalTrades
-        val totalPnl = memeStats.totalPnl + volumeStats.totalPnl
+    private fun calculateSummary(strategyStats: Map<String, StrategyStats>): Map<String, Any?> {
+        val totalTrades = strategyStats.values.sumOf { it.totalTrades }
+        val totalPnl = strategyStats.values.sumOf { it.totalPnl }
 
         return mapOf(
             "totalTrades" to totalTrades,
             "totalPnl" to String.format("%.0f", totalPnl),
-            "activeStrategies" to listOf(MEME_SCALPER, VOLUME_SURGE)
+            "activeStrategies" to strategyStats.keys.toList()
         )
     }
 
