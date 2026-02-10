@@ -107,6 +107,7 @@ class OrderExecutor(
                 rejectionReason = OrderRejectionReason.RISK_THROTTLE_BLOCK
             )
         }
+        validateSignalQuality(signal, side, throttleDecision)?.let { return it }
         val effectivePositionSize = applyRiskThrottle(positionSize, throttleDecision, signal.market, signal.strategy)
 
         validateMinimumOrderAmount(signal, side, effectivePositionSize)?.let { return it }
@@ -155,6 +156,33 @@ class OrderExecutor(
         )
 
         return adjusted
+    }
+
+    private fun validateSignalQuality(
+        signal: TradingSignal,
+        side: OrderSide,
+        throttleDecision: RiskThrottleDecision?
+    ): OrderResult? {
+        if (side != OrderSide.BUY) {
+            return null
+        }
+
+        val threshold = when (throttleDecision?.severity) {
+            "CRITICAL" -> tradingProperties.riskThrottle.minBuyConfidenceCritical
+            "WEAK" -> tradingProperties.riskThrottle.minBuyConfidenceWeak
+            else -> tradingProperties.riskThrottle.minBuyConfidenceNormal
+        }
+
+        if (signal.confidence >= threshold) {
+            return null
+        }
+
+        return createFailureResult(
+            signal = signal,
+            side = side,
+            message = "신호 신뢰도 부족: ${String.format("%.1f", signal.confidence)} < ${String.format("%.1f", threshold)}",
+            rejectionReason = OrderRejectionReason.LOW_SIGNAL_CONFIDENCE
+        )
     }
 
     private fun validateMinimumOrderAmount(
@@ -1399,6 +1427,7 @@ enum class OrderRejectionReason {
     EXCEPTION,              // 예외 발생
     CIRCUIT_BREAKER,        // 서킷 브레이커 발동
     RISK_THROTTLE_BLOCK,    // 리스크 스로틀 임계 구간으로 신규 매수 차단
+    LOW_SIGNAL_CONFIDENCE,  // 신호 신뢰도 기준 미달
     BELOW_MIN_ORDER_AMOUNT, // 최소 주문 금액 미달 (빗썸 5000원)
     MARKET_SUSPENDED        // 거래 정지/상장 폐지 코인
 }

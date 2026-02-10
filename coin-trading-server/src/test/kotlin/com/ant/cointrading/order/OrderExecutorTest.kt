@@ -3,6 +3,7 @@ package com.ant.cointrading.order
 import com.ant.cointrading.api.bithumb.Balance
 import com.ant.cointrading.api.bithumb.BithumbPrivateApi
 import com.ant.cointrading.api.bithumb.OrderResponse
+import com.ant.cointrading.config.RiskThrottleProperties
 import com.ant.cointrading.config.TradingProperties
 import com.ant.cointrading.model.OrderSide
 import com.ant.cointrading.model.OrderType
@@ -83,6 +84,7 @@ class OrderExecutorTest {
         // TradingProperties 기본 mock 설정
         whenever(tradingProperties.feeRate).thenReturn(BigDecimal("0.0004"))
         whenever(tradingProperties.enabled).thenReturn(false) // 기본 시뮬레이션 모드
+        whenever(tradingProperties.riskThrottle).thenReturn(RiskThrottleProperties())
         whenever(riskThrottleService.getDecision(any(), any(), any())).thenReturn(
             RiskThrottleDecision(
                 multiplier = 1.0,
@@ -247,6 +249,29 @@ class OrderExecutorTest {
             assertFalse(result.success)
             assertEquals(OrderRejectionReason.RISK_THROTTLE_BLOCK, result.rejectionReason)
             assertTrue(result.message.contains("리스크 스로틀 차단"))
+        }
+
+        @Test
+        @DisplayName("신뢰도 기준 미달 매수 신호는 차단된다")
+        fun rejectLowConfidenceBuySignal() {
+            // given
+            val signal = TradingSignal(
+                market = "BTC_KRW",
+                action = SignalAction.BUY,
+                confidence = 52.0,
+                price = BigDecimal("65000000"),
+                reason = "테스트",
+                strategy = "TEST"
+            )
+            val positionSize = BigDecimal("10000")
+
+            // when
+            val result = orderExecutor.execute(signal, positionSize)
+
+            // then
+            assertFalse(result.success)
+            assertEquals(OrderRejectionReason.LOW_SIGNAL_CONFIDENCE, result.rejectionReason)
+            assertTrue(result.message.contains("신호 신뢰도 부족"))
         }
     }
 

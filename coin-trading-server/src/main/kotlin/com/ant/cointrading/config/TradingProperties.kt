@@ -31,6 +31,9 @@ data class RiskThrottleProperties(
     val criticalMultiplier: Double = 0.45,
     val blockNewBuysOnCritical: Boolean = true,
     val blockMultiplierThreshold: Double = 0.50,
+    val minBuyConfidenceNormal: Double = 55.0,
+    val minBuyConfidenceWeak: Double = 65.0,
+    val minBuyConfidenceCritical: Double = 75.0,
     val cacheMinutes: Long = 10
 )
 
