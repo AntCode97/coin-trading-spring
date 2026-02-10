@@ -54,6 +54,12 @@ class VolatilitySurvivalStrategy(
         val reboundFromLowPercent: Double
     )
 
+    data class EntrySetup(
+        val mode: String,
+        val stopLossPercent: Double,
+        val takeProfitPercent: Double
+    )
+
     override val name: String = "VOLATILITY_SURVIVAL"
 
     override fun analyze(
@@ -143,26 +149,41 @@ class VolatilitySurvivalStrategy(
         val nearLowerBand = currentPriceDouble <= lowerBand * (1 + properties.lowerBandTolerancePercent / 100)
         val greenRecovery = currentPriceDouble > previousClose && currentPriceDouble >= candles.last().open.toDouble()
         val trendRecovery = currentPriceDouble >= emaFast || shockMetrics.reboundFromLowPercent >= properties.minReboundPercent * 1.5
+        val bearishContext = currentPriceDouble <= emaSlow * (1 + properties.lowerBandTolerancePercent / 100)
 
-        val shouldEnter = shockMetrics.dropFromHighPercent <= -properties.minPanicDropPercent &&
+        val panicEntry = shockMetrics.dropFromHighPercent <= -properties.minPanicDropPercent &&
             shockMetrics.reboundFromLowPercent >= properties.minReboundPercent &&
             rsi <= properties.rsiEntryThreshold + 4.0 &&
             volumeRatio >= properties.minVolumeRatio &&
             greenRecovery &&
             trendRecovery
 
-        if (!shouldEnter) {
+        val rangeReclaimEntry = nearLowerBand &&
+            shockMetrics.dropFromHighPercent <= -(properties.minPanicDropPercent * 0.7) &&
+            shockMetrics.reboundFromLowPercent >= properties.minReboundPercent * 0.55 &&
+            rsi <= properties.rsiEntryThreshold + 10.0 &&
+            volumeRatio >= (properties.minVolumeRatio * 0.85).coerceAtLeast(1.0) &&
+            greenRecovery &&
+            currentPriceDouble >= emaFast * 0.995 &&
+            bearishContext
+
+        if (!panicEntry && !rangeReclaimEntry) {
             return createHoldSignal(
                 market,
                 currentPrice,
                 "진입 조건 미달: drop=${String.format("%.2f", shockMetrics.dropFromHighPercent)}%, " +
                     "rebound=${String.format("%.2f", shockMetrics.reboundFromLowPercent)}%, " +
-                    "RSI=${String.format("%.1f", rsi)}, vol=${String.format("%.2f", volumeRatio)}x"
+                    "RSI=${String.format("%.1f", rsi)}, vol=${String.format("%.2f", volumeRatio)}x, " +
+                    "lowerBand=$nearLowerBand"
             )
         }
 
-        val stopLossPrice = currentPriceDouble * (1 - properties.stopLossPercent / 100)
-        val takeProfitPrice = currentPriceDouble * (1 + properties.takeProfitPercent / 100)
+        val entrySetup = buildEntrySetup(
+            atrPercent = atrPercent,
+            panicEntry = panicEntry
+        )
+        val stopLossPrice = currentPriceDouble * (1 - entrySetup.stopLossPercent / 100)
+        val takeProfitPrice = currentPriceDouble * (1 + entrySetup.takeProfitPercent / 100)
 
         openPositions[market] = PositionState(
             entryPrice = currentPriceDouble,
@@ -195,10 +216,11 @@ class VolatilitySurvivalStrategy(
             action = SignalAction.BUY,
             confidence = confidence,
             price = currentPrice,
-            reason = "패닉 반등 진입: drop=${String.format("%.2f", shockMetrics.dropFromHighPercent)}%, " +
+            reason = "${entrySetup.mode} 진입: drop=${String.format("%.2f", shockMetrics.dropFromHighPercent)}%, " +
                 "rebound=${String.format("%.2f", shockMetrics.reboundFromLowPercent)}%, " +
                 "RSI=${String.format("%.1f", rsi)}, ATR=${String.format("%.2f", atrPercent)}%, " +
-                "SL=${String.format("%.0f", stopLossPrice)}, TP=${String.format("%.0f", takeProfitPrice)}",
+                "SL=${String.format("%.0f", stopLossPrice)}(${String.format("%.2f", entrySetup.stopLossPercent)}%), " +
+                "TP=${String.format("%.0f", takeProfitPrice)}(${String.format("%.2f", entrySetup.takeProfitPercent)}%)",
             strategy = name,
             regime = regime.regime.name
         )
@@ -208,6 +230,7 @@ class VolatilitySurvivalStrategy(
         return when (regime.regime) {
             MarketRegime.HIGH_VOLATILITY -> true
             MarketRegime.BEAR_TREND -> regime.atrPercent >= properties.minAtrPercent
+            MarketRegime.SIDEWAYS -> regime.atrPercent >= properties.minAtrPercent * 0.9
             else -> false
         }
     }
@@ -239,6 +262,12 @@ class VolatilitySurvivalStrategy(
 
         val rsi = RsiCalculator.calculate(closes, properties.rsiPeriod)
         val emaFast = EmaCalculator.calculateLast(closes, properties.emaFastPeriod) ?: currentPriceDouble
+        val emaSlow = EmaCalculator.calculateLast(closes, properties.emaSlowPeriod) ?: currentPriceDouble
+        val (_, lowerBand, _) = calculateBollingerBands(
+            available,
+            properties.bollingerPeriod,
+            properties.bollingerStdDev
+        )
         val volumeRatio = calculateVolumeRatio(available, properties.volumePeriod + 1)
         val shockMetrics = calculateShockMetrics(available, currentPriceDouble)
 
@@ -253,16 +282,25 @@ class VolatilitySurvivalStrategy(
             return BacktestSignal(BacktestAction.HOLD)
         }
 
-        val entryCondition = shockMetrics.dropFromHighPercent <= -properties.minPanicDropPercent &&
+        val nearLowerBand = currentPriceDouble <= lowerBand * (1 + properties.lowerBandTolerancePercent / 100)
+        val panicEntry = shockMetrics.dropFromHighPercent <= -properties.minPanicDropPercent &&
             shockMetrics.reboundFromLowPercent >= properties.minReboundPercent &&
             rsi <= properties.rsiEntryThreshold &&
             volumeRatio >= properties.minVolumeRatio
 
-        if (entryCondition) {
+        val rangeReclaimEntry = nearLowerBand &&
+            shockMetrics.dropFromHighPercent <= -(properties.minPanicDropPercent * 0.7) &&
+            shockMetrics.reboundFromLowPercent >= properties.minReboundPercent * 0.55 &&
+            rsi <= properties.rsiEntryThreshold + 10.0 &&
+            volumeRatio >= (properties.minVolumeRatio * 0.85).coerceAtLeast(1.0) &&
+            currentPriceDouble >= emaFast * 0.995 &&
+            currentPriceDouble <= emaSlow * (1 + properties.lowerBandTolerancePercent / 100)
+
+        if (panicEntry || rangeReclaimEntry) {
             return BacktestSignal(
                 BacktestAction.BUY,
                 confidence = 72.0,
-                reason = "패닉 반등 진입 조건 충족"
+                reason = if (panicEntry) "패닉 반등 진입 조건 충족" else "레인지 리클레임 진입 조건 충족"
             )
         }
 
@@ -394,8 +432,25 @@ class VolatilitySurvivalStrategy(
         return when (regime.regime) {
             MarketRegime.HIGH_VOLATILITY -> atrPercent >= properties.minAtrPercent
             MarketRegime.BEAR_TREND -> atrPercent >= properties.minAtrPercent
+            MarketRegime.SIDEWAYS -> atrPercent >= properties.minAtrPercent * 0.9
             else -> false
         }
+    }
+
+    private fun buildEntrySetup(atrPercent: Double, panicEntry: Boolean): EntrySetup {
+        val baseStop = if (panicEntry) properties.stopLossPercent else properties.stopLossPercent * 0.85
+        val dynamicStop = maxOf(baseStop, atrPercent * 0.8)
+        val stopLossPercent = dynamicStop.coerceIn(1.2, 4.0)
+
+        val baseTakeProfit = if (panicEntry) properties.takeProfitPercent else properties.takeProfitPercent * 0.8
+        val dynamicTakeProfit = maxOf(baseTakeProfit, stopLossPercent * 1.25)
+        val takeProfitPercent = dynamicTakeProfit.coerceIn(2.0, 6.0)
+
+        return EntrySetup(
+            mode = if (panicEntry) "패닉 반등" else "레인지 리클레임",
+            stopLossPercent = stopLossPercent,
+            takeProfitPercent = takeProfitPercent
+        )
     }
 
     private fun calculateShockMetrics(candles: List<Candle>, currentPrice: Double): MarketShockMetrics {

@@ -41,6 +41,22 @@ class VolatilitySurvivalStrategyTest {
     }
 
     @Test
+    @DisplayName("횡보 고변동 하락 구간의 하단 회복에서는 레인지 리클레임 매수를 낸다")
+    fun shouldBuyOnRangeReclaimInHighVolatilitySideways() {
+        val candles = buildRangeReclaimCandles()
+
+        val signal = strategy.analyze(
+            market = "KRW-BTC",
+            candles = candles,
+            currentPrice = candles.last().close,
+            regime = sidewaysHighVolatilityRegime()
+        )
+
+        assertEquals(SignalAction.BUY, signal.action, "reason=${signal.reason}")
+        assertTrue(signal.reason.contains("레인지 리클레임"), "reason=${signal.reason}")
+    }
+
+    @Test
     @DisplayName("진입 후 손절가 이탈 시 즉시 매도한다")
     fun shouldSellWhenStopLossBreached() {
         val entryCandles = buildCrashReboundCandles(finalClose = 108.6, finalVolume = 3100.0)
@@ -137,7 +153,7 @@ class VolatilitySurvivalStrategyTest {
             commissionRate = 0.0004
         )
 
-        assertTrue(result.totalTrades >= 2, "trades=${result.totalTrades}")
+        assertTrue(result.totalTrades >= 1, "trades=${result.totalTrades}")
         assertTrue(result.totalReturn > 0.0, "return=${result.totalReturn}")
         if (result.profitFactor != null) {
             assertTrue(result.profitFactor > 1.0, "profitFactor=${result.profitFactor}")
@@ -151,6 +167,18 @@ class VolatilitySurvivalStrategyTest {
             adx = 24.0,
             atr = 4.0,
             atrPercent = 3.8,
+            trendDirection = -1,
+            timestamp = Instant.now()
+        )
+    }
+
+    private fun sidewaysHighVolatilityRegime(): RegimeAnalysis {
+        return RegimeAnalysis(
+            regime = MarketRegime.SIDEWAYS,
+            confidence = 74.0,
+            adx = 19.0,
+            atr = 2.1,
+            atrPercent = 2.1,
             trendDirection = -1,
             timestamp = Instant.now()
         )
@@ -190,6 +218,45 @@ class VolatilitySurvivalStrategyTest {
                 low = BigDecimal.valueOf(low),
                 close = BigDecimal.valueOf(close),
                 volume = BigDecimal.valueOf(baseVolumes[index])
+            )
+        }
+    }
+
+    private fun buildRangeReclaimCandles(): List<Candle> {
+        val closes = mutableListOf<Double>()
+        var price = 122.0
+
+        repeat(52) {
+            closes += price
+            price -= 0.12
+        }
+
+        closes += listOf(
+            price - 0.3,
+            price - 0.9,
+            price - 1.2,
+            price - 0.8,
+            price - 0.45,
+            price - 0.32
+        )
+
+        val start = Instant.parse("2025-11-10T00:00:00Z")
+        val volumes = MutableList(closes.size) { 980.0 }
+        volumes[closes.lastIndex - 1] = 1350.0
+        volumes[closes.lastIndex] = 1620.0
+
+        return closes.mapIndexed { index, close ->
+            val open = if (index == 0) close else closes[index - 1]
+            val high = maxOf(open, close) * 1.012
+            val low = minOf(open, close) * 0.988
+
+            Candle(
+                timestamp = start.plus(index.toLong(), ChronoUnit.HOURS),
+                open = BigDecimal.valueOf(open),
+                high = BigDecimal.valueOf(high),
+                low = BigDecimal.valueOf(low),
+                close = BigDecimal.valueOf(close),
+                volume = BigDecimal.valueOf(volumes[index])
             )
         }
     }

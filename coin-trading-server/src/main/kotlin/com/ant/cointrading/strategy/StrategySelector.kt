@@ -50,6 +50,10 @@ class StrategySelector(
         const val REGIME_CONFIRMATION_COUNT = 3     // 3회 연속 같은 레짐 필요
         const val STRATEGY_COOLDOWN_MINUTES = 60L   // 전략 변경 후 1시간 쿨다운
         const val MAX_HISTORY_SIZE = 10             // 히스토리 최대 크기
+        const val CONFIDENCE_LOW_THRESHOLD = 50.0
+        const val CONFIDENCE_STRONG_THRESHOLD = 70.0
+        const val ATR_LOW_VOL_THRESHOLD = 1.4
+        const val ATR_HIGH_VOL_THRESHOLD = 2.4
     }
 
     /**
@@ -86,7 +90,7 @@ class StrategySelector(
         // 4. 레짐 확인 체크 - 3회 연속 같은 레짐이 아니면 현재 전략 유지
         if (!isRegimeConfirmed(market, regime.regime)) {
             log.debug("[$market] 레짐 미확정: ${getRegimeHistoryString(market)}")
-            return active?.strategy ?: dcaStrategy
+            return active?.strategy ?: getCurrentStrategy()
         }
 
         // 5. 최적 전략 결정
@@ -109,24 +113,36 @@ class StrategySelector(
      * 레짐 확인 없이 최적 전략 결정 (내부 로직)
      */
     private fun determineOptimalStrategy(regime: RegimeAnalysis): TradingStrategy {
-        if (regime.confidence < 50.0) {
-            return gridStrategy
+        if (regime.confidence < CONFIDENCE_LOW_THRESHOLD) {
+            return if (regime.atrPercent >= ATR_HIGH_VOL_THRESHOLD) {
+                volatilitySurvivalStrategy
+            } else {
+                gridStrategy
+            }
         }
 
         return when (regime.regime) {
-            MarketRegime.BULL_TREND -> breakoutStrategy
+            MarketRegime.BULL_TREND -> {
+                if (regime.confidence >= CONFIDENCE_STRONG_THRESHOLD) {
+                    enhancedBreakoutStrategy
+                } else {
+                    breakoutStrategy
+                }
+            }
             MarketRegime.BEAR_TREND -> {
-                if (regime.atrPercent >= 2.0) {
+                if (regime.atrPercent >= ATR_LOW_VOL_THRESHOLD) {
                     volatilitySurvivalStrategy
                 } else {
-                    dcaStrategy
+                    meanReversionStrategy
                 }
             }
             MarketRegime.SIDEWAYS -> {
-                if (regime.atrPercent < 2.0) {
+                if (regime.atrPercent < ATR_LOW_VOL_THRESHOLD) {
                     gridStrategy
+                } else if (regime.atrPercent < ATR_HIGH_VOL_THRESHOLD) {
+                    meanReversionStrategy
                 } else {
-                    breakoutStrategy
+                    volatilitySurvivalStrategy
                 }
             }
             MarketRegime.HIGH_VOLATILITY -> volatilitySurvivalStrategy

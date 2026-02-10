@@ -1,7 +1,6 @@
 package com.ant.cointrading.indicator
 
 import com.ant.cointrading.model.Candle
-import java.math.BigDecimal
 import kotlin.math.abs
 import kotlin.math.sqrt
 
@@ -213,18 +212,27 @@ class ConfluenceAnalyzer(
         var avgLoss = losses.take(period).average()
 
         // 초기 RSI
-        val rs = if (avgLoss != 0.0) avgGain / avgLoss else 0.0
-        rsiValues.add(100.0 - (100.0 / (1 + rs)))
+        rsiValues.add(calculateRsiFromAverages(avgGain, avgLoss))
 
         // 이후 RSI (Wilder's smoothing)
         for (i in period until gains.size) {
             avgGain = (avgGain * (period - 1) + gains[i]) / period
             avgLoss = (avgLoss * (period - 1) + losses[i]) / period
-            val rs = if (avgLoss != 0.0) avgGain / avgLoss else 0.0
-            rsiValues.add(100.0 - (100.0 / (1 + rs)))
+            rsiValues.add(calculateRsiFromAverages(avgGain, avgLoss))
         }
 
         return rsiValues
+    }
+
+    private fun calculateRsiFromAverages(avgGain: Double, avgLoss: Double): Double {
+        return when {
+            avgLoss == 0.0 && avgGain == 0.0 -> 50.0
+            avgLoss == 0.0 -> 100.0
+            else -> {
+                val rs = avgGain / avgLoss
+                100.0 - (100.0 / (1 + rs))
+            }
+        }
     }
 
     private fun calculateMacdData(candles: List<Candle>): Triple<List<Double>, List<Double>, List<Double>>? {
@@ -233,18 +241,27 @@ class ConfluenceAnalyzer(
         val emaFast = calculateEma(closes, macdFast)
         val emaSlow = calculateEma(closes, macdSlow)
 
-        if (emaFast.size != emaSlow.size) return null
+        if (emaFast.isEmpty() || emaSlow.isEmpty()) return null
+
+        // 빠른 EMA는 더 일찍 시작하므로 느린 EMA 기준으로 정렬한다.
+        val alignmentOffset = macdSlow - macdFast
+        if (alignmentOffset < 0 || emaFast.size <= alignmentOffset) return null
+        val alignedFastEma = emaFast.drop(alignmentOffset)
+        if (alignedFastEma.size != emaSlow.size) return null
 
         val macdLine = mutableListOf<Double>()
         for (i in emaSlow.indices) {
-            macdLine.add(emaFast[i] - emaSlow[i])
+            macdLine.add(alignedFastEma[i] - emaSlow[i])
         }
 
         val signalLine = calculateEma(macdLine, macdSignal)
+        if (signalLine.isEmpty()) return null
 
         val histogram = mutableListOf<Double>()
+        val macdOffset = macdLine.size - signalLine.size
+        if (macdOffset < 0) return null
         for (i in signalLine.indices) {
-            histogram.add(macdLine[i + (macdLine.size - signalLine.size)] - signalLine[i])
+            histogram.add(macdLine[i + macdOffset] - signalLine[i])
         }
 
         return Triple(macdLine, signalLine, histogram)
@@ -309,11 +326,11 @@ class ConfluenceAnalyzer(
         // signalLine은 macdLine보다 길이가 짧음 (offset만큼)
         val offset = macdLine.size - signalLine.size
 
-        // macdLine에서 offset 위치의 값들이 signalLine의 현재/이전 값과 대응됨
-        if (offset < 1) return false
+        if (offset < 0) return false
 
-        val prevMacd = macdLine[offset - 1]     // signalLine[last-2]와 대응
-        val currMacd = macdLine[offset]         // signalLine[last-1]와 대응
+        // 최신 두 시점의 정렬된 MACD/Signal 비교로 크로스를 판단한다.
+        val prevMacd = macdLine[macdLine.size - 2]
+        val currMacd = macdLine.last()
         val prevSignal = signalLine[signalLine.size - 2]
         val currSignal = signalLine.last()
 
