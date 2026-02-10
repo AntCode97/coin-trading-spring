@@ -39,6 +39,11 @@ class VolumeSurgeReflectorTools(
         fun set(value: Double)
     }
 
+    private data class ParamConfig(
+        val keyValueKey: String,
+        val accessor: ParamAccessor
+    )
+
     private fun doubleParam(getter: () -> Double, setter: (Double) -> Unit) = object : ParamAccessor {
         override fun get() = getter()
         override fun set(value: Double) = setter(value)
@@ -49,40 +54,60 @@ class VolumeSurgeReflectorTools(
         override fun set(value: Double) = setter(value.toInt())
     }
 
-    private val paramMap by lazy {
+    private val paramConfigs by lazy {
         mapOf(
-            "minVolumeRatio" to doubleParam({ volumeSurgeProperties.minVolumeRatio }) { volumeSurgeProperties.minVolumeRatio = it },
-            "maxRsi" to doubleParam({ volumeSurgeProperties.maxRsi }) { volumeSurgeProperties.maxRsi = it },
-            "minConfluenceScore" to intParam({ volumeSurgeProperties.minConfluenceScore }) { volumeSurgeProperties.minConfluenceScore = it },
-            "stopLossPercent" to doubleParam({ volumeSurgeProperties.stopLossPercent }) { volumeSurgeProperties.stopLossPercent = it },
-            "takeProfitPercent" to doubleParam({ volumeSurgeProperties.takeProfitPercent }) { volumeSurgeProperties.takeProfitPercent = it },
-            "trailingStopTrigger" to doubleParam({ volumeSurgeProperties.trailingStopTrigger }) { volumeSurgeProperties.trailingStopTrigger = it },
-            "trailingStopOffset" to doubleParam({ volumeSurgeProperties.trailingStopOffset }) { volumeSurgeProperties.trailingStopOffset = it },
-            "positionTimeoutMin" to intParam({ volumeSurgeProperties.positionTimeoutMin }) { volumeSurgeProperties.positionTimeoutMin = it },
-            "cooldownMin" to intParam({ volumeSurgeProperties.cooldownMin }) { volumeSurgeProperties.cooldownMin = it },
-            "maxConsecutiveLosses" to intParam({ volumeSurgeProperties.maxConsecutiveLosses }) { volumeSurgeProperties.maxConsecutiveLosses = it },
-            "dailyMaxLossKrw" to intParam({ volumeSurgeProperties.dailyMaxLossKrw }) { volumeSurgeProperties.dailyMaxLossKrw = it },
-            "positionSizeKrw" to intParam({ volumeSurgeProperties.positionSizeKrw }) { volumeSurgeProperties.positionSizeKrw = it },
-            "alertFreshnessMin" to intParam({ volumeSurgeProperties.alertFreshnessMin }) { volumeSurgeProperties.alertFreshnessMin = it }
-        )
-    }
-
-    companion object {
-        /** 변경 가능한 파라미터 목록과 KeyValue 키 매핑 */
-        val ALLOWED_PARAMS = mapOf(
-            "minVolumeRatio" to "volumesurge.minVolumeRatio",
-            "maxRsi" to "volumesurge.maxRsi",
-            "minConfluenceScore" to "volumesurge.minConfluenceScore",
-            "stopLossPercent" to "volumesurge.stopLossPercent",
-            "takeProfitPercent" to "volumesurge.takeProfitPercent",
-            "trailingStopTrigger" to "volumesurge.trailingStopTrigger",
-            "trailingStopOffset" to "volumesurge.trailingStopOffset",
-            "positionTimeoutMin" to "volumesurge.positionTimeoutMin",
-            "cooldownMin" to "volumesurge.cooldownMin",
-            "maxConsecutiveLosses" to "volumesurge.maxConsecutiveLosses",
-            "dailyMaxLossKrw" to "volumesurge.dailyMaxLossKrw",
-            "positionSizeKrw" to "volumesurge.positionSizeKrw",
-            "alertFreshnessMin" to "volumesurge.alertFreshnessMin"
+            "minVolumeRatio" to ParamConfig(
+                keyValueKey = "volumesurge.minVolumeRatio",
+                accessor = doubleParam({ volumeSurgeProperties.minVolumeRatio }) { volumeSurgeProperties.minVolumeRatio = it }
+            ),
+            "maxRsi" to ParamConfig(
+                keyValueKey = "volumesurge.maxRsi",
+                accessor = doubleParam({ volumeSurgeProperties.maxRsi }) { volumeSurgeProperties.maxRsi = it }
+            ),
+            "minConfluenceScore" to ParamConfig(
+                keyValueKey = "volumesurge.minConfluenceScore",
+                accessor = intParam({ volumeSurgeProperties.minConfluenceScore }) { volumeSurgeProperties.minConfluenceScore = it }
+            ),
+            "stopLossPercent" to ParamConfig(
+                keyValueKey = "volumesurge.stopLossPercent",
+                accessor = doubleParam({ volumeSurgeProperties.stopLossPercent }) { volumeSurgeProperties.stopLossPercent = it }
+            ),
+            "takeProfitPercent" to ParamConfig(
+                keyValueKey = "volumesurge.takeProfitPercent",
+                accessor = doubleParam({ volumeSurgeProperties.takeProfitPercent }) { volumeSurgeProperties.takeProfitPercent = it }
+            ),
+            "trailingStopTrigger" to ParamConfig(
+                keyValueKey = "volumesurge.trailingStopTrigger",
+                accessor = doubleParam({ volumeSurgeProperties.trailingStopTrigger }) { volumeSurgeProperties.trailingStopTrigger = it }
+            ),
+            "trailingStopOffset" to ParamConfig(
+                keyValueKey = "volumesurge.trailingStopOffset",
+                accessor = doubleParam({ volumeSurgeProperties.trailingStopOffset }) { volumeSurgeProperties.trailingStopOffset = it }
+            ),
+            "positionTimeoutMin" to ParamConfig(
+                keyValueKey = "volumesurge.positionTimeoutMin",
+                accessor = intParam({ volumeSurgeProperties.positionTimeoutMin }) { volumeSurgeProperties.positionTimeoutMin = it }
+            ),
+            "cooldownMin" to ParamConfig(
+                keyValueKey = "volumesurge.cooldownMin",
+                accessor = intParam({ volumeSurgeProperties.cooldownMin }) { volumeSurgeProperties.cooldownMin = it }
+            ),
+            "maxConsecutiveLosses" to ParamConfig(
+                keyValueKey = "volumesurge.maxConsecutiveLosses",
+                accessor = intParam({ volumeSurgeProperties.maxConsecutiveLosses }) { volumeSurgeProperties.maxConsecutiveLosses = it }
+            ),
+            "dailyMaxLossKrw" to ParamConfig(
+                keyValueKey = "volumesurge.dailyMaxLossKrw",
+                accessor = intParam({ volumeSurgeProperties.dailyMaxLossKrw }) { volumeSurgeProperties.dailyMaxLossKrw = it }
+            ),
+            "positionSizeKrw" to ParamConfig(
+                keyValueKey = "volumesurge.positionSizeKrw",
+                accessor = intParam({ volumeSurgeProperties.positionSizeKrw }) { volumeSurgeProperties.positionSizeKrw = it }
+            ),
+            "alertFreshnessMin" to ParamConfig(
+                keyValueKey = "volumesurge.alertFreshnessMin",
+                accessor = intParam({ volumeSurgeProperties.alertFreshnessMin }) { volumeSurgeProperties.alertFreshnessMin = it }
+            )
         )
     }
 
@@ -236,20 +261,20 @@ class VolumeSurgeReflectorTools(
         log.info("[Tool] suggestParameterChange: $paramName -> $newValue")
 
         // 허용된 파라미터인지 검증
-        val keyValueKey = ALLOWED_PARAMS[paramName]
-        if (keyValueKey == null) {
+        val paramConfig = paramConfigs[paramName]
+        if (paramConfig == null) {
             log.warn("허용되지 않은 파라미터: $paramName")
             return """
                 오류: 허용되지 않은 파라미터입니다.
                 파라미터명: $paramName
 
                 허용된 파라미터 목록:
-                ${ALLOWED_PARAMS.keys.joinToString(", ")}
+                ${paramConfigs.keys.joinToString(", ")}
             """.trimIndent()
         }
 
         // 현재 값 조회
-        val currentValue = paramMap[paramName]?.get() ?: 0.0
+        val currentValue = paramConfig.accessor.get()
 
         // 값이 동일하면 변경 불필요
         if (currentValue == newValue) {
@@ -259,14 +284,14 @@ class VolumeSurgeReflectorTools(
         try {
             // 1. KeyValueService에 저장 (영속성 - 재시작 후에도 유지)
             keyValueService.set(
-                key = keyValueKey,
+                key = paramConfig.keyValueKey,
                 value = newValue.toString(),
                 category = "volumesurge",
                 description = "LLM 자동 변경: $reason"
             )
 
             // 2. VolumeSurgeProperties 필드 직접 변경 (즉시 반영)
-            paramMap[paramName]?.set(newValue)
+            paramConfig.accessor.set(newValue)
 
             // 3. DB 요약에 변경 기록 저장
             val today = today()
@@ -303,7 +328,7 @@ class VolumeSurgeReflectorTools(
                     변경: $currentValue → $newValue
                     이유: $reason
 
-                    KeyValue 키: $keyValueKey
+                    KeyValue 키: ${paramConfig.keyValueKey}
                     즉시 반영됨 (재시작 후에도 유지)
                 """.trimIndent()
             )
@@ -314,7 +339,7 @@ class VolumeSurgeReflectorTools(
                 파라미터 변경 완료:
                 - $paramName: $currentValue → $newValue
                 - 이유: $reason
-                - KeyValue 저장: $keyValueKey
+                - KeyValue 저장: ${paramConfig.keyValueKey}
                 - 즉시 반영됨
             """.trimIndent()
 
@@ -417,7 +442,7 @@ class VolumeSurgeReflectorTools(
             return "백테스트 기간($historicalDays 일) 내 트레이드가 없습니다."
         }
 
-        val currentValue = paramMap[paramName]?.get() ?: 0.0
+        val currentValue = paramConfigs[paramName]?.accessor?.get() ?: 0.0
         val filterResult = simulateBacktestFilter(paramName, newValue, currentValue, trades)
 
         val winningTrades = trades.filter { (it.pnlAmount ?: 0.0) > 0 }
