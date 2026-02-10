@@ -12,7 +12,6 @@ import com.ant.cointrading.service.ModelSelector
 import com.ant.cointrading.stats.TradeStatsCalculator
 import com.ant.cointrading.util.DateTimeUtils.today
 import com.ant.cointrading.util.DateTimeUtils.todayRange
-import com.fasterxml.jackson.databind.ObjectMapper
 import jakarta.annotation.PostConstruct
 import org.slf4j.LoggerFactory
 import org.springframework.ai.tool.annotation.Tool
@@ -22,6 +21,8 @@ import org.springframework.stereotype.Component
 import java.time.Instant
 import java.time.LocalDate
 import java.time.temporal.ChronoUnit
+
+private val REFLECTION_TARGET_STATUSES = setOf("CLOSED", "ABANDONED")
 
 /**
  * Meme Scalper 전략 회고 시스템
@@ -34,15 +35,12 @@ class MemeScalperReflector(
     private val properties: MemeScalperProperties,
     private val modelSelector: ModelSelector,
     private val tradeRepository: MemeScalperTradeRepository,
-    private val statsRepository: MemeScalperDailyStatsRepository,
     private val keyValueService: KeyValueService,
     private val slackNotifier: SlackNotifier,
-    private val objectMapper: ObjectMapper,
     private val reflectorTools: MemeScalperReflectorTools,
     private val slackTools: SlackTools
 ) {
     private val log = LoggerFactory.getLogger(javaClass)
-    private val reflectionTargetStatuses = setOf("CLOSED", "ABANDONED")
 
     companion object {
         const val KEY_LAST_REFLECTION = "memescalper.last_reflection"
@@ -173,7 +171,7 @@ class MemeScalperReflector(
 
     private fun findReflectableTradesSince(startInclusive: Instant): List<MemeScalperTradeEntity> {
         return tradeRepository.findByCreatedAtAfter(startInclusive)
-            .filter { it.status in reflectionTargetStatuses }
+            .filter { it.status in REFLECTION_TARGET_STATUSES }
     }
 
     private fun requestReflectionFromLlm(userPrompt: String): String? {
@@ -304,13 +302,25 @@ class MemeScalperReflectorTools(
     private val tradeRepository: MemeScalperTradeRepository,
     private val statsRepository: MemeScalperDailyStatsRepository,
     private val keyValueService: KeyValueService,
-    private val objectMapper: ObjectMapper,
     private val slackNotifier: SlackNotifier,
     private val properties: MemeScalperProperties
 ) {
     private val log = LoggerFactory.getLogger(javaClass)
 
-    private val reflectionTargetStatuses = setOf("CLOSED", "ABANDONED")
+    private interface ParamAccessor {
+        fun get(): Double
+        fun set(value: Double)
+    }
+
+    private fun doubleParam(getter: () -> Double, setter: (Double) -> Unit) = object : ParamAccessor {
+        override fun get() = getter()
+        override fun set(value: Double) = setter(value)
+    }
+
+    private fun intParam(getter: () -> Int, setter: (Int) -> Unit) = object : ParamAccessor {
+        override fun get() = getter().toDouble()
+        override fun set(value: Double) = setter(value.toInt())
+    }
 
     companion object {
         val ALLOWED_PARAMS = mapOf(
@@ -328,6 +338,25 @@ class MemeScalperReflectorTools(
             "maxConsecutiveLosses" to "memescalper.maxConsecutiveLosses",
             "dailyMaxLossKrw" to "memescalper.dailyMaxLossKrw",
             "positionSizeKrw" to "memescalper.positionSizeKrw"
+        )
+    }
+
+    private val paramAccessors by lazy {
+        mapOf(
+            "stopLossPercent" to doubleParam({ properties.stopLossPercent }) { properties.stopLossPercent = it },
+            "takeProfitPercent" to doubleParam({ properties.takeProfitPercent }) { properties.takeProfitPercent = it },
+            "trailingStopTrigger" to doubleParam({ properties.trailingStopTrigger }) { properties.trailingStopTrigger = it },
+            "trailingStopOffset" to doubleParam({ properties.trailingStopOffset }) { properties.trailingStopOffset = it },
+            "positionTimeoutMin" to intParam({ properties.positionTimeoutMin }) { properties.positionTimeoutMin = it },
+            "volumeSpikeRatio" to doubleParam({ properties.volumeSpikeRatio }) { properties.volumeSpikeRatio = it },
+            "priceSpikePercent" to doubleParam({ properties.priceSpikePercent }) { properties.priceSpikePercent = it },
+            "minBidImbalance" to doubleParam({ properties.minBidImbalance }) { properties.minBidImbalance = it },
+            "maxRsi" to intParam({ properties.maxRsi }) { properties.maxRsi = it },
+            "volumeDropRatio" to doubleParam({ properties.volumeDropRatio }) { properties.volumeDropRatio = it },
+            "cooldownSec" to intParam({ properties.cooldownSec }) { properties.cooldownSec = it },
+            "maxConsecutiveLosses" to intParam({ properties.maxConsecutiveLosses }) { properties.maxConsecutiveLosses = it },
+            "dailyMaxLossKrw" to intParam({ properties.dailyMaxLossKrw }) { properties.dailyMaxLossKrw = it },
+            "positionSizeKrw" to intParam({ properties.positionSizeKrw }) { properties.positionSizeKrw = it }
         )
     }
 
@@ -452,7 +481,8 @@ class MemeScalperReflectorTools(
         log.info("[Tool] suggestParameterChange: $paramName -> $newValue")
 
         val keyValueKey = ALLOWED_PARAMS[paramName]
-        if (keyValueKey == null) {
+        val accessor = paramAccessors[paramName]
+        if (keyValueKey == null || accessor == null) {
             return """
                 오류: 허용되지 않은 파라미터입니다.
                 파라미터명: $paramName
@@ -460,7 +490,7 @@ class MemeScalperReflectorTools(
             """.trimIndent()
         }
 
-        val currentValue = getCurrentParamValue(paramName)
+        val currentValue = accessor.get()
         if (currentValue == newValue) {
             return "파라미터 $paramName 의 현재값($currentValue)과 새 값($newValue)이 동일하여 변경하지 않았습니다."
         }
@@ -473,7 +503,7 @@ class MemeScalperReflectorTools(
                 description = "LLM 자동 변경: $reason"
             )
 
-            applyParamToProperties(paramName, newValue)
+            accessor.set(newValue)
 
             slackNotifier.sendSystemNotification(
                 "[자동] Meme Scalper 파라미터 변경",
@@ -499,45 +529,6 @@ class MemeScalperReflectorTools(
         }
     }
 
-    private fun getCurrentParamValue(paramName: String): Double {
-        return when (paramName) {
-            "stopLossPercent" -> properties.stopLossPercent
-            "takeProfitPercent" -> properties.takeProfitPercent
-            "trailingStopTrigger" -> properties.trailingStopTrigger
-            "trailingStopOffset" -> properties.trailingStopOffset
-            "positionTimeoutMin" -> properties.positionTimeoutMin.toDouble()
-            "volumeSpikeRatio" -> properties.volumeSpikeRatio
-            "priceSpikePercent" -> properties.priceSpikePercent
-            "minBidImbalance" -> properties.minBidImbalance
-            "maxRsi" -> properties.maxRsi.toDouble()
-            "volumeDropRatio" -> properties.volumeDropRatio
-            "cooldownSec" -> properties.cooldownSec.toDouble()
-            "maxConsecutiveLosses" -> properties.maxConsecutiveLosses.toDouble()
-            "dailyMaxLossKrw" -> properties.dailyMaxLossKrw.toDouble()
-            "positionSizeKrw" -> properties.positionSizeKrw.toDouble()
-            else -> 0.0
-        }
-    }
-
-    private fun applyParamToProperties(paramName: String, value: Double) {
-        when (paramName) {
-            "stopLossPercent" -> properties.stopLossPercent = value
-            "takeProfitPercent" -> properties.takeProfitPercent = value
-            "trailingStopTrigger" -> properties.trailingStopTrigger = value
-            "trailingStopOffset" -> properties.trailingStopOffset = value
-            "positionTimeoutMin" -> properties.positionTimeoutMin = value.toInt()
-            "volumeSpikeRatio" -> properties.volumeSpikeRatio = value
-            "priceSpikePercent" -> properties.priceSpikePercent = value
-            "minBidImbalance" -> properties.minBidImbalance = value
-            "maxRsi" -> properties.maxRsi = value.toInt()
-            "volumeDropRatio" -> properties.volumeDropRatio = value
-            "cooldownSec" -> properties.cooldownSec = value.toInt()
-            "maxConsecutiveLosses" -> properties.maxConsecutiveLosses = value.toInt()
-            "dailyMaxLossKrw" -> properties.dailyMaxLossKrw = value.toInt()
-            "positionSizeKrw" -> properties.positionSizeKrw = value.toInt()
-        }
-    }
-
     @Tool(description = """
         파라미터 변경 전 과거 데이터로 백테스트를 수행합니다.
         suggestParameterChange 호출 전에 반드시 이 도구로 검증하세요.
@@ -556,7 +547,7 @@ class MemeScalperReflectorTools(
             return "백테스트 기간($historicalDays 일) 내 트레이드가 없습니다."
         }
 
-        val currentValue = getCurrentParamValue(paramName)
+        val currentValue = paramAccessors[paramName]?.get() ?: 0.0
 
         // 파라미터별 백테스트 시뮬레이션
         val (filteredIn, filteredOut) = simulateBacktestFilter(paramName, newValue, currentValue, trades)
@@ -623,7 +614,7 @@ class MemeScalperReflectorTools(
 
     private fun findReflectableTradesSince(startInclusive: Instant): List<MemeScalperTradeEntity> {
         return tradeRepository.findByCreatedAtAfter(startInclusive)
-            .filter { it.status in reflectionTargetStatuses }
+            .filter { it.status in REFLECTION_TARGET_STATUSES }
     }
 
     private fun simulateBacktestFilter(

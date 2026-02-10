@@ -6,7 +6,6 @@ import com.ant.cointrading.repository.MemeScalperDailyStatsRepository
 import com.ant.cointrading.repository.MemeScalperTradeEntity
 import com.ant.cointrading.repository.MemeScalperTradeRepository
 import com.ant.cointrading.service.KeyValueService
-import com.fasterxml.jackson.databind.ObjectMapper
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.DisplayName
 import org.junit.jupiter.api.Nested
@@ -57,7 +56,6 @@ class MemeScalperReflectorToolsTest {
             tradeRepository,
             statsRepository,
             keyValueService,
-            ObjectMapper(),
             slackNotifier,
             properties
         )
