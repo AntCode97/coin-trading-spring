@@ -10,6 +10,7 @@ import com.ant.cointrading.memescalper.MemeScalperEngine
 import com.ant.cointrading.repository.DcaPositionRepository
 import com.ant.cointrading.repository.MemeScalperTradeRepository
 import com.ant.cointrading.repository.VolumeSurgeTradeRepository
+import com.ant.cointrading.util.apiFailure
 import com.ant.cointrading.volumesurge.VolumeSurgeEngine
 import org.springframework.web.bind.annotation.GetMapping
 import org.springframework.web.bind.annotation.PostMapping
@@ -136,11 +137,7 @@ class DashboardController(
 
         // Meme Scalper 포지션
         memeScalperRepository.findByStatus("OPEN").forEach { trade ->
-            val currentPrice = try {
-                bithumbPublicApi.getCurrentPrice(trade.market)?.firstOrNull()?.tradePrice?.toDouble() ?: trade.entryPrice
-            } catch (e: Exception) {
-                trade.entryPrice
-            }
+            val currentPrice = resolveCurrentPriceOrFallback(trade.market, trade.entryPrice)
 
             val pnl = (currentPrice - trade.entryPrice) * trade.quantity
             val pnlPercent = ((currentPrice - trade.entryPrice) / trade.entryPrice) * 100
@@ -163,11 +160,7 @@ class DashboardController(
 
         // Volume Surge 포지션
         volumeSurgeRepository.findByStatus("OPEN").forEach { trade ->
-            val currentPrice = try {
-                bithumbPublicApi.getCurrentPrice(trade.market)?.firstOrNull()?.tradePrice?.toDouble() ?: trade.entryPrice
-            } catch (e: Exception) {
-                trade.entryPrice
-            }
+            val currentPrice = resolveCurrentPriceOrFallback(trade.market, trade.entryPrice)
 
             val pnl = (currentPrice - trade.entryPrice) * trade.quantity
             val pnlPercent = ((currentPrice - trade.entryPrice) / trade.entryPrice) * 100
@@ -193,11 +186,7 @@ class DashboardController(
 
         // DCA 포지션
         dcaPositionRepository.findByStatus("OPEN").forEach { pos ->
-            val currentPrice = try {
-                bithumbPublicApi.getCurrentPrice(pos.market)?.firstOrNull()?.tradePrice?.toDouble() ?: pos.averagePrice
-            } catch (e: Exception) {
-                pos.averagePrice
-            }
+            val currentPrice = resolveCurrentPriceOrFallback(pos.market, pos.averagePrice)
 
             val pnl = (currentPrice - pos.averagePrice) * pos.totalQuantity
             val pnlPercent = ((currentPrice - pos.averagePrice) / pos.averagePrice) * 100
@@ -228,7 +217,7 @@ class DashboardController(
 
         // Meme Scalper 체결 내역
         memeScalperRepository.findByStatus("CLOSED")
-            .filter { it.exitTime != null && it.exitTime!!.isAfter(startOfDay) && it.exitTime!!.isBefore(endOfDay) }
+            .filter { isWithinRange(it.exitTime, startOfDay, endOfDay) }
             .forEach { trade ->
                 trades.add(ClosedTradeInfo(
                     market = trade.market,
@@ -249,7 +238,7 @@ class DashboardController(
 
         // Volume Surge 체결 내역
         volumeSurgeRepository.findByStatus("CLOSED")
-            .filter { it.exitTime != null && it.exitTime!!.isAfter(startOfDay) && it.exitTime!!.isBefore(endOfDay) }
+            .filter { isWithinRange(it.exitTime, startOfDay, endOfDay) }
             .forEach { trade ->
                 trades.add(ClosedTradeInfo(
                     market = trade.market,
@@ -270,7 +259,7 @@ class DashboardController(
 
         // DCA 체결 내역
         dcaPositionRepository.findByStatus("CLOSED")
-            .filter { it.exitedAt != null && it.exitedAt!!.isAfter(startOfDay) && it.exitedAt!!.isBefore(endOfDay) }
+            .filter { isWithinRange(it.exitedAt, startOfDay, endOfDay) }
             .forEach { pos ->
                 trades.add(ClosedTradeInfo(
                     market = pos.market,
@@ -296,33 +285,21 @@ class DashboardController(
         val startOfDay = targetDate.atZone(java.time.ZoneId.systemDefault()).toLocalDate().atStartOfDay(java.time.ZoneId.systemDefault()).toInstant()
         val endOfDay = startOfDay.plus(java.time.Duration.ofDays(1))
 
-        val memeTrades = memeScalperRepository.findByStatus("CLOSED").filter { it.exitTime != null && it.exitTime!!.isAfter(startOfDay) && it.exitTime!!.isBefore(endOfDay) }
-        val volumeTrades = volumeSurgeRepository.findByStatus("CLOSED").filter { it.exitTime != null && it.exitTime!!.isAfter(startOfDay) && it.exitTime!!.isBefore(endOfDay) }
-        val dcaTrades = dcaPositionRepository.findByStatus("CLOSED").filter { it.exitedAt != null && it.exitedAt!!.isAfter(startOfDay) && it.exitedAt!!.isBefore(endOfDay) }
+        val memeTrades = memeScalperRepository.findByStatus("CLOSED").filter { isWithinRange(it.exitTime, startOfDay, endOfDay) }
+        val volumeTrades = volumeSurgeRepository.findByStatus("CLOSED").filter { isWithinRange(it.exitTime, startOfDay, endOfDay) }
+        val dcaTrades = dcaPositionRepository.findByStatus("CLOSED").filter { isWithinRange(it.exitedAt, startOfDay, endOfDay) }
 
-        val allPnl = memeTrades.mapNotNull { it.pnlAmount }.filterNotNull() +
-                     volumeTrades.mapNotNull { it.pnlAmount }.filterNotNull() +
-                     dcaTrades.mapNotNull { it.realizedPnl }.filterNotNull()
-        val totalPnl = allPnl.sum()
-        val winCount = allPnl.count { it > 0 }
-        val lossCount = allPnl.count { it < 0 }
+        val allPnl = collectPnlValues(memeTrades, volumeTrades, dcaTrades)
 
         // 트레이딩에 사용한 총 금액 (매수 금액 합계)
         val totalInvested = memeTrades.sumOf { it.entryPrice * it.quantity } +
                            volumeTrades.sumOf { it.entryPrice * it.quantity } +
                            dcaTrades.sumOf { it.averagePrice * it.totalQuantity }
 
-        // 트레이딩 금액 대비 수익률 (ROI)
-        val roi = if (totalInvested > 0) (totalPnl / totalInvested) * 100 else 0.0
-
-        return StatsInfo(
+        return buildStatsInfo(
             totalTrades = memeTrades.size + volumeTrades.size + dcaTrades.size,
-            winCount = winCount,
-            lossCount = lossCount,
-            totalPnl = totalPnl,
-            winRate = if (allPnl.isNotEmpty()) winCount.toDouble() / allPnl.size else 0.0,
-            totalInvested = totalInvested,
-            roi = roi
+            pnlValues = allPnl,
+            totalInvested = totalInvested
         )
     }
 
@@ -331,19 +308,9 @@ class DashboardController(
         val volumeTrades = volumeSurgeRepository.findByStatus("CLOSED")
         val dcaTrades = dcaPositionRepository.findByStatus("CLOSED")
 
-        val allPnl = memeTrades.mapNotNull { it.pnlAmount }.filterNotNull() +
-                     volumeTrades.mapNotNull { it.pnlAmount }.filterNotNull() +
-                     dcaTrades.mapNotNull { it.realizedPnl }.filterNotNull()
-        val totalPnl = allPnl.sum()
-        val winCount = allPnl.count { it > 0 }
-        val lossCount = allPnl.count { it < 0 }
-
-        return StatsInfo(
+        return buildStatsInfo(
             totalTrades = memeTrades.size + volumeTrades.size + dcaTrades.size,
-            winCount = winCount,
-            lossCount = lossCount,
-            totalPnl = totalPnl,
-            winRate = if (allPnl.isNotEmpty()) winCount.toDouble() / allPnl.size else 0.0
+            pnlValues = collectPnlValues(memeTrades, volumeTrades, dcaTrades)
         )
     }
 
@@ -353,9 +320,52 @@ class DashboardController(
             "Meme Scalper" -> memeScalperEngine.manualClose(market)
             "Volume Surge" -> volumeSurgeEngine.manualClose(market)
             "DCA" -> dcaEngine.manualClose(market)
-            else -> mapOf("success" to false, "error" to "알 수 없는 전략: $strategy")
+            else -> apiFailure("알 수 없는 전략: $strategy")
         }
         return result
+    }
+
+    private fun resolveCurrentPriceOrFallback(market: String, fallback: Double): Double {
+        return try {
+            bithumbPublicApi.getCurrentPrice(market)?.firstOrNull()?.tradePrice?.toDouble() ?: fallback
+        } catch (_: Exception) {
+            fallback
+        }
+    }
+
+    private fun isWithinRange(time: Instant?, start: Instant, end: Instant): Boolean {
+        return time != null && time.isAfter(start) && time.isBefore(end)
+    }
+
+    private fun collectPnlValues(
+        memeTrades: List<com.ant.cointrading.repository.MemeScalperTradeEntity>,
+        volumeTrades: List<com.ant.cointrading.repository.VolumeSurgeTradeEntity>,
+        dcaTrades: List<com.ant.cointrading.repository.DcaPositionEntity>
+    ): List<Double> {
+        return memeTrades.mapNotNull { it.pnlAmount } +
+            volumeTrades.mapNotNull { it.pnlAmount } +
+            dcaTrades.mapNotNull { it.realizedPnl }
+    }
+
+    private fun buildStatsInfo(
+        totalTrades: Int,
+        pnlValues: List<Double>,
+        totalInvested: Double = 0.0
+    ): StatsInfo {
+        val totalPnl = pnlValues.sum()
+        val winCount = pnlValues.count { it > 0 }
+        val lossCount = pnlValues.count { it < 0 }
+        val winRate = if (pnlValues.isNotEmpty()) winCount.toDouble() / pnlValues.size else 0.0
+        val roi = if (totalInvested > 0) (totalPnl / totalInvested) * 100 else 0.0
+        return StatsInfo(
+            totalTrades = totalTrades,
+            winCount = winCount,
+            lossCount = lossCount,
+            totalPnl = totalPnl,
+            winRate = winRate,
+            totalInvested = totalInvested,
+            roi = roi
+        )
     }
 
     private fun formatInstant(instant: Instant): String {

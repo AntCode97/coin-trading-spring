@@ -117,18 +117,7 @@ class FundingArbitrageController(
         val history = fundingRateRepository.findBySymbolOrderByFundingTimeDesc(symbol.uppercase())
             .take(limit.coerceAtMost(100))
 
-        return history.map {
-            mapOf(
-                "id" to it.id,
-                "exchange" to it.exchange,
-                "symbol" to it.symbol,
-                "fundingRate" to it.fundingRate,
-                "fundingRatePercent" to String.format("%.4f%%", it.fundingRate * 100),
-                "annualizedRate" to it.annualizedRate?.let { rate -> String.format("%.2f%%", rate) },
-                "fundingTime" to it.fundingTime.toString(),
-                "markPrice" to it.markPrice
-            )
-        }
+        return history.map { toFundingRateDto(it, includeId = true) }
     }
 
     /**
@@ -156,17 +145,7 @@ class FundingArbitrageController(
      */
     @GetMapping("/rates/latest")
     fun getLatestRates(): List<Map<String, Any?>> {
-        return fundingRateRepository.findLatestBySymbol().map {
-            mapOf(
-                "symbol" to it.symbol,
-                "exchange" to it.exchange,
-                "fundingRate" to it.fundingRate,
-                "fundingRatePercent" to String.format("%.4f%%", it.fundingRate * 100),
-                "annualizedRate" to it.annualizedRate?.let { rate -> String.format("%.2f%%", rate) },
-                "fundingTime" to it.fundingTime.toString(),
-                "markPrice" to it.markPrice
-            )
-        }
+        return fundingRateRepository.findLatestBySymbol().map { toFundingRateDto(it, includeId = false) }
     }
 
     /**
@@ -352,6 +331,22 @@ class FundingArbitrageController(
         return buildMap {
             put("success", success)
             entries.forEach { (key, value) -> put(key, value) }
+        }
+    }
+
+    private fun toFundingRateDto(
+        rate: com.ant.cointrading.repository.FundingRateEntity,
+        includeId: Boolean
+    ): Map<String, Any?> {
+        return buildMap {
+            if (includeId) put("id", rate.id)
+            put("exchange", rate.exchange)
+            put("symbol", rate.symbol)
+            put("fundingRate", rate.fundingRate)
+            put("fundingRatePercent", String.format("%.4f%%", rate.fundingRate * 100))
+            put("annualizedRate", rate.annualizedRate?.let { formatted -> String.format("%.2f%%", formatted) })
+            put("fundingTime", rate.fundingTime.toString())
+            put("markPrice", rate.markPrice)
         }
     }
 
