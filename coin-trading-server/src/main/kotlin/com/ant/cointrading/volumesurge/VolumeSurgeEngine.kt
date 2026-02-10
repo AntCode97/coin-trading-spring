@@ -639,7 +639,15 @@ class VolumeSurgeEngine(
         errorPrefix: String,
         action: (VolumeSurgeTradeEntity) -> Unit
     ) {
-        tradeRepository.findByStatus(status).forEach { position ->
+        forEachPositionSafely(tradeRepository.findByStatus(status), errorPrefix, action)
+    }
+
+    private fun forEachPositionSafely(
+        positions: List<VolumeSurgeTradeEntity>,
+        errorPrefix: String,
+        action: (VolumeSurgeTradeEntity) -> Unit
+    ) {
+        positions.forEach { position ->
             try {
                 action(position)
             } catch (e: Exception) {
@@ -692,12 +700,11 @@ class VolumeSurgeEngine(
 
         log.info("ABANDONED 포지션 ${abandonedPositions.size}건 재시도 시작")
 
-        abandonedPositions.forEach { position ->
-            try {
-                retryAbandonedPosition(position)
-            } catch (e: Exception) {
-                log.error("[${position.market}] ABANDONED 재시도 오류: ${e.message}")
-            }
+        forEachPositionSafely(
+            positions = abandonedPositions,
+            errorPrefix = "ABANDONED 재시도 오류"
+        ) { position ->
+            retryAbandonedPosition(position)
         }
     }
 
