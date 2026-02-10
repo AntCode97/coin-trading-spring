@@ -117,18 +117,11 @@ class DcaEngine(
     fun scanMarkets() {
         if (!tradingProperties.enabled) return
 
-        try {
+        runCatching {
             val markets = tradingProperties.markets
             log.debug("DCA 마켓 스캔 시작: ${markets.size}개 마켓")
-
-            for (market in markets) {
-                try {
-                    scanSingleMarket(market)
-                } catch (e: Exception) {
-                    log.error("[$market] 스캔 중 오류: ${e.message}", e)
-                }
-            }
-        } catch (e: Exception) {
+            forEachMarketSafely(markets, "스캔 중") { market -> scanSingleMarket(market) }
+        }.onFailure { e ->
             log.error("DCA 마켓 스캔 오류: ${e.message}", e)
         }
     }
@@ -427,22 +420,14 @@ class DcaEngine(
 
         // OPEN 포지션 모니터링
         val openPositions = dcaPositionRepository.findByStatus("OPEN")
-        openPositions.forEach { position ->
-            try {
-                monitorSinglePosition(position)
-            } catch (e: Exception) {
-                log.error("[${position.market}] OPEN 포지션 모니터링 오류: ${e.message}")
-            }
+        forEachPositionSafely(openPositions, "OPEN 포지션 모니터링") { position ->
+            monitorSinglePosition(position)
         }
 
         // CLOSING 포지션 모니터링 (청산 진행 중)
         val closingPositions = dcaPositionRepository.findByStatus("CLOSING")
-        closingPositions.forEach { position ->
-            try {
-                monitorClosingPosition(position)
-            } catch (e: Exception) {
-                log.error("[${position.market}] CLOSING 포지션 모니터링 오류: ${e.message}")
-            }
+        forEachPositionSafely(closingPositions, "CLOSING 포지션 모니터링") { position ->
+            monitorClosingPosition(position)
         }
 
         // ABANDONED 포지션 재시도 (10분마다 체크)
@@ -452,6 +437,34 @@ class DcaEngine(
         if (lastCheck == null || ChronoUnit.MINUTES.between(lastCheck, now) >= 10) {
             cooldowns[lastRetryCheckKey] = now
             retryAbandonedPositions()
+        }
+    }
+
+    private inline fun forEachMarketSafely(
+        markets: List<String>,
+        action: String,
+        operation: (String) -> Unit
+    ) {
+        markets.forEach { market ->
+            try {
+                operation(market)
+            } catch (e: Exception) {
+                log.error("[$market] $action 오류: ${e.message}", e)
+            }
+        }
+    }
+
+    private inline fun forEachPositionSafely(
+        positions: List<DcaPositionEntity>,
+        action: String,
+        operation: (DcaPositionEntity) -> Unit
+    ) {
+        positions.forEach { position ->
+            try {
+                operation(position)
+            } catch (e: Exception) {
+                log.error("[${position.market}] $action 오류: ${e.message}", e)
+            }
         }
     }
 
@@ -583,12 +596,8 @@ class DcaEngine(
 
         log.info("ABANDONED 포지션 ${abandonedPositions.size}건 재시도 시작")
 
-        abandonedPositions.forEach { position ->
-            try {
-                retryAbandonedPosition(position)
-            } catch (e: Exception) {
-                log.error("[${position.market}] ABANDONED 재시도 오류: ${e.message}")
-            }
+        forEachPositionSafely(abandonedPositions, "ABANDONED 재시도") { position ->
+            retryAbandonedPosition(position)
         }
     }
 
