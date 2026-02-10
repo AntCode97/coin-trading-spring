@@ -169,7 +169,7 @@ class MemeScalperController(
      */
     @GetMapping("/scan")
     fun scanPumps(): Map<String, Any?> {
-        return try {
+        return withApiError {
             val signals = memeScalperDetector.scanForPumps()
             apiSuccess(
                 "count" to signals.size,
@@ -186,8 +186,6 @@ class MemeScalperController(
                     )
                 }
             )
-        } catch (e: Exception) {
-            apiFailure(e.message ?: "Unknown error")
         }
     }
 
@@ -253,9 +251,17 @@ class MemeScalperController(
      */
     @PostMapping("/reflect")
     fun runReflection(): Map<String, Any?> {
-        return try {
+        return withApiError {
             val result = memeScalperReflector.runManualReflection()
             apiSuccess("result" to result)
+        }
+    }
+
+    private inline fun withApiError(
+        block: () -> Map<String, Any?>
+    ): Map<String, Any?> {
+        return try {
+            block()
         } catch (e: Exception) {
             apiFailure(e.message ?: "Unknown error")
         }

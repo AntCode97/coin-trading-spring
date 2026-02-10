@@ -181,11 +181,9 @@ class VolumeSurgeController(
      */
     @PostMapping("/reflect")
     fun runReflection(): Map<String, Any?> {
-        return try {
+        return withApiError {
             val result = volumeSurgeReflector.runManualReflection()
             apiSuccess("result" to result)
-        } catch (e: Exception) {
-            apiFailure(e.message ?: "Unknown error")
         }
     }
 
@@ -205,7 +203,7 @@ class VolumeSurgeController(
         @PathVariable symbol: String,
         @RequestParam(defaultValue = "24") hours: Int
     ): Map<String, Any?> {
-        return try {
+        return withApiError {
             val news = cryptoCompareApi.getRecentNews(symbol.uppercase(), hours)
             apiSuccess(
                 "symbol" to symbol.uppercase(),
@@ -220,8 +218,6 @@ class VolumeSurgeController(
                     )
                 }
             )
-        } catch (e: Exception) {
-            apiFailure(e.message ?: "Unknown error")
         }
     }
 
@@ -255,5 +251,15 @@ class VolumeSurgeController(
     @PostMapping("/reset-circuit-breaker")
     fun resetCircuitBreaker(): Map<String, Any> {
         return volumeSurgeEngine.resetCircuitBreaker()
+    }
+
+    private inline fun withApiError(
+        block: () -> Map<String, Any?>
+    ): Map<String, Any?> {
+        return try {
+            block()
+        } catch (e: Exception) {
+            apiFailure(e.message ?: "Unknown error")
+        }
     }
 }
