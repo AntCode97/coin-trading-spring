@@ -717,15 +717,10 @@ class OrderExecutor(
     private fun resolveSellSizingPrice(signal: TradingSignal, positionSize: BigDecimal): BigDecimal {
         if (signal.price > BigDecimal.ZERO) return signal.price
 
-        return try {
-            marketConditionChecker.checkMarketCondition(signal.market, positionSize)
-                .midPrice
-                ?.takeIf { it > BigDecimal.ZERO }
-                ?: BigDecimal.ONE
-        } catch (e: Exception) {
+        val midPrice = resolveMidPriceOrNull(signal, positionSize) { e ->
             log.warn("[${signal.market}] 매도 수량 산정용 가격 조회 실패: ${e.message}")
-            BigDecimal.ONE
         }
+        return midPrice ?: BigDecimal.ONE
     }
 
     /**
@@ -1115,19 +1110,26 @@ class OrderExecutor(
     }
 
     private fun resolveFallbackTradePrice(signal: TradingSignal, positionSize: BigDecimal): Double {
-        return try {
-            val marketCondition = marketConditionChecker.checkMarketCondition(signal.market, positionSize)
-            val midPrice = marketCondition.midPrice
-            if (midPrice != null && midPrice > BigDecimal.ZERO) {
-                val resolvedPrice = midPrice.toDouble()
-                log.info("[${signal.market}] 시장 중간가로 대체: ${resolvedPrice}")
-                resolvedPrice
-            } else {
-                0.0
-            }
-        } catch (e: Exception) {
+        val midPrice = resolveMidPriceOrNull(signal, positionSize) { e ->
             log.error("[${signal.market}] 시장 상태 조회 실패: ${e.message}")
-            0.0
+        }
+        return midPrice?.toDouble()?.also { resolvedPrice ->
+            log.info("[${signal.market}] 시장 중간가로 대체: ${resolvedPrice}")
+        } ?: 0.0
+    }
+
+    private fun resolveMidPriceOrNull(
+        signal: TradingSignal,
+        positionSize: BigDecimal,
+        onFailure: (Exception) -> Unit
+    ): BigDecimal? {
+        return try {
+            marketConditionChecker.checkMarketCondition(signal.market, positionSize)
+                .midPrice
+                ?.takeIf { it > BigDecimal.ZERO }
+        } catch (e: Exception) {
+            onFailure(e)
+            null
         }
     }
 
