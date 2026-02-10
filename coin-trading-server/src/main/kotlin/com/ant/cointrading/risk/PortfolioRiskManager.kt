@@ -199,7 +199,7 @@ class PortfolioRiskManager(
             val drawdown = if (peakEquity > 0) {
                 (peakEquity - currentEquity) / peakEquity
             } else {
-                .0
+                0.0
             }
 
             maxDrawdown = maxOf(maxDrawdown, drawdown)
@@ -242,7 +242,7 @@ class PortfolioRiskManager(
         val currentDrawdown = if (peakEquity > 0) {
             (peakEquity - currentEquity) / peakEquity
         } else {
-            .0
+            0.0
         }.coerceAtLeast(0.0)
 
         return DrawdownMetrics(
