@@ -296,7 +296,15 @@ class MemeScalperEngine(
         errorPrefix: String,
         action: (MemeScalperTradeEntity) -> Unit
     ) {
-        tradeRepository.findByStatus(status).forEach { position ->
+        forEachPositionSafely(tradeRepository.findByStatus(status), errorPrefix, action)
+    }
+
+    private fun forEachPositionSafely(
+        positions: List<MemeScalperTradeEntity>,
+        errorPrefix: String,
+        action: (MemeScalperTradeEntity) -> Unit
+    ) {
+        positions.forEach { position ->
             try {
                 action(position)
             } catch (e: Exception) {
@@ -326,12 +334,11 @@ class MemeScalperEngine(
 
         log.info("ABANDONED 포지션 ${abandonedPositions.size}건 재시도 시작")
 
-        abandonedPositions.forEach { position ->
-            try {
-                retryAbandonedPosition(position)
-            } catch (e: Exception) {
-                log.error("[${position.market}] ABANDONED 재시도 오류: ${e.message}")
-            }
+        forEachPositionSafely(
+            positions = abandonedPositions,
+            errorPrefix = "ABANDONED 재시도 오류"
+        ) { position ->
+            retryAbandonedPosition(position)
         }
     }
 
