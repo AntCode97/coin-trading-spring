@@ -158,31 +158,44 @@ class VolumeSurgeEngine(
     }
 
     private fun restoreClosingPosition(position: VolumeSurgeTradeEntity) {
-        val positionId = position.id ?: run {
-            log.warn("[${position.market}] CLOSING 포지션 ID 없음 - 복원 스킵")
-            return
+        withPositionId(position, missingIdMessage = "CLOSING 포지션 ID 없음 - 복원 스킵") { positionId ->
+            restoreTrailingHighestPrice(position, positionId)
+            log.warn("[${position.market}] CLOSING 포지션 복원 - 주문ID: ${position.closeOrderId}, 청산시도: ${position.closeAttemptCount}회")
+            monitorClosingPosition(position)
         }
-        restoreTrailingHighestPrice(position, positionId)
-
-        log.warn("[${position.market}] CLOSING 포지션 복원 - 주문ID: ${position.closeOrderId}, 청산시도: ${position.closeAttemptCount}회")
-        monitorClosingPosition(position)
     }
 
-    private fun restoreTrailingHighestPrice(position: VolumeSurgeTradeEntity, missingIdMessage: String): Boolean {
-        if (!position.trailingActive) return true
-        val highestPriceValue = position.highestPrice ?: return true
+    private inline fun withPositionId(
+        position: VolumeSurgeTradeEntity,
+        missingIdMessage: String,
+        action: (Long) -> Unit
+    ) {
         val positionId = position.id ?: run {
             log.warn("[${position.market}] $missingIdMessage")
-            return false
+            return
         }
-        highestPrices[positionId] = highestPriceValue
-        log.info("[${position.market}] 트레일링 고점 복원: $highestPriceValue")
-        return true
+        action(positionId)
+    }
+
+    private fun restoreTrailingHighestPrice(position: VolumeSurgeTradeEntity, missingIdMessage: String) {
+        if (!position.trailingActive) return
+        val highestPriceValue = position.highestPrice ?: return
+        withPositionId(position, missingIdMessage) { positionId ->
+            registerTrailingHighestPrice(position, positionId, highestPriceValue)
+        }
     }
 
     private fun restoreTrailingHighestPrice(position: VolumeSurgeTradeEntity, positionId: Long) {
         if (!position.trailingActive) return
         val highestPriceValue = position.highestPrice ?: return
+        registerTrailingHighestPrice(position, positionId, highestPriceValue)
+    }
+
+    private fun registerTrailingHighestPrice(
+        position: VolumeSurgeTradeEntity,
+        positionId: Long,
+        highestPriceValue: Double
+    ) {
         highestPrices[positionId] = highestPriceValue
         log.info("[${position.market}] 트레일링 고점 복원: $highestPriceValue")
     }
