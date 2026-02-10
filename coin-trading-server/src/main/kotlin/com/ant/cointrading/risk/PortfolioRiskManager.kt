@@ -1,8 +1,9 @@
 package com.ant.cointrading.risk
 
+import com.ant.cointrading.repository.MemeScalperTradeEntity
 import com.ant.cointrading.repository.MemeScalperTradeRepository
+import com.ant.cointrading.repository.VolumeSurgeTradeEntity
 import com.ant.cointrading.repository.VolumeSurgeTradeRepository
-import org.slf4j.LoggerFactory
 import org.springframework.stereotype.Component
 import java.time.Instant
 import java.time.LocalDate
@@ -22,8 +23,15 @@ class PortfolioRiskManager(
     private val memeRepository: MemeScalperTradeRepository,
     private val volumeRepository: VolumeSurgeTradeRepository
 ) {
+    private companion object {
+        const val CLOSED = "CLOSED"
+    }
 
-    private val log = LoggerFactory.getLogger(javaClass)
+    private data class ClosedTrade(
+        val pnlAmount: Double,
+        val exitTime: Instant?,
+        val createdAt: Instant
+    )
 
     /**
      * 포트폴리오 최적화
@@ -68,8 +76,8 @@ class PortfolioRiskManager(
      * 전략간 수익률 상관관계 계산
      */
     fun calculateCorrelation(): Double {
-        val memeTrades = memeRepository.findByStatus("CLOSED")
-        val volumeTrades = volumeRepository.findByStatus("CLOSED")
+        val memeTrades = loadClosedMemeTrades()
+        val volumeTrades = loadClosedVolumeTrades()
 
         if (memeTrades.isEmpty() || volumeTrades.isEmpty()) {
             return 0.0
@@ -115,15 +123,14 @@ class PortfolioRiskManager(
     /**
      * 일별 수익률 계산
      */
-    private fun calculateDailyReturns(trades: List<Any>): Map<LocalDate, Double> {
+    private fun calculateDailyReturns(trades: List<ClosedTrade>): Map<LocalDate, Double> {
         val dailyPnl = mutableMapOf<LocalDate, Double>()
 
         for (trade in trades) {
-            val pnl = getPnlAmount(trade)
-            val date = getExitTime(trade)?.atZone(java.time.ZoneId.systemDefault())?.toLocalDate()
+            val date = trade.exitTime?.atZone(java.time.ZoneId.systemDefault())?.toLocalDate()
                 ?: continue
 
-            dailyPnl[date] = dailyPnl.getOrDefault(date, 0.0) + pnl
+            dailyPnl[date] = dailyPnl.getOrDefault(date, 0.0) + trade.pnlAmount
         }
 
         // 정규화 (1만원 기준)
@@ -136,8 +143,8 @@ class PortfolioRiskManager(
      */
     fun calculateCovarianceMatrix(): CovarianceMatrix {
         val correlation = calculateCorrelation()
-        val memeStd = calculateStandardDeviation(memeRepository.findByStatus("CLOSED"))
-        val volumeStd = calculateStandardDeviation(volumeRepository.findByStatus("CLOSED"))
+        val memeStd = calculateStandardDeviation(loadClosedMemeTrades())
+        val volumeStd = calculateStandardDeviation(loadClosedVolumeTrades())
 
         val covariance = correlation * memeStd * volumeStd
 
@@ -151,10 +158,10 @@ class PortfolioRiskManager(
     /**
      * 표준편차 계산
      */
-    private fun calculateStandardDeviation(trades: List<Any>): Double {
+    private fun calculateStandardDeviation(trades: List<ClosedTrade>): Double {
         if (trades.isEmpty()) return 0.0
 
-        val pnls = trades.map { getPnlAmount(it) }
+        val pnls = trades.map { it.pnlAmount }
         val mean = pnls.average()
         val variance = pnls.map { (it - mean) * (it - mean) }.average()
 
@@ -171,8 +178,8 @@ class PortfolioRiskManager(
      * - Trough: Peak 이후 최저 자산
      */
     fun calculateMaxDrawdown(): DrawdownMetrics {
-        val allTrades = (memeRepository.findByStatus("CLOSED") + volumeRepository.findByStatus("CLOSED"))
-            .sortedBy { getCreatedAt(it) }
+        val allTrades = (loadClosedMemeTrades() + loadClosedVolumeTrades())
+            .sortedBy { it.createdAt }
 
         if (allTrades.isEmpty()) {
             return DrawdownMetrics(0.0, 0.0, 0)
@@ -186,7 +193,7 @@ class PortfolioRiskManager(
         val dailyEquity = mutableMapOf<LocalDate, Double>()
 
         for (trade in allTrades) {
-            currentEquity += getPnlAmount(trade)
+            currentEquity += trade.pnlAmount
             peakEquity = maxOf(peakEquity, currentEquity)
 
             val drawdown = if (peakEquity > 0) {
@@ -198,7 +205,7 @@ class PortfolioRiskManager(
             maxDrawdown = maxOf(maxDrawdown, drawdown)
 
             // 날짜 기준 집계
-            val date = getExitTime(trade)?.atZone(java.time.ZoneId.systemDefault())?.toLocalDate()
+            val date = trade.exitTime?.atZone(java.time.ZoneId.systemDefault())?.toLocalDate()
             if (date != null) {
                 dailyEquity[date] = currentEquity
             }
@@ -245,28 +252,28 @@ class PortfolioRiskManager(
         )
     }
 
-    private fun getPnlAmount(trade: Any): Double {
-        return when (trade) {
-            is com.ant.cointrading.repository.MemeScalperTradeEntity -> trade.pnlAmount ?: 0.0
-            is com.ant.cointrading.repository.VolumeSurgeTradeEntity -> trade.pnlAmount ?: 0.0
-            else -> 0.0
-        }
+    private fun loadClosedMemeTrades(): List<ClosedTrade> {
+        return memeRepository.findByStatus(CLOSED).map { it.toClosedTrade() }
     }
 
-    private fun getExitTime(trade: Any): Instant? {
-        return when (trade) {
-            is com.ant.cointrading.repository.MemeScalperTradeEntity -> trade.exitTime
-            is com.ant.cointrading.repository.VolumeSurgeTradeEntity -> trade.exitTime
-            else -> null
-        }
+    private fun loadClosedVolumeTrades(): List<ClosedTrade> {
+        return volumeRepository.findByStatus(CLOSED).map { it.toClosedTrade() }
     }
 
-    private fun getCreatedAt(trade: Any): Instant {
-        return when (trade) {
-            is com.ant.cointrading.repository.MemeScalperTradeEntity -> trade.createdAt
-            is com.ant.cointrading.repository.VolumeSurgeTradeEntity -> trade.createdAt
-            else -> Instant.now()
-        }
+    private fun MemeScalperTradeEntity.toClosedTrade(): ClosedTrade {
+        return ClosedTrade(
+            pnlAmount = pnlAmount ?: 0.0,
+            exitTime = exitTime,
+            createdAt = createdAt
+        )
+    }
+
+    private fun VolumeSurgeTradeEntity.toClosedTrade(): ClosedTrade {
+        return ClosedTrade(
+            pnlAmount = pnlAmount ?: 0.0,
+            exitTime = exitTime,
+            createdAt = createdAt
+        )
     }
 }
 
