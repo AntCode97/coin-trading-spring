@@ -140,7 +140,7 @@ class OrderExecutor(
 
         val adjusted = when {
             requestedPositionSize < TradingConstants.MIN_ORDER_AMOUNT_KRW -> requestedPositionSize
-            reduced < TradingConstants.MIN_ORDER_AMOUNT_KRW -> TradingConstants.MIN_ORDER_AMOUNT_KRW
+            reduced < TradingConstants.MIN_ORDER_AMOUNT_KRW -> reduced
             else -> reduced
         }
 

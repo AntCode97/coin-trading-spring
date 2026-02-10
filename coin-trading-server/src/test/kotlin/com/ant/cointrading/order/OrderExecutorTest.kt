@@ -273,6 +273,43 @@ class OrderExecutorTest {
             assertEquals(OrderRejectionReason.LOW_SIGNAL_CONFIDENCE, result.rejectionReason)
             assertTrue(result.message.contains("신호 신뢰도 부족"))
         }
+
+        @Test
+        @DisplayName("스로틀 축소 결과가 최소 주문 금액 미만이면 진입을 거부한다")
+        fun rejectBuyWhenThrottleDropsBelowMinimumOrder() {
+            // given
+            val signal = TradingSignal(
+                market = "BTC_KRW",
+                action = SignalAction.BUY,
+                confidence = 80.0,
+                price = BigDecimal("65000000"),
+                reason = "테스트",
+                strategy = "TEST"
+            )
+            val positionSize = BigDecimal("10000")
+
+            whenever(riskThrottleService.getDecision("BTC_KRW", "TEST", false)).thenReturn(
+                RiskThrottleDecision(
+                    multiplier = 0.45,
+                    severity = "WEAK",
+                    blockNewBuys = false,
+                    reason = "최근 성과 둔화(완화 축소)",
+                    sampleSize = 20,
+                    recentConsecutiveLosses = 1,
+                    winRate = 0.42,
+                    avgPnlPercent = -0.3,
+                    enabled = true,
+                    cached = false
+                )
+            )
+
+            // when
+            val result = orderExecutor.execute(signal, positionSize)
+
+            // then
+            assertFalse(result.success)
+            assertEquals(OrderRejectionReason.BELOW_MIN_ORDER_AMOUNT, result.rejectionReason)
+        }
     }
 
     @Nested
