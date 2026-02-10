@@ -58,12 +58,9 @@ class SyncController(
                 bithumbPrivateApi.getBalances() ?: emptyList()
             } catch (e: Exception) {
                 log.error("잔고 조회 실패: ${e.message}")
-                return SyncResult(
+                return syncResult(
                     success = false,
-                    message = "잔고 조회 실패: ${e.message}",
-                    actions = emptyList(),
-                    fixedCount = 0,
-                    verifiedCount = 0
+                    message = "잔고 조회 실패: ${e.message}"
                 )
             }
 
@@ -167,13 +164,7 @@ class SyncController(
                         position.status = "CLOSED"
                         position.exitTime = Instant.now()
                         position.exitReason = "SYNC_NO_BALANCE"
-                        // PnL은 현재가로 계산 (체결 내역 없으므로)
-                        val currentPrice = try {
-                            val apiMarket = convertToApiMarket(position.market)
-                            bithumbPublicApi.getCurrentPrice(apiMarket)?.firstOrNull()?.tradePrice?.toDouble() ?: position.entryPrice
-                        } catch (e: Exception) {
-                            position.entryPrice
-                        }
+                        val currentPrice = resolveCurrentPriceOrFallback(position.market, position.entryPrice)
                         position.exitPrice = currentPrice
                         position.pnlAmount = (currentPrice - position.entryPrice) * position.quantity
                         position.pnlPercent = ((currentPrice - position.entryPrice) / position.entryPrice) * 100
@@ -245,12 +236,7 @@ class SyncController(
                         position.status = "CLOSED"
                         position.exitTime = Instant.now()
                         position.exitReason = "SYNC_NO_BALANCE"
-                        val currentPrice = try {
-                            val apiMarket = convertToApiMarket(position.market)
-                            bithumbPublicApi.getCurrentPrice(apiMarket)?.firstOrNull()?.tradePrice?.toDouble() ?: position.entryPrice
-                        } catch (e: Exception) {
-                            position.entryPrice
-                        }
+                        val currentPrice = resolveCurrentPriceOrFallback(position.market, position.entryPrice)
                         position.exitPrice = currentPrice
                         position.pnlAmount = (currentPrice - position.entryPrice) * position.quantity
                         position.pnlPercent = ((currentPrice - position.entryPrice) / position.entryPrice) * 100
@@ -322,12 +308,7 @@ class SyncController(
                         position.status = "CLOSED"
                         position.exitedAt = Instant.now()
                         position.exitReason = "SYNC_NO_BALANCE"
-                        val currentPrice = try {
-                            val apiMarket = convertToApiMarket(position.market)
-                            bithumbPublicApi.getCurrentPrice(apiMarket)?.firstOrNull()?.tradePrice?.toDouble() ?: position.averagePrice
-                        } catch (e: Exception) {
-                            position.averagePrice
-                        }
+                        val currentPrice = resolveCurrentPriceOrFallback(position.market, position.averagePrice)
                         position.exitPrice = currentPrice
                         position.realizedPnl = (currentPrice - position.averagePrice) * position.totalQuantity
                         position.realizedPnlPercent = ((currentPrice - position.averagePrice) / position.averagePrice) * 100
@@ -450,7 +431,7 @@ class SyncController(
                 }
             }
 
-            return SyncResult(
+            return syncResult(
                 success = true,
                 message = message,
                 actions = results,
@@ -460,7 +441,7 @@ class SyncController(
 
         } catch (e: Exception) {
             log.error("동기화 실패: ${e.message}", e)
-            return SyncResult(
+            return syncResult(
                 success = false,
                 message = "동기화 실패: ${e.message}",
                 actions = results,
@@ -493,14 +474,11 @@ class SyncController(
      */
     private fun isMatchingOrder(order: com.ant.cointrading.api.bithumb.OrderResponse, positionQty: Double): Boolean {
         val executedQty = order.executedVolume ?: return false
-        if (positionQty <= 0.0) return false
-
-        val positionQty = BigDecimal.valueOf(positionQty)
-        if (positionQty <= BigDecimal.ZERO) return false
+        val expectedQty = toPositiveQuantityOrNull(positionQty) ?: return false
 
         // 수량이 10% 이내로 일치하면 같은 주문으로 간주
-        val diff = (executedQty - positionQty).abs()
-        val ratio = diff.divide(positionQty, 4, java.math.RoundingMode.HALF_UP)
+        val diff = (executedQty - expectedQty).abs()
+        val ratio = diff.divide(expectedQty, 4, java.math.RoundingMode.HALF_UP)
 
         return ratio <= BigDecimal("0.1")
     }
@@ -511,22 +489,9 @@ class SyncController(
     private fun parseInstant(dateTimeStr: String?): Instant {
         if (dateTimeStr.isNullOrBlank()) return Instant.now()
 
-        return try {
-            Instant.parse(dateTimeStr)
-        } catch (e: Exception) {
-            // 시간대 정보 없으면 UTC로 간주하고 'Z' 추가
-            try {
-                Instant.parse("${dateTimeStr}Z")
-            } catch (e2: Exception) {
-                // 그래도 실패하면 LocalDateTime으로 파싱 후 UTC 변환
-                try {
-                    val localDateTime = java.time.LocalDateTime.parse(dateTimeStr)
-                    localDateTime.atZone(java.time.ZoneId.of("UTC")).toInstant()
-                } catch (e3: Exception) {
-                    log.warn("시간 파싱 실패: $dateTimeStr, 현재 시간 사용")
-                    Instant.now()
-                }
-            }
+        return parseInstantOrNull(dateTimeStr) ?: run {
+            log.warn("시간 파싱 실패: $dateTimeStr, 현재 시간 사용")
+            Instant.now()
         }
     }
 
@@ -553,12 +518,9 @@ class SyncController(
                 bithumbPrivateApi.getOrders(null, "wait", 0, 100) ?: emptyList()
             } catch (e: Exception) {
                 log.error("미체결 주문 조회 실패: ${e.message}")
-                return SyncResult(
+                return syncResult(
                     success = false,
-                    message = "미체결 주문 조회 실패: ${e.message}",
-                    actions = emptyList(),
-                    fixedCount = 0,
-                    verifiedCount = 0
+                    message = "미체결 주문 조회 실패: ${e.message}"
                 )
             }
 
@@ -577,7 +539,7 @@ class SyncController(
                 }
             }
 
-            return SyncResult(
+            return syncResult(
                 success = true,
                 message = "주문 동기화 완료: 미체결 ${openOrders.size}개",
                 actions = results,
@@ -587,7 +549,7 @@ class SyncController(
 
         } catch (e: Exception) {
             log.error("주문 동기화 실패: ${e.message}", e)
-            return SyncResult(
+            return syncResult(
                 success = false,
                 message = "주문 동기화 실패: ${e.message}",
                 actions = results,
@@ -615,13 +577,10 @@ class SyncController(
      */
     private fun isMatchingOrderForDca(order: com.ant.cointrading.api.bithumb.OrderResponse, positionQty: Double): Boolean {
         val executedQty = order.executedVolume ?: return false
-        if (positionQty <= 0.0) return false
-
-        val positionQty = BigDecimal.valueOf(positionQty)
-        if (positionQty <= BigDecimal.ZERO) return false
+        val expectedQty = toPositiveQuantityOrNull(positionQty) ?: return false
 
         // DCA는 총 수량보다 크거나 같으면 일치로 간주 (부분 청산 가능)
-        return executedQty >= positionQty.multiply(BigDecimal("0.9"))
+        return executedQty >= expectedQty.multiply(BigDecimal("0.9"))
     }
 
     private fun registerExpectedQuantity(
@@ -800,6 +759,47 @@ class SyncController(
     private fun isCarryOverCandidate(exitReason: String?): Boolean {
         val normalized = exitReason?.trim()?.uppercase() ?: return false
         return normalized.startsWith("ABANDONED") || normalized == "SYNC_NO_BALANCE"
+    }
+
+    private fun resolveCurrentPriceOrFallback(market: String, fallback: Double): Double {
+        return try {
+            val apiMarket = convertToApiMarket(market)
+            bithumbPublicApi.getCurrentPrice(apiMarket)?.firstOrNull()?.tradePrice?.toDouble() ?: fallback
+        } catch (_: Exception) {
+            fallback
+        }
+    }
+
+    private fun parseInstantOrNull(dateTimeStr: String): Instant? {
+        return runCatching { Instant.parse(dateTimeStr) }.getOrNull()
+            ?: runCatching { Instant.parse("${dateTimeStr}Z") }.getOrNull()
+            ?: runCatching {
+                java.time.LocalDateTime.parse(dateTimeStr)
+                    .atZone(java.time.ZoneId.of("UTC"))
+                    .toInstant()
+            }.getOrNull()
+    }
+
+    private fun toPositiveQuantityOrNull(quantity: Double): BigDecimal? {
+        if (quantity <= 0.0) return null
+        val value = BigDecimal.valueOf(quantity)
+        return value.takeIf { it > BigDecimal.ZERO }
+    }
+
+    private fun syncResult(
+        success: Boolean,
+        message: String,
+        actions: List<SyncAction> = emptyList(),
+        fixedCount: Int = 0,
+        verifiedCount: Int = 0
+    ): SyncResult {
+        return SyncResult(
+            success = success,
+            message = message,
+            actions = actions,
+            fixedCount = fixedCount,
+            verifiedCount = verifiedCount
+        )
     }
 
     private data class BalanceSnapshot(
