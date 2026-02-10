@@ -312,6 +312,11 @@ class MemeScalperReflectorTools(
         fun set(value: Double)
     }
 
+    private data class ParamConfig(
+        val keyValueKey: String,
+        val accessor: ParamAccessor
+    )
+
     private fun doubleParam(getter: () -> Double, setter: (Double) -> Unit) = object : ParamAccessor {
         override fun get() = getter()
         override fun set(value: Double) = setter(value)
@@ -322,41 +327,64 @@ class MemeScalperReflectorTools(
         override fun set(value: Double) = setter(value.toInt())
     }
 
-    companion object {
-        val ALLOWED_PARAMS = mapOf(
-            "stopLossPercent" to "memescalper.stopLossPercent",
-            "takeProfitPercent" to "memescalper.takeProfitPercent",
-            "trailingStopTrigger" to "memescalper.trailingStopTrigger",
-            "trailingStopOffset" to "memescalper.trailingStopOffset",
-            "positionTimeoutMin" to "memescalper.positionTimeoutMin",
-            "volumeSpikeRatio" to "memescalper.volumeSpikeRatio",
-            "priceSpikePercent" to "memescalper.priceSpikePercent",
-            "minBidImbalance" to "memescalper.minBidImbalance",
-            "maxRsi" to "memescalper.maxRsi",
-            "volumeDropRatio" to "memescalper.volumeDropRatio",
-            "cooldownSec" to "memescalper.cooldownSec",
-            "maxConsecutiveLosses" to "memescalper.maxConsecutiveLosses",
-            "dailyMaxLossKrw" to "memescalper.dailyMaxLossKrw",
-            "positionSizeKrw" to "memescalper.positionSizeKrw"
-        )
-    }
-
-    private val paramAccessors by lazy {
+    private val paramConfigs by lazy {
         mapOf(
-            "stopLossPercent" to doubleParam({ properties.stopLossPercent }) { properties.stopLossPercent = it },
-            "takeProfitPercent" to doubleParam({ properties.takeProfitPercent }) { properties.takeProfitPercent = it },
-            "trailingStopTrigger" to doubleParam({ properties.trailingStopTrigger }) { properties.trailingStopTrigger = it },
-            "trailingStopOffset" to doubleParam({ properties.trailingStopOffset }) { properties.trailingStopOffset = it },
-            "positionTimeoutMin" to intParam({ properties.positionTimeoutMin }) { properties.positionTimeoutMin = it },
-            "volumeSpikeRatio" to doubleParam({ properties.volumeSpikeRatio }) { properties.volumeSpikeRatio = it },
-            "priceSpikePercent" to doubleParam({ properties.priceSpikePercent }) { properties.priceSpikePercent = it },
-            "minBidImbalance" to doubleParam({ properties.minBidImbalance }) { properties.minBidImbalance = it },
-            "maxRsi" to intParam({ properties.maxRsi }) { properties.maxRsi = it },
-            "volumeDropRatio" to doubleParam({ properties.volumeDropRatio }) { properties.volumeDropRatio = it },
-            "cooldownSec" to intParam({ properties.cooldownSec }) { properties.cooldownSec = it },
-            "maxConsecutiveLosses" to intParam({ properties.maxConsecutiveLosses }) { properties.maxConsecutiveLosses = it },
-            "dailyMaxLossKrw" to intParam({ properties.dailyMaxLossKrw }) { properties.dailyMaxLossKrw = it },
-            "positionSizeKrw" to intParam({ properties.positionSizeKrw }) { properties.positionSizeKrw = it }
+            "stopLossPercent" to ParamConfig(
+                keyValueKey = "memescalper.stopLossPercent",
+                accessor = doubleParam({ properties.stopLossPercent }) { properties.stopLossPercent = it }
+            ),
+            "takeProfitPercent" to ParamConfig(
+                keyValueKey = "memescalper.takeProfitPercent",
+                accessor = doubleParam({ properties.takeProfitPercent }) { properties.takeProfitPercent = it }
+            ),
+            "trailingStopTrigger" to ParamConfig(
+                keyValueKey = "memescalper.trailingStopTrigger",
+                accessor = doubleParam({ properties.trailingStopTrigger }) { properties.trailingStopTrigger = it }
+            ),
+            "trailingStopOffset" to ParamConfig(
+                keyValueKey = "memescalper.trailingStopOffset",
+                accessor = doubleParam({ properties.trailingStopOffset }) { properties.trailingStopOffset = it }
+            ),
+            "positionTimeoutMin" to ParamConfig(
+                keyValueKey = "memescalper.positionTimeoutMin",
+                accessor = intParam({ properties.positionTimeoutMin }) { properties.positionTimeoutMin = it }
+            ),
+            "volumeSpikeRatio" to ParamConfig(
+                keyValueKey = "memescalper.volumeSpikeRatio",
+                accessor = doubleParam({ properties.volumeSpikeRatio }) { properties.volumeSpikeRatio = it }
+            ),
+            "priceSpikePercent" to ParamConfig(
+                keyValueKey = "memescalper.priceSpikePercent",
+                accessor = doubleParam({ properties.priceSpikePercent }) { properties.priceSpikePercent = it }
+            ),
+            "minBidImbalance" to ParamConfig(
+                keyValueKey = "memescalper.minBidImbalance",
+                accessor = doubleParam({ properties.minBidImbalance }) { properties.minBidImbalance = it }
+            ),
+            "maxRsi" to ParamConfig(
+                keyValueKey = "memescalper.maxRsi",
+                accessor = intParam({ properties.maxRsi }) { properties.maxRsi = it }
+            ),
+            "volumeDropRatio" to ParamConfig(
+                keyValueKey = "memescalper.volumeDropRatio",
+                accessor = doubleParam({ properties.volumeDropRatio }) { properties.volumeDropRatio = it }
+            ),
+            "cooldownSec" to ParamConfig(
+                keyValueKey = "memescalper.cooldownSec",
+                accessor = intParam({ properties.cooldownSec }) { properties.cooldownSec = it }
+            ),
+            "maxConsecutiveLosses" to ParamConfig(
+                keyValueKey = "memescalper.maxConsecutiveLosses",
+                accessor = intParam({ properties.maxConsecutiveLosses }) { properties.maxConsecutiveLosses = it }
+            ),
+            "dailyMaxLossKrw" to ParamConfig(
+                keyValueKey = "memescalper.dailyMaxLossKrw",
+                accessor = intParam({ properties.dailyMaxLossKrw }) { properties.dailyMaxLossKrw = it }
+            ),
+            "positionSizeKrw" to ParamConfig(
+                keyValueKey = "memescalper.positionSizeKrw",
+                accessor = intParam({ properties.positionSizeKrw }) { properties.positionSizeKrw = it }
+            )
         )
     }
 
@@ -480,30 +508,29 @@ class MemeScalperReflectorTools(
     ): String {
         log.info("[Tool] suggestParameterChange: $paramName -> $newValue")
 
-        val keyValueKey = ALLOWED_PARAMS[paramName]
-        val accessor = paramAccessors[paramName]
-        if (keyValueKey == null || accessor == null) {
+        val paramConfig = paramConfigs[paramName]
+        if (paramConfig == null) {
             return """
                 오류: 허용되지 않은 파라미터입니다.
                 파라미터명: $paramName
-                허용된 파라미터: ${ALLOWED_PARAMS.keys.joinToString(", ")}
+                허용된 파라미터: ${paramConfigs.keys.joinToString(", ")}
             """.trimIndent()
         }
 
-        val currentValue = accessor.get()
+        val currentValue = paramConfig.accessor.get()
         if (currentValue == newValue) {
             return "파라미터 $paramName 의 현재값($currentValue)과 새 값($newValue)이 동일하여 변경하지 않았습니다."
         }
 
         try {
             keyValueService.set(
-                key = keyValueKey,
+                key = paramConfig.keyValueKey,
                 value = newValue.toString(),
                 category = "memescalper",
                 description = "LLM 자동 변경: $reason"
             )
 
-            accessor.set(newValue)
+            paramConfig.accessor.set(newValue)
 
             slackNotifier.sendSystemNotification(
                 "[자동] Meme Scalper 파라미터 변경",
@@ -547,7 +574,7 @@ class MemeScalperReflectorTools(
             return "백테스트 기간($historicalDays 일) 내 트레이드가 없습니다."
         }
 
-        val currentValue = paramAccessors[paramName]?.get() ?: 0.0
+        val currentValue = paramConfigs[paramName]?.accessor?.get() ?: 0.0
 
         // 파라미터별 백테스트 시뮬레이션
         val (filteredIn, filteredOut) = simulateBacktestFilter(paramName, newValue, currentValue, trades)
