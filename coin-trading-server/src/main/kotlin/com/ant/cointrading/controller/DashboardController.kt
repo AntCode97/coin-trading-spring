@@ -35,6 +35,13 @@ class DashboardController(
     private val memeScalperEngine: MemeScalperEngine,
     private val volumeSurgeEngine: VolumeSurgeEngine
 ) {
+    private val manualCloseHandlers by lazy {
+        mapOf<String, (String) -> Map<String, Any?>>(
+            "Meme Scalper" to memeScalperEngine::manualClose,
+            "Volume Surge" to volumeSurgeEngine::manualClose,
+            "DCA" to dcaEngine::manualClose
+        )
+    }
 
     @GetMapping
     fun getDashboard(@RequestParam date: String?): DashboardResponse {
@@ -316,13 +323,8 @@ class DashboardController(
 
     @PostMapping("/manual-close")
     fun manualClose(@RequestParam market: String, @RequestParam strategy: String): Map<String, Any?> {
-        val result = when (strategy) {
-            "Meme Scalper" -> memeScalperEngine.manualClose(market)
-            "Volume Surge" -> volumeSurgeEngine.manualClose(market)
-            "DCA" -> dcaEngine.manualClose(market)
-            else -> apiFailure("알 수 없는 전략: $strategy")
-        }
-        return result
+        return manualCloseHandlers[strategy]?.invoke(market)
+            ?: apiFailure("알 수 없는 전략: $strategy")
     }
 
     private fun resolveCurrentPriceOrFallback(market: String, fallback: Double): Double {
