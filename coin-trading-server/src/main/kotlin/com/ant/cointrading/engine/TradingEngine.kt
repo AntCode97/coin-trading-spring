@@ -218,8 +218,15 @@ class TradingEngine(
      */
     fun analyzeMarket(market: String): TradingSignal? {
         val state = marketStates.getOrPut(market) { MarketState() }
+        val candles = loadCandlesIntoState(market, state) ?: return null
+        val regime = analyzeRegimeIntoState(market, state, candles)
+        val strategy = selectStrategyIntoState(market, state, regime)
+        val signal = generateSignalIntoState(market, state, strategy, regime, candles)
+        processSignalIfNeeded(market, signal, state)
+        return signal
+    }
 
-        // 1. 캔들 데이터 수집
+    private fun loadCandlesIntoState(market: String, state: MarketState): List<Candle>? {
         val candles = fetchCandles(market)
         if (candles.isEmpty()) {
             log.warn("캔들 데이터 없음: $market")
@@ -227,28 +234,48 @@ class TradingEngine(
         }
         state.candles = candles
         state.currentPrice = candles.last().close
+        return candles
+    }
 
-        // 2. 레짐 분석 (설정에 따라 HMM 또는 Simple 사용)
+    private fun analyzeRegimeIntoState(
+        market: String,
+        state: MarketState,
+        candles: List<Candle>
+    ): RegimeAnalysis {
         val regime = detectRegime(candles)
         state.regime = regime
-
         log.debug("[$market] 레짐: ${regime.regime}, ADX: ${regime.adx}, ATR%: ${regime.atrPercent}")
+        return regime
+    }
 
-        // 3. 전략 선택 (마켓별 레짐 전환 지연 적용)
+    private fun selectStrategyIntoState(
+        market: String,
+        state: MarketState,
+        regime: RegimeAnalysis
+    ): TradingStrategy {
         val strategy = strategySelector.selectStrategy(regime, market)
         state.currentStrategy = strategy
+        return strategy
+    }
 
-        // 4. 신호 생성
+    private fun generateSignalIntoState(
+        market: String,
+        state: MarketState,
+        strategy: TradingStrategy,
+        regime: RegimeAnalysis,
+        candles: List<Candle>
+    ): TradingSignal {
         val signal = strategy.analyze(market, candles, state.currentPrice, regime)
         state.lastSignal = signal
         state.lastAnalysisTime = Instant.now()
-
-        // HOLD가 아닌 경우에만 처리
-        if (signal.action != SignalAction.HOLD) {
-            processSignal(market, signal, state)
-        }
-
         return signal
+    }
+
+    private fun processSignalIfNeeded(market: String, signal: TradingSignal, state: MarketState) {
+        if (signal.action == SignalAction.HOLD) {
+            return
+        }
+        processSignal(market, signal, state)
     }
 
     /**
