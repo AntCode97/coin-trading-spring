@@ -269,7 +269,11 @@ class SlackPerformanceReporter(
         criteria.add(if (avgSharpe > 1.0) "✓ Sharpe > 1.0 (현재 ${String.format("%.2f", avgSharpe)})" else "○ Sharpe 미달 (현재 ${String.format("%.2f", avgSharpe)})")
 
         // 승률 > 50%
-        val winRate = (memeStats.winningTrades + volumeStats.winningTrades).toDouble() / totalTrades
+        val winRate = if (totalTrades > 0) {
+            (memeStats.winningTrades + volumeStats.winningTrades).toDouble() / totalTrades
+        } else {
+            0.0
+        }
         criteria.add(if (winRate > 0.5) "✓ 승률 50%+ (현재 ${String.format("%.1f", winRate * 100)}%)" else "○ 승률 50% 미만 (현재 ${String.format("%.1f", winRate * 100)}%)")
 
         return criteria.joinToString("\n")
