@@ -22,7 +22,7 @@ class OptimizerController(
 ) {
     private val log = LoggerFactory.getLogger(OptimizerController::class.java)
     private val unavailableMessage = "LLM 서비스 사용 불가: API 키가 설정되지 않았습니다. " +
-            "SPRING_AI_ANTHROPIC_API_KEY 또는 SPRING_AI_OPENAI_API_KEY 환경변수를 설정하세요."
+            "SPRING_AI_OPENAI_API_KEY 환경변수를 설정하세요."
 
     /**
      * 수동 최적화 실행

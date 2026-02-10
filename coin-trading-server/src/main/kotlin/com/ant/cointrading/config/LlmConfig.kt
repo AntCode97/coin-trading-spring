@@ -1,7 +1,6 @@
 package com.ant.cointrading.config
 
 import org.slf4j.LoggerFactory
-import org.springframework.ai.anthropic.AnthropicChatModel
 import org.springframework.ai.chat.client.ChatClient
 import org.springframework.ai.openai.OpenAiChatModel
 import org.springframework.beans.factory.ObjectProvider
@@ -18,18 +17,6 @@ import org.springframework.context.annotation.Configuration
 class LlmConfig {
 
     private val log = LoggerFactory.getLogger(LlmConfig::class.java)
-
-    @Bean("anthropicChatClient")
-    fun anthropicChatClient(chatModelProvider: ObjectProvider<AnthropicChatModel>): ChatClient? {
-        val chatModel = chatModelProvider.ifAvailable
-        return if (chatModel != null) {
-            log.info("Anthropic ChatClient 생성됨")
-            ChatClient.create(chatModel)
-        } else {
-            log.info("AnthropicChatModel 없음 - ChatClient 생성 안 함")
-            null
-        }
-    }
 
     @Bean("openAiChatClient")
     fun openAiChatClient(chatModelProvider: ObjectProvider<OpenAiChatModel>): ChatClient? {

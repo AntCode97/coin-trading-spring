@@ -39,17 +39,8 @@ spring:
         format_sql: true
     open-in-view: false
 
-  # Spring AI 설정 (API 키가 없으면 해당 provider 비활성화)
+  # Spring AI 설정 (OpenAI 전용)
   ai:
-    # Anthropic Claude (환경변수 SPRING_AI_ANTHROPIC_API_KEY 필요)
-    anthropic:
-      api-key: ${SPRING_AI_ANTHROPIC_API_KEY:}
-      chat:
-        options:
-          model: claude-sonnet-4-20250514
-          max-tokens: 4096
-          temperature: 0.3
-
     # OpenAI GPT (환경변수 SPRING_AI_OPENAI_API_KEY 필요)
     # GPT-5 시리즈는 max-tokens 대신 max-completion-tokens 사용
     openai:

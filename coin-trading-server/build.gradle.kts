@@ -28,7 +28,6 @@ dependencies {
     implementation("org.springframework.ai:spring-ai-starter-mcp-server-webmvc")
 
     // Spring AI Model Providers (starter - Spring Boot 3.5.x 호환)
-    implementation("org.springframework.ai:spring-ai-starter-model-anthropic")
     implementation("org.springframework.ai:spring-ai-starter-model-openai")
     // Google GenAI는 project-id 필수 문제로 비활성화
 

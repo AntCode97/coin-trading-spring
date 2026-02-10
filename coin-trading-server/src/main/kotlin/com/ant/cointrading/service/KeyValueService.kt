@@ -16,8 +16,8 @@ import java.util.concurrent.ConcurrentHashMap
  * 쓰기 시 DB와 캐시 동시 갱신.
  *
  * 기본값 정의:
- * - llm.model.provider: anthropic
- * - llm.model.name: claude-sonnet-4-20250514
+ * - llm.model.provider: openai
+ * - llm.model.name: gpt-5-mini
  */
 @Service
 class KeyValueService(
@@ -31,8 +31,8 @@ class KeyValueService(
     companion object {
         // 시스템 기본값
         val DEFAULTS = mapOf(
-            "llm.model.provider" to "anthropic",
-            "llm.model.name" to "claude-sonnet-4-20250514",
+            "llm.model.provider" to "openai",
+            "llm.model.name" to "gpt-5-mini",
             "llm.enabled" to "false",
             "trading.enabled" to "false",
             "system.maintenance" to "false",

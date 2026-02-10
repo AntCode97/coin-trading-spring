@@ -21,13 +21,11 @@ import java.time.temporal.ChronoUnit
  * Spring AI ChatClient + Tool Calling을 사용하여
  * LLM이 직접 성과 분석 및 전략 조정 함수를 호출.
  *
- * 지원 모델 (ModelSelector를 통해 동적 선택):
- * - Anthropic Claude
+ * 지원 모델:
  * - OpenAI GPT
- * - Google Gemini
  *
  * 모델 변경:
- * - API를 통해 llm.model.provider 키 변경
+ * - API를 통해 llm.model.name 변경
  * - 다음 요청부터 새 모델 사용
  *
  * 핵심 기능:
