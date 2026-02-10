@@ -135,74 +135,49 @@ class DashboardController(
 
         // Meme Scalper 포지션
         memeScalperRepository.findByStatus(STATUS_OPEN).forEach { trade ->
-            val currentPrice = resolveCurrentPriceOrFallback(trade.market, trade.entryPrice)
-
-            val pnl = (currentPrice - trade.entryPrice) * trade.quantity
-            val pnlPercent = ((currentPrice - trade.entryPrice) / trade.entryPrice) * 100
-
-            positions.add(PositionInfo(
-                market = trade.market,
-                strategy = STRATEGY_MEME_SCALPER,
-                entryPrice = trade.entryPrice,
-                currentPrice = currentPrice,
-                quantity = trade.quantity,
-                value = trade.entryPrice * trade.quantity,
-                pnl = pnl,
-                pnlPercent = pnlPercent,
-                takeProfitPrice = 0.0,
-                stopLossPrice = 0.0,
-                entryTime = trade.entryTime.toString(),
-                peakPrice = trade.peakPrice
-            ))
+            positions.add(
+                buildPositionInfo(
+                    market = trade.market,
+                    strategy = STRATEGY_MEME_SCALPER,
+                    entryPrice = trade.entryPrice,
+                    quantity = trade.quantity,
+                    entryTime = trade.entryTime,
+                    peakPrice = trade.peakPrice
+                )
+            )
         }
 
         // Volume Surge 포지션
         volumeSurgeRepository.findByStatus(STATUS_OPEN).forEach { trade ->
-            val currentPrice = resolveCurrentPriceOrFallback(trade.market, trade.entryPrice)
-
-            val pnl = (currentPrice - trade.entryPrice) * trade.quantity
-            val pnlPercent = ((currentPrice - trade.entryPrice) / trade.entryPrice) * 100
-
             val takeProfitPrice = trade.entryPrice * (1 + (trade.appliedTakeProfitPercent ?: 6.0) / 100)
             val stopLossPrice = trade.entryPrice * (1 - (trade.appliedStopLossPercent ?: 3.0) / 100)
 
-            positions.add(PositionInfo(
-                market = trade.market,
-                strategy = STRATEGY_VOLUME_SURGE,
-                entryPrice = trade.entryPrice,
-                currentPrice = currentPrice,
-                quantity = trade.quantity,
-                value = trade.entryPrice * trade.quantity,
-                pnl = pnl,
-                pnlPercent = pnlPercent,
-                takeProfitPrice = takeProfitPrice,
-                stopLossPrice = stopLossPrice,
-                entryTime = trade.entryTime.toString(),
-                peakPrice = null
-            ))
+            positions.add(
+                buildPositionInfo(
+                    market = trade.market,
+                    strategy = STRATEGY_VOLUME_SURGE,
+                    entryPrice = trade.entryPrice,
+                    quantity = trade.quantity,
+                    entryTime = trade.entryTime,
+                    takeProfitPrice = takeProfitPrice,
+                    stopLossPrice = stopLossPrice
+                )
+            )
         }
 
         // DCA 포지션
         dcaPositionRepository.findByStatus(STATUS_OPEN).forEach { pos ->
-            val currentPrice = resolveCurrentPriceOrFallback(pos.market, pos.averagePrice)
-
-            val pnl = (currentPrice - pos.averagePrice) * pos.totalQuantity
-            val pnlPercent = ((currentPrice - pos.averagePrice) / pos.averagePrice) * 100
-
-            positions.add(PositionInfo(
-                market = pos.market,
-                strategy = STRATEGY_DCA,
-                entryPrice = pos.averagePrice,
-                currentPrice = currentPrice,
-                quantity = pos.totalQuantity,
-                value = pos.averagePrice * pos.totalQuantity,
-                pnl = pnl,
-                pnlPercent = pnlPercent,
-                takeProfitPrice = pos.averagePrice * (1 + pos.takeProfitPercent / 100),
-                stopLossPrice = pos.averagePrice * (1 + pos.stopLossPercent / 100),
-                entryTime = pos.createdAt.toString(),
-                peakPrice = null
-            ))
+            positions.add(
+                buildPositionInfo(
+                    market = pos.market,
+                    strategy = STRATEGY_DCA,
+                    entryPrice = pos.averagePrice,
+                    quantity = pos.totalQuantity,
+                    entryTime = pos.createdAt,
+                    takeProfitPrice = pos.averagePrice * (1 + pos.takeProfitPercent / 100),
+                    stopLossPrice = pos.averagePrice * (1 + pos.stopLossPercent / 100)
+                )
+            )
         }
 
         return positions.sortedByDescending { it.entryTime }
@@ -214,65 +189,68 @@ class DashboardController(
 
         // Meme Scalper 체결 내역
         memeScalperRepository.findByStatus(STATUS_CLOSED)
-            .filter { isWithinRange(it.exitTime, startOfDay, endOfDay) }
             .forEach { trade ->
-                trades.add(ClosedTradeInfo(
-                    market = trade.market,
-                    strategy = STRATEGY_MEME_SCALPER,
-                    entryPrice = trade.entryPrice,
-                    exitPrice = trade.exitPrice ?: 0.0,
-                    quantity = trade.quantity,
-                    entryTime = trade.entryTime.toString(),
-                    entryTimeFormatted = formatInstant(trade.entryTime),
-                    exitTime = trade.exitTime!!,
-                    exitTimeFormatted = formatInstant(trade.exitTime!!),
-                    holdingMinutes = java.time.Duration.between(trade.entryTime, trade.exitTime!!).toMinutes(),
-                    pnlAmount = trade.pnlAmount ?: 0.0,
-                    pnlPercent = trade.pnlPercent ?: 0.0,
-                    exitReason = trade.exitReason ?: "UNKNOWN"
-                ))
+                val exitTime = trade.exitTime ?: return@forEach
+                if (!isWithinRange(exitTime, startOfDay, endOfDay)) return@forEach
+
+                trades.add(
+                    buildClosedTradeInfo(
+                        market = trade.market,
+                        strategy = STRATEGY_MEME_SCALPER,
+                        entryPrice = trade.entryPrice,
+                        exitPrice = trade.exitPrice ?: 0.0,
+                        quantity = trade.quantity,
+                        entryTime = trade.entryTime,
+                        exitTime = exitTime,
+                        pnlAmount = trade.pnlAmount ?: 0.0,
+                        pnlPercent = trade.pnlPercent ?: 0.0,
+                        exitReason = trade.exitReason ?: "UNKNOWN"
+                    )
+                )
             }
 
         // Volume Surge 체결 내역
         volumeSurgeRepository.findByStatus(STATUS_CLOSED)
-            .filter { isWithinRange(it.exitTime, startOfDay, endOfDay) }
             .forEach { trade ->
-                trades.add(ClosedTradeInfo(
-                    market = trade.market,
-                    strategy = STRATEGY_VOLUME_SURGE,
-                    entryPrice = trade.entryPrice,
-                    exitPrice = trade.exitPrice ?: 0.0,
-                    quantity = trade.quantity,
-                    entryTime = trade.entryTime.toString(),
-                    entryTimeFormatted = formatInstant(trade.entryTime),
-                    exitTime = trade.exitTime!!,
-                    exitTimeFormatted = formatInstant(trade.exitTime!!),
-                    holdingMinutes = java.time.Duration.between(trade.entryTime, trade.exitTime!!).toMinutes(),
-                    pnlAmount = trade.pnlAmount ?: 0.0,
-                    pnlPercent = trade.pnlPercent ?: 0.0,
-                    exitReason = trade.exitReason ?: "UNKNOWN"
-                ))
+                val exitTime = trade.exitTime ?: return@forEach
+                if (!isWithinRange(exitTime, startOfDay, endOfDay)) return@forEach
+
+                trades.add(
+                    buildClosedTradeInfo(
+                        market = trade.market,
+                        strategy = STRATEGY_VOLUME_SURGE,
+                        entryPrice = trade.entryPrice,
+                        exitPrice = trade.exitPrice ?: 0.0,
+                        quantity = trade.quantity,
+                        entryTime = trade.entryTime,
+                        exitTime = exitTime,
+                        pnlAmount = trade.pnlAmount ?: 0.0,
+                        pnlPercent = trade.pnlPercent ?: 0.0,
+                        exitReason = trade.exitReason ?: "UNKNOWN"
+                    )
+                )
             }
 
         // DCA 체결 내역
         dcaPositionRepository.findByStatus(STATUS_CLOSED)
-            .filter { isWithinRange(it.exitedAt, startOfDay, endOfDay) }
             .forEach { pos ->
-                trades.add(ClosedTradeInfo(
-                    market = pos.market,
-                    strategy = STRATEGY_DCA,
-                    entryPrice = pos.averagePrice,
-                    exitPrice = pos.exitPrice ?: 0.0,
-                    quantity = pos.totalQuantity,
-                    entryTime = pos.createdAt.toString(),
-                    entryTimeFormatted = formatInstant(pos.createdAt),
-                    exitTime = pos.exitedAt!!,
-                    exitTimeFormatted = formatInstant(pos.exitedAt!!),
-                    holdingMinutes = java.time.Duration.between(pos.createdAt, pos.exitedAt!!).toMinutes(),
-                    pnlAmount = pos.realizedPnl ?: 0.0,
-                    pnlPercent = pos.realizedPnlPercent ?: 0.0,
-                    exitReason = pos.exitReason ?: "UNKNOWN"
-                ))
+                val exitTime = pos.exitedAt ?: return@forEach
+                if (!isWithinRange(exitTime, startOfDay, endOfDay)) return@forEach
+
+                trades.add(
+                    buildClosedTradeInfo(
+                        market = pos.market,
+                        strategy = STRATEGY_DCA,
+                        entryPrice = pos.averagePrice,
+                        exitPrice = pos.exitPrice ?: 0.0,
+                        quantity = pos.totalQuantity,
+                        entryTime = pos.createdAt,
+                        exitTime = exitTime,
+                        pnlAmount = pos.realizedPnl ?: 0.0,
+                        pnlPercent = pos.realizedPnlPercent ?: 0.0,
+                        exitReason = pos.exitReason ?: "UNKNOWN"
+                    )
+                )
             }
 
         return trades.sortedByDescending { it.exitTime }
@@ -322,6 +300,64 @@ class DashboardController(
         } catch (_: Exception) {
             fallback
         }
+    }
+
+    private fun buildPositionInfo(
+        market: String,
+        strategy: String,
+        entryPrice: Double,
+        quantity: Double,
+        entryTime: Instant,
+        takeProfitPrice: Double = 0.0,
+        stopLossPrice: Double = 0.0,
+        peakPrice: Double? = null
+    ): PositionInfo {
+        val currentPrice = resolveCurrentPriceOrFallback(market, entryPrice)
+        val pnl = (currentPrice - entryPrice) * quantity
+        val pnlPercent = ((currentPrice - entryPrice) / entryPrice) * 100
+        return PositionInfo(
+            market = market,
+            strategy = strategy,
+            entryPrice = entryPrice,
+            currentPrice = currentPrice,
+            quantity = quantity,
+            value = entryPrice * quantity,
+            pnl = pnl,
+            pnlPercent = pnlPercent,
+            takeProfitPrice = takeProfitPrice,
+            stopLossPrice = stopLossPrice,
+            entryTime = entryTime.toString(),
+            peakPrice = peakPrice
+        )
+    }
+
+    private fun buildClosedTradeInfo(
+        market: String,
+        strategy: String,
+        entryPrice: Double,
+        exitPrice: Double,
+        quantity: Double,
+        entryTime: Instant,
+        exitTime: Instant,
+        pnlAmount: Double,
+        pnlPercent: Double,
+        exitReason: String
+    ): ClosedTradeInfo {
+        return ClosedTradeInfo(
+            market = market,
+            strategy = strategy,
+            entryPrice = entryPrice,
+            exitPrice = exitPrice,
+            quantity = quantity,
+            entryTime = entryTime.toString(),
+            entryTimeFormatted = formatInstant(entryTime),
+            exitTime = exitTime,
+            exitTimeFormatted = formatInstant(exitTime),
+            holdingMinutes = Duration.between(entryTime, exitTime).toMinutes(),
+            pnlAmount = pnlAmount,
+            pnlPercent = pnlPercent,
+            exitReason = exitReason
+        )
     }
 
     private fun resolveTargetDate(date: String?): Instant {
