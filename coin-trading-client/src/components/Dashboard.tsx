@@ -7,6 +7,7 @@ import {
   type FundingScanResult,
   type FundingStatus,
   type PositionInfo,
+  type RiskThrottleStatus,
   type SyncResult,
   type SystemControlResult,
   type ValidationGateStatus,
@@ -177,6 +178,18 @@ export default function Dashboard() {
   } = useQuery<ValidationGateStatus>({
     queryKey: ['optimizer-validation-gate'],
     queryFn: () => systemControlApi.getOptimizerValidationGate(false),
+    enabled: systemControlExpanded,
+    refetchInterval: systemControlExpanded ? 60000 : false,
+  });
+
+  const throttleMarket = validationGateStatus?.market ?? 'KRW-BTC';
+  const {
+    data: riskThrottleStatus,
+    refetch: refetchRiskThrottle,
+    isFetching: riskThrottleFetching,
+  } = useQuery<RiskThrottleStatus>({
+    queryKey: ['risk-throttle-status', throttleMarket],
+    queryFn: () => systemControlApi.getRiskThrottleStatus(throttleMarket),
     enabled: systemControlExpanded,
     refetchInterval: systemControlExpanded ? 60000 : false,
   });
@@ -567,6 +580,17 @@ export default function Dashboard() {
                     </div>
                   </div>
                 )}
+                {riskThrottleStatus && (
+                  <div className={`optimizer-throttle-banner ${riskThrottleStatus.multiplier < 1 ? 'active' : 'normal'}`}>
+                    <div className="optimizer-throttle-title">
+                      포지션 스로틀: x{riskThrottleStatus.multiplier.toFixed(2)}
+                    </div>
+                    <div className="optimizer-throttle-reason">{riskThrottleStatus.reason}</div>
+                    <div className="optimizer-throttle-meta">
+                      표본 {riskThrottleStatus.sampleSize}건 · 승률 {(riskThrottleStatus.winRate * 100).toFixed(1)}% · 평균 {riskThrottleStatus.avgPnlPercent.toFixed(2)}%
+                    </div>
+                  </div>
+                )}
                 <div className="control-buttons">
                   <button
                     className="control-btn control-btn-primary"
@@ -593,11 +617,14 @@ export default function Dashboard() {
                   <button
                     className="control-btn control-btn-secondary"
                     type="button"
-                    onClick={() => void refetchValidationGate()}
-                    disabled={validationGateFetching}
-                    title="수익성 검증 게이트 상태를 즉시 다시 평가합니다"
+                    onClick={() => {
+                      void refetchValidationGate();
+                      void refetchRiskThrottle();
+                    }}
+                    disabled={validationGateFetching || riskThrottleFetching}
+                    title="수익성 검증/포지션 스로틀 상태를 즉시 다시 평가합니다"
                   >
-                    {validationGateFetching ? '검증 중...' : '검증 상태 새로고침'}
+                    {validationGateFetching || riskThrottleFetching ? '검증 중...' : '검증 상태 새로고침'}
                   </button>
                 </div>
               </div>

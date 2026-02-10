@@ -480,6 +480,44 @@ body {
   line-height: 1.35;
 }
 
+.optimizer-throttle-banner {
+  border-radius: var(--radius-md);
+  border: 1px solid var(--border-default);
+  background: var(--bg-tertiary);
+  padding: 10px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.optimizer-throttle-banner.active {
+  border-color: var(--warning-primary);
+  background: var(--warning-secondary);
+}
+
+.optimizer-throttle-banner.normal {
+  border-color: var(--success-primary);
+  background: var(--success-tertiary);
+}
+
+.optimizer-throttle-title {
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--text-primary);
+}
+
+.optimizer-throttle-reason {
+  font-size: 12px;
+  color: var(--text-secondary);
+  line-height: 1.4;
+}
+
+.optimizer-throttle-meta {
+  font-size: 11px;
+  color: var(--text-tertiary);
+  line-height: 1.35;
+}
+
 .control-buttons {
   display: flex;
   flex-direction: column;

@@ -125,6 +125,16 @@ export interface ValidationGateStatus {
   cached: boolean;
 }
 
+export interface RiskThrottleStatus {
+  multiplier: number;
+  reason: string;
+  sampleSize: number;
+  winRate: number;
+  avgPnlPercent: number;
+  enabled: boolean;
+  cached: boolean;
+}
+
 export interface FundingStatus {
   enabled: boolean;
   autoTradingEnabled: boolean;
@@ -317,6 +327,20 @@ function normalizeValidationGateStatus(raw: unknown): ValidationGateStatus {
   };
 }
 
+function normalizeRiskThrottleStatus(raw: unknown): RiskThrottleStatus {
+  const status = asApiObject(raw);
+
+  return {
+    multiplier: toNumber(status.multiplier, 1),
+    reason: toStringValue(status.reason),
+    sampleSize: toNumber(status.sampleSize, 0),
+    winRate: toNumber(status.winRate, 0),
+    avgPnlPercent: toNumber(status.avgPnlPercent, 0),
+    enabled: toBoolean(status.enabled, false),
+    cached: toBoolean(status.cached, false),
+  };
+}
+
 export type GenericApiResult = Record<string, unknown>;
 
 export const dashboardApi = {
@@ -362,6 +386,14 @@ export const systemControlApi = {
 
   getOptimizerValidationGate: (forceRefresh = false): Promise<ValidationGateStatus> =>
     api.get('/optimizer/validation-gate', { params: { forceRefresh } }).then(res => normalizeValidationGateStatus(res.data)),
+
+  getRiskThrottleStatus: (
+    market = 'KRW-BTC',
+    strategy?: string,
+    forceRefresh = false
+  ): Promise<RiskThrottleStatus> =>
+    api.get(`/trading/risk-throttle/${market}`, { params: { strategy, forceRefresh } })
+      .then(res => normalizeRiskThrottleStatus(res.data)),
 
   // Funding Rate
   scanFundingOpportunities: (): Promise<FundingScanResult> =>

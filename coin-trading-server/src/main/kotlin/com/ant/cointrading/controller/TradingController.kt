@@ -3,6 +3,8 @@ package com.ant.cointrading.controller
 import com.ant.cointrading.config.TradingProperties
 import com.ant.cointrading.engine.TradingEngine
 import com.ant.cointrading.model.*
+import com.ant.cointrading.risk.RiskThrottleDecision
+import com.ant.cointrading.risk.RiskThrottleService
 import com.ant.cointrading.risk.RiskManager
 import com.ant.cointrading.strategy.StrategySelector
 import org.springframework.web.bind.annotation.*
@@ -17,6 +19,7 @@ class TradingController(
     private val tradingEngine: TradingEngine,
     private val strategySelector: StrategySelector,
     private val riskManager: RiskManager,
+    private val riskThrottleService: RiskThrottleService,
     private val tradingProperties: TradingProperties
 ) {
 
@@ -40,6 +43,21 @@ class TradingController(
         @PathVariable market: String,
         @RequestParam(defaultValue = "1000000") balance: BigDecimal
     ): RiskStats = riskManager.getRiskStats(market, balance)
+
+    @GetMapping("/risk-throttle/{market}")
+    fun getRiskThrottleStatus(
+        @PathVariable market: String,
+        @RequestParam(required = false) strategy: String?,
+        @RequestParam(defaultValue = "false") forceRefresh: Boolean
+    ): RiskThrottleDecision {
+        val targetStrategy = strategy?.trim()?.takeIf { it.isNotEmpty() }
+            ?: tradingProperties.strategy.type.name
+        return riskThrottleService.getDecision(
+            market = market,
+            strategy = targetStrategy,
+            forceRefresh = forceRefresh
+        )
+    }
 
     /**
      * 사용 가능한 전략 목록
@@ -92,7 +110,8 @@ class TradingController(
     fun isEnabled(): Map<String, Any> = mapOf(
         "tradingEnabled" to tradingProperties.enabled,
         "orderAmountKrw" to tradingProperties.orderAmountKrw,
-        "maxDrawdownPercent" to tradingProperties.maxDrawdownPercent
+        "maxDrawdownPercent" to tradingProperties.maxDrawdownPercent,
+        "riskThrottleEnabled" to tradingProperties.riskThrottle.enabled
     )
 
     /**
