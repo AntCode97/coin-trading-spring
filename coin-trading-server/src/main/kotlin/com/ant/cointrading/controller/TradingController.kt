@@ -24,17 +24,13 @@ class TradingController(
      * 전체 마켓 상태 조회
      */
     @GetMapping("/status")
-    fun getAllStatus(): Map<String, MarketStatus> {
-        return tradingEngine.getAllMarketStatuses()
-    }
+    fun getAllStatus(): Map<String, MarketStatus> = tradingEngine.getAllMarketStatuses()
 
     /**
      * 특정 마켓 상태 조회
      */
     @GetMapping("/status/{market}")
-    fun getStatus(@PathVariable market: String): MarketStatus? {
-        return tradingEngine.getMarketStatus(market)
-    }
+    fun getStatus(@PathVariable market: String): MarketStatus? = tradingEngine.getMarketStatus(market)
 
     /**
      * 리스크 통계 조회
@@ -43,23 +39,20 @@ class TradingController(
     fun getRiskStats(
         @PathVariable market: String,
         @RequestParam(defaultValue = "1000000") balance: BigDecimal
-    ): RiskStats {
-        return riskManager.getRiskStats(market, balance)
-    }
+    ): RiskStats = riskManager.getRiskStats(market, balance)
 
     /**
      * 사용 가능한 전략 목록
      */
     @GetMapping("/strategies")
-    fun getStrategies(): List<Map<String, Any>> {
-        return strategySelector.getAllStrategies().map { strategy ->
+    fun getStrategies(): List<Map<String, Any>> =
+        strategySelector.getAllStrategies().map { strategy ->
             mapOf(
                 "name" to strategy.name,
                 "description" to strategy.getDescription(),
                 "isCurrent" to (strategy.name == tradingProperties.strategy.type.name)
             )
         }
-    }
 
     /**
      * 현재 전략 설정 조회
@@ -84,41 +77,33 @@ class TradingController(
      * 수동 분석 트리거
      */
     @PostMapping("/analyze/{market}")
-    fun triggerAnalysis(@PathVariable market: String): TradingSignal? {
-        return tradingEngine.triggerAnalysis(market)
-    }
+    fun triggerAnalysis(@PathVariable market: String): TradingSignal? = tradingEngine.triggerAnalysis(market)
 
     /**
      * 거래 대상 마켓 목록
      */
     @GetMapping("/markets")
-    fun getMarkets(): List<String> {
-        return tradingProperties.markets
-    }
+    fun getMarkets(): List<String> = tradingProperties.markets
 
     /**
      * 거래 활성화 상태
      */
     @GetMapping("/enabled")
-    fun isEnabled(): Map<String, Any> {
-        return mapOf(
-            "tradingEnabled" to tradingProperties.enabled,
-            "orderAmountKrw" to tradingProperties.orderAmountKrw,
-            "maxDrawdownPercent" to tradingProperties.maxDrawdownPercent
-        )
-    }
+    fun isEnabled(): Map<String, Any> = mapOf(
+        "tradingEnabled" to tradingProperties.enabled,
+        "orderAmountKrw" to tradingProperties.orderAmountKrw,
+        "maxDrawdownPercent" to tradingProperties.maxDrawdownPercent
+    )
 
     /**
      * 헬스 체크
      */
     @GetMapping("/health")
-    fun health(): Map<String, String> {
-        return mapOf(
-            "status" to "UP",
-            "tradingEnabled" to tradingProperties.enabled.toString(),
-            "markets" to tradingProperties.markets.joinToString(",")
-        )
-    }
+    fun health(): Map<String, String> = mapOf(
+        "status" to "UP",
+        "tradingEnabled" to tradingProperties.enabled.toString(),
+        "markets" to tradingProperties.markets.joinToString(",")
+    )
 }
 
 data class StrategyConfigResponse(
