@@ -1,7 +1,9 @@
 package com.ant.cointrading.controller
 
+import com.ant.cointrading.api.bithumb.Balance
 import com.ant.cointrading.api.bithumb.BithumbPrivateApi
 import com.ant.cointrading.api.bithumb.BithumbPublicApi
+import com.ant.cointrading.api.bithumb.OrderResponse
 import com.ant.cointrading.dca.DcaEngine
 import com.ant.cointrading.engine.PositionHelper
 import com.ant.cointrading.memescalper.MemeScalperEngine
@@ -53,10 +55,7 @@ class SyncController(
         var skippedCount = 0
 
         try {
-            // 실제 잔고 조회
-            val actualBalances = try {
-                bithumbPrivateApi.getBalances() ?: emptyList()
-            } catch (e: Exception) {
+            val actualBalances = fetchActualBalances().getOrElse { e ->
                 log.error("잔고 조회 실패: ${e.message}")
                 return syncResult(
                     success = false,
@@ -100,23 +99,7 @@ class SyncController(
             val expectedByCoin = mutableMapOf<String, CoinQuantityExpectation>()
 
             // 각 마켓별로 체결된 매도 주문 조회 (최근 500개 - 오래된 수기 매도 대응)
-            val sellOrdersByMarket = mutableMapOf<String, List<com.ant.cointrading.api.bithumb.OrderResponse>>()
-
-            for (market in allOpenMarkets) {
-                val apiMarket = convertToApiMarket(market)
-                try {
-                    val doneOrders = bithumbPrivateApi.getOrders(apiMarket, "done", 0, 500) ?: emptyList()
-                    val sellOrders = doneOrders
-                        .filter { it.side == "ask" && it.state == "done" && it.executedVolume != null && it.executedVolume > BigDecimal.ZERO }
-
-                    if (sellOrders.isNotEmpty()) {
-                        sellOrdersByMarket[market] = sellOrders
-                        log.info("[$market] 체결된 매도 주문 ${sellOrders.size}개 발견")
-                    }
-                } catch (e: Exception) {
-                    log.warn("[$market] 체결 내역 조회 실패: ${e.message}")
-                }
-            }
+            val sellOrdersByMarket = loadSellOrdersByMarket(allOpenMarkets)
 
             // Meme Scalper 포지션 체크
             openMemePositions.forEach { position ->
@@ -128,11 +111,12 @@ class SyncController(
                     val sellOrdersForMarket = sellOrdersByMarket[position.market]
 
                     // 진입 시간 이후의 매도 주문 찾기 (수기 매도 대응)
-                    val matchingSellOrder = sellOrdersForMarket?.find { sellOrder ->
-                        val orderTime = parseInstant(sellOrder.createdAt)
-                        isMatchingOrder(sellOrder, position.quantity) &&
-                        orderTime.isAfter(position.entryTime.minusSeconds(60))  // 진입 60초 전부터 체크
-                    }
+                    val matchingSellOrder = findMatchingSellOrder(
+                        sellOrders = sellOrdersForMarket,
+                        positionQty = position.quantity,
+                        positionStartTime = position.entryTime,
+                        matcher = ::isMatchingOrder
+                    )
 
                     if (matchingSellOrder != null) {
                         // 실제 매도 체결 확인 -> 실제 정보로 CLOSED 처리
@@ -201,11 +185,12 @@ class SyncController(
                     val sellOrdersForMarket = sellOrdersByMarket[position.market]
 
                     // 진입 시간 이후의 매도 주문 찾기
-                    val matchingSellOrder = sellOrdersForMarket?.find { sellOrder ->
-                        val orderTime = parseInstant(sellOrder.createdAt)
-                        isMatchingOrder(sellOrder, position.quantity) &&
-                        orderTime.isAfter(position.entryTime.minusSeconds(60))
-                    }
+                    val matchingSellOrder = findMatchingSellOrder(
+                        sellOrders = sellOrdersForMarket,
+                        positionQty = position.quantity,
+                        positionStartTime = position.entryTime,
+                        matcher = ::isMatchingOrder
+                    )
 
                     if (matchingSellOrder != null) {
                         val executedPrice = matchingSellOrder.price?.toDouble() ?: position.entryPrice
@@ -273,11 +258,12 @@ class SyncController(
                     val sellOrdersForMarket = sellOrdersByMarket[position.market]
 
                     // 첫 매수 시간 이후의 매도 주문 찾기 (DCA는 createdAt 사용)
-                    val matchingSellOrder = sellOrdersForMarket?.find { sellOrder ->
-                        val orderTime = parseInstant(sellOrder.createdAt)
-                        isMatchingOrderForDca(sellOrder, position.totalQuantity) &&
-                        orderTime.isAfter(position.createdAt.minusSeconds(60))
-                    }
+                    val matchingSellOrder = findMatchingSellOrder(
+                        sellOrders = sellOrdersForMarket,
+                        positionQty = position.totalQuantity,
+                        positionStartTime = position.createdAt,
+                        matcher = ::isMatchingOrderForDca
+                    )
 
                     if (matchingSellOrder != null) {
                         val executedPrice = matchingSellOrder.price?.toDouble() ?: position.averagePrice
@@ -472,7 +458,7 @@ class SyncController(
      * 주문이 포지션과 일치하는지 확인
      * 체결 수량이 포지션 수량과 비슷하면 일치로 간주 (10% 오차 허용)
      */
-    private fun isMatchingOrder(order: com.ant.cointrading.api.bithumb.OrderResponse, positionQty: Double): Boolean {
+    private fun isMatchingOrder(order: OrderResponse, positionQty: Double): Boolean {
         val executedQty = order.executedVolume ?: return false
         val expectedQty = toPositiveQuantityOrNull(positionQty) ?: return false
 
@@ -513,10 +499,7 @@ class SyncController(
         var fixedCount = 0
 
         try {
-            // 미체결 주문 조회 (state=wait)
-            val openOrders = try {
-                bithumbPrivateApi.getOrders(null, "wait", 0, 100) ?: emptyList()
-            } catch (e: Exception) {
+            val openOrders = fetchOpenOrders().getOrElse { e ->
                 log.error("미체결 주문 조회 실패: ${e.message}")
                 return syncResult(
                     success = false,
@@ -575,7 +558,7 @@ class SyncController(
      * DCA용 주문 일치 확인
      * DCA는 여러 번 나누어 매수하므로 총 수량보다 큰 주문도 일치로 간주
      */
-    private fun isMatchingOrderForDca(order: com.ant.cointrading.api.bithumb.OrderResponse, positionQty: Double): Boolean {
+    private fun isMatchingOrderForDca(order: OrderResponse, positionQty: Double): Boolean {
         val executedQty = order.executedVolume ?: return false
         val expectedQty = toPositiveQuantityOrNull(positionQty) ?: return false
 
@@ -759,6 +742,53 @@ class SyncController(
     private fun isCarryOverCandidate(exitReason: String?): Boolean {
         val normalized = exitReason?.trim()?.uppercase() ?: return false
         return normalized.startsWith("ABANDONED") || normalized == "SYNC_NO_BALANCE"
+    }
+
+    private fun fetchActualBalances(): Result<List<Balance>> {
+        return runCatching { bithumbPrivateApi.getBalances() ?: emptyList() }
+    }
+
+    private fun fetchOpenOrders(): Result<List<OrderResponse>> {
+        return runCatching { bithumbPrivateApi.getOrders(null, "wait", 0, 100) ?: emptyList() }
+    }
+
+    private fun loadSellOrdersByMarket(markets: Set<String>): Map<String, List<OrderResponse>> {
+        val sellOrdersByMarket = mutableMapOf<String, List<OrderResponse>>()
+
+        markets.forEach { market ->
+            val apiMarket = convertToApiMarket(market)
+            try {
+                val doneOrders = bithumbPrivateApi.getOrders(apiMarket, "done", 0, 500) ?: emptyList()
+                val sellOrders = doneOrders.filter { order ->
+                    order.side == "ask" &&
+                        order.state == "done" &&
+                        order.executedVolume != null &&
+                        order.executedVolume > BigDecimal.ZERO
+                }
+
+                if (sellOrders.isNotEmpty()) {
+                    sellOrdersByMarket[market] = sellOrders
+                    log.info("[$market] 체결된 매도 주문 ${sellOrders.size}개 발견")
+                }
+            } catch (e: Exception) {
+                log.warn("[$market] 체결 내역 조회 실패: ${e.message}")
+            }
+        }
+
+        return sellOrdersByMarket
+    }
+
+    private fun findMatchingSellOrder(
+        sellOrders: List<OrderResponse>?,
+        positionQty: Double,
+        positionStartTime: Instant,
+        matcher: (OrderResponse, Double) -> Boolean
+    ): OrderResponse? {
+        return sellOrders?.find { sellOrder ->
+            val orderTime = parseInstant(sellOrder.createdAt)
+            matcher(sellOrder, positionQty) &&
+                orderTime.isAfter(positionStartTime.minusSeconds(60))
+        }
     }
 
     private fun resolveCurrentPriceOrFallback(market: String, fallback: Double): Double {
