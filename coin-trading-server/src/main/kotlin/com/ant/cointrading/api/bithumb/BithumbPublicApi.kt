@@ -13,6 +13,8 @@ import org.springframework.web.client.ResourceAccessException
 import org.springframework.web.client.toEntity
 import java.io.ByteArrayInputStream
 import java.nio.charset.StandardCharsets
+import java.time.Duration
+import java.time.Instant
 
 /**
  * Bithumb Public API 클라이언트
@@ -30,6 +32,10 @@ class BithumbPublicApi(
     private val eventPublisher: ApplicationEventPublisher
 ) {
     private val log = LoggerFactory.getLogger(javaClass)
+    @Volatile
+    private var cachedMarketAll: List<MarketInfo>? = null
+    @Volatile
+    private var cachedMarketAllAt: Instant? = null
 
     companion object {
         private const val MAX_RETRY_ATTEMPTS = 3
@@ -272,47 +278,49 @@ class BithumbPublicApi(
      * 타임아웃/연결 에러 시 자동 재시도
      */
     fun getMarketAll(): List<MarketInfo>? {
-        return executeWithRetry("getMarketAll") {
-            bithumbRestClient.get()
-                .uri("/v1/market/all")
-                .retrieve()
-                .body(object : ParameterizedTypeReference<List<MarketInfo>>() {})
-        }
-    }
-
-    /**
-     * 재시도 로직이 포함된 실행 헬퍼
-     * 타임아웃/연결 에러 시 최대 3회 재시도
-     */
-    private fun <T> executeWithRetry(
-        operation: String,
-        block: () -> T
-    ): T? {
         var lastException: Exception? = null
 
         for (attempt in 1..MAX_RETRY_ATTEMPTS) {
             try {
-                return block()
+                val markets = bithumbRestClient.get()
+                    .uri("/v1/market/all")
+                    .retrieve()
+                    .body(object : ParameterizedTypeReference<List<MarketInfo>>() {})
+
+                if (markets != null) {
+                    cachedMarketAll = markets
+                    cachedMarketAllAt = Instant.now()
+                }
+                return markets
             } catch (e: ResourceAccessException) {
                 lastException = e
                 if (attempt < MAX_RETRY_ATTEMPTS) {
-                    log.warn("$operation 실패 (연결 타임아웃), 재시도 $attempt/$MAX_RETRY_ATTEMPTS: ${e.message}")
-                    Thread.sleep(RETRY_DELAY_MS * attempt) // 지수 백오프
+                    log.warn("getMarketAll 실패 (연결 타임아웃), 재시도 $attempt/$MAX_RETRY_ATTEMPTS: ${e.message}")
+                    Thread.sleep(RETRY_DELAY_MS * attempt)
                 } else {
-                    log.error("$operation 실패: 최대 재시도 횟수 초과")
+                    log.error("getMarketAll 실패: 최대 재시도 횟수 초과")
                 }
             } catch (e: Exception) {
                 lastException = e
-                log.error("$operation 실패 (시도 $attempt/$MAX_RETRY_ATTEMPTS): ${e.message}")
-                break // 타임아웃 외 에러는 재시도 안 함
+                log.error("getMarketAll 실패 (시도 $attempt/$MAX_RETRY_ATTEMPTS): ${e.message}")
+                break
             }
+        }
+
+        // 네트워크 일시 장애면 마지막 성공 캐시를 반환해 트레이딩 파이프라인을 유지
+        val cached = cachedMarketAll
+        if (!cached.isNullOrEmpty()) {
+            val lastSuccess = cachedMarketAllAt
+            val ageMinutes = if (lastSuccess != null) Duration.between(lastSuccess, Instant.now()).toMinutes() else -1
+            log.warn("getMarketAll 실패 - 캐시된 마켓 목록 사용 (age={}m, size={})", ageMinutes, cached.size)
+            return cached
         }
 
         // 모든 재시도 실패 시 이벤트 발행
         eventPublisher.publishEvent(TradingErrorEvent(
             eventSource = this,
             component = "BithumbPublicApi",
-            operation = operation,
+            operation = "getMarketAll",
             market = null,
             errorMessage = lastException?.message ?: "Max retry exceeded",
             exception = lastException

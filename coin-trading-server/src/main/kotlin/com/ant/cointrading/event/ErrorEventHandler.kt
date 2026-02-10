@@ -18,7 +18,8 @@ import java.time.Instant
  * 에러 발생 시 Slack으로 알림 전송
  * @Async로 비동기 처리하여 메인 로직 방지
  *
- * 중복 에러 방지: 동일 컴포넌트/작업에 대해 5분 이내 재발생 시 알림 스킵
+ * 중복 에러 방지: 동일 컴포넌트/작업에 대해 기본 5분 이내 재발생 시 알림 스킵
+ * - getMarketAll 네트워크 에러는 30분 쿨다운
  *
  * Slack 알림 제외 대상:
  * - Jackson 역직렬화 에러 (Bithumb API 응답 필드 변경 등 일시적 이슈)
@@ -35,7 +36,8 @@ class ErrorEventHandler(
 
     // 중복 에러 방지 (컴포넌트 + 작업 + 마켓 -> 마지막 알림 시각)
     private val lastAlertTime = ConcurrentHashMap<String, Instant>()
-    private val ALERT_COOLDOWN_MINUTES = 5L
+    private val DEFAULT_ALERT_COOLDOWN_MINUTES = 5L
+    private val MARKET_ALL_ALERT_COOLDOWN_MINUTES = 30L
 
     // Slack 알림 제외 컴포넌트/작업 조합
     private val SLACK_EXCLUDED = setOf(
@@ -69,7 +71,8 @@ class ErrorEventHandler(
 
             if (lastTime != null) {
                 val elapsedMinutes = java.time.Duration.between(lastTime, now).toMinutes()
-                if (elapsedMinutes < ALERT_COOLDOWN_MINUTES) {
+                val cooldownMinutes = resolveCooldownMinutes(event)
+                if (elapsedMinutes < cooldownMinutes) {
                     log.debug("[${event.component}] 중복 에러 스킵 (${elapsedMinutes}분 경과): ${event.operation}")
                     return
                 }
@@ -113,5 +116,13 @@ class ErrorEventHandler(
 
     private fun buildAlertKey(event: TradingErrorEvent): String {
         return "${event.component}:${event.operation}:${event.market ?: "ALL"}"
+    }
+
+    private fun resolveCooldownMinutes(event: TradingErrorEvent): Long {
+        return if (event.component == "BithumbPublicApi" && event.operation == "getMarketAll") {
+            MARKET_ALL_ALERT_COOLDOWN_MINUTES
+        } else {
+            DEFAULT_ALERT_COOLDOWN_MINUTES
+        }
     }
 }

@@ -88,11 +88,11 @@ class SyncController(
             // 모든 OPEN 포지션의 마켓 목록 수집
             val openMemePositions = memeScalperRepository.findByStatus("OPEN")
             val openVolumeSurgePositions = volumeSurgeRepository.findByStatus("OPEN")
-            val openDcaPositions = dcaPositionRepository.findByStatus("OPEN")
-            val closingDcaPositions = dcaPositionRepository.findByStatus("CLOSING")
-            val abandonedDcaPositions = dcaPositionRepository.findByStatus("ABANDONED")
-            val failedDcaPositions = dcaPositionRepository.findByStatus("FAILED")
-            val dcaHoldingPositions = openDcaPositions + closingDcaPositions + abandonedDcaPositions + failedDcaPositions
+            // DCA는 과거 버전/수동 수정으로 상태값이 OPEN/CLOSING/ABANDONED/FAILED 변형일 수 있어
+            // 단순 equals 조회 대신 전체 조회 후 정규화하여 집계한다.
+            val allDcaPositions = dcaPositionRepository.findAll()
+            val openDcaPositions = allDcaPositions.filter { normalizeStatus(it.status) == "OPEN" }
+            val dcaHoldingPositions = allDcaPositions.filter { isDcaHoldingStatus(it.status) }
 
             val allOpenMarkets = mutableSetOf<String>()
             openMemePositions.forEach { allOpenMarkets.add(it.market) }
@@ -354,10 +354,10 @@ class SyncController(
                 }
             }
 
-            // DCA 비-OPEN 상태(CLOSING/ABANDONED/FAILED)라도 실제 잔고가 남아있으면 기대 수량에 포함
+            // DCA 비-OPEN 상태(CLOSING/ABANDONED*/FAILED*)라도 실제 잔고가 남아있으면 기대 수량에 포함
             dcaHoldingPositions
                 .asSequence()
-                .filter { it.status != "OPEN" }
+                .filter { normalizeStatus(it.status) != "OPEN" }
                 .forEach { position ->
                     val coinSymbol = extractCoinSymbol(position.market)
                     val actualBalanceObj = coinsWithBalance[coinSymbol]
@@ -691,6 +691,18 @@ class SyncController(
         val relativeTolerance = base.multiply(BigDecimal("0.001")) // 0.1%
         val absoluteTolerance = BigDecimal("0.0001")
         return relativeTolerance.max(absoluteTolerance)
+    }
+
+    private fun normalizeStatus(status: String?): String {
+        return status?.trim()?.uppercase() ?: ""
+    }
+
+    private fun isDcaHoldingStatus(status: String?): Boolean {
+        val normalized = normalizeStatus(status)
+        return normalized == "OPEN" ||
+            normalized == "CLOSING" ||
+            normalized.startsWith("ABANDONED") ||
+            normalized.startsWith("FAILED")
     }
 
     private data class BalanceSnapshot(

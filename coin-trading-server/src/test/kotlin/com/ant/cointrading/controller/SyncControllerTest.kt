@@ -69,7 +69,7 @@ class SyncControllerTest {
             dcaEngine = dcaEngine
         )
 
-        whenever(dcaPositionRepository.findByStatus(any())).thenReturn(emptyList())
+        whenever(dcaPositionRepository.findAll()).thenReturn(emptyList())
     }
 
     @Test
@@ -89,7 +89,7 @@ class SyncControllerTest {
         )
         whenever(memeScalperRepository.findByStatus("OPEN")).thenReturn(listOf(openPosition))
         whenever(volumeSurgeRepository.findByStatus("OPEN")).thenReturn(emptyList())
-        whenever(dcaPositionRepository.findByStatus("OPEN")).thenReturn(emptyList())
+        whenever(dcaPositionRepository.findAll()).thenReturn(emptyList())
         whenever(bithumbPrivateApi.getOrders("KRW-BTC", "done", 0, 500)).thenReturn(emptyList())
 
         val result = syncController.syncPositions()
@@ -121,7 +121,7 @@ class SyncControllerTest {
         )
         whenever(memeScalperRepository.findByStatus("OPEN")).thenReturn(listOf(memeOpen))
         whenever(volumeSurgeRepository.findByStatus("OPEN")).thenReturn(listOf(volumeOpen))
-        whenever(dcaPositionRepository.findByStatus("OPEN")).thenReturn(emptyList())
+        whenever(dcaPositionRepository.findAll()).thenReturn(emptyList())
         whenever(bithumbPrivateApi.getOrders("KRW-BTC", "done", 0, 500)).thenReturn(emptyList())
 
         val result = syncController.syncPositions()
@@ -152,7 +152,7 @@ class SyncControllerTest {
         )
         whenever(memeScalperRepository.findByStatus("OPEN")).thenReturn(listOf(memeOpen))
         whenever(volumeSurgeRepository.findByStatus("OPEN")).thenReturn(listOf(volumeOpen))
-        whenever(dcaPositionRepository.findByStatus("OPEN")).thenReturn(emptyList())
+        whenever(dcaPositionRepository.findAll()).thenReturn(emptyList())
         whenever(bithumbPrivateApi.getOrders("KRW-BTC", "done", 0, 500)).thenReturn(emptyList())
 
         val result = syncController.syncPositions()
@@ -189,10 +189,42 @@ class SyncControllerTest {
         )
         whenever(memeScalperRepository.findByStatus("OPEN")).thenReturn(emptyList())
         whenever(volumeSurgeRepository.findByStatus("OPEN")).thenReturn(emptyList())
-        whenever(dcaPositionRepository.findByStatus("OPEN")).thenReturn(listOf(openDca))
-        whenever(dcaPositionRepository.findByStatus("CLOSING")).thenReturn(listOf(closingDca))
-        whenever(dcaPositionRepository.findByStatus("ABANDONED")).thenReturn(emptyList())
-        whenever(dcaPositionRepository.findByStatus("FAILED")).thenReturn(emptyList())
+        whenever(dcaPositionRepository.findAll()).thenReturn(listOf(openDca, closingDca))
+        whenever(bithumbPrivateApi.getOrders("KRW-XRP", "done", 0, 500)).thenReturn(emptyList())
+
+        val result = syncController.syncPositions()
+
+        assertTrue(result.success)
+        assertEquals(0, result.actions.count { it.action == "QUANTITY_MISMATCH" })
+        assertEquals(2, result.verifiedCount)
+    }
+
+    @Test
+    @DisplayName("DCA ABANDONED 변형 상태(ABANDONED_*)도 기대 수량에 포함한다")
+    fun includesAbandonedVariantDcaStatusWhenBalanceStillExists() {
+        val openDca = DcaPositionEntity(
+            market = "KRW-XRP",
+            totalQuantity = 7.21060704,
+            averagePrice = 2100.0,
+            totalInvested = 15142.27,
+            status = "OPEN"
+        )
+        val abandonedVariant = DcaPositionEntity(
+            market = "KRW-XRP",
+            totalQuantity = 7.18648084,
+            averagePrice = 2098.0,
+            totalInvested = 15078.43,
+            status = "ABANDONED_MIN"
+        )
+
+        whenever(bithumbPrivateApi.getBalances()).thenReturn(
+            listOf(
+                balance(currency = "XRP", available = "14.39708788", locked = "0")
+            )
+        )
+        whenever(memeScalperRepository.findByStatus("OPEN")).thenReturn(emptyList())
+        whenever(volumeSurgeRepository.findByStatus("OPEN")).thenReturn(emptyList())
+        whenever(dcaPositionRepository.findAll()).thenReturn(listOf(openDca, abandonedVariant))
         whenever(bithumbPrivateApi.getOrders("KRW-XRP", "done", 0, 500)).thenReturn(emptyList())
 
         val result = syncController.syncPositions()

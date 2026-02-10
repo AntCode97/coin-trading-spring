@@ -3,8 +3,10 @@ package com.ant.cointrading.config
 import org.springframework.context.annotation.Bean
 import org.springframework.context.annotation.Configuration
 import org.springframework.http.client.ClientHttpRequestFactory
+import org.springframework.http.client.JdkClientHttpRequestFactory
 import org.springframework.http.client.SimpleClientHttpRequestFactory
 import org.springframework.web.client.RestClient
+import java.net.http.HttpClient
 import java.time.Duration
 
 @Configuration
@@ -22,8 +24,12 @@ class RestClientConfig {
 
     @Bean
     fun bithumbRestClient(properties: BithumbProperties): RestClient {
-        val requestFactory: ClientHttpRequestFactory = SimpleClientHttpRequestFactory().apply {
-            setConnectTimeout(Duration.ofSeconds(BITHUMB_CONNECT_TIMEOUT_SECONDS))
+        val httpClient = HttpClient.newBuilder()
+            .connectTimeout(Duration.ofSeconds(BITHUMB_CONNECT_TIMEOUT_SECONDS))
+            .version(HttpClient.Version.HTTP_1_1)
+            .followRedirects(HttpClient.Redirect.NORMAL)
+            .build()
+        val requestFactory: ClientHttpRequestFactory = JdkClientHttpRequestFactory(httpClient).apply {
             setReadTimeout(Duration.ofSeconds(BITHUMB_READ_TIMEOUT_SECONDS))
         }
 
