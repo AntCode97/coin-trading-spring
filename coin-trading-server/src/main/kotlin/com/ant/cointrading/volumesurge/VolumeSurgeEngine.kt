@@ -71,6 +71,11 @@ class VolumeSurgeEngine(
 ) {
     private val log = LoggerFactory.getLogger(javaClass)
 
+    companion object {
+        private const val ABANDONED_RETRY_CHECK_KEY = "abandoned_last_check"
+        private const val ABANDONED_RETRY_INTERVAL_MINUTES = 10L
+    }
+
     // 공통 청산 로직 (PositionCloser 사용)
     private val positionCloser = PositionCloser(bithumbPrivateApi, orderExecutor, slackNotifier)
 
@@ -190,81 +195,142 @@ class VolumeSurgeEngine(
 
         log.info("[$market] 경보 처리 시작")
 
-        // 마켓 유효성 검증 (상장 코인 여부 확인)
-        val ticker = bithumbPublicApi.getCurrentPrice(market)?.firstOrNull()
-        if (ticker == null) {
+        if (!validateAutoAlertPreconditions(alert, market)) {
+            return
+        }
+        startAsyncAutoAlertProcessing(alert, market)
+    }
+
+    private fun validateAutoAlertPreconditions(alert: VolumeSurgeAlertEntity, market: String): Boolean {
+        if (!isListedMarket(market)) {
             log.warn("[$market] 상장 폐지 또는 존재하지 않는 마켓")
-            markAlertProcessed(alert, "SKIPPED", "상장 폐지 코�")
-            return
+            markAlertProcessed(alert, "SKIPPED", "상장 폐지 코인")
+            return false
         }
+        if (shouldSkipByCircuitBreaker(alert, market)) return false
+        if (shouldSkipByMaxPositions(alert, market)) return false
+        if (shouldSkipByCooldown(alert, market)) return false
+        return true
+    }
 
-        // 서킷 브레이커 체크
-        if (!canTrade()) {
-            log.warn("[$market] 서킷 브레이커 발동, 거래 중지")
-            markAlertProcessed(alert, "SKIPPED", "서킷 브레이커 발동")
-            return
+    private fun isListedMarket(market: String): Boolean {
+        return bithumbPublicApi.getCurrentPrice(market)?.firstOrNull() != null
+    }
+
+    private fun shouldSkipByCircuitBreaker(alert: VolumeSurgeAlertEntity, market: String): Boolean {
+        if (canTrade()) {
+            return false
         }
+        log.warn("[$market] 서킷 브레이커 발동, 거래 중지")
+        markAlertProcessed(alert, "SKIPPED", "서킷 브레이커 발동")
+        return true
+    }
 
-        // 동시 포지션 수 체크
+    private fun shouldSkipByMaxPositions(alert: VolumeSurgeAlertEntity, market: String): Boolean {
         val openPositions = tradeRepository.countByStatus("OPEN")
-        if (openPositions >= properties.maxPositions) {
-            log.info("[$market] 최대 포지션 도달 ($openPositions/${properties.maxPositions})")
-            markAlertProcessed(alert, "SKIPPED", "최대 포지션 도달")
-            return
+        if (!isMaxPositionReached(openPositions)) {
+            return false
         }
+        log.info("[$market] 최대 포지션 도달 ($openPositions/${properties.maxPositions})")
+        markAlertProcessed(alert, "SKIPPED", "최대 포지션 도달")
+        return true
+    }
 
-        // 쿨다운 체크
-        val lastTrade = tradeRepository.findTopByMarketOrderByCreatedAtDesc(market)
-        if (lastTrade != null) {
-            val cooldownEnd = lastTrade.createdAt.plus(properties.cooldownMin.toLong(), ChronoUnit.MINUTES)
-            if (Instant.now().isBefore(cooldownEnd)) {
-                log.info("[$market] 쿨다운 중")
-                markAlertProcessed(alert, "SKIPPED", "쿨다운 기간")
-                return
-            }
+    private fun shouldSkipByCooldown(alert: VolumeSurgeAlertEntity, market: String): Boolean {
+        val lastTrade = tradeRepository.findTopByMarketOrderByCreatedAtDesc(market) ?: return false
+        val cooldownEnd = lastTrade.createdAt.plus(properties.cooldownMin.toLong(), ChronoUnit.MINUTES)
+        if (!Instant.now().isBefore(cooldownEnd)) {
+            return false
         }
+        log.info("[$market] 쿨다운 중")
+        markAlertProcessed(alert, "SKIPPED", "쿨다운 기간")
+        return true
+    }
 
-        // LLM 필터 (Virtual Thread로 비동기 처리)
+    private fun startAsyncAutoAlertProcessing(alert: VolumeSurgeAlertEntity, market: String) {
         Thread.startVirtualThread {
             try {
-                val filterResult = volumeSurgeFilter.filter(market, alert)
-
-                alert.llmFilterResult = filterResult.decision
-                alert.llmFilterReason = filterResult.reason
-                alert.llmConfidence = filterResult.confidence
-                alertRepository.save(alert)
-
-                if (filterResult.decision != "APPROVED") {
-                    log.info("[$market] LLM 필터 거부: ${filterResult.reason}")
-                    markAlertProcessed(alert, filterResult.decision, filterResult.reason)
+                val filterResult = resolveFilterResult(market, alert, skipLlmFilter = false)
+                if (handleRejectedFilter(market, alert, filterResult)) {
                     return@startVirtualThread
                 }
 
                 log.info("[$market] LLM 필터 승인 (신뢰도: ${filterResult.confidence})")
 
-                // 기술적 분석
-                val analysis = volumeSurgeAnalyzer.analyze(market)
-                if (analysis == null) {
-                    log.warn("[$market] 기술적 분석 실패")
-                    markAlertProcessed(alert, "REJECTED", "기술적 분석 실패")
+                val analysis = analyzeMarketOrReject(alert, market) ?: return@startVirtualThread
+                if (!validateEntryConditionsOrReject(alert, market, analysis)) {
                     return@startVirtualThread
                 }
 
-                // 진입 조건 체크
-                if (!shouldEnter(analysis)) {
-                    log.info("[$market] 진입 조건 미충족: ${analysis.rejectReason}")
-                    markAlertProcessed(alert, "REJECTED", analysis.rejectReason ?: "진입 조건 미충족")
-                    return@startVirtualThread
-                }
-
-                // 포지션 진입
                 enterPosition(alert, analysis, filterResult)
-
             } catch (e: Exception) {
                 log.error("[$market] 경보 처리 중 오류: ${e.message}", e)
                 markAlertProcessed(alert, "ERROR", e.message ?: "Unknown error")
             }
         }
+    }
+
+    private fun resolveFilterResult(
+        market: String,
+        alert: VolumeSurgeAlertEntity,
+        skipLlmFilter: Boolean
+    ): FilterResult {
+        val filterResult = if (skipLlmFilter) {
+            log.info("[$market] LLM 필터 스킵 (수동 트리거)")
+            FilterResult(
+                decision = "APPROVED",
+                confidence = 1.0,
+                reason = "수동 트리거 (LLM 스킵)"
+            )
+        } else {
+            volumeSurgeFilter.filter(market, alert)
+        }
+        persistFilterResult(alert, filterResult)
+        return filterResult
+    }
+
+    private fun handleRejectedFilter(
+        market: String,
+        alert: VolumeSurgeAlertEntity,
+        filterResult: FilterResult,
+        onRejected: (() -> Unit)? = null
+    ): Boolean {
+        if (filterResult.decision == "APPROVED") {
+            return false
+        }
+
+        log.info("[$market] LLM 필터 거부: ${filterResult.reason}")
+        markAlertProcessed(alert, filterResult.decision, filterResult.reason)
+        onRejected?.invoke()
+        return true
+    }
+
+    private fun analyzeMarketOrReject(
+        alert: VolumeSurgeAlertEntity,
+        market: String,
+        onRejected: (() -> Unit)? = null
+    ): VolumeSurgeAnalysis? {
+        val analysis = volumeSurgeAnalyzer.analyze(market)
+        if (analysis != null) {
+            return analysis
+        }
+        log.warn("[$market] 기술적 분석 실패")
+        markAlertProcessed(alert, "REJECTED", "기술적 분석 실패")
+        onRejected?.invoke()
+        return null
+    }
+
+    private fun validateEntryConditionsOrReject(
+        alert: VolumeSurgeAlertEntity,
+        market: String,
+        analysis: VolumeSurgeAnalysis
+    ): Boolean {
+        if (shouldEnter(analysis)) {
+            return true
+        }
+        log.info("[$market] 진입 조건 미충족: ${analysis.rejectReason}")
+        markAlertProcessed(alert, "REJECTED", analysis.rejectReason ?: "진입 조건 미충족")
+        return false
     }
 
     /**
@@ -542,7 +608,12 @@ class VolumeSurgeEngine(
     fun monitorPositions() {
         if (!properties.enabled) return
 
-        // OPEN 포지션 모니터링
+        monitorOpenPositions()
+        monitorClosingPositions()
+        checkAbandonedRetrySchedule()
+    }
+
+    private fun monitorOpenPositions() {
         val openPositions = tradeRepository.findByStatus("OPEN")
         openPositions.forEach { position ->
             try {
@@ -551,8 +622,9 @@ class VolumeSurgeEngine(
                 log.error("[${position.market}] 포지션 모니터링 오류: ${e.message}")
             }
         }
+    }
 
-        // CLOSING 포지션 모니터링 (청산 진행 중)
+    private fun monitorClosingPositions() {
         val closingPositions = tradeRepository.findByStatus("CLOSING")
         closingPositions.forEach { position ->
             try {
@@ -561,13 +633,14 @@ class VolumeSurgeEngine(
                 log.error("[${position.market}] 청산 모니터링 오류: ${e.message}")
             }
         }
+    }
 
+    private fun checkAbandonedRetrySchedule() {
         // ABANDONED 포지션 재시도 (10분마다 체크 - 빈번한 API 호출 방지)
         val now = Instant.now()
-        val lastRetryCheckKey = "abandoned_last_check"
-        val lastCheck = cooldowns[lastRetryCheckKey]
-        if (lastCheck == null || ChronoUnit.MINUTES.between(lastCheck, now) >= 10) {
-            cooldowns[lastRetryCheckKey] = now
+        val lastCheck = cooldowns[ABANDONED_RETRY_CHECK_KEY]
+        if (lastCheck == null || ChronoUnit.MINUTES.between(lastCheck, now) >= ABANDONED_RETRY_INTERVAL_MINUTES) {
+            cooldowns[ABANDONED_RETRY_CHECK_KEY] = now
             retryAbandonedPositions()
         }
     }
@@ -681,45 +754,19 @@ class VolumeSurgeEngine(
         val market = position.market
 
         // ID 필수 체크 - ID 없으면 ABANDONED 처리
-        val positionId = position.id
-        if (positionId == null) {
+        val positionId = position.id ?: run {
             log.error("[$market] 포지션 ID 없음 - ABANDONED 처리")
             return
         }
 
-        // 잘못된 데이터 방어: entryPrice가 0 이하면 ABANDONED 처리
-        if (position.entryPrice <= 0) {
-            log.error("[$market] 유효하지 않은 진입가격 (${position.entryPrice}) - ABANDONED 처리")
-            position.status = "ABANDONED"
-            position.exitReason = "INVALID_ENTRY_PRICE"
-            position.exitTime = Instant.now()
-            position.pnlAmount = 0.0
-            position.pnlPercent = 0.0
-            tradeRepository.save(position)
-            highestPrices.remove(positionId)
+        if (handleInvalidEntryPrice(position, positionId)) return
 
-            slackNotifier.sendWarning(
-                market,
-                """
-                유효하지 않은 포지션 데이터 감지
-                진입가격: ${position.entryPrice}원
-                포지션 ID: ${position.id}
-
-                ABANDONED 처리됨. DB 데이터 확인 필요.
-                """.trimIndent()
-            )
-            return
-        }
-
-        // 현재가 조회
-        val ticker = bithumbPublicApi.getCurrentPrice(market)?.firstOrNull() ?: return
-        val currentPrice = ticker.tradePrice.toDouble()
+        val currentPrice = fetchCurrentPriceOrNull(market) ?: return
         val entryPrice = position.entryPrice
         val pnlPercent = safePnlPercent(entryPrice, currentPrice)
 
         // 1. 손절 체크 (저장된 손절 비율 사용, 없으면 기본값)
-        val appliedStopLoss = position.appliedStopLossPercent
-            ?: kotlin.math.abs(properties.stopLossPercent)
+        val appliedStopLoss = resolveAppliedStopLoss(position)
         val stopLossPercent = -appliedStopLoss
         if (pnlPercent <= stopLossPercent) {
             closePosition(position, currentPrice, "STOP_LOSS")
@@ -727,18 +774,77 @@ class VolumeSurgeEngine(
         }
 
         // 2. 익절 체크 (저장된 익절 비율 사용, 없으면 계산)
-        val takeProfitPercent = position.appliedTakeProfitPercent
-            ?: if (properties.useDynamicTakeProfit) {
-                kotlin.math.abs(appliedStopLoss) * properties.takeProfitMultiplier
-            } else {
-                properties.takeProfitPercent
-            }
+        val takeProfitPercent = resolveTakeProfitPercent(position, appliedStopLoss)
         if (pnlPercent >= takeProfitPercent) {
             closePosition(position, currentPrice, "TAKE_PROFIT")
             return
         }
 
         // 3. 트레일링 스탑 체크 (익절 도달 이후에만 활성화)
+        if (shouldCloseByTrailingProfit(position, positionId, currentPrice, pnlPercent, takeProfitPercent, market)) {
+            closePosition(position, currentPrice, "TRAILING_PROFIT")
+            return
+        }
+
+        // 4. 타임아웃 체크
+        val holdingMinutes = ChronoUnit.MINUTES.between(position.entryTime, Instant.now())
+        if (holdingMinutes >= properties.positionTimeoutMin) {
+            closePosition(position, currentPrice, "TIMEOUT")
+            return
+        }
+    }
+
+    private fun handleInvalidEntryPrice(position: VolumeSurgeTradeEntity, positionId: Long): Boolean {
+        if (position.entryPrice > 0) return false
+
+        val market = position.market
+        log.error("[$market] 유효하지 않은 진입가격 (${position.entryPrice}) - ABANDONED 처리")
+        position.status = "ABANDONED"
+        position.exitReason = "INVALID_ENTRY_PRICE"
+        position.exitTime = Instant.now()
+        position.pnlAmount = 0.0
+        position.pnlPercent = 0.0
+        tradeRepository.save(position)
+        highestPrices.remove(positionId)
+
+        slackNotifier.sendWarning(
+            market,
+            """
+            유효하지 않은 포지션 데이터 감지
+            진입가격: ${position.entryPrice}원
+            포지션 ID: ${position.id}
+
+            ABANDONED 처리됨. DB 데이터 확인 필요.
+            """.trimIndent()
+        )
+        return true
+    }
+
+    private fun fetchCurrentPriceOrNull(market: String): Double? {
+        val ticker = bithumbPublicApi.getCurrentPrice(market)?.firstOrNull() ?: return null
+        return ticker.tradePrice.toDouble()
+    }
+
+    private fun resolveAppliedStopLoss(position: VolumeSurgeTradeEntity): Double {
+        return position.appliedStopLossPercent ?: kotlin.math.abs(properties.stopLossPercent)
+    }
+
+    private fun resolveTakeProfitPercent(position: VolumeSurgeTradeEntity, appliedStopLoss: Double): Double {
+        return position.appliedTakeProfitPercent ?: if (properties.useDynamicTakeProfit) {
+            kotlin.math.abs(appliedStopLoss) * properties.takeProfitMultiplier
+        } else {
+            properties.takeProfitPercent
+        }
+    }
+
+    private fun shouldCloseByTrailingProfit(
+        position: VolumeSurgeTradeEntity,
+        positionId: Long,
+        currentPrice: Double,
+        pnlPercent: Double,
+        takeProfitPercent: Double,
+        market: String
+    ): Boolean {
         // NOTE: 익절 도달 후에만 트레일링으로 보호
         if (pnlPercent >= properties.trailingStopTrigger && pnlPercent >= takeProfitPercent) {
             // 익절 도달: 트레일링으로 보호
@@ -748,28 +854,22 @@ class VolumeSurgeEngine(
                 highestPrices[positionId] = currentPrice
                 tradeRepository.save(position)
                 log.info("[$market] 트레일링 스탑 활성화 (익절 도달 후 수익률: ${String.format("%.2f", pnlPercent)}%)")
-            } else {
-                val highestPrice = highestPrices.getOrDefault(positionId, currentPrice)
-                if (currentPrice > highestPrice) {
-                    highestPrices[positionId] = currentPrice
-                    position.highestPrice = currentPrice
-                    tradeRepository.save(position)
-                }
+                return false
+            }
 
-                val trailingStopPrice = highestPrice * (1 - properties.trailingStopOffset / 100)
-                if (currentPrice <= trailingStopPrice) {
-                    closePosition(position, currentPrice, "TRAILING_PROFIT")
-                    return
-                }
+            val highestPrice = highestPrices.getOrDefault(positionId, currentPrice)
+            if (currentPrice > highestPrice) {
+                highestPrices[positionId] = currentPrice
+                position.highestPrice = currentPrice
+                tradeRepository.save(position)
+            }
+
+            val trailingStopPrice = highestPrice * (1 - properties.trailingStopOffset / 100)
+            if (currentPrice <= trailingStopPrice) {
+                return true
             }
         }
-
-        // 4. 타임아웃 체크
-        val holdingMinutes = ChronoUnit.MINUTES.between(position.entryTime, Instant.now())
-        if (holdingMinutes >= properties.positionTimeoutMin) {
-            closePosition(position, currentPrice, "TIMEOUT")
-            return
-        }
+        return false
     }
 
     /**
@@ -866,6 +966,17 @@ class VolumeSurgeEngine(
      */
     private fun canTrade(): Boolean = circuitBreaker.canTrade()
 
+    private fun isMaxPositionReached(openPositions: Long): Boolean {
+        return openPositions >= properties.maxPositions
+    }
+
+    private fun persistFilterResult(alert: VolumeSurgeAlertEntity, filterResult: FilterResult) {
+        alert.llmFilterResult = filterResult.decision
+        alert.llmFilterReason = filterResult.reason
+        alert.llmConfidence = filterResult.confidence
+        alertRepository.save(alert)
+    }
+
     /**
      * 경보 처리 완료 마킹
      */
@@ -908,126 +1019,14 @@ class VolumeSurgeEngine(
     fun manualTrigger(market: String, skipLlmFilter: Boolean = false): Map<String, Any?> {
         log.info("[$market] 수동 트리거 시작 (skipLlmFilter=$skipLlmFilter)")
 
-        val cbState = circuitBreaker.getState()
-
-        // 서킷 브레이커 체크
-        if (!canTrade()) {
-            return mapOf(
-                "success" to false,
-                "market" to market,
-                "error" to "서킷 브레이커 발동 (연속손실: ${cbState.consecutiveLosses}, 일일손익: ${cbState.dailyPnl})"
-            )
+        val validationError = validateManualTriggerPreconditions(market)
+        if (validationError != null) {
+            return manualTriggerFailure(market, validationError)
         }
 
-        // 동시 포지션 수 체크
-        val openPositions = tradeRepository.countByStatus("OPEN")
-        if (openPositions >= properties.maxPositions) {
-            return mapOf(
-                "success" to false,
-                "market" to market,
-                "error" to "최대 포지션 도달 ($openPositions/${properties.maxPositions})"
-            )
-        }
-
-        // 이미 해당 마켓에 열린 포지션이 있는지 확인
-        // [엔진 간 충돌 방지] GlobalPositionManager로 모든 엔진의 포지션 확인
-        val existingPosition = tradeRepository.findByMarketAndStatus(market, "OPEN")
-        if (existingPosition.isNotEmpty()) {
-            return mapOf(
-                "success" to false,
-                "market" to market,
-                "error" to "이미 열린 포지션 존재 (id=${existingPosition.first().id})"
-            )
-        }
-
-        // 다른 엔진(TradingEngine, MemeScalper)에서 포지션 확인
-        if (globalPositionManager.hasOpenPosition(market)) {
-            return mapOf(
-                "success" to false,
-                "market" to market,
-                "error" to "다른 엔진에서 열린 포지션 존재 - VolumeSurge 진입 차단"
-            )
-        }
-
-        // 가짜 경보 생성 (수동 트리거용)
-        val manualAlert = VolumeSurgeAlertEntity(
-            market = market,
-            alertType = "MANUAL_TRIGGER",
-            detectedAt = Instant.now(),
-            processed = false
-        )
-        val savedAlert = alertRepository.save(manualAlert)
-
-        // 시작 알림
-        slackNotifier.sendSystemNotification(
-            "Volume Surge 수동 트리거",
-            """
-            마켓: $market
-            LLM 필터: ${if (skipLlmFilter) "스킵" else "사용"}
-            경보ID: ${savedAlert.id}
-            """.trimIndent()
-        )
-
-        // Virtual Thread로 비동기 처리
-        Thread.startVirtualThread {
-            try {
-                // LLM 필터 (옵션)
-                val filterResult = if (skipLlmFilter) {
-                    log.info("[$market] LLM 필터 스킵 (수동 트리거)")
-                    FilterResult(
-                        decision = "APPROVED",
-                        confidence = 1.0,
-                        reason = "수동 트리거 (LLM 스킵)"
-                    )
-                } else {
-                    volumeSurgeFilter.filter(market, savedAlert)
-                }
-
-                savedAlert.llmFilterResult = filterResult.decision
-                savedAlert.llmFilterReason = filterResult.reason
-                savedAlert.llmConfidence = filterResult.confidence
-                alertRepository.save(savedAlert)
-
-                if (filterResult.decision != "APPROVED") {
-                    log.info("[$market] LLM 필터 거부: ${filterResult.reason}")
-                    markAlertProcessed(savedAlert, filterResult.decision, filterResult.reason)
-
-                    slackNotifier.sendWarning(
-                        market,
-                        """
-                        수동 트리거 거부됨
-                        사유: ${filterResult.reason}
-                        신뢰도: ${filterResult.confidence}
-                        """.trimIndent()
-                    )
-                    return@startVirtualThread
-                }
-
-                log.info("[$market] 필터 통과, 기술적 분석 시작")
-
-                // 기술적 분석
-                val analysis = volumeSurgeAnalyzer.analyze(market)
-                if (analysis == null) {
-                    log.warn("[$market] 기술적 분석 실패")
-                    markAlertProcessed(savedAlert, "REJECTED", "기술적 분석 실패")
-
-                    slackNotifier.sendWarning(market, "수동 트리거 실패: 기술적 분석 실패")
-                    return@startVirtualThread
-                }
-
-                // 진입 조건 체크 (수동 트리거는 조건 완화)
-                log.info("[$market] 기술적 분석 결과: RSI=${analysis.rsi}, 컨플루언스=${analysis.confluenceScore}")
-
-                // 포지션 진입
-                enterPosition(savedAlert, analysis, filterResult)
-
-            } catch (e: Exception) {
-                log.error("[$market] 수동 트리거 처리 중 오류: ${e.message}", e)
-                markAlertProcessed(savedAlert, "ERROR", e.message ?: "Unknown error")
-
-                slackNotifier.sendWarning(market, "수동 트리거 오류: ${e.message}")
-            }
-        }
+        val savedAlert = createManualTriggerAlert(market)
+        notifyManualTriggerStart(market, skipLlmFilter, savedAlert)
+        startAsyncManualTriggerProcessing(savedAlert, market, skipLlmFilter)
 
         return mapOf(
             "success" to true,
@@ -1036,6 +1035,99 @@ class VolumeSurgeEngine(
             "skipLlmFilter" to skipLlmFilter,
             "message" to "트리거 실행 중 (비동기 처리)"
         )
+    }
+
+    private fun validateManualTriggerPreconditions(market: String): String? {
+        val cbState = circuitBreaker.getState()
+        if (!canTrade()) {
+            return "서킷 브레이커 발동 (연속손실: ${cbState.consecutiveLosses}, 일일손익: ${cbState.dailyPnl})"
+        }
+
+        val openPositions = tradeRepository.countByStatus("OPEN")
+        if (isMaxPositionReached(openPositions)) {
+            return "최대 포지션 도달 ($openPositions/${properties.maxPositions})"
+        }
+
+        val existingPosition = tradeRepository.findByMarketAndStatus(market, "OPEN")
+        if (existingPosition.isNotEmpty()) {
+            return "이미 열린 포지션 존재 (id=${existingPosition.first().id})"
+        }
+
+        if (globalPositionManager.hasOpenPosition(market)) {
+            return "다른 엔진에서 열린 포지션 존재 - VolumeSurge 진입 차단"
+        }
+
+        return null
+    }
+
+    private fun manualTriggerFailure(market: String, error: String): Map<String, Any?> {
+        return mapOf(
+            "success" to false,
+            "market" to market,
+            "error" to error
+        )
+    }
+
+    private fun createManualTriggerAlert(market: String): VolumeSurgeAlertEntity {
+        val manualAlert = VolumeSurgeAlertEntity(
+            market = market,
+            alertType = "MANUAL_TRIGGER",
+            detectedAt = Instant.now(),
+            processed = false
+        )
+        return alertRepository.save(manualAlert)
+    }
+
+    private fun notifyManualTriggerStart(
+        market: String,
+        skipLlmFilter: Boolean,
+        savedAlert: VolumeSurgeAlertEntity
+    ) {
+        slackNotifier.sendSystemNotification(
+            "Volume Surge 수동 트리거",
+            """
+            마켓: $market
+            LLM 필터: ${if (skipLlmFilter) "스킵" else "사용"}
+            경보ID: ${savedAlert.id}
+            """.trimIndent()
+        )
+    }
+
+    private fun startAsyncManualTriggerProcessing(
+        savedAlert: VolumeSurgeAlertEntity,
+        market: String,
+        skipLlmFilter: Boolean
+    ) {
+        Thread.startVirtualThread {
+            try {
+                val filterResult = resolveFilterResult(market, savedAlert, skipLlmFilter)
+                if (handleRejectedFilter(market, savedAlert, filterResult) {
+                    slackNotifier.sendWarning(
+                        market,
+                        """
+                        수동 트리거 거부됨
+                        사유: ${filterResult.reason}
+                        신뢰도: ${filterResult.confidence}
+                        """.trimIndent()
+                    )
+                }) {
+                    return@startVirtualThread
+                }
+
+                log.info("[$market] 필터 통과, 기술적 분석 시작")
+                val analysis = analyzeMarketOrReject(savedAlert, market) {
+                    slackNotifier.sendWarning(market, "수동 트리거 실패: 기술적 분석 실패")
+                } ?: return@startVirtualThread
+
+                // 진입 조건 체크 (수동 트리거는 조건 완화)
+                log.info("[$market] 기술적 분석 결과: RSI=${analysis.rsi}, 컨플루언스=${analysis.confluenceScore}")
+                enterPosition(savedAlert, analysis, filterResult)
+            } catch (e: Exception) {
+                log.error("[$market] 수동 트리거 처리 중 오류: ${e.message}", e)
+                markAlertProcessed(savedAlert, "ERROR", e.message ?: "Unknown error")
+                slackNotifier.sendWarning(market, "수동 트리거 오류: ${e.message}")
+            }
+        }
     }
 
     /**
@@ -1065,36 +1157,43 @@ class VolumeSurgeEngine(
             """.trimIndent()
         )
 
-        val results = openPositions.map { position ->
-            try {
-                // 현재가 조회
-                val ticker = bithumbPublicApi.getCurrentPrice(market)?.firstOrNull()
-                val exitPrice = ticker?.tradePrice?.toDouble() ?: position.entryPrice
-
-                closePosition(position, exitPrice, "MANUAL")
-
-                mapOf(
-                    "positionId" to position.id,
-                    "exitPrice" to exitPrice,
-                    "pnlAmount" to position.pnlAmount,
-                    "pnlPercent" to position.pnlPercent,
-                    "success" to true
-                )
-            } catch (e: Exception) {
-                slackNotifier.sendWarning(market, "수동 청산 실패: ${e.message}")
-                mapOf(
-                    "positionId" to position.id,
-                    "success" to false,
-                    "error" to e.message
-                )
-            }
-        }
+        val results = openPositions.map { position -> manualCloseSinglePosition(market, position) }
 
         return mapOf(
             "success" to true,
             "market" to market,
             "closedPositions" to results
         )
+    }
+
+    private fun manualCloseSinglePosition(
+        market: String,
+        position: VolumeSurgeTradeEntity
+    ): Map<String, Any?> {
+        return try {
+            val exitPrice = fetchManualCloseExitPrice(market, position)
+            closePosition(position, exitPrice, "MANUAL")
+
+            mapOf(
+                "positionId" to position.id,
+                "exitPrice" to exitPrice,
+                "pnlAmount" to position.pnlAmount,
+                "pnlPercent" to position.pnlPercent,
+                "success" to true
+            )
+        } catch (e: Exception) {
+            slackNotifier.sendWarning(market, "수동 청산 실패: ${e.message}")
+            mapOf(
+                "positionId" to position.id,
+                "success" to false,
+                "error" to e.message
+            )
+        }
+    }
+
+    private fun fetchManualCloseExitPrice(market: String, position: VolumeSurgeTradeEntity): Double {
+        val ticker = bithumbPublicApi.getCurrentPrice(market)?.firstOrNull()
+        return ticker?.tradePrice?.toDouble() ?: position.entryPrice
     }
 
     /**

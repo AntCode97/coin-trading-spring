@@ -108,6 +108,10 @@ class MemeScalperEngine(
 
         // 최소 수익률 (%) - 수수료 0.08% × 2 = 0.16% 이상이어야 실익
         private const val MIN_PROFIT_PERCENT = 0.1
+
+        // ABANDONED 재시도 체크 주기
+        private const val ABANDONED_RETRY_CHECK_KEY = "abandoned_last_check"
+        private const val ABANDONED_RETRY_INTERVAL_MINUTES = 10L
     }
 
     @PostConstruct
@@ -260,7 +264,12 @@ class MemeScalperEngine(
     fun monitorPositions() {
         if (!properties.enabled) return
 
-        // OPEN 포지션 모니터링
+        monitorOpenPositions()
+        monitorClosingPositions()
+        checkAbandonedRetrySchedule()
+    }
+
+    private fun monitorOpenPositions() {
         val openPositions = tradeRepository.findByStatus("OPEN")
         openPositions.forEach { position ->
             try {
@@ -269,8 +278,9 @@ class MemeScalperEngine(
                 log.error("[${position.market}] 모니터링 오류: ${e.message}")
             }
         }
+    }
 
-        // CLOSING 포지션 모니터링
+    private fun monitorClosingPositions() {
         val closingPositions = tradeRepository.findByStatus("CLOSING")
         closingPositions.forEach { position ->
             try {
@@ -279,13 +289,14 @@ class MemeScalperEngine(
                 log.error("[${position.market}] 청산 모니터링 오류: ${e.message}")
             }
         }
+    }
 
+    private fun checkAbandonedRetrySchedule() {
         // ABANDONED 포지션 재시도 (10분마다 체크 - 빈번한 API 호출 방지)
         val now = Instant.now()
-        val lastRetryCheckKey = "abandoned_last_check"
-        val lastCheck = cooldowns[lastRetryCheckKey]
-        if (lastCheck == null || ChronoUnit.MINUTES.between(lastCheck, now) >= 10) {
-            cooldowns[lastRetryCheckKey] = now
+        val lastCheck = cooldowns[ABANDONED_RETRY_CHECK_KEY]
+        if (lastCheck == null || ChronoUnit.MINUTES.between(lastCheck, now) >= ABANDONED_RETRY_INTERVAL_MINUTES) {
+            cooldowns[ABANDONED_RETRY_CHECK_KEY] = now
             retryAbandonedPositions()
         }
     }
@@ -683,22 +694,10 @@ class MemeScalperEngine(
         val market = position.market
 
         // ID 필수 체크
-        val positionId = position.id ?: run {
-            log.error("[$market] 포지션 ID 없음 - 모니터링 스킵")
-            return
-        }
+        val positionId = resolvePositionId(position) ?: return
 
         // 0. 진입가 무결성 검증 - 진입가가 0이면 거래 불가능
-        if (position.entryPrice <= 0) {
-            log.error("[$market] 진입가 무효(${position.entryPrice}) - 포지션 정리 필요")
-            // 현재가로 진입가 보정 시도
-            val ticker = bithumbPublicApi.getCurrentPrice(market)?.firstOrNull()
-            if (ticker != null) {
-                position.entryPrice = ticker.tradePrice.toDouble()
-                position.entryTime = Instant.now()  // 진입 시간도 리셋
-                tradeRepository.save(position)
-                log.info("[$market] 진입가 보정: ${position.entryPrice}원")
-            }
+        if (repairInvalidEntryPriceIfNeeded(position)) {
             return  // 이번 사이클은 스킵
         }
 
@@ -709,57 +708,18 @@ class MemeScalperEngine(
         }
 
         // 2. 현재가 조회
-        val ticker = bithumbPublicApi.getCurrentPrice(market)?.firstOrNull() ?: return
-        val currentPrice = ticker.tradePrice.toDouble()
+        val currentPrice = fetchCurrentPriceOrNull(market) ?: return
 
         // 3. 안전한 손익률 계산 - NaN/Infinity 방지
         val pnlPercent = safePnlPercent(position.entryPrice, currentPrice)
 
         // 4. 피크 업데이트
-        val peakPrice = peakPrices.getOrDefault(positionId, position.entryPrice)
-        if (currentPrice > peakPrice) {
-            peakPrices[positionId] = currentPrice
-            position.peakPrice = currentPrice
-            tradeRepository.save(position)
-        }
+        updatePeakPriceIfNeeded(position, positionId, currentPrice)
 
-        // 5. 익절 체크 (수수료 0.08% 고려 - 최소 0.1% 이상 수익 시에만)
-        // NOTE: 익절 체크가 손절/트레일링보다 우선되어야 함
-        if (pnlPercent >= properties.takeProfitPercent && pnlPercent > MIN_PROFIT_PERCENT) {
-            closePosition(position, currentPrice, "TAKE_PROFIT")
-            return
-        }
-
-        // 6. 손절 체크 (손절은 최소 보유 시간 이후에만)
-        if (pnlPercent <= properties.stopLossPercent) {
-            closePosition(position, currentPrice, "STOP_LOSS")
-            return
-        }
-
-        // 7. 트레일링 스탑 로직 (익절 도달 이후에만 활성화)
-        val triggerPercent = properties.trailingStopTrigger
-        val offsetPercent = properties.trailingStopOffset
-
-        // 트레일링 활성화 조건: 익절 도달 후 수익 유지
-        if (!position.trailingActive && pnlPercent >= triggerPercent && pnlPercent >= properties.takeProfitPercent) {
-            position.trailingActive = true
-            log.info("[$market] 트레일링 스탑 활성화 (익절 도달 후 수익률: ${String.format("%.2f", pnlPercent)}%)")
-        }
-
-        // 트레일링 중: 고점 대비 offset% 하락 시 청산
-        if (position.trailingActive) {
-            val peakPriceVal = peakPrices.getOrDefault(positionId, position.entryPrice)
-            val drawdownPercent = ((peakPriceVal - currentPrice) / peakPriceVal) * 100
-
-            if (drawdownPercent >= offsetPercent) {
-                closePosition(position, currentPrice, "TRAILING_STOP")
-                return
-            }
-        }
-
-        // 8. 타임아웃 체크
-        if (holdingSeconds >= properties.positionTimeoutMin * 60) {
-            closePosition(position, currentPrice, "TIMEOUT")
+        // 5~8. 익절/손절/트레일링/타임아웃 체크 (우선순위 유지)
+        val closeReason = resolvePrimaryCloseReason(position, positionId, currentPrice, pnlPercent, holdingSeconds)
+        if (closeReason != null) {
+            closePosition(position, currentPrice, closeReason)
             return
         }
 
@@ -769,9 +729,110 @@ class MemeScalperEngine(
             val exitSignal = detector.detectExitSignal(market, peakVol)
             if (exitSignal != null) {
                 closePosition(position, currentPrice, exitSignal.reason)
-                return
             }
         }
+    }
+
+    private fun resolvePositionId(position: MemeScalperTradeEntity): Long? {
+        val market = position.market
+        return position.id ?: run {
+            log.error("[$market] 포지션 ID 없음 - 모니터링 스킵")
+            null
+        }
+    }
+
+    private fun repairInvalidEntryPriceIfNeeded(position: MemeScalperTradeEntity): Boolean {
+        val market = position.market
+        // 0. 진입가 무결성 검증 - 진입가가 0이면 거래 불가능
+        if (position.entryPrice > 0) return false
+
+        log.error("[$market] 진입가 무효(${position.entryPrice}) - 포지션 정리 필요")
+
+        // 현재가로 진입가 보정 시도
+        val ticker = bithumbPublicApi.getCurrentPrice(market)?.firstOrNull()
+        if (ticker != null) {
+            position.entryPrice = ticker.tradePrice.toDouble()
+            position.entryTime = Instant.now()  // 진입 시간도 리셋
+            tradeRepository.save(position)
+            log.info("[$market] 진입가 보정: ${position.entryPrice}원")
+        }
+
+        return true
+    }
+
+    private fun fetchCurrentPriceOrNull(market: String): Double? {
+        val ticker = bithumbPublicApi.getCurrentPrice(market)?.firstOrNull() ?: return null
+        return ticker.tradePrice.toDouble()
+    }
+
+    private fun updatePeakPriceIfNeeded(position: MemeScalperTradeEntity, positionId: Long, currentPrice: Double) {
+        val peakPrice = peakPrices.getOrDefault(positionId, position.entryPrice)
+        if (currentPrice > peakPrice) {
+            peakPrices[positionId] = currentPrice
+            position.peakPrice = currentPrice
+            tradeRepository.save(position)
+        }
+    }
+
+    private fun resolvePrimaryCloseReason(
+        position: MemeScalperTradeEntity,
+        positionId: Long,
+        currentPrice: Double,
+        pnlPercent: Double,
+        holdingSeconds: Long
+    ): String? {
+        // 5. 익절 체크 (수수료 0.08% 고려 - 최소 0.1% 이상 수익 시에만)
+        // NOTE: 익절 체크가 손절/트레일링보다 우선되어야 함
+        if (pnlPercent >= properties.takeProfitPercent && pnlPercent > MIN_PROFIT_PERCENT) {
+            return "TAKE_PROFIT"
+        }
+
+        // 6. 손절 체크 (손절은 최소 보유 시간 이후에만)
+        if (pnlPercent <= properties.stopLossPercent) {
+            return "STOP_LOSS"
+        }
+
+        // 7. 트레일링 스탑 로직 (익절 도달 이후에만 활성화)
+        if (shouldCloseByTrailingStop(position, positionId, currentPrice, pnlPercent)) {
+            return "TRAILING_STOP"
+        }
+
+        // 8. 타임아웃 체크
+        if (holdingSeconds >= properties.positionTimeoutMin * 60) {
+            return "TIMEOUT"
+        }
+
+        return null
+    }
+
+    private fun shouldCloseByTrailingStop(
+        position: MemeScalperTradeEntity,
+        positionId: Long,
+        currentPrice: Double,
+        pnlPercent: Double
+    ): Boolean {
+        val triggerPercent = properties.trailingStopTrigger
+        val offsetPercent = properties.trailingStopOffset
+
+        // 트레일링 활성화 조건: 익절 도달 후 수익 유지
+        if (pnlPercent >= triggerPercent && pnlPercent >= properties.takeProfitPercent) {
+            if (!position.trailingActive) {
+                position.trailingActive = true
+                log.info(
+                    "[${position.market}] 트레일링 스탑 활성화 (익절 도달 후 수익률: ${String.format("%.2f", pnlPercent)}%)"
+                )
+                return false
+            }
+
+            // 트레일링 중: 고점 대비 offset% 하락 시 청산
+            val peakPriceVal = peakPrices.getOrDefault(positionId, position.entryPrice)
+            val drawdownPercent = ((peakPriceVal - currentPrice) / peakPriceVal) * 100
+            if (drawdownPercent >= offsetPercent) {
+                return true
+            }
+        }
+
+        return false
     }
 
     /**

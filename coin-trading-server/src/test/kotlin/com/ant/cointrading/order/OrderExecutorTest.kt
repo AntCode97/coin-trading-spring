@@ -5,6 +5,7 @@ import com.ant.cointrading.api.bithumb.BithumbPrivateApi
 import com.ant.cointrading.api.bithumb.OrderResponse
 import com.ant.cointrading.config.TradingProperties
 import com.ant.cointrading.model.OrderSide
+import com.ant.cointrading.model.OrderType
 import com.ant.cointrading.model.SignalAction
 import com.ant.cointrading.model.TradingSignal
 import com.ant.cointrading.notification.SlackNotifier
@@ -401,6 +402,96 @@ class OrderExecutorTest {
             // then
             verify(bithumbPrivateApi).buyMarketOrder(any(), any())  // 시장가
             verify(bithumbPrivateApi, never()).buyLimitOrder(any(), any(), any())  // 지정가 아님
+        }
+    }
+
+    @Nested
+    @DisplayName("주문 폴백")
+    inner class OrderFallbackTest {
+
+        @Test
+        @DisplayName("시장가 주문 실패 시 지정가로 폴백한다")
+        fun fallbackToLimitWhenMarketOrderFails() {
+            val signal = TradingSignal(
+                market = "BTC_KRW",
+                action = SignalAction.BUY,
+                confidence = 60.0,
+                price = BigDecimal("65000000"),
+                reason = "테스트",
+                strategy = "MEME_SCALPER"
+            )
+            val positionSize = BigDecimal("10000")
+
+            whenever(tradingProperties.enabled).thenReturn(true)
+            whenever(marketConditionChecker.checkMarketCondition(any(), any())).thenReturn(
+                MarketConditionResult(
+                    canTrade = true,
+                    severity = ConditionSeverity.NORMAL,
+                    issues = emptyList(),
+                    spread = 0.1,
+                    midPrice = BigDecimal("65000000"),
+                    bestBid = BigDecimal("64990000"),
+                    bestAsk = BigDecimal("65010000"),
+                    liquidityRatio = 20.0,
+                    volatility1Min = 0.3,
+                    orderBookImbalance = 0.0
+                )
+            )
+
+            whenever(bithumbPrivateApi.buyMarketOrder(any(), any())).thenReturn(null)
+            whenever(bithumbPrivateApi.buyLimitOrder(any(), any(), any()))
+                .thenReturn(createOrderResponse(uuid = "limit-fallback-1"))
+            whenever(bithumbPrivateApi.getOrder(any()))
+                .thenReturn(createOrderResponse(uuid = "limit-fallback-1"))
+
+            val result = orderExecutor.execute(signal, positionSize)
+
+            assertTrue(result.success)
+            assertEquals(OrderType.LIMIT, result.orderType)
+            verify(bithumbPrivateApi).buyMarketOrder(any(), any())
+            verify(bithumbPrivateApi).buyLimitOrder(any(), any(), any())
+        }
+
+        @Test
+        @DisplayName("지정가 경로에서 호가 정보가 없으면 시장가로 전환한다")
+        fun fallbackToMarketWhenOrderBookIsMissing() {
+            val signal = TradingSignal(
+                market = "BTC_KRW",
+                action = SignalAction.BUY,
+                confidence = 60.0,
+                price = BigDecimal("65000000"),
+                reason = "테스트",
+                strategy = "SWING"
+            )
+            val positionSize = BigDecimal("10000")
+
+            whenever(tradingProperties.enabled).thenReturn(true)
+            whenever(marketConditionChecker.checkMarketCondition(any(), any())).thenReturn(
+                MarketConditionResult(
+                    canTrade = true,
+                    severity = ConditionSeverity.NORMAL,
+                    issues = emptyList(),
+                    spread = 0.1,
+                    midPrice = BigDecimal("65000000"),
+                    bestBid = null,
+                    bestAsk = null,
+                    liquidityRatio = 20.0,
+                    volatility1Min = 0.3,
+                    orderBookImbalance = 0.0
+                )
+            )
+
+            whenever(bithumbPrivateApi.buyMarketOrder(any(), any()))
+                .thenReturn(createOrderResponse(uuid = "market-fallback-1"))
+            whenever(bithumbPrivateApi.getOrder(any()))
+                .thenReturn(createOrderResponse(uuid = "market-fallback-1"))
+
+            val result = orderExecutor.execute(signal, positionSize)
+
+            assertTrue(result.success)
+            assertEquals(OrderType.MARKET, result.orderType)
+            verify(bithumbPrivateApi).buyMarketOrder(any(), any())
+            verify(bithumbPrivateApi, never()).buyLimitOrder(any(), any(), any())
         }
     }
 }

@@ -34,6 +34,7 @@ import org.mockito.quality.Strictness
 import java.math.BigDecimal
 import java.time.Instant
 import kotlin.test.assertEquals
+import kotlin.test.assertTrue
 
 /**
  * VolumeSurgeEngine 단위 테스트
@@ -286,6 +287,51 @@ class VolumeSurgeEngineTest {
             // then
             assertEquals(1000.0, grossPnl, 0.01)
             assert(netPnl < grossPnl) // 수수료 차감 확인
+        }
+    }
+
+    @Nested
+    @DisplayName("수동 트리거")
+    inner class ManualTriggerTest {
+
+        @Test
+        @DisplayName("최대 포지션 도달 시 수동 트리거를 거부한다")
+        fun rejectsWhenMaxPositionReached() {
+            whenever(properties.maxPositions).thenReturn(1)
+            whenever(tradeRepository.countByStatus("OPEN")).thenReturn(1)
+
+            val result = engine.manualTrigger("KRW-BTC", skipLlmFilter = true)
+
+            assertEquals(false, result["success"])
+            assertTrue((result["error"] as String).contains("최대 포지션 도달"))
+        }
+
+        @Test
+        @DisplayName("같은 마켓 열린 포지션이 있으면 수동 트리거를 거부한다")
+        fun rejectsWhenMarketAlreadyOpen() {
+            whenever(properties.maxPositions).thenReturn(5)
+            whenever(tradeRepository.countByStatus("OPEN")).thenReturn(0)
+            whenever(tradeRepository.findByMarketAndStatus("KRW-BTC", "OPEN"))
+                .thenReturn(listOf(createOpenPosition("KRW-BTC", 50000.0, 0.01)))
+
+            val result = engine.manualTrigger("KRW-BTC", skipLlmFilter = true)
+
+            assertEquals(false, result["success"])
+            assertTrue((result["error"] as String).contains("이미 열린 포지션 존재"))
+        }
+
+        @Test
+        @DisplayName("다른 엔진 포지션이 있으면 수동 트리거를 거부한다")
+        fun rejectsWhenOtherEngineHasOpenPosition() {
+            whenever(properties.maxPositions).thenReturn(5)
+            whenever(tradeRepository.countByStatus("OPEN")).thenReturn(0)
+            whenever(tradeRepository.findByMarketAndStatus("KRW-BTC", "OPEN")).thenReturn(emptyList())
+            whenever(globalPositionManager.hasOpenPosition("KRW-BTC")).thenReturn(true)
+
+            val result = engine.manualTrigger("KRW-BTC", skipLlmFilter = true)
+
+            assertEquals(false, result["success"])
+            assertTrue((result["error"] as String).contains("다른 엔진에서 열린 포지션 존재"))
         }
     }
 

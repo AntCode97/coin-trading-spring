@@ -202,6 +202,27 @@ class TradingEngineLoopPreventionTest {
     }
 
     @Nested
+    @DisplayName("Regime Threshold Tests")
+    inner class RegimeThresholdTest {
+
+        @Test
+        @DisplayName("80% 이상 하락 비율이면 bear-dominant로 판단한다")
+        fun detectsBearDominantAtThreshold() {
+            assertTrue(TradingEngine.isBearDominantRegime(0.80))
+            assertTrue(TradingEngine.isBearDominantRegime(0.95))
+            assertFalse(TradingEngine.isBearDominantRegime(0.79))
+        }
+
+        @Test
+        @DisplayName("50% 미만 하락 비율이면 recovery로 판단한다")
+        fun detectsRecoveryBelowThreshold() {
+            assertTrue(TradingEngine.isRecoveryRegime(0.49))
+            assertTrue(TradingEngine.isRecoveryRegime(0.10))
+            assertFalse(TradingEngine.isRecoveryRegime(0.50))
+        }
+    }
+
+    @Nested
     @DisplayName("Duplicate Buy Prevention Tests")
     inner class DuplicateBuyPreventionTest {
 

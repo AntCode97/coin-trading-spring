@@ -176,6 +176,29 @@ class MemeScalperReflectorToolsTest {
         }
     }
 
+    @Nested
+    @DisplayName("파라미터 변경")
+    inner class ParameterChangeTest {
+
+        @Test
+        @DisplayName("허용되지 않은 파라미터는 변경하지 않는다")
+        fun rejectsUnknownParameter() {
+            val result = tools.suggestParameterChange("unknownParam", 1.0, "test")
+
+            assertContains(result, "허용되지 않은 파라미터")
+        }
+
+        @Test
+        @DisplayName("현재값과 동일하면 변경하지 않는다")
+        fun skipsWhenValueIsSame() {
+            whenever(properties.takeProfitPercent).thenReturn(3.0)
+
+            val result = tools.suggestParameterChange("takeProfitPercent", 3.0, "same value")
+
+            assertContains(result, "동일하여 변경하지 않았습니다")
+        }
+    }
+
     private fun createTrade(
         market: String = "KRW-TEST",
         volumeSpike: Double = 3.0,

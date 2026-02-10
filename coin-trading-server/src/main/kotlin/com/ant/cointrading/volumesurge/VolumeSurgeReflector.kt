@@ -3,21 +3,21 @@ package com.ant.cointrading.volumesurge
 import com.ant.cointrading.config.VolumeSurgeProperties
 import com.ant.cointrading.mcp.tool.SlackTools
 import com.ant.cointrading.notification.SlackNotifier
-import com.ant.cointrading.repository.*
+import com.ant.cointrading.repository.VolumeSurgeAlertRepository
+import com.ant.cointrading.repository.VolumeSurgeTradeEntity
+import com.ant.cointrading.repository.VolumeSurgeTradeRepository
 import com.ant.cointrading.service.KeyValueService
 import com.ant.cointrading.service.ModelSelector
 import com.ant.cointrading.stats.TradeStatsCalculator
-import com.ant.cointrading.risk.KellyPositionSizer
-import com.ant.cointrading.util.DateTimeUtils.SEOUL_ZONE
 import com.ant.cointrading.util.DateTimeUtils.today
 import com.ant.cointrading.util.DateTimeUtils.todayRange
-import java.time.LocalDate
 import jakarta.annotation.PostConstruct
 import org.slf4j.LoggerFactory
 import org.springframework.scheduling.annotation.Scheduled
 import org.springframework.core.io.ClassPathResource
 import org.springframework.stereotype.Component
 import java.time.Instant
+import java.time.LocalDate
 
 /**
  * Volume Surge 전략 회고 시스템
@@ -31,12 +31,10 @@ class VolumeSurgeReflector(
     private val modelSelector: ModelSelector,
     private val alertRepository: VolumeSurgeAlertRepository,
     private val tradeRepository: VolumeSurgeTradeRepository,
-    private val summaryRepository: VolumeSurgeDailySummaryRepository,
     private val keyValueService: KeyValueService,
     private val slackNotifier: SlackNotifier,
     private val reflectorTools: VolumeSurgeReflectorTools,
-    private val slackTools: SlackTools,
-    private val kellyPositionSizer: KellyPositionSizer
+    private val slackTools: SlackTools
 ) {
     private val log = LoggerFactory.getLogger(javaClass)
 
@@ -107,28 +105,23 @@ class VolumeSurgeReflector(
         val (startOfDay, endOfDay) = todayRange()
         val today = today()
 
-        // 오늘의 트레이드 조회
         val todayTrades = tradeRepository.findByCreatedAtBetweenOrderByCreatedAtDesc(startOfDay, endOfDay)
-
         if (todayTrades.isEmpty()) {
             log.info("오늘 트레이드 없음")
             return "오늘 트레이드가 없어 회고를 건너뜁니다."
         }
 
-        // 통계 계산
-        val stats = calculateDailyStats(today, startOfDay, endOfDay)
-
-        // LLM 회고 요청
+        val stats = calculateDailyStats(today, startOfDay, endOfDay, todayTrades)
         val userPrompt = buildUserPrompt(stats, todayTrades)
 
-        try {
-            // ReflectorTools와 SlackTools를 결합하여 ChatClient 생성
-            val allTools = arrayOf(reflectorTools, slackTools)
+        return requestReflectionFromLlm(userPrompt)
+    }
 
-            // 회고용 ChatClient (무조건 OpenAI 사용 - 무료 토큰)
+    private fun requestReflectionFromLlm(userPrompt: String): String {
+        try {
             val chatClient = modelSelector.getChatClientForReflection()
                 .mutate()
-                .defaultTools(*allTools)
+                .defaultTools(reflectorTools, slackTools)
                 .build()
 
             val response = chatClient.prompt()
@@ -137,11 +130,8 @@ class VolumeSurgeReflector(
                 .call()
                 .content()
 
-            // 마지막 회고 시각 저장
             keyValueService.set(KEY_LAST_REFLECTION, Instant.now().toString())
-
             return response ?: "LLM 응답 없음"
-
         } catch (e: Exception) {
             log.error("LLM 회고 호출 실패: ${e.message}", e)
             throw e
@@ -154,13 +144,13 @@ class VolumeSurgeReflector(
     private fun calculateDailyStats(
         date: LocalDate,
         startOfDay: Instant,
-        endOfDay: Instant
+        endOfDay: Instant,
+        trades: List<VolumeSurgeTradeEntity>
     ): DailyStats {
         val totalAlerts = alertRepository.countByDetectedAtBetween(startOfDay, endOfDay).toInt()
         val approvedAlerts = alertRepository.countApprovedBetween(startOfDay, endOfDay).toInt()
 
-        val closedTrades = tradeRepository.findByCreatedAtBetweenOrderByCreatedAtDesc(startOfDay, endOfDay)
-            .filter { it.status == "CLOSED" }
+        val closedTrades = trades.filter { it.status == "CLOSED" }
 
         val tradeStats = TradeStatsCalculator.calculateVolumeSurge(closedTrades)
 
@@ -181,40 +171,9 @@ class VolumeSurgeReflector(
      * 사용자 프롬프트 생성 (Jim Simons Kelly Criterion 추가)
      */
     private fun buildUserPrompt(stats: DailyStats, trades: List<VolumeSurgeTradeEntity>): String {
-        val successCases = trades.filter { (it.pnlAmount ?: 0.0) > 0 }
-            .take(5)
-            .joinToString("\n") { formatTradeCase(it, "성공") }
-
-        val failureCases = trades.filter { (it.pnlAmount ?: 0.0) <= 0 }
-            .take(5)
-            .joinToString("\n") { formatTradeCase(it, "실패") }
-
-        // Kelly Criterion 분석 (Jim Simons)
-        val closedTrades = trades.filter { it.status == "CLOSED" }
-        val kellyAnalysis = if (closedTrades.isNotEmpty()) {
-            val winRate = stats.winRate
-            val avgWin = closedTrades.filter { (it.pnlAmount ?: 0.0) > 0 }.map { it.pnlAmount!! }.average()
-            val avgLoss = kotlin.math.abs(closedTrades.filter { (it.pnlAmount ?: 0.0) < 0 }.map { it.pnlAmount!! }.average())
-
-            val kellyRec = when {
-                stats.totalTrades < 30 -> "최소 30건 거래 미달, Kelly 적용 불가"
-                winRate < 0.5 -> "승률 ${String.format("%.1f", winRate * 100)}% < 50%, Jim Simos: '베팅 중단'"
-                avgLoss == 0.0 -> "손실 데이터 없음"
-                else -> {
-                    val b = avgWin / avgLoss
-                    val f = (b * winRate - (1 - winRate)) / b
-                    "Kelly f* = ${String.format("%.2f", f * 100)}% (배당률 ${String.format("%.2f", b)}:1)"
-                }
-            }
-
-            """
-            === Kelly Criterion 분석 (Jim Simons) ===
-            $kellyRec
-
-            """
-        } else {
-            ""
-        }
+        val successCases = summarizeTradeCases(trades, isSuccess = true)
+        val failureCases = summarizeTradeCases(trades, isSuccess = false)
+        val kellyAnalysis = buildKellyAnalysis(stats, trades)
 
         return """
             오늘 날짜: ${stats.date}
@@ -249,6 +208,63 @@ class VolumeSurgeReflector(
             3. 패턴 분석 후 saveReflection으로 회고 저장
             4. 필요시 suggestParameterChange로 파라미터 변경 제안
         """.trimIndent()
+    }
+
+    private fun summarizeTradeCases(
+        trades: List<VolumeSurgeTradeEntity>,
+        isSuccess: Boolean
+    ): String {
+        return trades.filter { trade ->
+            val pnl = trade.pnlAmount ?: 0.0
+            if (isSuccess) pnl > 0 else pnl <= 0
+        }
+            .take(5)
+            .joinToString("\n") { trade ->
+                formatTradeCase(trade, if (isSuccess) "성공" else "실패")
+            }
+    }
+
+    private fun buildKellyAnalysis(
+        stats: DailyStats,
+        trades: List<VolumeSurgeTradeEntity>
+    ): String {
+        val closedTrades = trades.filter { it.status == "CLOSED" }
+        if (closedTrades.isEmpty()) {
+            return ""
+        }
+
+        val recommendation = calculateKellyRecommendation(stats, closedTrades)
+        return """
+            === Kelly Criterion 분석 (Jim Simons) ===
+            $recommendation
+
+        """
+    }
+
+    private fun calculateKellyRecommendation(
+        stats: DailyStats,
+        closedTrades: List<VolumeSurgeTradeEntity>
+    ): String {
+        val winRate = stats.winRate
+        val avgWin = closedTrades.filter { (it.pnlAmount ?: 0.0) > 0 }
+            .map { it.pnlAmount!! }
+            .average()
+        val avgLoss = kotlin.math.abs(
+            closedTrades.filter { (it.pnlAmount ?: 0.0) < 0 }
+                .map { it.pnlAmount!! }
+                .average()
+        )
+
+        return when {
+            stats.totalTrades < 30 -> "최소 30건 거래 미달, Kelly 적용 불가"
+            winRate < 0.5 -> "승률 ${String.format("%.1f", winRate * 100)}% < 50%, Jim Simons: '베팅 중단'"
+            avgLoss == 0.0 -> "손실 데이터 없음"
+            else -> {
+                val b = avgWin / avgLoss
+                val f = (b * winRate - (1 - winRate)) / b
+                "Kelly f* = ${String.format("%.2f", f * 100)}% (배당률 ${String.format("%.2f", b)}:1)"
+            }
+        }
     }
 
     private fun formatTradeCase(trade: VolumeSurgeTradeEntity, type: String): String {

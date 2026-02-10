@@ -42,6 +42,7 @@ class MemeScalperReflector(
     private val slackTools: SlackTools
 ) {
     private val log = LoggerFactory.getLogger(javaClass)
+    private val reflectionTargetStatuses = setOf("CLOSED", "ABANDONED")
 
     companion object {
         const val KEY_LAST_REFLECTION = "memescalper.last_reflection"
@@ -149,41 +150,51 @@ class MemeScalperReflector(
         val (startOfDay) = todayRange()
         val today = today()
 
-        val todayTrades = tradeRepository.findByCreatedAtAfter(startOfDay)
-            .filter { it.status == "CLOSED" || it.status == "ABANDONED" }
+        val todayTrades = findReflectableTradesSince(startOfDay)
 
         if (todayTrades.isEmpty()) {
             log.info("오늘 트레이드 없음")
             return "오늘 트레이드가 없어 회고를 건너뜁니다."
         }
 
-        val stats = calculateDailyStats(today, startOfDay, todayTrades)
+        val stats = calculateDailyStats(today, todayTrades)
         val userPrompt = buildUserPrompt(stats, todayTrades)
 
         try {
-            // ReflectorTools와 SlackTools를 결합하여 ChatClient 생성
-            val allTools = arrayOf(reflectorTools, slackTools)
-
-            // 회고용 ChatClient (무조건 OpenAI 사용 - 무료 토큰)
-            val chatClient = modelSelector.getChatClientForReflection()
-                .mutate()
-                .defaultTools(*allTools)
-                .build()
-
-            val response = chatClient.prompt()
-                .system(systemPrompt)
-                .user(userPrompt)
-                .call()
-                .content()
-
-            keyValueService.set(KEY_LAST_REFLECTION, Instant.now().toString())
-
+            val response = requestReflectionFromLlm(userPrompt)
+            markReflectionCompleted()
             return response ?: "LLM 응답 없음"
 
         } catch (e: Exception) {
             log.error("LLM 회고 호출 실패: ${e.message}", e)
             throw e
         }
+    }
+
+    private fun findReflectableTradesSince(startInclusive: Instant): List<MemeScalperTradeEntity> {
+        return tradeRepository.findByCreatedAtAfter(startInclusive)
+            .filter { it.status in reflectionTargetStatuses }
+    }
+
+    private fun requestReflectionFromLlm(userPrompt: String): String? {
+        // ReflectorTools와 SlackTools를 결합하여 ChatClient 생성
+        val allTools = arrayOf(reflectorTools, slackTools)
+
+        // 회고용 ChatClient (무조건 OpenAI 사용 - 무료 토큰)
+        val chatClient = modelSelector.getChatClientForReflection()
+            .mutate()
+            .defaultTools(*allTools)
+            .build()
+
+        return chatClient.prompt()
+            .system(systemPrompt)
+            .user(userPrompt)
+            .call()
+            .content()
+    }
+
+    private fun markReflectionCompleted() {
+        keyValueService.set(KEY_LAST_REFLECTION, Instant.now().toString())
     }
 
     /**
@@ -193,7 +204,6 @@ class MemeScalperReflector(
      */
     private fun calculateDailyStats(
         date: LocalDate,
-        startOfDay: Instant,
         trades: List<MemeScalperTradeEntity>
     ): MemeScalperDailyStats {
         val tradeStats = TradeStatsCalculator.calculateMemeScalper(trades)
@@ -214,17 +224,9 @@ class MemeScalperReflector(
      * 사용자 프롬프트 생성
      */
     private fun buildUserPrompt(stats: MemeScalperDailyStats, trades: List<MemeScalperTradeEntity>): String {
-        val successCases = trades.filter { (it.pnlAmount ?: 0.0) > 0 }
-            .take(5)
-            .joinToString("\n") { formatTradeCase(it, "성공") }
-
-        val failureCases = trades.filter { (it.pnlAmount ?: 0.0) <= 0 }
-            .take(5)
-            .joinToString("\n") { formatTradeCase(it, "실패") }
-
-        val exitReasonSummary = stats.exitReasonStats.entries
-            .sortedByDescending { it.value }
-            .joinToString("\n") { "  - ${it.key}: ${it.value}건" }
+        val successCases = buildCaseSummary(trades, true)
+        val failureCases = buildCaseSummary(trades, false)
+        val exitReasonSummary = buildExitReasonSummary(stats)
 
         return """
             오늘 날짜: ${stats.date}
@@ -252,6 +254,20 @@ class MemeScalperReflector(
             4. TIMEOUT 비율이 30% 이상이면 진입 조건 강화 제안
             5. 승률이 50% 미만이면 파라미터 변경 제안
         """.trimIndent()
+    }
+
+    private fun buildCaseSummary(trades: List<MemeScalperTradeEntity>, isSuccess: Boolean): String {
+        val label = if (isSuccess) "성공" else "실패"
+        return trades
+            .filter { ((it.pnlAmount ?: 0.0) > 0) == isSuccess }
+            .take(5)
+            .joinToString("\n") { formatTradeCase(it, label) }
+    }
+
+    private fun buildExitReasonSummary(stats: MemeScalperDailyStats): String {
+        return stats.exitReasonStats.entries
+            .sortedByDescending { it.value }
+            .joinToString("\n") { "  - ${it.key}: ${it.value}건" }
     }
 
     private fun formatTradeCase(trade: MemeScalperTradeEntity, type: String): String {
@@ -294,6 +310,8 @@ class MemeScalperReflectorTools(
 ) {
     private val log = LoggerFactory.getLogger(javaClass)
 
+    private val reflectionTargetStatuses = setOf("CLOSED", "ABANDONED")
+
     companion object {
         val ALLOWED_PARAMS = mapOf(
             "stopLossPercent" to "memescalper.stopLossPercent",
@@ -321,8 +339,7 @@ class MemeScalperReflectorTools(
         val today = today()
 
         // CLOSED + ABANDONED 모두 포함
-        val trades = tradeRepository.findByCreatedAtAfter(startOfDay)
-            .filter { it.status == "CLOSED" || it.status == "ABANDONED" }
+        val trades = findReflectableTradesSince(startOfDay)
 
         val totalPnl = trades.sumOf { it.pnlAmount ?: 0.0 }
         val winCount = trades.count { (it.pnlAmount ?: 0.0) > 0 }
@@ -353,10 +370,7 @@ class MemeScalperReflectorTools(
         log.info("[Tool] getTodayTrades: limit=$limit")
 
         val (startOfDay) = todayRange()
-        val today = today()
-
-        val trades = tradeRepository.findByCreatedAtAfter(startOfDay)
-            .filter { it.status == "CLOSED" || it.status == "ABANDONED" }
+        val trades = findReflectableTradesSince(startOfDay)
             .sortedByDescending { it.createdAt }
             .take(limit)
 
@@ -389,8 +403,7 @@ class MemeScalperReflectorTools(
         val today = today()
 
         // 오늘 통계 계산 (CLOSED + ABANDONED)
-        val trades = tradeRepository.findByCreatedAtAfter(startOfDay)
-            .filter { it.status == "CLOSED" || it.status == "ABANDONED" }
+        val trades = findReflectableTradesSince(startOfDay)
 
         val stats = statsRepository.findByDate(today) ?: MemeScalperDailyStatsEntity(date = today)
         stats.totalTrades = trades.size
@@ -537,8 +550,7 @@ class MemeScalperReflectorTools(
         log.info("[Tool] backtestParameterChange: $paramName=$newValue, days=$historicalDays")
 
         val startOfPeriod = Instant.now().minus(historicalDays.toLong(), ChronoUnit.DAYS)
-        val trades = tradeRepository.findByCreatedAtAfter(startOfPeriod)
-            .filter { it.status == "CLOSED" || it.status == "ABANDONED" }
+        val trades = findReflectableTradesSince(startOfPeriod)
 
         if (trades.isEmpty()) {
             return "백테스트 기간($historicalDays 일) 내 트레이드가 없습니다."
@@ -547,56 +559,15 @@ class MemeScalperReflectorTools(
         val currentValue = getCurrentParamValue(paramName)
 
         // 파라미터별 백테스트 시뮬레이션
-        val (filteredIn, filteredOut) = when (paramName) {
-            "volumeSpikeRatio" -> {
-                val passed = trades.count { (it.entryVolumeSpikeRatio ?: 0.0) >= newValue }
-                passed to (trades.size - passed)
-            }
-            "priceSpikePercent" -> {
-                val passed = trades.count { (it.entryPriceSpikePercent ?: 0.0) >= newValue }
-                passed to (trades.size - passed)
-            }
-            "minBidImbalance" -> {
-                val passed = trades.count { (it.entryImbalance ?: 0.0) >= newValue }
-                passed to (trades.size - passed)
-            }
-            "maxRsi" -> {
-                val passed = trades.count { (it.entryRsi ?: 100.0) <= newValue }
-                passed to (trades.size - passed)
-            }
-            "stopLossPercent" -> {
-                // 손절 변경 시 수익 변화
-                val stoppedEarlier = trades.count { trade ->
-                    val pnl = trade.pnlPercent ?: 0.0
-                    pnl < 0 && pnl > newValue && pnl <= currentValue
-                }
-                val stoppedLater = trades.count { trade ->
-                    val pnl = trade.pnlPercent ?: 0.0
-                    pnl < 0 && pnl <= newValue && pnl > currentValue
-                }
-                stoppedEarlier to stoppedLater
-            }
-            "takeProfitPercent" -> {
-                val wouldHaveTakenProfit = trades.count { trade ->
-                    val pnl = trade.pnlPercent ?: 0.0
-                    pnl > 0 && pnl >= newValue
-                }
-                wouldHaveTakenProfit to (trades.size - wouldHaveTakenProfit)
-            }
-            else -> trades.size to 0
-        }
+        val (filteredIn, filteredOut) = simulateBacktestFilter(paramName, newValue, currentValue, trades)
 
         // 필터링 후 성과
         val winningTrades = trades.filter { (it.pnlAmount ?: 0.0) > 0 }
         val totalPnl = trades.sumOf { it.pnlAmount ?: 0.0 }
         val winRate = if (trades.isNotEmpty()) winningTrades.size.toDouble() / trades.size * 100 else 0.0
 
-        val estimatedImpact = when {
-            filteredIn > trades.size * 0.9 -> "거의 변화 없음"
-            filteredIn > trades.size * 0.7 -> "소폭 감소 예상 (-10~30%)"
-            filteredIn > trades.size * 0.5 -> "중간 감소 예상 (-30~50%)"
-            else -> "대폭 감소 예상 (-50% 이상)"
-        }
+        val estimatedImpact = estimateTradeImpact(filteredIn, trades.size)
+        val recommendation = buildBacktestRecommendation(paramName, filteredIn, trades.size)
 
         return """
             === 백테스트 결과 ($historicalDays 일) ===
@@ -614,15 +585,7 @@ class MemeScalperReflectorTools(
             - 필터링된 트레이드: $filteredOut 건
             - 예상 영향: $estimatedImpact
 
-            권장사항: ${
-            when {
-                paramName in listOf("stopLossPercent", "takeProfitPercent") ->
-                    "손절/익절 변경은 신중하게 결정하세요."
-                filteredIn < trades.size * 0.5 ->
-                    "트레이드 수가 절반 이하로 감소합니다. 신중하게 결정하세요."
-                else -> "변경 적용 가능합니다."
-            }
-        }
+            권장사항: $recommendation
         """.trimIndent()
     }
 
@@ -636,8 +599,7 @@ class MemeScalperReflectorTools(
         log.info("[Tool] analyzeExitPatterns: days=$days")
 
         val startOfPeriod = Instant.now().minus(days.toLong(), ChronoUnit.DAYS)
-        val trades = tradeRepository.findByCreatedAtAfter(startOfPeriod)
-            .filter { it.status == "CLOSED" || it.status == "ABANDONED" }
+        val trades = findReflectableTradesSince(startOfPeriod)
 
         if (trades.isEmpty()) {
             return "분석 기간($days 일) 내 트레이드가 없습니다."
@@ -646,15 +608,78 @@ class MemeScalperReflectorTools(
         // 청산 사유별 그룹화
         val byExitReason = trades.groupBy { it.exitReason ?: "UNKNOWN" }
 
-        val analysis = byExitReason.map { (reason, reasonTrades) ->
+        val analysis = formatExitReasonAnalysis(byExitReason)
+        val insights = buildExitPatternInsights(byExitReason, trades.size)
+
+        return """
+            === 청산 사유별 패턴 분석 ($days 일, ${trades.size}건) ===
+
+            ${analysis.joinToString("\n\n")}
+
+            === 인사이트 ===
+            $insights
+        """.trimIndent()
+    }
+
+    private fun findReflectableTradesSince(startInclusive: Instant): List<MemeScalperTradeEntity> {
+        return tradeRepository.findByCreatedAtAfter(startInclusive)
+            .filter { it.status in reflectionTargetStatuses }
+    }
+
+    private fun simulateBacktestFilter(
+        paramName: String,
+        newValue: Double,
+        currentValue: Double,
+        trades: List<MemeScalperTradeEntity>
+    ): Pair<Int, Int> {
+        val filteredIn = when (paramName) {
+            "volumeSpikeRatio" -> trades.count { (it.entryVolumeSpikeRatio ?: 0.0) >= newValue }
+            "priceSpikePercent" -> trades.count { (it.entryPriceSpikePercent ?: 0.0) >= newValue }
+            "minBidImbalance" -> trades.count { (it.entryImbalance ?: 0.0) >= newValue }
+            "maxRsi" -> trades.count { (it.entryRsi ?: 100.0) <= newValue }
+            "stopLossPercent" -> trades.count { trade ->
+                val pnl = trade.pnlPercent ?: 0.0
+                pnl < 0 && pnl > newValue && pnl <= currentValue
+            }
+            "takeProfitPercent" -> trades.count { trade ->
+                val pnl = trade.pnlPercent ?: 0.0
+                pnl > 0 && pnl >= newValue
+            }
+            else -> trades.size
+        }
+        return filteredIn to (trades.size - filteredIn)
+    }
+
+    private fun estimateTradeImpact(filteredIn: Int, totalTrades: Int): String {
+        return when {
+            filteredIn > totalTrades * 0.9 -> "거의 변화 없음"
+            filteredIn > totalTrades * 0.7 -> "소폭 감소 예상 (-10~30%)"
+            filteredIn > totalTrades * 0.5 -> "중간 감소 예상 (-30~50%)"
+            else -> "대폭 감소 예상 (-50% 이상)"
+        }
+    }
+
+    private fun buildBacktestRecommendation(paramName: String, filteredIn: Int, totalTrades: Int): String {
+        return when {
+            paramName in listOf("stopLossPercent", "takeProfitPercent") ->
+                "손절/익절 변경은 신중하게 결정하세요."
+            filteredIn < totalTrades * 0.5 ->
+                "트레이드 수가 절반 이하로 감소합니다. 신중하게 결정하세요."
+            else -> "변경 적용 가능합니다."
+        }
+    }
+
+    private fun formatExitReasonAnalysis(byExitReason: Map<String, List<MemeScalperTradeEntity>>): List<String> {
+        return byExitReason.map { (reason, reasonTrades) ->
             val count = reasonTrades.size
-            val avgPnl = reasonTrades.mapNotNull { it.pnlAmount }.average().takeIf { !it.isNaN() } ?: 0.0
-            val avgVolumeSpike = reasonTrades.mapNotNull { it.entryVolumeSpikeRatio }.average().takeIf { !it.isNaN() }
-            val avgRsi = reasonTrades.mapNotNull { it.entryRsi }.average().takeIf { !it.isNaN() }
-            val avgImbalance = reasonTrades.mapNotNull { it.entryImbalance }.average().takeIf { !it.isNaN() }
-            val avgHoldingSec = reasonTrades.filter { it.exitTime != null }
-                .map { ChronoUnit.SECONDS.between(it.entryTime, it.exitTime) }
-                .average().takeIf { !it.isNaN() }
+            val avgPnl = averageOrNull(reasonTrades.mapNotNull { it.pnlAmount }) ?: 0.0
+            val avgVolumeSpike = averageOrNull(reasonTrades.mapNotNull { it.entryVolumeSpikeRatio })
+            val avgRsi = averageOrNull(reasonTrades.mapNotNull { it.entryRsi })
+            val avgImbalance = averageOrNull(reasonTrades.mapNotNull { it.entryImbalance })
+            val avgHoldingSec = averageOrNull(
+                reasonTrades.filter { it.exitTime != null }
+                    .map { ChronoUnit.SECONDS.between(it.entryTime, it.exitTime).toDouble() }
+            )
 
             """
             === $reason (${count}건) ===
@@ -665,10 +690,14 @@ class MemeScalperReflectorTools(
             진입 시 Imbalance: ${avgImbalance?.let { String.format("%.2f", it) } ?: "N/A"}
             """.trimIndent()
         }
+    }
 
-        // 인사이트 생성
-        val timeoutRatio = (byExitReason["TIMEOUT"]?.size ?: 0).toDouble() / trades.size * 100
-        val stopLossRatio = (byExitReason["STOP_LOSS"]?.size ?: 0).toDouble() / trades.size * 100
+    private fun buildExitPatternInsights(
+        byExitReason: Map<String, List<MemeScalperTradeEntity>>,
+        totalTrades: Int
+    ): String {
+        val timeoutRatio = (byExitReason["TIMEOUT"]?.size ?: 0).toDouble() / totalTrades * 100
+        val stopLossRatio = (byExitReason["STOP_LOSS"]?.size ?: 0).toDouble() / totalTrades * 100
 
         val insights = mutableListOf<String>()
         if (timeoutRatio > 30) {
@@ -678,14 +707,12 @@ class MemeScalperReflectorTools(
             insights.add("STOP_LOSS 비율이 ${String.format("%.0f", stopLossRatio)}%로 높습니다. 손절 조건 검토 필요.")
         }
 
-        return """
-            === 청산 사유별 패턴 분석 ($days 일, ${trades.size}건) ===
+        return if (insights.isEmpty()) "특이사항 없음" else insights.joinToString("\n")
+    }
 
-            ${analysis.joinToString("\n\n")}
-
-            === 인사이트 ===
-            ${if (insights.isEmpty()) "특이사항 없음" else insights.joinToString("\n")}
-        """.trimIndent()
+    private fun averageOrNull(values: List<Double>): Double? {
+        if (values.isEmpty()) return null
+        return values.average().takeIf { !it.isNaN() }
     }
 
     @Tool(description = "시스템 개선 아이디어를 제안합니다. Slack 알림이 발송됩니다.")

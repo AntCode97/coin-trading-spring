@@ -115,6 +115,42 @@ class VolumeSurgeReflectorTools(
         )
     }
 
+    private data class BacktestFilterResult(
+        val filteredIn: Int,
+        val filteredOut: Int
+    )
+
+    private data class MarketPerformance(
+        val market: String,
+        val trades: Int,
+        val wins: Int,
+        val losses: Int,
+        val winRate: Double,
+        val totalPnl: Double,
+        val avgRsi: Double,
+        val avgVolumeRatio: Double,
+        val avgConfluence: Double
+    )
+
+    private data class EntryPattern(
+        val avgRsi: Double,
+        val avgVolumeRatio: Double,
+        val avgConfluence: Double,
+        val commonExitReason: String?
+    )
+
+    private data class TimeBucketStats(
+        val count: Int,
+        val wins: Int,
+        val winRate: Double,
+        val totalPnl: Double
+    )
+
+    private data class ExitReasonStats(
+        val count: Int,
+        val avgPnl: Double
+    )
+
     @Tool(description = "오늘의 Volume Surge 전략 통계를 조회합니다")
     fun getTodayStats(): String {
         log.info("[Tool] getTodayStats")
@@ -346,14 +382,6 @@ class VolumeSurgeReflectorTools(
         val existingSummary = summaryRepository.findByDate(today)
             ?: VolumeSurgeDailySummaryEntity(date = today)
 
-        val improvementRecord = mapOf(
-            "title" to title,
-            "description" to description,
-            "priority" to priority.uppercase(),
-            "category" to category.uppercase(),
-            "timestamp" to Instant.now().toString()
-        )
-
         // 기존 반영 노트에 추가
         val existingNotes = existingSummary.reflectionSummary ?: ""
         existingSummary.reflectionSummary = """
@@ -419,61 +447,15 @@ class VolumeSurgeReflectorTools(
         }
 
         val currentValue = paramMap[paramName]?.get() ?: 0.0
+        val filterResult = simulateBacktestFilter(paramName, newValue, currentValue, trades)
 
-        // 파라미터별 백테스트 시뮬레이션
-        val (filteredIn, filteredOut) = when (paramName) {
-            "minVolumeRatio" -> {
-                val passedNew = trades.count { (it.entryVolumeRatio ?: 0.0) >= newValue }
-                val passedOld = trades.count { (it.entryVolumeRatio ?: 0.0) >= currentValue }
-                passedNew to (trades.size - passedNew)
-            }
-            "maxRsi" -> {
-                val passedNew = trades.count { (it.entryRsi ?: 100.0) <= newValue }
-                val passedOld = trades.count { (it.entryRsi ?: 100.0) <= currentValue }
-                passedNew to (trades.size - passedNew)
-            }
-            "minConfluenceScore" -> {
-                val passedNew = trades.count { (it.confluenceScore ?: 0) >= newValue.toInt() }
-                val passedOld = trades.count { (it.confluenceScore ?: 0) >= currentValue.toInt() }
-                passedNew to (trades.size - passedNew)
-            }
-            "stopLossPercent" -> {
-                // 손절 변경 시 수익 변화 시뮬레이션
-                val stoppedEarlier = trades.count { trade ->
-                    val pnlPercent = trade.pnlPercent ?: 0.0
-                    pnlPercent < 0 && pnlPercent > newValue && pnlPercent <= currentValue
-                }
-                val stoppedLater = trades.count { trade ->
-                    val pnlPercent = trade.pnlPercent ?: 0.0
-                    pnlPercent < 0 && pnlPercent <= newValue && pnlPercent > currentValue
-                }
-                stoppedEarlier to stoppedLater
-            }
-            "takeProfitPercent" -> {
-                // 익절 변경 시 수익 변화 시뮬레이션
-                val wouldHaveTakenProfit = trades.count { trade ->
-                    val pnlPercent = trade.pnlPercent ?: 0.0
-                    pnlPercent > 0 && pnlPercent >= newValue
-                }
-                wouldHaveTakenProfit to (trades.size - wouldHaveTakenProfit)
-            }
-            else -> trades.size to 0
-        }
-
-        // 필터링된 트레이드의 성과 분석
         val winningTrades = trades.filter { (it.pnlAmount ?: 0.0) > 0 }
         val losingTrades = trades.filter { (it.pnlAmount ?: 0.0) <= 0 }
         val totalPnl = trades.sumOf { it.pnlAmount ?: 0.0 }
         val winRate = if (trades.isNotEmpty()) winningTrades.size.toDouble() / trades.size * 100 else 0.0
 
-        // 새 파라미터 적용 시 예상 결과 추정
-        val estimatedTradesAfterChange = filteredIn
-        val estimatedImpact = when {
-            estimatedTradesAfterChange > trades.size * 0.9 -> "거의 변화 없음"
-            estimatedTradesAfterChange > trades.size * 0.7 -> "소폭 감소 예상 (-10~30%)"
-            estimatedTradesAfterChange > trades.size * 0.5 -> "중간 감소 예상 (-30~50%)"
-            else -> "대폭 감소 예상 (-50% 이상)"
-        }
+        val estimatedImpact = estimateTradeImpact(filterResult.filteredIn, trades.size)
+        val recommendation = buildBacktestRecommendation(paramName, filterResult.filteredIn, trades.size)
 
         return """
             === 백테스트 결과 ($historicalDays 일) ===
@@ -487,20 +469,76 @@ class VolumeSurgeReflectorTools(
             총 손익: ${String.format("%.0f", totalPnl)}원
 
             새 파라미터 적용 시:
-            - 진입 가능 트레이드: $filteredIn 건
-            - 필터링된 트레이드: $filteredOut 건
+            - 진입 가능 트레이드: ${filterResult.filteredIn} 건
+            - 필터링된 트레이드: ${filterResult.filteredOut} 건
             - 예상 영향: $estimatedImpact
 
-            권장사항: ${
-            when {
-                paramName in listOf("stopLossPercent", "takeProfitPercent") ->
-                    "손절/익절 변경은 기존 수익률과 비교하여 신중하게 결정하세요."
-                filteredIn < trades.size * 0.5 ->
-                    "변경 시 트레이드 수가 절반 이하로 감소합니다. 신중하게 결정하세요."
-                else -> "변경 적용 가능합니다."
-            }
-        }
+            권장사항: $recommendation
         """.trimIndent()
+    }
+
+    private fun simulateBacktestFilter(
+        paramName: String,
+        newValue: Double,
+        currentValue: Double,
+        trades: List<VolumeSurgeTradeEntity>
+    ): BacktestFilterResult {
+        return when (paramName) {
+            "minVolumeRatio" -> {
+                val passedNew = trades.count { (it.entryVolumeRatio ?: 0.0) >= newValue }
+                BacktestFilterResult(passedNew, trades.size - passedNew)
+            }
+            "maxRsi" -> {
+                val passedNew = trades.count { (it.entryRsi ?: 100.0) <= newValue }
+                BacktestFilterResult(passedNew, trades.size - passedNew)
+            }
+            "minConfluenceScore" -> {
+                val passedNew = trades.count { (it.confluenceScore ?: 0) >= newValue.toInt() }
+                BacktestFilterResult(passedNew, trades.size - passedNew)
+            }
+            "stopLossPercent" -> {
+                val stoppedEarlier = trades.count { trade ->
+                    val pnlPercent = trade.pnlPercent ?: 0.0
+                    pnlPercent < 0 && pnlPercent > newValue && pnlPercent <= currentValue
+                }
+                val stoppedLater = trades.count { trade ->
+                    val pnlPercent = trade.pnlPercent ?: 0.0
+                    pnlPercent < 0 && pnlPercent <= newValue && pnlPercent > currentValue
+                }
+                BacktestFilterResult(stoppedEarlier, stoppedLater)
+            }
+            "takeProfitPercent" -> {
+                val wouldHaveTakenProfit = trades.count { trade ->
+                    val pnlPercent = trade.pnlPercent ?: 0.0
+                    pnlPercent > 0 && pnlPercent >= newValue
+                }
+                BacktestFilterResult(wouldHaveTakenProfit, trades.size - wouldHaveTakenProfit)
+            }
+            else -> BacktestFilterResult(trades.size, 0)
+        }
+    }
+
+    private fun estimateTradeImpact(filteredIn: Int, totalTrades: Int): String {
+        return when {
+            filteredIn > totalTrades * 0.9 -> "거의 변화 없음"
+            filteredIn > totalTrades * 0.7 -> "소폭 감소 예상 (-10~30%)"
+            filteredIn > totalTrades * 0.5 -> "중간 감소 예상 (-30~50%)"
+            else -> "대폭 감소 예상 (-50% 이상)"
+        }
+    }
+
+    private fun buildBacktestRecommendation(
+        paramName: String,
+        filteredIn: Int,
+        totalTrades: Int
+    ): String {
+        return when {
+            paramName in listOf("stopLossPercent", "takeProfitPercent") ->
+                "손절/익절 변경은 기존 수익률과 비교하여 신중하게 결정하세요."
+            filteredIn < totalTrades * 0.5 ->
+                "변경 시 트레이드 수가 절반 이하로 감소합니다. 신중하게 결정하세요."
+            else -> "변경 적용 가능합니다."
+        }
     }
 
     @Tool(description = """
@@ -523,54 +561,11 @@ class VolumeSurgeReflectorTools(
             return "분석 기간($days 일) 내 트레이드가 없습니다."
         }
 
-        // 마켓별 그룹화
-        val tradesByMarket = trades.groupBy { it.market }
-
-        // 성공/실패 패턴 분석
-        val marketStats = tradesByMarket.map { (market, marketTrades) ->
-            val wins = marketTrades.count { (it.pnlAmount ?: 0.0) > 0 }
-            val losses = marketTrades.size - wins
-            val totalPnl = marketTrades.sumOf { it.pnlAmount ?: 0.0 }
-            val avgRsi = marketTrades.mapNotNull { it.entryRsi }.average().takeIf { !it.isNaN() } ?: 0.0
-            val avgVolumeRatio = marketTrades.mapNotNull { it.entryVolumeRatio }.average().takeIf { !it.isNaN() } ?: 0.0
-            val avgConfluence = marketTrades.mapNotNull { it.confluenceScore }.average().takeIf { !it.isNaN() } ?: 0.0
-
-            mapOf(
-                "market" to market,
-                "trades" to marketTrades.size,
-                "wins" to wins,
-                "losses" to losses,
-                "winRate" to if (marketTrades.isNotEmpty()) wins.toDouble() / marketTrades.size * 100 else 0.0,
-                "totalPnl" to totalPnl,
-                "avgRsi" to avgRsi,
-                "avgVolumeRatio" to avgVolumeRatio,
-                "avgConfluence" to avgConfluence
-            )
-        }.sortedByDescending { it["totalPnl"] as Double }
-
-        // 성공 트레이드의 공통 특성
         val winningTrades = trades.filter { (it.pnlAmount ?: 0.0) > 0 }
         val losingTrades = trades.filter { (it.pnlAmount ?: 0.0) <= 0 }
-
-        val winningPattern = if (winningTrades.isNotEmpty()) {
-            mapOf(
-                "avgRsi" to winningTrades.mapNotNull { it.entryRsi }.average(),
-                "avgVolumeRatio" to winningTrades.mapNotNull { it.entryVolumeRatio }.average(),
-                "avgConfluence" to winningTrades.mapNotNull { it.confluenceScore }.average(),
-                "commonExitReason" to winningTrades.groupBy { it.exitReason }
-                    .maxByOrNull { it.value.size }?.key
-            )
-        } else null
-
-        val losingPattern = if (losingTrades.isNotEmpty()) {
-            mapOf(
-                "avgRsi" to losingTrades.mapNotNull { it.entryRsi }.average(),
-                "avgVolumeRatio" to losingTrades.mapNotNull { it.entryVolumeRatio }.average(),
-                "avgConfluence" to losingTrades.mapNotNull { it.confluenceScore }.average(),
-                "commonExitReason" to losingTrades.groupBy { it.exitReason }
-                    .maxByOrNull { it.value.size }?.key
-            )
-        } else null
+        val marketStats = analyzeMarketPerformance(trades)
+        val winningPattern = summarizeEntryPattern(winningTrades)
+        val losingPattern = summarizeEntryPattern(losingTrades)
 
         return """
             === 시장 상관관계 분석 ($days 일) ===
@@ -579,47 +574,81 @@ class VolumeSurgeReflectorTools(
             승리: ${winningTrades.size}건 / 패배: ${losingTrades.size}건
 
             === 마켓별 성과 ===
-            ${marketStats.take(5).joinToString("\n") { stat ->
-                """
-                ${stat["market"]}:
-                  거래: ${stat["trades"]}건 (승률: ${String.format("%.1f", stat["winRate"])}%)
-                  손익: ${String.format("%.0f", stat["totalPnl"])}원
-                  평균 RSI: ${String.format("%.1f", stat["avgRsi"])}
-                  평균 거래량비율: ${String.format("%.1f", stat["avgVolumeRatio"])}x
-                """.trimIndent()
-            }}
+            ${marketStats.take(5).joinToString("\n") { formatMarketPerformance(it) }}
 
             === 성공 트레이드 패턴 ===
-            ${winningPattern?.let {
-                """
-                평균 RSI: ${String.format("%.1f", it["avgRsi"])}
-                평균 거래량비율: ${String.format("%.1f", it["avgVolumeRatio"])}x
-                평균 컨플루언스: ${String.format("%.0f", it["avgConfluence"])}
-                주요 청산사유: ${it["commonExitReason"]}
-                """.trimIndent()
-            } ?: "데이터 없음"}
+            ${winningPattern?.let { formatEntryPattern(it) } ?: "데이터 없음"}
 
             === 실패 트레이드 패턴 ===
-            ${losingPattern?.let {
-                """
-                평균 RSI: ${String.format("%.1f", it["avgRsi"])}
-                평균 거래량비율: ${String.format("%.1f", it["avgVolumeRatio"])}x
-                평균 컨플루언스: ${String.format("%.0f", it["avgConfluence"])}
-                주요 청산사유: ${it["commonExitReason"]}
-                """.trimIndent()
-            } ?: "데이터 없음"}
+            ${losingPattern?.let { formatEntryPattern(it) } ?: "데이터 없음"}
 
             === 인사이트 ===
             ${generateInsights(winningPattern, losingPattern)}
         """.trimIndent()
     }
 
+    private fun analyzeMarketPerformance(trades: List<VolumeSurgeTradeEntity>): List<MarketPerformance> {
+        return trades.groupBy { it.market }
+            .map { (market, marketTrades) ->
+                val wins = marketTrades.count { (it.pnlAmount ?: 0.0) > 0 }
+                val losses = marketTrades.size - wins
+                val totalPnl = marketTrades.sumOf { it.pnlAmount ?: 0.0 }
+                MarketPerformance(
+                    market = market,
+                    trades = marketTrades.size,
+                    wins = wins,
+                    losses = losses,
+                    winRate = if (marketTrades.isNotEmpty()) wins.toDouble() / marketTrades.size * 100 else 0.0,
+                    totalPnl = totalPnl,
+                    avgRsi = averageOrZero(marketTrades.mapNotNull { it.entryRsi }),
+                    avgVolumeRatio = averageOrZero(marketTrades.mapNotNull { it.entryVolumeRatio }),
+                    avgConfluence = averageOrZero(marketTrades.mapNotNull { it.confluenceScore?.toDouble() })
+                )
+            }
+            .sortedByDescending { it.totalPnl }
+    }
+
+    private fun summarizeEntryPattern(trades: List<VolumeSurgeTradeEntity>): EntryPattern? {
+        if (trades.isEmpty()) {
+            return null
+        }
+        return EntryPattern(
+            avgRsi = averageOrZero(trades.mapNotNull { it.entryRsi }),
+            avgVolumeRatio = averageOrZero(trades.mapNotNull { it.entryVolumeRatio }),
+            avgConfluence = averageOrZero(trades.mapNotNull { it.confluenceScore?.toDouble() }),
+            commonExitReason = trades.groupBy { it.exitReason }.maxByOrNull { it.value.size }?.key
+        )
+    }
+
+    private fun formatMarketPerformance(stat: MarketPerformance): String {
+        return """
+            ${stat.market}:
+              거래: ${stat.trades}건 (승률: ${String.format("%.1f", stat.winRate)}%)
+              손익: ${String.format("%.0f", stat.totalPnl)}원
+              평균 RSI: ${String.format("%.1f", stat.avgRsi)}
+              평균 거래량비율: ${String.format("%.1f", stat.avgVolumeRatio)}x
+        """.trimIndent()
+    }
+
+    private fun formatEntryPattern(pattern: EntryPattern): String {
+        return """
+            평균 RSI: ${String.format("%.1f", pattern.avgRsi)}
+            평균 거래량비율: ${String.format("%.1f", pattern.avgVolumeRatio)}x
+            평균 컨플루언스: ${String.format("%.0f", pattern.avgConfluence)}
+            주요 청산사유: ${pattern.commonExitReason}
+        """.trimIndent()
+    }
+
+    private fun averageOrZero(values: List<Double>): Double {
+        return values.average().takeIf { !it.isNaN() } ?: 0.0
+    }
+
     /**
      * 패턴 기반 인사이트 생성
      */
     private fun generateInsights(
-        winningPattern: Map<String, Any?>?,
-        losingPattern: Map<String, Any?>?
+        winningPattern: EntryPattern?,
+        losingPattern: EntryPattern?
     ): String {
         if (winningPattern == null || losingPattern == null) {
             return "충분한 데이터가 없어 인사이트를 생성할 수 없습니다."
@@ -628,8 +657,8 @@ class VolumeSurgeReflectorTools(
         val insights = mutableListOf<String>()
 
         // RSI 비교
-        val winRsi = winningPattern["avgRsi"] as? Double ?: 0.0
-        val loseRsi = losingPattern["avgRsi"] as? Double ?: 0.0
+        val winRsi = winningPattern.avgRsi
+        val loseRsi = losingPattern.avgRsi
         if (kotlin.math.abs(winRsi - loseRsi) > 5) {
             if (winRsi < loseRsi) {
                 insights.add("성공 트레이드는 낮은 RSI(${String.format("%.0f", winRsi)})에서 진입하는 경향이 있습니다.")
@@ -639,15 +668,15 @@ class VolumeSurgeReflectorTools(
         }
 
         // 거래량 비교
-        val winVolume = winningPattern["avgVolumeRatio"] as? Double ?: 0.0
-        val loseVolume = losingPattern["avgVolumeRatio"] as? Double ?: 0.0
+        val winVolume = winningPattern.avgVolumeRatio
+        val loseVolume = losingPattern.avgVolumeRatio
         if (winVolume > loseVolume * 1.2) {
             insights.add("성공 트레이드는 더 높은 거래량 비율(${String.format("%.1f", winVolume)}x)에서 진입합니다.")
         }
 
         // 컨플루언스 비교
-        val winConf = winningPattern["avgConfluence"] as? Double ?: 0.0
-        val loseConf = losingPattern["avgConfluence"] as? Double ?: 0.0
+        val winConf = winningPattern.avgConfluence
+        val loseConf = losingPattern.avgConfluence
         if (winConf > loseConf + 5) {
             insights.add("성공 트레이드는 더 높은 컨플루언스 점수(${String.format("%.0f", winConf)})를 가집니다.")
         }
@@ -677,55 +706,11 @@ class VolumeSurgeReflectorTools(
             return "분석 기간($days 일) 내 트레이드가 없습니다."
         }
 
-        // 시간대별 분석 (KST 기준)
-        val hourlyStats = trades.groupBy { trade ->
-            trade.entryTime.atZone(SEOUL_ZONE).hour
-        }.mapValues { (_, hourTrades) ->
-            val wins = hourTrades.count { (it.pnlAmount ?: 0.0) > 0 }
-            val totalPnl = hourTrades.sumOf { it.pnlAmount ?: 0.0 }
-            mapOf(
-                "count" to hourTrades.size,
-                "wins" to wins,
-                "winRate" to if (hourTrades.isNotEmpty()) wins.toDouble() / hourTrades.size * 100 else 0.0,
-                "totalPnl" to totalPnl
-            )
-        }.toSortedMap()
-
-        // 요일별 분석
-        val dayOfWeekStats = trades.groupBy { trade ->
-            trade.entryTime.atZone(SEOUL_ZONE).dayOfWeek.name
-        }.mapValues { (_, dayTrades) ->
-            val wins = dayTrades.count { (it.pnlAmount ?: 0.0) > 0 }
-            val totalPnl = dayTrades.sumOf { it.pnlAmount ?: 0.0 }
-            mapOf(
-                "count" to dayTrades.size,
-                "wins" to wins,
-                "winRate" to if (dayTrades.isNotEmpty()) wins.toDouble() / dayTrades.size * 100 else 0.0,
-                "totalPnl" to totalPnl
-            )
-        }
-
-        // 최적 시간대 추출
-        val bestHours = hourlyStats.entries
-            .filter { it.value["count"] as Int >= 2 }
-            .sortedByDescending { it.value["winRate"] as Double }
-            .take(3)
-
-        val worstHours = hourlyStats.entries
-            .filter { it.value["count"] as Int >= 2 }
-            .sortedBy { it.value["winRate"] as Double }
-            .take(3)
-
-        // 청산 사유별 분석
-        val exitReasonStats = trades.filter { it.exitReason != null }
-            .groupBy { it.exitReason!! }
-            .mapValues { (_, reasonTrades) ->
-                val avgPnl = reasonTrades.mapNotNull { it.pnlAmount }.average()
-                mapOf(
-                    "count" to reasonTrades.size,
-                    "avgPnl" to avgPnl
-                )
-            }
+        val hourlyStats = buildHourlyStats(trades)
+        val dayOfWeekStats = buildDayOfWeekStats(trades)
+        val bestHours = selectHoursByWinRate(hourlyStats, descending = true)
+        val worstHours = selectHoursByWinRate(hourlyStats, descending = false)
+        val exitReasonStats = buildExitReasonStats(trades)
 
         return """
             === 시간대/요일별 패턴 분석 ($days 일) ===
@@ -734,25 +719,25 @@ class VolumeSurgeReflectorTools(
 
             === 최적 시간대 (KST) ===
             ${bestHours.joinToString("\n") { (hour, stats) ->
-                "${hour}시: ${stats["count"]}건, 승률 ${String.format("%.0f", stats["winRate"])}%"
+                "${hour}시: ${stats.count}건, 승률 ${String.format("%.0f", stats.winRate)}%"
             }}
 
             === 회피 시간대 (KST) ===
             ${worstHours.joinToString("\n") { (hour, stats) ->
-                "${hour}시: ${stats["count"]}건, 승률 ${String.format("%.0f", stats["winRate"])}%"
+                "${hour}시: ${stats.count}건, 승률 ${String.format("%.0f", stats.winRate)}%"
             }}
 
             === 요일별 성과 ===
-            ${dayOfWeekStats.entries.sortedByDescending { it.value["totalPnl"] as Double }
+            ${dayOfWeekStats.entries.sortedByDescending { it.value.totalPnl }
                 .joinToString("\n") { (day, stats) ->
-                    "$day: ${stats["count"]}건, 승률 ${String.format("%.0f", stats["winRate"])}%, " +
-                    "손익 ${String.format("%.0f", stats["totalPnl"])}원"
+                    "$day: ${stats.count}건, 승률 ${String.format("%.0f", stats.winRate)}%, " +
+                    "손익 ${String.format("%.0f", stats.totalPnl)}원"
                 }}
 
             === 청산 사유별 분석 ===
-            ${exitReasonStats.entries.sortedByDescending { it.value["count"] as Int }
+            ${exitReasonStats.entries.sortedByDescending { it.value.count }
                 .joinToString("\n") { (reason, stats) ->
-                    "$reason: ${stats["count"]}건, 평균 손익 ${String.format("%.0f", stats["avgPnl"])}원"
+                    "$reason: ${stats.count}건, 평균 손익 ${String.format("%.0f", stats.avgPnl)}원"
                 }}
 
             === 권장사항 ===
@@ -760,12 +745,58 @@ class VolumeSurgeReflectorTools(
         """.trimIndent()
     }
 
+    private fun buildHourlyStats(trades: List<VolumeSurgeTradeEntity>): Map<Int, TimeBucketStats> {
+        return trades.groupBy { trade -> trade.entryTime.atZone(SEOUL_ZONE).hour }
+            .mapValues { (_, hourTrades) -> buildTimeBucketStats(hourTrades) }
+            .toSortedMap()
+    }
+
+    private fun buildDayOfWeekStats(trades: List<VolumeSurgeTradeEntity>): Map<String, TimeBucketStats> {
+        return trades.groupBy { trade -> trade.entryTime.atZone(SEOUL_ZONE).dayOfWeek.name }
+            .mapValues { (_, dayTrades) -> buildTimeBucketStats(dayTrades) }
+    }
+
+    private fun buildTimeBucketStats(trades: List<VolumeSurgeTradeEntity>): TimeBucketStats {
+        val wins = trades.count { (it.pnlAmount ?: 0.0) > 0 }
+        val totalPnl = trades.sumOf { it.pnlAmount ?: 0.0 }
+        return TimeBucketStats(
+            count = trades.size,
+            wins = wins,
+            winRate = if (trades.isNotEmpty()) wins.toDouble() / trades.size * 100 else 0.0,
+            totalPnl = totalPnl
+        )
+    }
+
+    private fun selectHoursByWinRate(
+        hourlyStats: Map<Int, TimeBucketStats>,
+        descending: Boolean
+    ): List<Map.Entry<Int, TimeBucketStats>> {
+        val candidates = hourlyStats.entries.filter { it.value.count >= 2 }
+        val sorted = if (descending) {
+            candidates.sortedByDescending { it.value.winRate }
+        } else {
+            candidates.sortedBy { it.value.winRate }
+        }
+        return sorted.take(3)
+    }
+
+    private fun buildExitReasonStats(trades: List<VolumeSurgeTradeEntity>): Map<String, ExitReasonStats> {
+        return trades.filter { it.exitReason != null }
+            .groupBy { it.exitReason!! }
+            .mapValues { (_, reasonTrades) ->
+                ExitReasonStats(
+                    count = reasonTrades.size,
+                    avgPnl = averageOrZero(reasonTrades.mapNotNull { it.pnlAmount })
+                )
+            }
+    }
+
     /**
      * 시간대 기반 권장사항 생성
      */
     private fun generateTimeBasedRecommendations(
-        bestHours: List<Map.Entry<Int, Map<String, Any>>>,
-        worstHours: List<Map.Entry<Int, Map<String, Any>>>
+        bestHours: List<Map.Entry<Int, TimeBucketStats>>,
+        worstHours: List<Map.Entry<Int, TimeBucketStats>>
     ): String {
         val recommendations = mutableListOf<String>()
 
@@ -775,7 +806,7 @@ class VolumeSurgeReflectorTools(
         }
 
         if (worstHours.isNotEmpty()) {
-            val worstWinRate = worstHours.firstOrNull()?.value?.get("winRate") as? Double ?: 0.0
+            val worstWinRate = worstHours.firstOrNull()?.value?.winRate ?: 0.0
             if (worstWinRate < 30.0) {
                 val worstHour = worstHours.first().key
                 recommendations.add("${worstHour}시 시간대는 승률이 매우 낮아 트레이딩 회피 권장")

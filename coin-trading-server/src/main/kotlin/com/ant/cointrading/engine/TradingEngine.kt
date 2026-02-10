@@ -2,6 +2,7 @@ package com.ant.cointrading.engine
 
 import com.ant.cointrading.api.bithumb.BithumbPublicApi
 import com.ant.cointrading.api.bithumb.BithumbPrivateApi
+import com.ant.cointrading.api.bithumb.Balance
 import com.ant.cointrading.config.TradingConstants
 import com.ant.cointrading.config.TradingProperties
 import com.ant.cointrading.model.*
@@ -103,6 +104,31 @@ class TradingEngine(
             val normalizedReason = signal.reason.lowercase()
             return EMERGENCY_EXIT_KEYWORDS.any { normalizedReason.contains(it) }
         }
+
+        internal fun isBearDominantRegime(bearMarketRatio: Double): Boolean {
+            return bearMarketRatio >= BEAR_TREND_THRESHOLD
+        }
+
+        internal fun isRecoveryRegime(bearMarketRatio: Double): Boolean {
+            return bearMarketRatio < (1.0 - BULL_TREND_THRESHOLD)
+        }
+
+        internal fun resolveOrderFailureDetail(
+            rejectionReason: OrderRejectionReason?,
+            fallbackMessage: String
+        ): String {
+            return when (rejectionReason) {
+                OrderRejectionReason.MARKET_CONDITION -> "시장 상태 불량 - 스프레드/유동성 확인"
+                OrderRejectionReason.API_ERROR -> "API 장애 - 거래소 상태 확인"
+                OrderRejectionReason.VERIFICATION_FAILED -> "주문 상태 확인 실패 - 수동 확인 필요"
+                OrderRejectionReason.NO_FILL -> "체결 없음 - 유동성 부족 의심"
+                OrderRejectionReason.EXCEPTION -> "시스템 예외"
+                OrderRejectionReason.CIRCUIT_BREAKER -> "서킷 브레이커 발동"
+                OrderRejectionReason.BELOW_MIN_ORDER_AMOUNT -> "최소 주문 금액(5000원) 미달"
+                OrderRejectionReason.MARKET_SUSPENDED -> "거래 정지/상장 폐지 코인"
+                null -> fallbackMessage
+            }
+        }
     }
 
     private val log = LoggerFactory.getLogger(TradingEngine::class.java)
@@ -131,6 +157,19 @@ class TradingEngine(
         var currentStrategy: TradingStrategy? = null,
         var lastSignal: TradingSignal? = null,
         var lastAnalysisTime: Instant = Instant.EPOCH
+    )
+
+    private data class BalanceSnapshot(
+        val krwBalance: BigDecimal,
+        val coinSymbol: String,
+        val coinBalance: BigDecimal
+    )
+
+    private data class RegimeSnapshot(
+        val totalMarkets: Int,
+        val bearMarketCount: Int,
+        val bearMarketRatio: Double,
+        val tradingEnabled: Boolean
     )
 
     @PostConstruct
@@ -220,50 +259,106 @@ class TradingEngine(
             사유: ${signal.reason}
         """.trimIndent())
 
-        // 운영 킬스위치: trading.enabled=false면 주문 차단
-        if (!isTradingEnabled()) {
-            log.warn("[$market] trading.enabled=false - 주문 실행 차단")
-            return
-        }
-
-        // 0. 서킷 브레이커 체크 (안전장치)
-        val circuitCheck = circuitBreaker.canTrade(market)
-        if (!circuitCheck.canTrade) {
-            log.warn("[$market] 서킷 브레이커 발동: ${circuitCheck.reason}")
-            return
-        }
-
-        // 0.5 [무한 루프 방지] 쿨다운 및 최소 보유 시간 체크
         val now = Instant.now()
-        if (signal.action == SignalAction.BUY && shouldBlockBuyByCooldown(market, now)) {
+        if (!passesTradeGuards(market, signal, now)) return
+
+        val balances = fetchBalancesOrNull(market) ?: return
+        val balanceSnapshot = createBalanceSnapshot(market, balances)
+        val totalAssetKrw = syncAndGetTotalAssetKrw(balances, state.currentPrice, market)
+
+        if (!passesRiskChecks(market, totalAssetKrw)) return
+
+        val orderAmountKrw = resolveOrderAmount(market, signal, state, balanceSnapshot) ?: return
+        if (orderAmountKrw < TradingConstants.MIN_ORDER_AMOUNT_KRW) {
+            log.info(
+                "[$market] 주문 금액 최소치 미달로 실행 스킵: amount=$orderAmountKrw, min=${TradingConstants.MIN_ORDER_AMOUNT_KRW}"
+            )
             return
+        }
+
+        val result = orderExecutor.execute(signal, orderAmountKrw)
+        if (result.success) {
+            handleSuccessfulOrderResult(market, signal, state, result)
+            return
+        }
+
+        handleFailedOrderResult(market, result)
+    }
+
+    private fun passesTradeGuards(market: String, signal: TradingSignal, now: Instant): Boolean {
+        if (!passesTradingEnabledGuard(market)) return false
+        if (!passesCircuitBreakerGuard(market)) return false
+        return passesActionTimingGuard(market, signal, now)
+    }
+
+    private fun passesTradingEnabledGuard(market: String): Boolean {
+        if (isTradingEnabled()) {
+            return true
+        }
+        log.warn("[$market] trading.enabled=false - 주문 실행 차단")
+        return false
+    }
+
+    private fun passesCircuitBreakerGuard(market: String): Boolean {
+        val circuitCheck = circuitBreaker.canTrade(market)
+        if (circuitCheck.canTrade) {
+            return true
+        }
+        log.warn("[$market] 서킷 브레이커 발동: ${circuitCheck.reason}")
+        return false
+    }
+
+    private fun passesActionTimingGuard(market: String, signal: TradingSignal, now: Instant): Boolean {
+        if (signal.action == SignalAction.BUY && shouldBlockBuyByCooldown(market, now)) {
+            return false
         }
         if (signal.action == SignalAction.SELL && shouldBlockSellByHolding(market, signal, now)) {
-            return
+            return false
         }
+        return true
+    }
 
-        // 1. 잔고 조회
+    private fun fetchBalancesOrNull(market: String): List<Balance>? {
         val balances = try {
             bithumbPrivateApi.getBalances()
         } catch (e: Exception) {
             log.error("[$market] 잔고 조회 실패: ${e.message}")
             // API 에러는 OrderExecutor를 통해 주문 단계에서 기록됨
-            return
+            return null
         }
 
         if (balances == null) {
             log.error("[$market] 잔고 응답 null")
-            return
+            return null
         }
 
-        val krwBalance = balances.find { it.currency == "KRW" }?.balance ?: BigDecimal.ZERO
+        return balances
+    }
 
-        // 1.5 총 자산 기록 (CircuitBreaker 낙폭 추적용)
-        val totalAssetKrw = calculateTotalAssetKrw(balances, state.currentPrice, market)
+    private fun createBalanceSnapshot(market: String, balances: List<Balance>): BalanceSnapshot {
+        val krwBalance = balances.find { it.currency == "KRW" }?.balance ?: BigDecimal.ZERO
+        val coinSymbol = PositionHelper.extractCoinSymbol(market)
+        val coinBalance = balances.find { it.currency == coinSymbol }?.balance ?: BigDecimal.ZERO
+        return BalanceSnapshot(
+            krwBalance = krwBalance,
+            coinSymbol = coinSymbol,
+            coinBalance = coinBalance
+        )
+    }
+
+    private fun syncAndGetTotalAssetKrw(
+        balances: List<Balance>,
+        currentPrice: BigDecimal,
+        market: String
+    ): BigDecimal {
+        // 총 자산 기록 (CircuitBreaker 낙폭 추적용)
+        val totalAssetKrw = calculateTotalAssetKrw(balances, currentPrice, market)
         circuitBreaker.recordTotalAsset(totalAssetKrw.toDouble())
         dailyLossLimitService.syncInitialCapitalForToday(totalAssetKrw.toDouble())
+        return totalAssetKrw
+    }
 
-        // 2. 리스크 체크
+    private fun passesRiskChecks(market: String, totalAssetKrw: BigDecimal): Boolean {
         // 실질 리스크는 KRW 가용잔고가 아닌 총자산 기준으로 평가해야 왜곡이 없다.
         val riskCheck = riskManager.canTrade(market, totalAssetKrw)
         if (!riskCheck.canTrade) {
@@ -273,161 +368,185 @@ class TradingEngine(
                 slackNotifier.sendWarning(market, "리스크 체크 실패: ${riskCheck.reason}")
                 riskAlertTracker.recordAlert(market)
             }
-            return
+            return false
         }
 
-        // 2.5. 일일 손실 한도 체크
         if (!dailyLossLimitService.canTrade()) {
             log.warn("[$market] 일일 손실 한도 도달로 트레이딩 중지: ${dailyLossLimitService.tradingHaltedReason}")
             slackNotifier.sendError(market, "일일 손실 한도 도달: ${dailyLossLimitService.tradingHaltedReason}")
-            return
+            return false
+        }
+        return true
+    }
+
+    private fun resolveOrderAmount(
+        market: String,
+        signal: TradingSignal,
+        state: MarketState,
+        balances: BalanceSnapshot
+    ): BigDecimal? {
+        val riskBasedPositionSize = riskManager.calculatePositionSize(market, balances.krwBalance, signal.confidence)
+
+        return when (signal.action) {
+            SignalAction.BUY -> resolveBuyOrderAmount(market, state, riskBasedPositionSize, balances)
+            SignalAction.SELL -> resolveSellOrderAmount(market, state, balances)
+            SignalAction.HOLD -> null
+        }
+    }
+
+    private fun resolveBuyOrderAmount(
+        market: String,
+        state: MarketState,
+        riskBasedPositionSize: BigDecimal,
+        balances: BalanceSnapshot
+    ): BigDecimal? {
+        // KRW 잔고 확인
+        if (riskBasedPositionSize > balances.krwBalance) {
+            log.warn("[$market] KRW 잔고 부족: 필요 $riskBasedPositionSize, 보유 ${balances.krwBalance}")
+            return null
         }
 
-        // 3. 주문 금액 산정
-        val riskBasedPositionSize = riskManager.calculatePositionSize(market, krwBalance, signal.confidence)
-        var orderAmountKrw = riskBasedPositionSize
-
-        // [BUG FIX] 매수/매도 모두 잔고 체크 + 중복 매수 방지
-        val coinSymbol = PositionHelper.extractCoinSymbol(market)
-        val coinBalance = balances.find { it.currency == coinSymbol }?.balance ?: BigDecimal.ZERO
-
-        if (signal.action == SignalAction.BUY) {
-            // KRW 잔고 확인
-            if (orderAmountKrw > krwBalance) {
-                log.warn("[$market] KRW 잔고 부족: 필요 $orderAmountKrw, 보유 $krwBalance")
-                return
-            }
-
-            // [무한 루프 방지 + 엔진 간 충돌 방지]
-            // 1. 이미 코인을 보유하고 있으면 추가 매수 금지
-            val coinValueKrw = coinBalance.multiply(state.currentPrice)
-            if (coinValueKrw >= BigDecimal("5000")) {
-                log.warn("[$market] 이미 $coinSymbol 보유 중: ${coinBalance} (${coinValueKrw}원 상당) - 중복 매수 방지")
-                return
-            }
-
-            // 2. 다른 엔진(VolumeSurge, MemeScalper)에서 해당 마켓을 점유 중인지 확인
-            if (isOccupiedByOtherEngines(market)) {
-                log.warn("[$market] 다른 엔진 점유 중 - TradingEngine 진입 차단")
-                return
-            }
-        } else if (signal.action == SignalAction.SELL) {
-            // 매도 시 코인 잔고 확인
-            if (coinBalance <= BigDecimal.ZERO) {
-                log.warn("[$market] $coinSymbol 잔고 없음: $coinBalance - 매도 취소")
-                return
-            }
-
-            // SELL은 KRW 잔고가 아니라 보유 코인 가치 기준으로 주문 금액 산정
-            val sellableAmountKrw = coinBalance.multiply(state.currentPrice)
-            if (sellableAmountKrw < TradingConstants.MIN_ORDER_AMOUNT_KRW) {
-                log.warn(
-                    "[$market] 매도 가능 금액 최소 주문 미달: ${sellableAmountKrw}원 < ${TradingConstants.MIN_ORDER_AMOUNT_KRW}원"
-                )
-                return
-            }
-            orderAmountKrw = sellableAmountKrw
-        }
-
-        if (orderAmountKrw < TradingConstants.MIN_ORDER_AMOUNT_KRW) {
-            log.info(
-                "[$market] 주문 금액 최소치 미달로 실행 스킵: amount=$orderAmountKrw, min=${TradingConstants.MIN_ORDER_AMOUNT_KRW}"
+        // [무한 루프 방지 + 엔진 간 충돌 방지]
+        // 1. 이미 코인을 보유하고 있으면 추가 매수 금지
+        val coinValueKrw = balances.coinBalance.multiply(state.currentPrice)
+        if (coinValueKrw >= TradingConstants.MIN_ORDER_AMOUNT_KRW) {
+            log.warn(
+                "[$market] 이미 ${balances.coinSymbol} 보유 중: ${balances.coinBalance} (${coinValueKrw}원 상당) - 중복 매수 방지"
             )
+            return null
+        }
+
+        // 2. 다른 엔진(VolumeSurge, MemeScalper)에서 해당 마켓을 점유 중인지 확인
+        if (isOccupiedByOtherEngines(market)) {
+            log.warn("[$market] 다른 엔진 점유 중 - TradingEngine 진입 차단")
+            return null
+        }
+
+        return riskBasedPositionSize
+    }
+
+    private fun resolveSellOrderAmount(
+        market: String,
+        state: MarketState,
+        balances: BalanceSnapshot
+    ): BigDecimal? {
+        // 매도 시 코인 잔고 확인
+        if (balances.coinBalance <= BigDecimal.ZERO) {
+            log.warn("[$market] ${balances.coinSymbol} 잔고 없음: ${balances.coinBalance} - 매도 취소")
+            return null
+        }
+
+        // SELL은 KRW 잔고가 아니라 보유 코인 가치 기준으로 주문 금액 산정
+        val sellableAmountKrw = balances.coinBalance.multiply(state.currentPrice)
+        if (sellableAmountKrw < TradingConstants.MIN_ORDER_AMOUNT_KRW) {
+            log.warn(
+                "[$market] 매도 가능 금액 최소 주문 미달: ${sellableAmountKrw}원 < ${TradingConstants.MIN_ORDER_AMOUNT_KRW}원"
+            )
+            return null
+        }
+        return sellableAmountKrw
+    }
+
+    private fun handleSuccessfulOrderResult(
+        market: String,
+        signal: TradingSignal,
+        state: MarketState,
+        result: com.ant.cointrading.order.OrderResult
+    ) {
+        val hasExecutedFill = hasExecutedFill(result)
+        if (!hasExecutedFill && result.isPending) {
+            log.info("[$market] 주문 접수됨(미체결) - 체결 전까지 루프가드/실현손익 반영을 보류합니다")
+        }
+
+        // [무한 루프 방지] 체결 발생 시에만 매수/매도 시간 갱신
+        if (hasExecutedFill) {
+            recordExecutionTimestamp(market, signal.action)
+        }
+
+        handleDcaPositionTrackingIfNeeded(market, signal, state, result, hasExecutedFill)
+
+        val notificationMessage = buildTradeNotificationMessage(result, hasExecutedFill)
+        log.info("[$market] $notificationMessage")
+
+        slackNotifier.sendTradeNotification(signal, result)
+
+        // 일일 손실 한도에 실제 실현손익 기록 (매도 체결 건만)
+        if (signal.action == SignalAction.SELL && hasExecutedFill) {
+            recordDailyPnlFromExecutedTrade(market, result)
+            // SELL 체결 후 리스크 통계를 즉시 동기화해 다음 주문 사이징/차단 판단에 반영
+            riskManager.refreshStats(market)
+        }
+    }
+
+    private fun handleDcaPositionTrackingIfNeeded(
+        market: String,
+        signal: TradingSignal,
+        state: MarketState,
+        result: com.ant.cointrading.order.OrderResult,
+        hasExecutedFill: Boolean
+    ) {
+        // DCA 전략인 경우 포지션 추적 (실제 체결된 경우만 반영)
+        if (signal.strategy != "DCA" || !hasExecutedFill) return
+
+        val quantity = result.executedQuantity?.toDouble() ?: 0.0
+        val price = result.price?.toDouble() ?: 0.0
+        val amount = quantity * price
+
+        if (quantity <= 0.0 || price <= 0.0) {
+            log.warn("[$market] DCA 체결 데이터 불완전(수량=$quantity, 가격=$price) - 포지션 반영 스킵")
             return
         }
 
-        // 4. 주문 실행 (MarketConditionChecker는 OrderExecutor 내부에서 호출)
-        val result = orderExecutor.execute(signal, orderAmountKrw)
-
-        // 5. 결과 처리
-        if (result.success) {
-            val hasExecutedFill = hasExecutedFill(result)
-            if (!hasExecutedFill && result.isPending) {
-                log.info("[$market] 주문 접수됨(미체결) - 체결 전까지 루프가드/실현손익 반영을 보류합니다")
+        when (signal.action) {
+            SignalAction.BUY -> {
+                (state.currentStrategy as? DcaStrategy)?.recordBuy(market, quantity, price, amount)
             }
-
-            // [무한 루프 방지] 체결 발생 시에만 매수/매도 시간 갱신
-            if (hasExecutedFill) {
-                recordExecutionTimestamp(market, signal.action)
-            }
-
-            // DCA 전략인 경우 포지션 추적 (실제 체결된 경우만 반영)
-            if (signal.strategy == "DCA" && hasExecutedFill) {
-                val quantity = result.executedQuantity?.toDouble() ?: 0.0
-                val price = result.price?.toDouble() ?: 0.0
-                val amount = quantity * price
-
-                if (quantity > 0.0 && price > 0.0) {
-                    when (signal.action) {
-                        SignalAction.BUY -> {
-                            (state.currentStrategy as? DcaStrategy)?.recordBuy(market, quantity, price, amount)
-                        }
-                        SignalAction.SELL -> {
-                            val exitReason = when {
-                                signal.reason.contains("익절") -> "TAKE_PROFIT"
-                                signal.reason.contains("손절") -> "STOP_LOSS"
-                                signal.reason.contains("타임아웃") -> "TIMEOUT"
-                                else -> "SIGNAL"
-                            }
-                            (state.currentStrategy as? DcaStrategy)?.recordSell(market, quantity, price, exitReason)
-                        }
-                        else -> {}
-                    }
-                } else {
-                    log.warn("[$market] DCA 체결 데이터 불완전(수량=$quantity, 가격=$price) - 포지션 반영 스킵")
+            SignalAction.SELL -> {
+                val exitReason = when {
+                    signal.reason.contains("익절") -> "TAKE_PROFIT"
+                    signal.reason.contains("손절") -> "STOP_LOSS"
+                    signal.reason.contains("타임아웃") -> "TIMEOUT"
+                    else -> "SIGNAL"
                 }
+                (state.currentStrategy as? DcaStrategy)?.recordSell(market, quantity, price, exitReason)
             }
-
-            // 슬리피지 경고 포함 알림
-            val notificationMessage = buildString {
-                if (hasExecutedFill) {
-                    append("체결 완료")
-                    if (result.isPartialFill) {
-                        append(" (부분 ${String.format("%.1f", result.fillRatePercent)}%)")
-                    }
-                    if (result.slippagePercent > 0.5) {
-                        append(" ⚠️슬리피지: ${String.format("%.2f", result.slippagePercent)}%")
-                    }
-                    result.fee?.let { append(" | 수수료: $it") }
-                } else if (result.isPending) {
-                    append("주문 접수됨 (PendingOrderManager에서 체결 관리 중)")
-                } else {
-                    append("주문 성공 응답 수신 (체결 수량 미확인)")
-                }
-            }
-            log.info("[$market] $notificationMessage")
-
-            slackNotifier.sendTradeNotification(signal, result)
-
-            // 일일 손실 한도에 실제 실현손익 기록 (매도 체결 건만)
-            if (signal.action == SignalAction.SELL && hasExecutedFill) {
-                recordDailyPnlFromExecutedTrade(market, result)
-                // SELL 체결 후 리스크 통계를 즉시 동기화해 다음 주문 사이징/차단 판단에 반영
-                riskManager.refreshStats(market)
-            }
-        } else {
-            // 실패 사유별 처리
-            val errorDetail = when (result.rejectionReason) {
-                OrderRejectionReason.MARKET_CONDITION -> "시장 상태 불량 - 스프레드/유동성 확인"
-                OrderRejectionReason.API_ERROR -> "API 장애 - 거래소 상태 확인"
-                OrderRejectionReason.VERIFICATION_FAILED -> "주문 상태 확인 실패 - 수동 확인 필요"
-                OrderRejectionReason.NO_FILL -> "체결 없음 - 유동성 부족 의심"
-                OrderRejectionReason.EXCEPTION -> "시스템 예외"
-                OrderRejectionReason.CIRCUIT_BREAKER -> "서킷 브레이커 발동"
-                OrderRejectionReason.BELOW_MIN_ORDER_AMOUNT -> "최소 주문 금액(5000원) 미달"
-                OrderRejectionReason.MARKET_SUSPENDED -> "거래 정지/상장 폐지 코인"
-                null -> result.message
-            }
-            log.error("[$market] 주문 실패: $errorDetail")
-            slackNotifier.sendError(market, "주문 실패: $errorDetail\n원인: ${result.rejectionReason}")
+            SignalAction.HOLD -> {}
         }
+    }
+
+    private fun buildTradeNotificationMessage(
+        result: com.ant.cointrading.order.OrderResult,
+        hasExecutedFill: Boolean
+    ): String {
+        return buildString {
+            if (hasExecutedFill) {
+                append("체결 완료")
+                if (result.isPartialFill) {
+                    append(" (부분 ${String.format("%.1f", result.fillRatePercent)}%)")
+                }
+                if (result.slippagePercent > 0.5) {
+                    append(" ⚠️슬리피지: ${String.format("%.2f", result.slippagePercent)}%")
+                }
+                result.fee?.let { append(" | 수수료: $it") }
+            } else if (result.isPending) {
+                append("주문 접수됨 (PendingOrderManager에서 체결 관리 중)")
+            } else {
+                append("주문 성공 응답 수신 (체결 수량 미확인)")
+            }
+        }
+    }
+
+    private fun handleFailedOrderResult(market: String, result: com.ant.cointrading.order.OrderResult) {
+        val errorDetail = resolveOrderFailureDetail(result.rejectionReason, result.message)
+        log.error("[$market] 주문 실패: $errorDetail")
+        slackNotifier.sendError(market, "주문 실패: $errorDetail\n원인: ${result.rejectionReason}")
     }
 
     /**
      * 총 자산 계산 (KRW 환산)
      */
     private fun calculateTotalAssetKrw(
-        balances: List<com.ant.cointrading.api.bithumb.Balance>,
+        balances: List<Balance>,
         currentPrice: BigDecimal,
         market: String
     ): BigDecimal {
@@ -725,53 +844,70 @@ class TradingEngine(
      * 레짐 확인 및 거래 중지/재개 처리
      */
     private fun checkRegimeAndSuspendTrading() {
+        val snapshot = collectRegimeSnapshot() ?: return
         val now = Instant.now()
-        val regimes = marketStates.values.mapNotNull { it.regime }
+        logRegimeSnapshot(snapshot)
+        processRegimeTransition(snapshot, now)
+    }
 
+    private fun collectRegimeSnapshot(): RegimeSnapshot? {
+        val regimes = marketStates.values.mapNotNull { it.regime }
         if (regimes.isEmpty()) {
             log.debug("레짐 데이터 없음, 거래 중지 체크 스킵")
-            return
+            return null
         }
 
-        // 하락 추세 마켓 비율 계산
         val bearMarketCount = regimes.count { it.regime == MarketRegime.BEAR_TREND }
         val bearMarketRatio = bearMarketCount.toDouble() / regimes.size
+        val tradingEnabled = keyValueService.get("trading.enabled", "true").toBoolean()
+        return RegimeSnapshot(
+            totalMarkets = regimes.size,
+            bearMarketCount = bearMarketCount,
+            bearMarketRatio = bearMarketRatio,
+            tradingEnabled = tradingEnabled
+        )
+    }
 
-        // 현재 거래 활성화 상태 확인
-        val currentTradingEnabled = keyValueService.get("trading.enabled", "true").toBoolean()
+    private fun logRegimeSnapshot(snapshot: RegimeSnapshot) {
+        log.debug(
+            "레짐 현황: 하락=${snapshot.bearMarketCount}/${snapshot.totalMarkets} " +
+                "(${String.format("%.0f", snapshot.bearMarketRatio * 100)}%), " +
+                "거래활성=${snapshot.tradingEnabled}, 중지상태=${isTradingSuspendedByRegime}"
+        )
+    }
 
-        log.debug("레짐 현황: 하락=${bearMarketCount}/${regimes.size} (${String.format("%.0f", bearMarketRatio * 100)}%), " +
-                  "거래활성=${currentTradingEnabled}, 중지상태=${isTradingSuspendedByRegime}")
-
+    private fun processRegimeTransition(snapshot: RegimeSnapshot, now: Instant) {
         when {
-            // 하락 추세가 80% 이상이면 거래 중지 고려
-            bearMarketRatio >= BEAR_TREND_THRESHOLD -> {
-                if (lastBearTrendDetected == null) {
-                    lastBearTrendDetected = now
-                    log.warn("하락 추세 감지: ${String.format("%.0f", bearMarketRatio * 100)}% 마켓이 BEAR_TREND")
-                }
-
-                val bearDurationMinutes = Duration.between(lastBearTrendDetected!!, now).toMinutes()
-
-                // 최소 30분간 하락 추세 유지 시 거래 중지
-                if (bearDurationMinutes >= MIN_BEAR_DURATION_MINUTES && !isTradingSuspendedByRegime) {
-                    suspendTradingDueToRegime(bearMarketRatio, bearDurationMinutes)
-                }
-            }
-
-            // 상승/횡보 50% 이상이면 거래 재개
-            bearMarketRatio < (1.0 - BULL_TREND_THRESHOLD) -> {
-                if (isTradingSuspendedByRegime) {
-                    resumeTradingDueToRegime(bearMarketRatio)
-                }
-                lastBearTrendDetected = null
-            }
-
-            // 중간 상태: 시간 초기화만
-            else -> {
-                lastBearTrendDetected = null
-            }
+            isBearDominantRegime(snapshot.bearMarketRatio) ->
+                handleBearDominantRegime(snapshot.bearMarketRatio, now)
+            isRecoveryRegime(snapshot.bearMarketRatio) ->
+                handleRecoveryRegime(snapshot.bearMarketRatio)
+            else -> resetBearTrendDetection()
         }
+    }
+
+    private fun handleBearDominantRegime(bearMarketRatio: Double, now: Instant) {
+        if (lastBearTrendDetected == null) {
+            lastBearTrendDetected = now
+            log.warn("하락 추세 감지: ${String.format("%.0f", bearMarketRatio * 100)}% 마켓이 BEAR_TREND")
+        }
+
+        val detectedAt = lastBearTrendDetected ?: now
+        val bearDurationMinutes = Duration.between(detectedAt, now).toMinutes()
+        if (bearDurationMinutes >= MIN_BEAR_DURATION_MINUTES && !isTradingSuspendedByRegime) {
+            suspendTradingDueToRegime(bearMarketRatio, bearDurationMinutes)
+        }
+    }
+
+    private fun handleRecoveryRegime(bearMarketRatio: Double) {
+        if (isTradingSuspendedByRegime) {
+            resumeTradingDueToRegime(bearMarketRatio)
+        }
+        resetBearTrendDetection()
+    }
+
+    private fun resetBearTrendDetection() {
+        lastBearTrendDetected = null
     }
 
     /**
