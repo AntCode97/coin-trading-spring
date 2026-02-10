@@ -1,13 +1,15 @@
 package com.ant.cointrading.controller
 
+import com.ant.cointrading.repository.MemeScalperTradeEntity
 import com.ant.cointrading.repository.MemeScalperTradeRepository
+import com.ant.cointrading.repository.VolumeSurgeTradeEntity
 import com.ant.cointrading.repository.VolumeSurgeTradeRepository
 import com.ant.cointrading.stats.SharpeRatioCalculator
-import org.springframework.web.bind.annotation.*
-import java.math.BigDecimal
+import org.springframework.web.bind.annotation.GetMapping
+import org.springframework.web.bind.annotation.PathVariable
+import org.springframework.web.bind.annotation.RequestMapping
+import org.springframework.web.bind.annotation.RestController
 import java.time.Instant
-import java.time.LocalDate
-import java.time.ZoneId
 import java.time.temporal.ChronoUnit
 
 /**
@@ -25,20 +27,31 @@ class PerformanceDashboardController(
     private val memeScalperRepository: MemeScalperTradeRepository,
     private val volumeSurgeRepository: VolumeSurgeTradeRepository
 ) {
+    private companion object {
+        const val MEME_SCALPER = "meme_scalper"
+        const val VOLUME_SURGE = "volume_surge"
+        const val CLOSED = "CLOSED"
+    }
+
+    private data class ClosedTrade(
+        val entryTime: Instant?,
+        val createdAt: Instant?,
+        val pnlAmount: Double
+    )
 
     /**
      * 종합 대시보드
      */
     @GetMapping("/dashboard")
     fun getDashboard(): Map<String, Any?> {
-        val memeStats = calculateStrategyStats("meme_scalper", memeScalperRepository)
-        val volumeStats = calculateStrategyStats("volume_surge", volumeSurgeRepository)
+        val memeStats = calculateStrategyStats(MEME_SCALPER, loadClosedMemeTrades())
+        val volumeStats = calculateStrategyStats(VOLUME_SURGE, loadClosedVolumeSurgeTrades())
 
         return mapOf(
             "timestamp" to Instant.now(),
             "strategies" to mapOf(
-                "meme_scalper" to memeStats,
-                "volume_surge" to volumeStats
+                MEME_SCALPER to memeStats,
+                VOLUME_SURGE to volumeStats
             ),
             "summary" to calculateSummary(memeStats, volumeStats)
         )
@@ -49,12 +62,7 @@ class PerformanceDashboardController(
      */
     @GetMapping("/strategy/{strategy}")
     fun getStrategyPerformance(@PathVariable strategy: String): Map<String, Any?> {
-        val stats = when (strategy) {
-            "meme_scalper" -> calculateStrategyStats(strategy, memeScalperRepository)
-            "volume_surge" -> calculateStrategyStats(strategy, volumeSurgeRepository)
-            else -> mapOf("error" to "Unknown strategy")
-        }
-        return stats
+        return strategyStats(strategy) ?: mapOf("error" to "Unknown strategy")
     }
 
     /**
@@ -62,16 +70,12 @@ class PerformanceDashboardController(
      */
     @GetMapping("/kelly/{strategy}")
     fun getKellyCriterion(@PathVariable strategy: String): Map<String, Any?> {
-        val stats = when (strategy) {
-            "meme_scalper" -> calculateStrategyStats(strategy, memeScalperRepository)
-            "volume_surge" -> calculateStrategyStats(strategy, volumeSurgeRepository)
-            else -> return mapOf("error" to "Unknown strategy")
-        }
+        val stats = strategyStats(strategy) ?: return mapOf("error" to "Unknown strategy")
 
-        val totalTrades = stats["totalTrades"] as? Int ?: 0
-        val winningTrades = stats["winningTrades"] as? Int ?: 0
-        val avgWin = stats["avgWin"] as? Double ?: 0.0
-        val avgLoss = stats["avgLoss"] as? Double ?: 0.0
+        val totalTrades = parseInt(stats["totalTrades"])
+        val winningTrades = parseInt(stats["winningTrades"])
+        val avgWin = parseDouble(stats["avgWin"])
+        val avgLoss = parseDouble(stats["avgLoss"])
 
         if (totalTrades < 30 || avgLoss == 0.0) {
             return mapOf(
@@ -82,7 +86,7 @@ class PerformanceDashboardController(
         }
 
         val winRate = winningTrades.toDouble() / totalTrades
-        val b = avgWin / avgLoss  // 배당률
+        val b = avgWin / avgLoss
         val p = winRate
         val q = 1.0 - winRate
 
@@ -109,19 +113,45 @@ class PerformanceDashboardController(
         )
     }
 
+    private fun strategyStats(strategy: String): Map<String, Any?>? {
+        return when (strategy) {
+            MEME_SCALPER -> calculateStrategyStats(strategy, loadClosedMemeTrades())
+            VOLUME_SURGE -> calculateStrategyStats(strategy, loadClosedVolumeSurgeTrades())
+            else -> null
+        }
+    }
+
+    private fun loadClosedMemeTrades(): List<ClosedTrade> {
+        return memeScalperRepository.findByStatus(CLOSED).map { it.toClosedTrade() }
+    }
+
+    private fun loadClosedVolumeSurgeTrades(): List<ClosedTrade> {
+        return volumeSurgeRepository.findByStatus(CLOSED).map { it.toClosedTrade() }
+    }
+
+    private fun MemeScalperTradeEntity.toClosedTrade(): ClosedTrade {
+        return ClosedTrade(
+            entryTime = entryTime,
+            createdAt = createdAt,
+            pnlAmount = pnlAmount ?: 0.0
+        )
+    }
+
+    private fun VolumeSurgeTradeEntity.toClosedTrade(): ClosedTrade {
+        return ClosedTrade(
+            entryTime = entryTime,
+            createdAt = createdAt,
+            pnlAmount = pnlAmount ?: 0.0
+        )
+    }
+
     /**
      * 전략별 통계 계산 (Jim Simons 스타일)
      */
     private fun calculateStrategyStats(
         strategyName: String,
-        repository: Any
+        trades: List<ClosedTrade>
     ): Map<String, Any?> {
-        val trades = when (repository) {
-            is MemeScalperTradeRepository -> repository.findByStatus("CLOSED")
-            is VolumeSurgeTradeRepository -> repository.findByStatus("CLOSED")
-            else -> emptyList()
-        }
-
         if (trades.isEmpty()) {
             return mapOf(
                 "strategy" to strategyName,
@@ -131,11 +161,11 @@ class PerformanceDashboardController(
         }
 
         val totalTrades = trades.size
-        val winningTrades = trades.count { getPnlAmount(it) > 0 }
-        val losingTrades = trades.count { getPnlAmount(it) < 0 }
+        val winningTrades = trades.count { it.pnlAmount > 0 }
+        val losingTrades = trades.count { it.pnlAmount < 0 }
         val winRate = if (totalTrades > 0) winningTrades.toDouble() / totalTrades else 0.0
 
-        val pnls = trades.map { getPnlAmount(it) }
+        val pnls = trades.map { it.pnlAmount }
         val totalPnl = pnls.sum()
         val avgPnl = if (totalTrades > 0) pnls.average() else 0.0
 
@@ -145,7 +175,7 @@ class PerformanceDashboardController(
         val avgLoss = if (losingPnls.isNotEmpty()) losingPnls.average() else 0.0
 
         // Sharpe Ratio (암호화폐 적용: 자기상관 보정)
-        val capital = 10000.0  // 1만원 기준
+        val capital = 10000.0
         val periodDays = calculatePeriodDays(trades)
         val sharpeRatio = SharpeRatioCalculator.calculate(
             pnls = pnls,
@@ -155,8 +185,8 @@ class PerformanceDashboardController(
 
         // 최근 7일 거래
         val sevenDaysAgo = Instant.now().minusSeconds(7 * 24 * 60 * 60)
-        val recentTrades = trades.filter { getCreatedAt(it)!!.isAfter(sevenDaysAgo) }
-        val recentPnl = recentTrades.sumOf { getPnlAmount(it) }
+        val recentTrades = trades.filter { it.createdAt?.isAfter(sevenDaysAgo) == true }
+        val recentPnl = recentTrades.sumOf { it.pnlAmount }
 
         return mapOf(
             "strategy" to strategyName,
@@ -180,10 +210,10 @@ class PerformanceDashboardController(
     /**
      * 거래 기간 계산 (일)
      */
-    private fun calculatePeriodDays(trades: List<Any>): Int {
+    private fun calculatePeriodDays(trades: List<ClosedTrade>): Int {
         if (trades.isEmpty()) return 1
 
-        val timestamps = trades.mapNotNull { getEntryTime(it) }.sorted()
+        val timestamps = trades.mapNotNull { it.entryTime }.sorted()
 
         if (timestamps.size < 2) return 1
 
@@ -194,14 +224,6 @@ class PerformanceDashboardController(
         return maxOf(days, 1)
     }
 
-    private fun getEntryTime(trade: Any): Instant? {
-        return when (trade) {
-            is com.ant.cointrading.repository.MemeScalperTradeEntity -> trade.entryTime
-            is com.ant.cointrading.repository.VolumeSurgeTradeEntity -> trade.entryTime
-            else -> null
-        }
-    }
-
     /**
      * 종합 요약
      */
@@ -209,31 +231,21 @@ class PerformanceDashboardController(
         memeStats: Map<String, Any?>,
         volumeStats: Map<String, Any?>
     ): Map<String, Any?> {
-        val totalTrades = (memeStats["totalTrades"] as? Int ?: 0) +
-                          (volumeStats["totalTrades"] as? Int ?: 0)
-        val totalPnl = parseDouble(memeStats["totalPnl"]) +
-                       parseDouble(volumeStats["totalPnl"])
+        val totalTrades = parseInt(memeStats["totalTrades"]) + parseInt(volumeStats["totalTrades"])
+        val totalPnl = parseDouble(memeStats["totalPnl"]) + parseDouble(volumeStats["totalPnl"])
 
         return mapOf(
             "totalTrades" to totalTrades,
             "totalPnl" to String.format("%.0f", totalPnl),
-            "activeStrategies" to listOf("meme_scalper", "volume_surge")
+            "activeStrategies" to listOf(MEME_SCALPER, VOLUME_SURGE)
         )
     }
 
-    private fun getPnlAmount(trade: Any): Double {
-        return when (trade) {
-            is com.ant.cointrading.repository.MemeScalperTradeEntity -> trade.pnlAmount ?: 0.0
-            is com.ant.cointrading.repository.VolumeSurgeTradeEntity -> trade.pnlAmount ?: 0.0
-            else -> 0.0
-        }
-    }
-
-    private fun getCreatedAt(trade: Any): Instant? {
-        return when (trade) {
-            is com.ant.cointrading.repository.MemeScalperTradeEntity -> trade.createdAt
-            is com.ant.cointrading.repository.VolumeSurgeTradeEntity -> trade.createdAt
-            else -> null
+    private fun parseInt(value: Any?): Int {
+        return when (value) {
+            is Number -> value.toInt()
+            is String -> value.replace("[^0-9-]".toRegex(), "").toIntOrNull() ?: 0
+            else -> 0
         }
     }
 
