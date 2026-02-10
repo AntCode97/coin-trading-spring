@@ -3,6 +3,8 @@ package com.ant.cointrading.controller
 import com.ant.cointrading.regime.HmmRegimeDetector
 import com.ant.cointrading.service.KeyValueService
 import com.ant.cointrading.service.ModelSelector
+import com.ant.cointrading.util.apiFailure
+import com.ant.cointrading.util.apiSuccess
 import org.slf4j.LoggerFactory
 import org.springframework.http.ResponseEntity
 import org.springframework.web.bind.annotation.*
@@ -39,7 +41,7 @@ class SettingsController(
      * 전체 설정 조회
      */
     @GetMapping
-    fun getAllSettings(): ResponseEntity<Map<String, Any>> {
+    fun getAllSettings(): ResponseEntity<Map<String, Any?>> {
         val settings = keyValueService.getAllEntities().map { entity ->
             mapOf(
                 "key" to entity.key,
@@ -50,11 +52,10 @@ class SettingsController(
             )
         }
 
-        return ResponseEntity.ok(mapOf(
-            "success" to true,
+        return okSuccess(
             "count" to settings.size,
             "settings" to settings
-        ))
+        )
     }
 
     /**
@@ -65,17 +66,12 @@ class SettingsController(
         val value = keyValueService.get(key)
 
         return if (value != null) {
-            ResponseEntity.ok(mapOf(
-                "success" to true,
+            okSuccess(
                 "key" to key,
                 "value" to value
-            ))
+            )
         } else {
-            ResponseEntity.ok(mapOf(
-                "success" to false,
-                "key" to key,
-                "error" to "Key not found"
-            ))
+            okFailure("Key not found", "key" to key)
         }
     }
 
@@ -83,7 +79,7 @@ class SettingsController(
      * 설정 추가/수정
      */
     @PostMapping
-    fun setSetting(@RequestBody request: SetSettingRequest): ResponseEntity<Map<String, Any>> {
+    fun setSetting(@RequestBody request: SetSettingRequest): ResponseEntity<Map<String, Any?>> {
         log.info("설정 변경 요청: ${request.key} = ${request.value}")
 
         val success = keyValueService.set(
@@ -93,43 +89,42 @@ class SettingsController(
             description = request.description
         )
 
-        return ResponseEntity.ok(mapOf(
+        return ok(
             "success" to success,
             "key" to request.key,
             "value" to request.value,
             "message" to if (success) "설정이 저장되었습니다" else "설정 저장 실패"
-        ))
+        )
     }
 
     /**
      * 설정 삭제
      */
     @DeleteMapping("/{key}")
-    fun deleteSetting(@PathVariable key: String): ResponseEntity<Map<String, Any>> {
+    fun deleteSetting(@PathVariable key: String): ResponseEntity<Map<String, Any?>> {
         log.info("설정 삭제 요청: $key")
 
         val success = keyValueService.delete(key)
 
-        return ResponseEntity.ok(mapOf(
+        return ok(
             "success" to success,
             "key" to key,
             "message" to if (success) "설정이 삭제되었습니다" else "설정 삭제 실패"
-        ))
+        )
     }
 
     /**
      * 카테고리별 설정 조회
      */
     @GetMapping("/category/{category}")
-    fun getByCategory(@PathVariable category: String): ResponseEntity<Map<String, Any>> {
+    fun getByCategory(@PathVariable category: String): ResponseEntity<Map<String, Any?>> {
         val settings = keyValueService.getByCategory(category)
 
-        return ResponseEntity.ok(mapOf(
-            "success" to true,
+        return okSuccess(
             "category" to category,
             "count" to settings.size,
             "settings" to settings
-        ))
+        )
     }
 
     // ===========================================
@@ -144,18 +139,17 @@ class SettingsController(
         val status = modelSelector.getStatus()
         val providerModels = modelSelector.getProviderModels()
 
-        return ResponseEntity.ok(mapOf(
-            "success" to true,
+        return okSuccess(
             "status" to status,
             "providerModels" to providerModels
-        ))
+        )
     }
 
     /**
      * LLM 모델 변경
      */
     @PostMapping("/model")
-    fun setModel(@RequestBody request: SetModelRequest): ResponseEntity<Map<String, Any>> {
+    fun setModel(@RequestBody request: SetModelRequest): ResponseEntity<Map<String, Any?>> {
         log.info("LLM 모델 변경 요청: provider=${request.provider}, model=${request.modelName}")
 
         var success = true
@@ -183,24 +177,23 @@ class SettingsController(
 
         val currentStatus = modelSelector.getStatus()
 
-        return ResponseEntity.ok(mapOf(
+        return ok(
             "success" to success,
             "messages" to messages,
             "currentStatus" to currentStatus
-        ))
+        )
     }
 
     /**
      * 사용 가능한 Provider 목록
      */
     @GetMapping("/model/providers")
-    fun getAvailableProviders(): ResponseEntity<Map<String, Any>> {
-        return ResponseEntity.ok(mapOf(
-            "success" to true,
+    fun getAvailableProviders(): ResponseEntity<Map<String, Any?>> {
+        return okSuccess(
             "availableProviders" to modelSelector.getAvailableProviders(),
             "allProviders" to modelSelector.getProviderModels().keys,
             "providerModels" to modelSelector.getProviderModels()
-        ))
+        )
     }
 
     // ===========================================
@@ -211,25 +204,23 @@ class SettingsController(
      * 캐시 갱신
      */
     @PostMapping("/cache/refresh")
-    fun refreshCache(): ResponseEntity<Map<String, Any>> {
+    fun refreshCache(): ResponseEntity<Map<String, Any?>> {
         keyValueService.refreshCache()
 
-        return ResponseEntity.ok(mapOf(
-            "success" to true,
+        return okSuccess(
             "message" to "캐시가 갱신되었습니다",
             "cacheStats" to keyValueService.getCacheStats()
-        ))
+        )
     }
 
     /**
      * 캐시 통계
      */
     @GetMapping("/cache/stats")
-    fun getCacheStats(): ResponseEntity<Map<String, Any>> {
-        return ResponseEntity.ok(mapOf(
-            "success" to true,
+    fun getCacheStats(): ResponseEntity<Map<String, Any?>> {
+        return okSuccess(
             "stats" to keyValueService.getCacheStats()
-        ))
+        )
     }
 
     // ===========================================
@@ -244,47 +235,53 @@ class SettingsController(
         val currentType = keyValueService.get("regime.detector.type", "simple")
         val hmmStatus = hmmRegimeDetector.getStatus()
 
-        return ResponseEntity.ok(mapOf(
-            "success" to true,
+        return okSuccess(
             "currentDetector" to currentType,
             "availableDetectors" to listOf("simple", "hmm"),
             "hmm" to hmmStatus
-        ))
+        )
     }
 
     /**
      * 레짐 감지기 변경
      */
     @PostMapping("/regime")
-    fun setRegimeDetector(@RequestBody request: SetRegimeDetectorRequest): ResponseEntity<Map<String, Any>> {
+    fun setRegimeDetector(@RequestBody request: SetRegimeDetectorRequest): ResponseEntity<Map<String, Any?>> {
         val validTypes = listOf("simple", "hmm")
 
         if (request.type !in validTypes) {
-            return ResponseEntity.ok(mapOf(
-                "success" to false,
-                "error" to "Invalid detector type. Available: $validTypes"
-            ))
+            return okFailure("Invalid detector type. Available: $validTypes")
         }
 
         keyValueService.set("regime.detector.type", request.type, "regime", "레짐 감지기 유형")
         log.info("레짐 감지기 변경: ${request.type}")
 
-        return ResponseEntity.ok(mapOf(
-            "success" to true,
+        return okSuccess(
             "currentDetector" to request.type,
             "message" to "레짐 감지기가 '${request.type}'(으)로 변경되었습니다"
-        ))
+        )
     }
 
     /**
      * HMM 전이 확률 조회
      */
     @GetMapping("/regime/hmm/transitions")
-    fun getHmmTransitions(): ResponseEntity<Map<String, Any>> {
-        return ResponseEntity.ok(mapOf(
-            "success" to true,
+    fun getHmmTransitions(): ResponseEntity<Map<String, Any?>> {
+        return okSuccess(
             "transitions" to hmmRegimeDetector.getTransitionProbabilities()
-        ))
+        )
+    }
+
+    private fun ok(vararg entries: Pair<String, Any?>): ResponseEntity<Map<String, Any?>> {
+        return ResponseEntity.ok(buildMap { entries.forEach { (key, value) -> put(key, value) } })
+    }
+
+    private fun okSuccess(vararg entries: Pair<String, Any?>): ResponseEntity<Map<String, Any?>> {
+        return ResponseEntity.ok(apiSuccess(*entries))
+    }
+
+    private fun okFailure(error: String, vararg entries: Pair<String, Any?>): ResponseEntity<Map<String, Any?>> {
+        return ResponseEntity.ok(apiFailure(error, *entries))
     }
 }
 

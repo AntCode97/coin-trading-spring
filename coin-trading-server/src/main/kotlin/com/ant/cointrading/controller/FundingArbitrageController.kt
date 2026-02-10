@@ -9,6 +9,7 @@ import com.ant.cointrading.repository.FundingArbPositionRepository
 import com.ant.cointrading.repository.FundingDailyStatsRepository
 import com.ant.cointrading.repository.FundingPaymentRepository
 import com.ant.cointrading.repository.FundingRateRepository
+import com.ant.cointrading.util.apiSuccess
 import org.springframework.web.bind.annotation.*
 import java.time.Instant
 import java.time.LocalDate
@@ -260,22 +261,21 @@ class FundingArbitrageController(
     }
 
     @PostMapping("/toggle-auto-trading")
-    fun toggleAutoTrading(@RequestBody request: ToggleRequest): Map<String, Any> {
+    fun toggleAutoTrading(@RequestBody request: ToggleRequest): Map<String, Any?> {
         properties.autoTradingEnabled = request.enabled
 
         if (request.enabled) {
             engine.init()
         }
 
-        return mapOf(
-            "success" to true,
+        return apiSuccess(
             "autoTradingEnabled" to properties.autoTradingEnabled,
             "message" to if (request.enabled) "자동 거래 활성화" else "자동 거래 비활성화"
         )
     }
 
     @PostMapping("/manual-entry")
-    fun manualEntry(@RequestBody request: ManualEntryRequest): Map<String, Any> {
+    fun manualEntry(@RequestBody request: ManualEntryRequest): Map<String, Any?> {
         val position = FundingArbPositionEntity(
             symbol = request.symbol.uppercase(),
             spotExchange = "BITHUMB",
@@ -291,28 +291,28 @@ class FundingArbitrageController(
 
         val result = positionManager.enterPosition(position)
 
-        return mapOf(
-            "success" to result.success,
+        return statusResponse(
+            success = result.success,
             "message" to if (result.success) "수동 진입 완료" else (result.errorMessage ?: "알 수 없는 오류"),
             "positionId" to (result.orderId ?: "")
         )
     }
 
     @PostMapping("/manual-close")
-    fun manualClose(@RequestBody request: ManualCloseRequest): Map<String, Any> {
+    fun manualClose(@RequestBody request: ManualCloseRequest): Map<String, Any?> {
         val position = positionRepository.findById(request.positionId).orElse(null)
 
         if (position == null) {
-            return mapOf(
-                "success" to false,
+            return statusResponse(
+                success = false,
                 "message" to "포지션을 찾을 수 없습니다"
             )
         }
 
         val result = positionManager.closePosition(position)
 
-        return mapOf(
-            "success" to result.success,
+        return statusResponse(
+            success = result.success,
             "message" to if (result.success) "수동 청산 완료" else (result.errorMessage ?: "알 수 없는 오류"),
             "totalPnl" to result.totalPnl,
             "pnlPercent" to result.pnlPercent
@@ -346,6 +346,13 @@ class FundingArbitrageController(
             },
             "shouldClose" to riskChecker.shouldClosePosition(position)
         )
+    }
+
+    private fun statusResponse(success: Boolean, vararg entries: Pair<String, Any?>): Map<String, Any?> {
+        return buildMap {
+            put("success", success)
+            entries.forEach { (key, value) -> put(key, value) }
+        }
     }
 
     data class ToggleRequest(val enabled: Boolean)
