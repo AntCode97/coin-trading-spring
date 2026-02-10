@@ -56,6 +56,12 @@ class OrderExecutor(
         val feePerUnit: Double
     )
 
+    private data class MatchedLotSummary(
+        val matchedQty: Double,
+        val entryAmount: Double,
+        val entryFee: Double
+    )
+
     companion object {
         // 주문 상태 확인 설정 (OrderExecutor 전용)
         const val MAX_STATUS_CHECK_RETRIES = 3
@@ -1140,6 +1146,25 @@ class OrderExecutor(
     ): PnlCalculator.PnlResult? {
         if (sellQuantity <= 0.0 || sellPrice <= 0.0) return null
 
+        val openLots = buildOpenLotsFromTradeHistory(market, isSimulated)
+        val matchedSummary = matchCurrentSellAgainstOpenLots(openLots, sellQuantity)
+        if (matchedSummary.matchedQty <= 0.0) return null
+
+        val weightedEntryPrice = matchedSummary.entryAmount / matchedSummary.matchedQty
+        val matchedExitFee = if (sellQuantity > 0.0) sellFee * (matchedSummary.matchedQty / sellQuantity) else 0.0
+        return PnlCalculator.calculate(
+            entryPrice = weightedEntryPrice,
+            exitPrice = sellPrice,
+            quantity = matchedSummary.matchedQty,
+            entryFee = matchedSummary.entryFee,
+            exitFee = matchedExitFee
+        )
+    }
+
+    private fun buildOpenLotsFromTradeHistory(
+        market: String,
+        isSimulated: Boolean
+    ): MutableList<OpenLot> {
         val records = tradeRepository.findByMarketAndSimulatedOrderByCreatedAtDesc(market, isSimulated).asReversed()
         val openLots = mutableListOf<OpenLot>()
 
@@ -1148,28 +1173,39 @@ class OrderExecutor(
             if (qty <= 0.0) return@forEach
 
             when (trade.side.uppercase()) {
-                "BUY" -> {
-                    val feePerUnit = if (qty > 0.0) trade.fee / qty else 0.0
-                    openLots.add(OpenLot(price = trade.price, quantity = qty, feePerUnit = feePerUnit))
-                }
-                "SELL" -> {
-                    var remainToMatch = qty
-                    var lotIndex = 0
-                    while (remainToMatch > 0.0 && lotIndex < openLots.size) {
-                        val lot = openLots[lotIndex]
-                        val consumed = minOf(lot.quantity, remainToMatch)
-                        lot.quantity -= consumed
-                        remainToMatch -= consumed
-                        if (lot.quantity <= 0.0) {
-                            openLots.removeAt(lotIndex)
-                        } else {
-                            lotIndex++
-                        }
-                    }
-                }
+                "BUY" -> openLots.add(toOpenLot(trade.price, qty, trade.fee))
+                "SELL" -> applyHistoricalSellToOpenLots(openLots, qty)
             }
         }
 
+        return openLots
+    }
+
+    private fun toOpenLot(price: Double, quantity: Double, fee: Double): OpenLot {
+        val feePerUnit = if (quantity > 0.0) fee / quantity else 0.0
+        return OpenLot(price = price, quantity = quantity, feePerUnit = feePerUnit)
+    }
+
+    private fun applyHistoricalSellToOpenLots(openLots: MutableList<OpenLot>, sellQuantity: Double) {
+        var remainToMatch = sellQuantity
+        var lotIndex = 0
+        while (remainToMatch > 0.0 && lotIndex < openLots.size) {
+            val lot = openLots[lotIndex]
+            val consumed = minOf(lot.quantity, remainToMatch)
+            lot.quantity -= consumed
+            remainToMatch -= consumed
+            if (lot.quantity <= 0.0) {
+                openLots.removeAt(lotIndex)
+            } else {
+                lotIndex++
+            }
+        }
+    }
+
+    private fun matchCurrentSellAgainstOpenLots(
+        openLots: List<OpenLot>,
+        sellQuantity: Double
+    ): MatchedLotSummary {
         var remainSellQty = sellQuantity
         var matchedQty = 0.0
         var entryAmount = 0.0
@@ -1191,16 +1227,10 @@ class OrderExecutor(
             lotIndex++
         }
 
-        if (matchedQty <= 0.0) return null
-
-        val weightedEntryPrice = entryAmount / matchedQty
-        val matchedExitFee = if (sellQuantity > 0.0) sellFee * (matchedQty / sellQuantity) else 0.0
-        return PnlCalculator.calculate(
-            entryPrice = weightedEntryPrice,
-            exitPrice = sellPrice,
-            quantity = matchedQty,
-            entryFee = entryFee,
-            exitFee = matchedExitFee
+        return MatchedLotSummary(
+            matchedQty = matchedQty,
+            entryAmount = entryAmount,
+            entryFee = entryFee
         )
     }
 
