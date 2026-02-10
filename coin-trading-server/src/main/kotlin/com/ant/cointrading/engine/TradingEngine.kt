@@ -165,6 +165,10 @@ class TradingEngine(
         val coinBalance: BigDecimal
     )
 
+    private data class OrderPreparation(
+        val orderAmountKrw: BigDecimal
+    )
+
     private data class RegimeSnapshot(
         val totalMarkets: Int,
         val bearMarketCount: Int,
@@ -251,38 +255,56 @@ class TradingEngine(
      * 신호 처리
      */
     private fun processSignal(market: String, signal: TradingSignal, state: MarketState) {
-        log.info("""
-            [$market] 신호 발생
-            행동: ${signal.action}
-            신뢰도: ${signal.confidence}%
-            전략: ${signal.strategy}
-            사유: ${signal.reason}
-        """.trimIndent())
-
-        val now = Instant.now()
-        if (!passesTradeGuards(market, signal, now)) return
-
-        val balances = fetchBalancesOrNull(market) ?: return
-        val balanceSnapshot = createBalanceSnapshot(market, balances)
-        val totalAssetKrw = syncAndGetTotalAssetKrw(balances, state.currentPrice, market)
-
-        if (!passesRiskChecks(market, totalAssetKrw)) return
-
-        val orderAmountKrw = resolveOrderAmount(market, signal, state, balanceSnapshot) ?: return
-        if (orderAmountKrw < TradingConstants.MIN_ORDER_AMOUNT_KRW) {
-            log.info(
-                "[$market] 주문 금액 최소치 미달로 실행 스킵: amount=$orderAmountKrw, min=${TradingConstants.MIN_ORDER_AMOUNT_KRW}"
-            )
-            return
-        }
-
-        val result = orderExecutor.execute(signal, orderAmountKrw)
+        logSignal(market, signal)
+        val preparation = prepareOrderExecution(market, signal, state) ?: return
+        val result = orderExecutor.execute(signal, preparation.orderAmountKrw)
         if (result.success) {
             handleSuccessfulOrderResult(market, signal, state, result)
             return
         }
 
         handleFailedOrderResult(market, result)
+    }
+
+    private fun logSignal(market: String, signal: TradingSignal) {
+        log.info(
+            """
+            [$market] 신호 발생
+            행동: ${signal.action}
+            신뢰도: ${signal.confidence}%
+            전략: ${signal.strategy}
+            사유: ${signal.reason}
+            """.trimIndent()
+        )
+    }
+
+    private fun prepareOrderExecution(
+        market: String,
+        signal: TradingSignal,
+        state: MarketState
+    ): OrderPreparation? {
+        val now = Instant.now()
+        if (!passesTradeGuards(market, signal, now)) return null
+
+        val balances = fetchBalancesOrNull(market) ?: return null
+        val balanceSnapshot = createBalanceSnapshot(market, balances)
+        val totalAssetKrw = syncAndGetTotalAssetKrw(balances, state.currentPrice, market)
+        if (!passesRiskChecks(market, totalAssetKrw)) return null
+
+        val orderAmountKrw = resolveOrderAmount(market, signal, state, balanceSnapshot) ?: return null
+        if (isBelowMinimumOrderAmount(market, orderAmountKrw)) return null
+
+        return OrderPreparation(orderAmountKrw = orderAmountKrw)
+    }
+
+    private fun isBelowMinimumOrderAmount(market: String, orderAmountKrw: BigDecimal): Boolean {
+        if (orderAmountKrw >= TradingConstants.MIN_ORDER_AMOUNT_KRW) {
+            return false
+        }
+        log.info(
+            "[$market] 주문 금액 최소치 미달로 실행 스킵: amount=$orderAmountKrw, min=${TradingConstants.MIN_ORDER_AMOUNT_KRW}"
+        )
+        return true
     }
 
     private fun passesTradeGuards(market: String, signal: TradingSignal, now: Instant): Boolean {
@@ -359,24 +381,31 @@ class TradingEngine(
     }
 
     private fun passesRiskChecks(market: String, totalAssetKrw: BigDecimal): Boolean {
-        // 실질 리스크는 KRW 가용잔고가 아닌 총자산 기준으로 평가해야 왜곡이 없다.
+        if (!passesPortfolioRiskCheck(market, totalAssetKrw)) return false
+        return passesDailyLossLimitCheck(market)
+    }
+
+    private fun passesPortfolioRiskCheck(market: String, totalAssetKrw: BigDecimal): Boolean {
         val riskCheck = riskManager.canTrade(market, totalAssetKrw)
-        if (!riskCheck.canTrade) {
-            log.warn("[$market] 리스크 체크 실패: ${riskCheck.reason}")
-
-            if (!riskAlertTracker.isInCooldown(market)) {
-                slackNotifier.sendWarning(market, "리스크 체크 실패: ${riskCheck.reason}")
-                riskAlertTracker.recordAlert(market)
-            }
-            return false
+        if (riskCheck.canTrade) {
+            return true
         }
 
-        if (!dailyLossLimitService.canTrade()) {
-            log.warn("[$market] 일일 손실 한도 도달로 트레이딩 중지: ${dailyLossLimitService.tradingHaltedReason}")
-            slackNotifier.sendError(market, "일일 손실 한도 도달: ${dailyLossLimitService.tradingHaltedReason}")
-            return false
+        log.warn("[$market] 리스크 체크 실패: ${riskCheck.reason}")
+        if (!riskAlertTracker.isInCooldown(market)) {
+            slackNotifier.sendWarning(market, "리스크 체크 실패: ${riskCheck.reason}")
+            riskAlertTracker.recordAlert(market)
         }
-        return true
+        return false
+    }
+
+    private fun passesDailyLossLimitCheck(market: String): Boolean {
+        if (dailyLossLimitService.canTrade()) {
+            return true
+        }
+        log.warn("[$market] 일일 손실 한도 도달로 트레이딩 중지: ${dailyLossLimitService.tradingHaltedReason}")
+        slackNotifier.sendError(market, "일일 손실 한도 도달: ${dailyLossLimitService.tradingHaltedReason}")
+        return false
     }
 
     private fun resolveOrderAmount(
@@ -454,28 +483,58 @@ class TradingEngine(
         result: com.ant.cointrading.order.OrderResult
     ) {
         val hasExecutedFill = hasExecutedFill(result)
-        if (!hasExecutedFill && result.isPending) {
-            log.info("[$market] 주문 접수됨(미체결) - 체결 전까지 루프가드/실현손익 반영을 보류합니다")
-        }
+        logPendingExecutionStatus(market, result, hasExecutedFill)
+        updateExecutionTracking(market, signal, state, result, hasExecutedFill)
+        notifySuccessfulTrade(market, signal, result, hasExecutedFill)
+        handlePostSellRiskSync(market, signal, result, hasExecutedFill)
+    }
 
-        // [무한 루프 방지] 체결 발생 시에만 매수/매도 시간 갱신
+    private fun logPendingExecutionStatus(
+        market: String,
+        result: com.ant.cointrading.order.OrderResult,
+        hasExecutedFill: Boolean
+    ) {
+        if (hasExecutedFill || !result.isPending) {
+            return
+        }
+        log.info("[$market] 주문 접수됨(미체결) - 체결 전까지 루프가드/실현손익 반영을 보류합니다")
+    }
+
+    private fun updateExecutionTracking(
+        market: String,
+        signal: TradingSignal,
+        state: MarketState,
+        result: com.ant.cointrading.order.OrderResult,
+        hasExecutedFill: Boolean
+    ) {
         if (hasExecutedFill) {
             recordExecutionTimestamp(market, signal.action)
         }
-
         handleDcaPositionTrackingIfNeeded(market, signal, state, result, hasExecutedFill)
+    }
 
+    private fun notifySuccessfulTrade(
+        market: String,
+        signal: TradingSignal,
+        result: com.ant.cointrading.order.OrderResult,
+        hasExecutedFill: Boolean
+    ) {
         val notificationMessage = buildTradeNotificationMessage(result, hasExecutedFill)
         log.info("[$market] $notificationMessage")
-
         slackNotifier.sendTradeNotification(signal, result)
+    }
 
-        // 일일 손실 한도에 실제 실현손익 기록 (매도 체결 건만)
-        if (signal.action == SignalAction.SELL && hasExecutedFill) {
-            recordDailyPnlFromExecutedTrade(market, result)
-            // SELL 체결 후 리스크 통계를 즉시 동기화해 다음 주문 사이징/차단 판단에 반영
-            riskManager.refreshStats(market)
+    private fun handlePostSellRiskSync(
+        market: String,
+        signal: TradingSignal,
+        result: com.ant.cointrading.order.OrderResult,
+        hasExecutedFill: Boolean
+    ) {
+        if (signal.action != SignalAction.SELL || !hasExecutedFill) {
+            return
         }
+        recordDailyPnlFromExecutedTrade(market, result)
+        riskManager.refreshStats(market)
     }
 
     private fun handleDcaPositionTrackingIfNeeded(
