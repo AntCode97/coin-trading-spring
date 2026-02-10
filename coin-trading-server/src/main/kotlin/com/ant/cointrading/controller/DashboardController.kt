@@ -18,7 +18,11 @@ import org.springframework.web.bind.annotation.RequestMapping
 import org.springframework.web.bind.annotation.RequestParam
 import org.springframework.web.bind.annotation.RestController
 import java.math.BigDecimal
+import java.time.Duration
 import java.time.Instant
+import java.time.LocalDate
+import java.time.ZoneId
+import java.time.format.DateTimeFormatter
 
 @RestController
 @RequestMapping("/api/dashboard")
@@ -35,41 +39,40 @@ class DashboardController(
     private val memeScalperEngine: MemeScalperEngine,
     private val volumeSurgeEngine: VolumeSurgeEngine
 ) {
+    private companion object {
+        const val STRATEGY_MEME_SCALPER = "Meme Scalper"
+        const val STRATEGY_VOLUME_SURGE = "Volume Surge"
+        const val STRATEGY_DCA = "DCA"
+        const val STRATEGY_MEAN_REVERSION = "Mean Reversion"
+        const val STATUS_OPEN = "OPEN"
+        const val STATUS_CLOSED = "CLOSED"
+        const val KRW = "KRW"
+        const val MIN_COIN_ASSET_VALUE_KRW = 100.0
+        val SYSTEM_ZONE: ZoneId = ZoneId.systemDefault()
+        val SEOUL_ZONE: ZoneId = ZoneId.of("Asia/Seoul")
+        val DASHBOARD_DATE_FORMATTER: DateTimeFormatter = DateTimeFormatter.ofPattern("MM-dd (E)")
+        val TRADE_TIME_FORMATTER: DateTimeFormatter = DateTimeFormatter.ofPattern("MM-dd HH:mm")
+    }
+
     private val manualCloseHandlers by lazy {
         mapOf<String, (String) -> Map<String, Any?>>(
-            "Meme Scalper" to memeScalperEngine::manualClose,
-            "Volume Surge" to volumeSurgeEngine::manualClose,
-            "DCA" to dcaEngine::manualClose
+            STRATEGY_MEME_SCALPER to memeScalperEngine::manualClose,
+            STRATEGY_VOLUME_SURGE to volumeSurgeEngine::manualClose,
+            STRATEGY_DCA to dcaEngine::manualClose
         )
     }
 
     @GetMapping
     fun getDashboard(@RequestParam date: String?): DashboardResponse {
-        // 날짜 파싱 (YYYY-MM-DD), null이면 오늘
-        val targetDate = if (date.isNullOrBlank()) {
-            java.time.LocalDate.now(java.time.ZoneId.systemDefault())
-        } else {
-            try {
-                java.time.LocalDate.parse(date)
-            } catch (e: Exception) {
-                // 파싱 실패하면 오늘 사용
-                java.time.LocalDate.now(java.time.ZoneId.systemDefault())
-            }
-        }.atStartOfDay(java.time.ZoneId.systemDefault()).toInstant()
-
-        // 잔고 조회
-        val balances = try {
-            bithumbPrivateApi.getBalances() ?: emptyList()
-        } catch (e: Exception) {
-            emptyList()
-        }
+        val targetDate = resolveTargetDate(date)
+        val balances = loadBalancesSafely()
 
         // 총 자산 계산
-        val krwBalance = balances.find { it.currency == "KRW" }?.balance ?: BigDecimal.ZERO
+        val krwBalance = balances.find { it.currency == KRW }?.balance ?: BigDecimal.ZERO
         var totalAssetKrw = krwBalance.toDouble()
 
         val coinAssets = balances.mapNotNull { balance ->
-            if (balance.currency == "KRW" || balance.balance <= BigDecimal.ZERO) return@mapNotNull null
+            if (balance.currency == KRW || balance.balance <= BigDecimal.ZERO) return@mapNotNull null
 
             val market = "KRW-${balance.currency}"
             val currentPrice = try {
@@ -94,7 +97,7 @@ class DashboardController(
                     } else 0.0
                 )
             } else null
-        }.filter { it.value >= 100.0 }
+        }.filter { it.value >= MIN_COIN_ASSET_VALUE_KRW }
 
         // 열린 포지션 조회
         val openPositions = getOpenPositions()
@@ -109,21 +112,9 @@ class DashboardController(
         val totalStats = getTotalStats()
 
         // 현재 조회 중인 날짜 표시
-        val dateFormatter = java.time.format.DateTimeFormatter.ofPattern("MM-dd (E)")
-        val currentDateStr = targetDate.atZone(java.time.ZoneId.systemDefault()).toLocalDate().format(dateFormatter)
-        val requestDate = targetDate.atZone(java.time.ZoneId.systemDefault()).toLocalDate().toString()  // YYYY-MM-DD
-
-        // 활성화된 전략 목록
-        val activeStrategies = mutableListOf<StrategyInfo>()
-        if (memeScalperProperties.enabled) {
-            activeStrategies.add(StrategyInfo("Meme Scalper", "단타 매매", "memescalper"))
-        }
-        if (volumeSurgeProperties.enabled) {
-            activeStrategies.add(StrategyInfo("Volume Surge", "거래량 급등", "volumesurge"))
-        }
-        if (tradingProperties.enabled) {
-            activeStrategies.add(StrategyInfo("Mean Reversion", "평균 회귀", "meanreversion"))
-        }
+        val targetLocalDate = targetDate.atZone(SYSTEM_ZONE).toLocalDate()
+        val currentDateStr = targetLocalDate.format(DASHBOARD_DATE_FORMATTER)
+        val requestDate = targetLocalDate.toString()
 
         return DashboardResponse(
             krwBalance = krwBalance.toDouble(),
@@ -135,7 +126,7 @@ class DashboardController(
             totalStats = totalStats,
             currentDateStr = currentDateStr,
             requestDate = requestDate,
-            activeStrategies = activeStrategies
+            activeStrategies = buildActiveStrategies()
         )
     }
 
@@ -143,7 +134,7 @@ class DashboardController(
         val positions = mutableListOf<PositionInfo>()
 
         // Meme Scalper 포지션
-        memeScalperRepository.findByStatus("OPEN").forEach { trade ->
+        memeScalperRepository.findByStatus(STATUS_OPEN).forEach { trade ->
             val currentPrice = resolveCurrentPriceOrFallback(trade.market, trade.entryPrice)
 
             val pnl = (currentPrice - trade.entryPrice) * trade.quantity
@@ -151,7 +142,7 @@ class DashboardController(
 
             positions.add(PositionInfo(
                 market = trade.market,
-                strategy = "Meme Scalper",
+                strategy = STRATEGY_MEME_SCALPER,
                 entryPrice = trade.entryPrice,
                 currentPrice = currentPrice,
                 quantity = trade.quantity,
@@ -166,7 +157,7 @@ class DashboardController(
         }
 
         // Volume Surge 포지션
-        volumeSurgeRepository.findByStatus("OPEN").forEach { trade ->
+        volumeSurgeRepository.findByStatus(STATUS_OPEN).forEach { trade ->
             val currentPrice = resolveCurrentPriceOrFallback(trade.market, trade.entryPrice)
 
             val pnl = (currentPrice - trade.entryPrice) * trade.quantity
@@ -177,7 +168,7 @@ class DashboardController(
 
             positions.add(PositionInfo(
                 market = trade.market,
-                strategy = "Volume Surge",
+                strategy = STRATEGY_VOLUME_SURGE,
                 entryPrice = trade.entryPrice,
                 currentPrice = currentPrice,
                 quantity = trade.quantity,
@@ -192,7 +183,7 @@ class DashboardController(
         }
 
         // DCA 포지션
-        dcaPositionRepository.findByStatus("OPEN").forEach { pos ->
+        dcaPositionRepository.findByStatus(STATUS_OPEN).forEach { pos ->
             val currentPrice = resolveCurrentPriceOrFallback(pos.market, pos.averagePrice)
 
             val pnl = (currentPrice - pos.averagePrice) * pos.totalQuantity
@@ -200,7 +191,7 @@ class DashboardController(
 
             positions.add(PositionInfo(
                 market = pos.market,
-                strategy = "DCA",
+                strategy = STRATEGY_DCA,
                 entryPrice = pos.averagePrice,
                 currentPrice = currentPrice,
                 quantity = pos.totalQuantity,
@@ -219,16 +210,15 @@ class DashboardController(
 
     private fun getClosedTrades(targetDate: Instant): List<ClosedTradeInfo> {
         val trades = mutableListOf<ClosedTradeInfo>()
-        val startOfDay = targetDate.atZone(java.time.ZoneId.systemDefault()).toLocalDate().atStartOfDay(java.time.ZoneId.systemDefault()).toInstant()
-        val endOfDay = startOfDay.plus(java.time.Duration.ofDays(1))
+        val (startOfDay, endOfDay) = dayRange(targetDate)
 
         // Meme Scalper 체결 내역
-        memeScalperRepository.findByStatus("CLOSED")
+        memeScalperRepository.findByStatus(STATUS_CLOSED)
             .filter { isWithinRange(it.exitTime, startOfDay, endOfDay) }
             .forEach { trade ->
                 trades.add(ClosedTradeInfo(
                     market = trade.market,
-                    strategy = "Meme Scalper",
+                    strategy = STRATEGY_MEME_SCALPER,
                     entryPrice = trade.entryPrice,
                     exitPrice = trade.exitPrice ?: 0.0,
                     quantity = trade.quantity,
@@ -244,12 +234,12 @@ class DashboardController(
             }
 
         // Volume Surge 체결 내역
-        volumeSurgeRepository.findByStatus("CLOSED")
+        volumeSurgeRepository.findByStatus(STATUS_CLOSED)
             .filter { isWithinRange(it.exitTime, startOfDay, endOfDay) }
             .forEach { trade ->
                 trades.add(ClosedTradeInfo(
                     market = trade.market,
-                    strategy = "Volume Surge",
+                    strategy = STRATEGY_VOLUME_SURGE,
                     entryPrice = trade.entryPrice,
                     exitPrice = trade.exitPrice ?: 0.0,
                     quantity = trade.quantity,
@@ -265,12 +255,12 @@ class DashboardController(
             }
 
         // DCA 체결 내역
-        dcaPositionRepository.findByStatus("CLOSED")
+        dcaPositionRepository.findByStatus(STATUS_CLOSED)
             .filter { isWithinRange(it.exitedAt, startOfDay, endOfDay) }
             .forEach { pos ->
                 trades.add(ClosedTradeInfo(
                     market = pos.market,
-                    strategy = "DCA",
+                    strategy = STRATEGY_DCA,
                     entryPrice = pos.averagePrice,
                     exitPrice = pos.exitPrice ?: 0.0,
                     quantity = pos.totalQuantity,
@@ -289,12 +279,11 @@ class DashboardController(
     }
 
     private fun getStats(targetDate: Instant): StatsInfo {
-        val startOfDay = targetDate.atZone(java.time.ZoneId.systemDefault()).toLocalDate().atStartOfDay(java.time.ZoneId.systemDefault()).toInstant()
-        val endOfDay = startOfDay.plus(java.time.Duration.ofDays(1))
+        val (startOfDay, endOfDay) = dayRange(targetDate)
 
-        val memeTrades = memeScalperRepository.findByStatus("CLOSED").filter { isWithinRange(it.exitTime, startOfDay, endOfDay) }
-        val volumeTrades = volumeSurgeRepository.findByStatus("CLOSED").filter { isWithinRange(it.exitTime, startOfDay, endOfDay) }
-        val dcaTrades = dcaPositionRepository.findByStatus("CLOSED").filter { isWithinRange(it.exitedAt, startOfDay, endOfDay) }
+        val memeTrades = memeScalperRepository.findByStatus(STATUS_CLOSED).filter { isWithinRange(it.exitTime, startOfDay, endOfDay) }
+        val volumeTrades = volumeSurgeRepository.findByStatus(STATUS_CLOSED).filter { isWithinRange(it.exitTime, startOfDay, endOfDay) }
+        val dcaTrades = dcaPositionRepository.findByStatus(STATUS_CLOSED).filter { isWithinRange(it.exitedAt, startOfDay, endOfDay) }
 
         val allPnl = collectPnlValues(memeTrades, volumeTrades, dcaTrades)
 
@@ -311,9 +300,9 @@ class DashboardController(
     }
 
     private fun getTotalStats(): StatsInfo {
-        val memeTrades = memeScalperRepository.findByStatus("CLOSED")
-        val volumeTrades = volumeSurgeRepository.findByStatus("CLOSED")
-        val dcaTrades = dcaPositionRepository.findByStatus("CLOSED")
+        val memeTrades = memeScalperRepository.findByStatus(STATUS_CLOSED)
+        val volumeTrades = volumeSurgeRepository.findByStatus(STATUS_CLOSED)
+        val dcaTrades = dcaPositionRepository.findByStatus(STATUS_CLOSED)
 
         return buildStatsInfo(
             totalTrades = memeTrades.size + volumeTrades.size + dcaTrades.size,
@@ -332,6 +321,38 @@ class DashboardController(
             bithumbPublicApi.getCurrentPrice(market)?.firstOrNull()?.tradePrice?.toDouble() ?: fallback
         } catch (_: Exception) {
             fallback
+        }
+    }
+
+    private fun resolveTargetDate(date: String?): Instant {
+        val localDate = if (date.isNullOrBlank()) {
+            LocalDate.now(SYSTEM_ZONE)
+        } else {
+            runCatching { LocalDate.parse(date) }.getOrElse { LocalDate.now(SYSTEM_ZONE) }
+        }
+        return localDate.atStartOfDay(SYSTEM_ZONE).toInstant()
+    }
+
+    private fun dayRange(targetDate: Instant): Pair<Instant, Instant> {
+        val start = targetDate.atZone(SYSTEM_ZONE).toLocalDate().atStartOfDay(SYSTEM_ZONE).toInstant()
+        return start to start.plus(Duration.ofDays(1))
+    }
+
+    private fun loadBalancesSafely() = runCatching {
+        bithumbPrivateApi.getBalances() ?: emptyList()
+    }.getOrDefault(emptyList())
+
+    private fun buildActiveStrategies(): List<StrategyInfo> {
+        return buildList {
+            if (memeScalperProperties.enabled) {
+                add(StrategyInfo(STRATEGY_MEME_SCALPER, "단타 매매", "memescalper"))
+            }
+            if (volumeSurgeProperties.enabled) {
+                add(StrategyInfo(STRATEGY_VOLUME_SURGE, "거래량 급등", "volumesurge"))
+            }
+            if (tradingProperties.enabled) {
+                add(StrategyInfo(STRATEGY_MEAN_REVERSION, "평균 회귀", "meanreversion"))
+            }
         }
     }
 
@@ -371,9 +392,7 @@ class DashboardController(
     }
 
     private fun formatInstant(instant: Instant): String {
-        val kstZone = java.time.ZoneId.of("Asia/Seoul")
-        val formatter = java.time.format.DateTimeFormatter.ofPattern("MM-dd HH:mm")
-        return instant.atZone(kstZone).format(formatter)
+        return instant.atZone(SEOUL_ZONE).format(TRADE_TIME_FORMATTER)
     }
 }
 
