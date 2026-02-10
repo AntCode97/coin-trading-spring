@@ -231,7 +231,14 @@ class OrderExecutor(
         val market = signal.market
         val submitResult = submitOrderWithDecision(signal, apiMarket, positionSize, marketCondition)
         val orderResponse = submitResult.orderResponse
-            ?: return createApiFailure(signal, side, market, "주문 응답 null")
+            ?: return recordFailureAndBuildResult(
+                signal = signal,
+                side = side,
+                market = market,
+                failureDetail = "주문 응답 null",
+                userMessage = "주문 응답 없음 - API 장애 의심",
+                rejectionReason = OrderRejectionReason.API_ERROR
+            )
 
         val orderId = orderResponse.uuid
         val actualOrderType = submitResult.orderType
@@ -242,7 +249,16 @@ class OrderExecutor(
         }
 
         val verifiedOrder = verifyOrderExecution(orderId, market)
-            ?: return createVerificationFailure(signal, side, market, orderId, actualOrderType)
+            ?: return recordFailureAndBuildResult(
+                signal = signal,
+                side = side,
+                market = market,
+                failureDetail = "주문 상태 확인 실패",
+                userMessage = "주문 상태 확인 실패 - 수동 확인 필요",
+                rejectionReason = OrderRejectionReason.VERIFICATION_FAILED,
+                orderId = orderId,
+                orderType = actualOrderType
+            )
 
         val executionResult = analyzeExecution(signal, verifiedOrder, positionSize, midPrice, actualOrderType)
         recordExecutionOutcome(market, executionResult)
@@ -258,41 +274,6 @@ class OrderExecutor(
     ): OrderSubmitResult {
         val orderType = determineOrderType(signal, marketCondition)
         return submitOrder(signal, apiMarket, positionSize, orderType, marketCondition)
-    }
-
-    private fun createApiFailure(
-        signal: TradingSignal,
-        side: OrderSide,
-        market: String,
-        failureReason: String
-    ): OrderResult {
-        return recordFailureAndBuildResult(
-            signal = signal,
-            side = side,
-            market = market,
-            failureDetail = failureReason,
-            userMessage = "주문 응답 없음 - API 장애 의심",
-            rejectionReason = OrderRejectionReason.API_ERROR
-        )
-    }
-
-    private fun createVerificationFailure(
-        signal: TradingSignal,
-        side: OrderSide,
-        market: String,
-        orderId: String,
-        orderType: OrderType
-    ): OrderResult {
-        return recordFailureAndBuildResult(
-            signal = signal,
-            side = side,
-            market = market,
-            failureDetail = "주문 상태 확인 실패",
-            userMessage = "주문 상태 확인 실패 - 수동 확인 필요",
-            rejectionReason = OrderRejectionReason.VERIFICATION_FAILED,
-            orderId = orderId,
-            orderType = orderType
-        )
     }
 
     private fun recordFailureAndBuildResult(
