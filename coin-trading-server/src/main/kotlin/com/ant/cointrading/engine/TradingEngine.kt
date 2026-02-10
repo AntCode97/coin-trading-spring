@@ -169,6 +169,12 @@ class TradingEngine(
         val orderAmountKrw: BigDecimal
     )
 
+    private data class DcaFillData(
+        val quantity: Double,
+        val price: Double,
+        val amount: Double
+    )
+
     private data class RegimeSnapshot(
         val totalMarkets: Int,
         val bearMarketCount: Int,
@@ -456,29 +462,45 @@ class TradingEngine(
         riskBasedPositionSize: BigDecimal,
         balances: BalanceSnapshot
     ): BigDecimal? {
-        // KRW 잔고 확인
-        if (riskBasedPositionSize > balances.krwBalance) {
-            log.warn("[$market] KRW 잔고 부족: 필요 $riskBasedPositionSize, 보유 ${balances.krwBalance}")
-            return null
-        }
-
-        // [무한 루프 방지 + 엔진 간 충돌 방지]
-        // 1. 이미 코인을 보유하고 있으면 추가 매수 금지
-        val coinValueKrw = balances.coinBalance.multiply(state.currentPrice)
-        if (coinValueKrw >= TradingConstants.MIN_ORDER_AMOUNT_KRW) {
-            log.warn(
-                "[$market] 이미 ${balances.coinSymbol} 보유 중: ${balances.coinBalance} (${coinValueKrw}원 상당) - 중복 매수 방지"
-            )
-            return null
-        }
-
-        // 2. 다른 엔진(VolumeSurge, MemeScalper)에서 해당 마켓을 점유 중인지 확인
-        if (isOccupiedByOtherEngines(market)) {
-            log.warn("[$market] 다른 엔진 점유 중 - TradingEngine 진입 차단")
-            return null
-        }
-
+        if (!hasSufficientKrwForBuy(market, riskBasedPositionSize, balances)) return null
+        if (isDuplicateBuyBlocked(market, state, balances)) return null
+        if (isBuyBlockedByOtherEngines(market)) return null
         return riskBasedPositionSize
+    }
+
+    private fun hasSufficientKrwForBuy(
+        market: String,
+        riskBasedPositionSize: BigDecimal,
+        balances: BalanceSnapshot
+    ): Boolean {
+        if (riskBasedPositionSize <= balances.krwBalance) {
+            return true
+        }
+        log.warn("[$market] KRW 잔고 부족: 필요 $riskBasedPositionSize, 보유 ${balances.krwBalance}")
+        return false
+    }
+
+    private fun isDuplicateBuyBlocked(
+        market: String,
+        state: MarketState,
+        balances: BalanceSnapshot
+    ): Boolean {
+        val coinValueKrw = balances.coinBalance.multiply(state.currentPrice)
+        if (coinValueKrw < TradingConstants.MIN_ORDER_AMOUNT_KRW) {
+            return false
+        }
+        log.warn(
+            "[$market] 이미 ${balances.coinSymbol} 보유 중: ${balances.coinBalance} (${coinValueKrw}원 상당) - 중복 매수 방지"
+        )
+        return true
+    }
+
+    private fun isBuyBlockedByOtherEngines(market: String): Boolean {
+        if (!isOccupiedByOtherEngines(market)) {
+            return false
+        }
+        log.warn("[$market] 다른 엔진 점유 중 - TradingEngine 진입 차단")
+        return true
     }
 
     private fun resolveSellOrderAmount(
@@ -574,29 +596,57 @@ class TradingEngine(
         // DCA 전략인 경우 포지션 추적 (실제 체결된 경우만 반영)
         if (signal.strategy != "DCA" || !hasExecutedFill) return
 
+        val fillData = resolveDcaFillData(market, result) ?: return
+        val dcaStrategy = state.currentStrategy as? DcaStrategy ?: return
+        applyDcaExecution(market, signal, dcaStrategy, fillData)
+    }
+
+    private fun resolveDcaFillData(
+        market: String,
+        result: com.ant.cointrading.order.OrderResult
+    ): DcaFillData? {
         val quantity = result.executedQuantity?.toDouble() ?: 0.0
         val price = result.price?.toDouble() ?: 0.0
-        val amount = quantity * price
-
         if (quantity <= 0.0 || price <= 0.0) {
             log.warn("[$market] DCA 체결 데이터 불완전(수량=$quantity, 가격=$price) - 포지션 반영 스킵")
-            return
+            return null
         }
+        return DcaFillData(
+            quantity = quantity,
+            price = price,
+            amount = quantity * price
+        )
+    }
 
+    private fun applyDcaExecution(
+        market: String,
+        signal: TradingSignal,
+        dcaStrategy: DcaStrategy,
+        fillData: DcaFillData
+    ) {
         when (signal.action) {
-            SignalAction.BUY -> {
-                (state.currentStrategy as? DcaStrategy)?.recordBuy(market, quantity, price, amount)
-            }
-            SignalAction.SELL -> {
-                val exitReason = when {
-                    signal.reason.contains("익절") -> "TAKE_PROFIT"
-                    signal.reason.contains("손절") -> "STOP_LOSS"
-                    signal.reason.contains("타임아웃") -> "TIMEOUT"
-                    else -> "SIGNAL"
-                }
-                (state.currentStrategy as? DcaStrategy)?.recordSell(market, quantity, price, exitReason)
-            }
-            SignalAction.HOLD -> {}
+            SignalAction.BUY -> dcaStrategy.recordBuy(
+                market,
+                fillData.quantity,
+                fillData.price,
+                fillData.amount
+            )
+            SignalAction.SELL -> dcaStrategy.recordSell(
+                market,
+                fillData.quantity,
+                fillData.price,
+                resolveDcaExitReason(signal.reason)
+            )
+            SignalAction.HOLD -> Unit
+        }
+    }
+
+    private fun resolveDcaExitReason(reason: String): String {
+        return when {
+            reason.contains("익절") -> "TAKE_PROFIT"
+            reason.contains("손절") -> "STOP_LOSS"
+            reason.contains("타임아웃") -> "TIMEOUT"
+            else -> "SIGNAL"
         }
     }
 
@@ -636,36 +686,50 @@ class TradingEngine(
         currentPrice: BigDecimal,
         market: String
     ): BigDecimal {
-        var totalKrw = BigDecimal.ZERO
-        val knownPricesByCoin = marketStates
-            .asSequence()
+        val knownPricesByCoin = buildKnownCoinPrices()
+        return balances.fold(BigDecimal.ZERO) { total, balance ->
+            total + calculateBalanceValueInKrw(balance, market, currentPrice, knownPricesByCoin)
+        }
+    }
+
+    private fun buildKnownCoinPrices(): Map<String, BigDecimal> {
+        return marketStates.asSequence()
             .map { (knownMarket, state) -> PositionHelper.extractCoinSymbol(knownMarket) to state.currentPrice }
             .filter { (_, price) -> price > BigDecimal.ZERO }
             .toMap()
+    }
 
-        for (balance in balances) {
-            val amount = balance.balance
-            if (amount <= BigDecimal.ZERO) continue
-
-            if (balance.currency == "KRW") {
-                totalKrw += amount
-            } else {
-                // 코인 자산은 현재가로 환산 (단순화: 메인 마켓 가격 사용)
-                val coinMarket = "${balance.currency}_KRW"
-                if (coinMarket == market) {
-                    totalKrw += amount.multiply(currentPrice)
-                } else {
-                    // 다른 코인은 최근 시세 캐시 우선, 없으면 평균 매수가로 환산
-                    val priceForValuation = knownPricesByCoin[balance.currency]
-                        ?.takeIf { it > BigDecimal.ZERO }
-                        ?: (balance.avgBuyPrice ?: BigDecimal.ZERO)
-
-                    totalKrw += amount.multiply(priceForValuation)
-                }
-            }
+    private fun calculateBalanceValueInKrw(
+        balance: Balance,
+        market: String,
+        currentPrice: BigDecimal,
+        knownPricesByCoin: Map<String, BigDecimal>
+    ): BigDecimal {
+        val amount = balance.balance
+        if (amount <= BigDecimal.ZERO) {
+            return BigDecimal.ZERO
+        }
+        if (balance.currency == "KRW") {
+            return amount
         }
 
-        return totalKrw
+        val valuationPrice = resolveCoinValuationPrice(balance, market, currentPrice, knownPricesByCoin)
+        return amount.multiply(valuationPrice)
+    }
+
+    private fun resolveCoinValuationPrice(
+        balance: Balance,
+        market: String,
+        currentPrice: BigDecimal,
+        knownPricesByCoin: Map<String, BigDecimal>
+    ): BigDecimal {
+        val coinMarket = "${balance.currency}_KRW"
+        if (coinMarket == market) {
+            return currentPrice
+        }
+        return knownPricesByCoin[balance.currency]
+            ?.takeIf { it > BigDecimal.ZERO }
+            ?: (balance.avgBuyPrice ?: BigDecimal.ZERO)
     }
 
     private fun recordDailyPnlFromExecutedTrade(market: String, result: com.ant.cointrading.order.OrderResult) {
@@ -675,25 +739,26 @@ class TradingEngine(
             return
         }
 
-        val executedTrade = tradeRepository.findTopByOrderIdOrderByCreatedAtDesc(orderId)
-        if (executedTrade == null) {
-            log.warn("[$market] 체결 거래 레코드 없음(orderId=$orderId) - 일일 손익 기록 스킵")
-            return
-        }
-
-        if (!executedTrade.side.equals("SELL", ignoreCase = true)) {
-            log.info("[$market] SELL 체결이 아님(side=${executedTrade.side}, orderId=$orderId) - 일일 손익 반영 스킵")
-            return
-        }
-
-        val pnl = executedTrade.pnl
-        if (pnl == null) {
+        val executedTrade = resolveSellTradeForDailyPnl(market, orderId) ?: return
+        val pnl = executedTrade.pnl ?: run {
             log.warn("[$market] 거래 PnL 없음(orderId=$orderId) - 일일 손익 기록 스킵")
             return
         }
-
         dailyLossLimitService.recordPnl(pnl)
         log.info("[$market] 일일 손익 반영: pnl=${String.format("%.0f", pnl)}원, orderId=$orderId")
+    }
+
+    private fun resolveSellTradeForDailyPnl(market: String, orderId: String): com.ant.cointrading.repository.TradeEntity? {
+        val executedTrade = tradeRepository.findTopByOrderIdOrderByCreatedAtDesc(orderId)
+        if (executedTrade == null) {
+            log.warn("[$market] 체결 거래 레코드 없음(orderId=$orderId) - 일일 손익 기록 스킵")
+            return null
+        }
+        if (!executedTrade.side.equals("SELL", ignoreCase = true)) {
+            log.info("[$market] SELL 체결이 아님(side=${executedTrade.side}, orderId=$orderId) - 일일 손익 반영 스킵")
+            return null
+        }
+        return executedTrade
     }
 
     private fun hasExecutedFill(result: com.ant.cointrading.order.OrderResult): Boolean {
@@ -830,32 +895,51 @@ class TradingEngine(
      * 수정: PositionHelper.extractCoinSymbol 사용으로 모든 형식 지원
      */
     private fun calculatePosition(market: String, currentPrice: BigDecimal): Position? {
-        val balances = try {
-            bithumbPrivateApi.getBalances() ?: return null
-        } catch (e: Exception) {
+        val balances = fetchBalancesForPosition() ?: return null
+        val coinSymbol = PositionHelper.extractCoinSymbol(market)
+        val coinBalance = findPositiveCoinBalance(balances, coinSymbol) ?: return null
+        return buildPositionSnapshot(market, currentPrice, coinBalance.balance, coinBalance.avgBuyPrice)
+    }
+
+    private fun fetchBalancesForPosition(): List<Balance>? {
+        return try {
+            bithumbPrivateApi.getBalances()
+        } catch (_: Exception) {
+            null
+        }
+    }
+
+    private fun findPositiveCoinBalance(balances: List<Balance>, coinSymbol: String): Balance? {
+        val coinBalance = balances.find { it.currency == coinSymbol } ?: return null
+        if (coinBalance.balance <= BigDecimal.ZERO) {
             return null
         }
+        return coinBalance
+    }
 
-        // 코인 심변 추출 (KRW-BTC, BTC_KRW, BTC_KRW 등 모든 형식 지원)
-        val coinSymbol = PositionHelper.extractCoinSymbol(market)
-        val coinBalance = balances.find { it.currency == coinSymbol } ?: return null
-        val quantity = coinBalance.balance
-        if (quantity <= BigDecimal.ZERO) return null
-
-        val avgPrice = coinBalance.avgBuyPrice ?: currentPrice
+    private fun buildPositionSnapshot(
+        market: String,
+        currentPrice: BigDecimal,
+        quantity: BigDecimal,
+        avgBuyPrice: BigDecimal?
+    ): Position {
+        val avgPrice = avgBuyPrice ?: currentPrice
         val unrealizedPnl = (currentPrice - avgPrice) * quantity
-        val unrealizedPnlPercent = if (avgPrice > BigDecimal.ZERO) {
-            ((currentPrice - avgPrice) / avgPrice * BigDecimal(100)).toDouble()
-        } else 0.0
-
         return Position(
             market = market,
             quantity = quantity,
             avgPrice = avgPrice,
             currentPrice = currentPrice,
             unrealizedPnl = unrealizedPnl,
-            unrealizedPnlPercent = unrealizedPnlPercent
+            unrealizedPnlPercent = calculateUnrealizedPnlPercent(currentPrice, avgPrice)
         )
+    }
+
+    private fun calculateUnrealizedPnlPercent(currentPrice: BigDecimal, avgPrice: BigDecimal): Double {
+        if (avgPrice <= BigDecimal.ZERO) {
+            return 0.0
+        }
+        return ((currentPrice - avgPrice) / avgPrice * BigDecimal(100)).toDouble()
     }
 
     /**
@@ -863,35 +947,44 @@ class TradingEngine(
      */
     private fun calculateDailyPnl(market: String, currentPrice: BigDecimal): Pair<BigDecimal, Double> {
         return try {
-            val startOfDay = LocalDate.now(com.ant.cointrading.util.DateTimeUtils.SEOUL_ZONE)
-                .atStartOfDay(com.ant.cointrading.util.DateTimeUtils.SEOUL_ZONE)
-                .toInstant()
-
-            val trades = tradeRepository.findByMarketAndSimulatedAndCreatedAtAfter(market, false, startOfDay)
-            val totalPnl = trades
-                .mapNotNull { it.pnl }
-                .fold(BigDecimal.ZERO) { acc, pnl -> acc + BigDecimal.valueOf(pnl) }
-
-            val totalAsset = try {
-                val balances = bithumbPrivateApi.getBalances() ?: emptyList()
-                calculateTotalAssetKrw(balances, currentPrice, market)
-            } catch (_: Exception) {
-                BigDecimal.ZERO
-            }
-
-            val pnlPercent = if (totalAsset > BigDecimal.ZERO) {
-                totalPnl.divide(totalAsset, 6, java.math.RoundingMode.HALF_UP)
-                    .multiply(BigDecimal(100))
-                    .toDouble()
-            } else {
-                0.0
-            }
-
-            Pair(totalPnl, pnlPercent)
+            val trades = findTodayTrades(market)
+            val totalPnl = calculateTotalPnl(trades)
+            val totalAsset = calculateCurrentTotalAsset(market, currentPrice)
+            Pair(totalPnl, calculatePnlPercent(totalPnl, totalAsset))
         } catch (e: Exception) {
             log.warn("[$market] 일별 PnL 계산 실패: ${e.message}")
             Pair(BigDecimal.ZERO, 0.0)
         }
+    }
+
+    private fun findTodayTrades(market: String): List<com.ant.cointrading.repository.TradeEntity> {
+        val startOfDay = LocalDate.now(com.ant.cointrading.util.DateTimeUtils.SEOUL_ZONE)
+            .atStartOfDay(com.ant.cointrading.util.DateTimeUtils.SEOUL_ZONE)
+            .toInstant()
+        return tradeRepository.findByMarketAndSimulatedAndCreatedAtAfter(market, false, startOfDay)
+    }
+
+    private fun calculateTotalPnl(trades: List<com.ant.cointrading.repository.TradeEntity>): BigDecimal {
+        return trades.mapNotNull { it.pnl }
+            .fold(BigDecimal.ZERO) { acc, pnl -> acc + BigDecimal.valueOf(pnl) }
+    }
+
+    private fun calculateCurrentTotalAsset(market: String, currentPrice: BigDecimal): BigDecimal {
+        return try {
+            val balances = bithumbPrivateApi.getBalances() ?: emptyList()
+            calculateTotalAssetKrw(balances, currentPrice, market)
+        } catch (_: Exception) {
+            BigDecimal.ZERO
+        }
+    }
+
+    private fun calculatePnlPercent(totalPnl: BigDecimal, totalAsset: BigDecimal): Double {
+        if (totalAsset <= BigDecimal.ZERO) {
+            return 0.0
+        }
+        return totalPnl.divide(totalAsset, 6, java.math.RoundingMode.HALF_UP)
+            .multiply(BigDecimal(100))
+            .toDouble()
     }
 
     /**

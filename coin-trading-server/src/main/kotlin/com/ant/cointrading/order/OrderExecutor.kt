@@ -751,48 +751,19 @@ class OrderExecutor(
 
                 if (response == null) {
                     log.warn("[$market] 주문 조회 실패 (시도 $attempt/$MAX_STATUS_CHECK_RETRIES)")
-                    delayMs = minOf(delayMs * 2, STATUS_CHECK_MAX_DELAY_MS)
+                    delayMs = nextStatusCheckDelay(delayMs)
                     continue
                 }
 
                 lastResponse = response
-                val state = response.state
-
-                when (state) {
-                    TradingConstants.ORDER_STATE_DONE -> {
-                        log.info("[$market] 주문 완료 확인: orderId=$orderId")
-                        return response
-                    }
-                    TradingConstants.ORDER_STATE_CANCEL -> {
-                        log.warn("[$market] 주문 취소됨: orderId=$orderId")
-                        return response
-                    }
-                    TradingConstants.ORDER_STATE_WAIT -> {
-                        // 대기 중 - 부분 체결 가능성
-                        val executedVolume = response.executedVolume ?: BigDecimal.ZERO
-                        val totalVolume = response.volume ?: BigDecimal.ONE
-
-                        if (executedVolume > BigDecimal.ZERO) {
-                            val fillRate = executedVolume.divide(totalVolume, 4, RoundingMode.HALF_UP)
-                            log.info("[$market] 부분 체결 중: ${fillRate.multiply(BigDecimal(100))}% (시도 $attempt/$MAX_STATUS_CHECK_RETRIES)")
-
-                            // 90% 이상 체결이면 성공으로 간주
-                            if (fillRate.toDouble() >= TradingConstants.PARTIAL_FILL_SUCCESS_THRESHOLD) {
-                                log.info("[$market] 부분 체결 임계값 초과 - 성공으로 처리")
-                                return response
-                            }
-                        }
-                    }
-                    else -> {
-                        log.warn("[$market] 알 수 없는 주문 상태: $state")
-                    }
+                if (shouldReturnVerifiedOrder(market, orderId, response, attempt)) {
+                    return response
                 }
-
-                delayMs = minOf(delayMs * 2, STATUS_CHECK_MAX_DELAY_MS)
+                delayMs = nextStatusCheckDelay(delayMs)
 
             } catch (e: Exception) {
                 log.error("[$market] 주문 조회 예외 (시도 $attempt/$MAX_STATUS_CHECK_RETRIES): ${e.message}")
-                delayMs = minOf(delayMs * 2, STATUS_CHECK_MAX_DELAY_MS)
+                delayMs = nextStatusCheckDelay(delayMs)
             }
         }
 
@@ -801,6 +772,58 @@ class OrderExecutor(
 
         // 부분 체결이라도 있으면 해당 응답 반환
         return lastResponse
+    }
+
+    private fun shouldReturnVerifiedOrder(
+        market: String,
+        orderId: String,
+        response: OrderResponse,
+        attempt: Int
+    ): Boolean {
+        return when (response.state) {
+            TradingConstants.ORDER_STATE_DONE -> {
+                log.info("[$market] 주문 완료 확인: orderId=$orderId")
+                true
+            }
+            TradingConstants.ORDER_STATE_CANCEL -> {
+                log.warn("[$market] 주문 취소됨: orderId=$orderId")
+                true
+            }
+            TradingConstants.ORDER_STATE_WAIT -> {
+                handleWaitingOrderState(market, response, attempt)
+            }
+            else -> {
+                log.warn("[$market] 알 수 없는 주문 상태: ${response.state}")
+                false
+            }
+        }
+    }
+
+    private fun handleWaitingOrderState(
+        market: String,
+        response: OrderResponse,
+        attempt: Int
+    ): Boolean {
+        val executedVolume = response.executedVolume ?: BigDecimal.ZERO
+        val totalVolume = response.volume ?: BigDecimal.ONE
+        if (executedVolume <= BigDecimal.ZERO) {
+            return false
+        }
+
+        val fillRate = executedVolume.divide(totalVolume, 4, RoundingMode.HALF_UP)
+        log.info(
+            "[$market] 부분 체결 중: ${fillRate.multiply(BigDecimal(100))}% " +
+                "(시도 $attempt/$MAX_STATUS_CHECK_RETRIES)"
+        )
+        if (fillRate.toDouble() >= TradingConstants.PARTIAL_FILL_SUCCESS_THRESHOLD) {
+            log.info("[$market] 부분 체결 임계값 초과 - 성공으로 처리")
+            return true
+        }
+        return false
+    }
+
+    private fun nextStatusCheckDelay(currentDelayMs: Long): Long {
+        return minOf(currentDelayMs * 2, STATUS_CHECK_MAX_DELAY_MS)
     }
 
     /**
