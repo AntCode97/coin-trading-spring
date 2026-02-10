@@ -104,6 +104,27 @@ export interface SystemControlResult {
   data?: Record<string, unknown>;
 }
 
+export interface ValidationGateStatus {
+  canApplyChanges: boolean;
+  reason: string;
+  checkedAt: string;
+  market: string;
+  totalWindows: number;
+  validWindows: number;
+  avgOutOfSampleSharpe: number;
+  avgOutOfSampleReturn: number;
+  avgOutOfSampleTrades: number;
+  decayPercent: number;
+  isOverfitted: boolean;
+  minValidWindows: number;
+  minOutOfSampleSharpe: number;
+  minOutOfSampleTrades: number;
+  maxSharpeDecayPercent: number;
+  maxOutOfSampleDrawdownPercent: number;
+  executionSlippageBps: number;
+  cached: boolean;
+}
+
 export interface FundingStatus {
   enabled: boolean;
   autoTradingEnabled: boolean;
@@ -258,6 +279,44 @@ function normalizeFundingScanResult(raw: unknown): FundingScanResult {
   };
 }
 
+function normalizeSystemControlResult(raw: unknown): SystemControlResult {
+  const result = asApiObject(raw);
+  const fallbackMessage = toStringValue(result.result, '완료되었습니다.');
+  const message = toStringValue(result.message, fallbackMessage);
+  const data = asApiObject(result.data);
+
+  return {
+    success: toBoolean(result.success, true),
+    message,
+    data,
+  };
+}
+
+function normalizeValidationGateStatus(raw: unknown): ValidationGateStatus {
+  const status = asApiObject(raw);
+
+  return {
+    canApplyChanges: toBoolean(status.canApplyChanges),
+    reason: toStringValue(status.reason),
+    checkedAt: toStringValue(status.checkedAt),
+    market: toStringValue(status.market),
+    totalWindows: toNumber(status.totalWindows, 0),
+    validWindows: toNumber(status.validWindows, 0),
+    avgOutOfSampleSharpe: toNumber(status.avgOutOfSampleSharpe, 0),
+    avgOutOfSampleReturn: toNumber(status.avgOutOfSampleReturn, 0),
+    avgOutOfSampleTrades: toNumber(status.avgOutOfSampleTrades, 0),
+    decayPercent: toNumber(status.decayPercent, 0),
+    isOverfitted: toBoolean(status.isOverfitted, false),
+    minValidWindows: toNumber(status.minValidWindows, 0),
+    minOutOfSampleSharpe: toNumber(status.minOutOfSampleSharpe, 0),
+    minOutOfSampleTrades: toNumber(status.minOutOfSampleTrades, 0),
+    maxSharpeDecayPercent: toNumber(status.maxSharpeDecayPercent, 0),
+    maxOutOfSampleDrawdownPercent: toNumber(status.maxOutOfSampleDrawdownPercent, 0),
+    executionSlippageBps: toNumber(status.executionSlippageBps, 0),
+    cached: toBoolean(status.cached, false),
+  };
+}
+
 export type GenericApiResult = Record<string, unknown>;
 
 export const dashboardApi = {
@@ -280,26 +339,29 @@ export const dashboardApi = {
 export const systemControlApi = {
   // LLM Optimizer (장기 실행 - 10분 타임아웃)
   runOptimizer: (): Promise<SystemControlResult> =>
-    longRunningApi.post('/optimizer/run').then(res => res.data),
+    longRunningApi.post('/optimizer/run').then(res => normalizeSystemControlResult(res.data)),
 
   // Volume Surge (장기 실행 - 10분 타임아웃)
   runVolumeSurgeReflection: (): Promise<SystemControlResult> =>
-    longRunningApi.post('/volume-surge/reflect').then(res => res.data),
+    longRunningApi.post('/volume-surge/reflect').then(res => normalizeSystemControlResult(res.data)),
 
   // Meme Scalper (장기 실행 - 10분 타임아웃)
   runMemeScalperReflection: (): Promise<SystemControlResult> =>
-    longRunningApi.post('/meme-scalper/reflect').then(res => res.data),
+    longRunningApi.post('/meme-scalper/reflect').then(res => normalizeSystemControlResult(res.data)),
 
   // 나머지는 기본 api 사용 (10초 타임아웃)
   resetVolumeSurgeCircuitBreaker: (): Promise<SystemControlResult> =>
-    api.post('/volume-surge/reset-circuit-breaker').then(res => res.data),
+    api.post('/volume-surge/reset-circuit-breaker').then(res => normalizeSystemControlResult(res.data)),
 
   resetMemeScalperCircuitBreaker: (): Promise<SystemControlResult> =>
-    api.post('/meme-scalper/reset').then(res => res.data),
+    api.post('/meme-scalper/reset').then(res => normalizeSystemControlResult(res.data)),
 
   // Kimchi Premium
   refreshExchangeRate: (): Promise<SystemControlResult> =>
-    api.post('/kimchi-premium/exchange-rate/refresh').then(res => res.data),
+    api.post('/kimchi-premium/exchange-rate/refresh').then(res => normalizeSystemControlResult(res.data)),
+
+  getOptimizerValidationGate: (forceRefresh = false): Promise<ValidationGateStatus> =>
+    api.get('/optimizer/validation-gate', { params: { forceRefresh } }).then(res => normalizeValidationGateStatus(res.data)),
 
   // Funding Rate
   scanFundingOpportunities: (): Promise<FundingScanResult> =>
@@ -331,7 +393,7 @@ export const systemControlApi = {
 
   // Settings
   refreshCache: (): Promise<SystemControlResult> =>
-    api.post('/settings/cache/refresh').then(res => res.data),
+    api.post('/settings/cache/refresh').then(res => normalizeSystemControlResult(res.data)),
 };
 
 export default api;

@@ -92,5 +92,6 @@ class OptimizerController(
 
 data class OptimizationResult(
     val success: Boolean,
-    val result: String
+    val result: String,
+    val message: String = result
 )

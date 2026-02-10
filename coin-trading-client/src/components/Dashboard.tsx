@@ -9,6 +9,7 @@ import {
   type PositionInfo,
   type SyncResult,
   type SystemControlResult,
+  type ValidationGateStatus,
 } from '../api';
 import {
   type ConfirmActionOptions,
@@ -167,6 +168,17 @@ export default function Dashboard() {
     queryKey: ['funding-opportunities'],
     queryFn: () => systemControlApi.scanFundingOpportunities(),
     enabled: fundingExpanded,
+  });
+
+  const {
+    data: validationGateStatus,
+    refetch: refetchValidationGate,
+    isFetching: validationGateFetching,
+  } = useQuery<ValidationGateStatus>({
+    queryKey: ['optimizer-validation-gate'],
+    queryFn: () => systemControlApi.getOptimizerValidationGate(false),
+    enabled: systemControlExpanded,
+    refetchInterval: systemControlExpanded ? 60000 : false,
   });
 
   const currentDate = requestDate ? new Date(`${requestDate}T00:00:00`) : new Date();
@@ -541,6 +553,20 @@ export default function Dashboard() {
             <div className="system-control-grid">
               <div className="control-group">
                 <h3 className="control-group-title">🤖 AI 분석</h3>
+                {validationGateStatus && (
+                  <div className={`optimizer-gate-banner ${validationGateStatus.canApplyChanges ? 'open' : 'blocked'}`}>
+                    <div className="optimizer-gate-title">
+                      {validationGateStatus.canApplyChanges ? '검증 게이트: 통과' : '검증 게이트: 차단'}
+                    </div>
+                    <div className="optimizer-gate-reason">{validationGateStatus.reason}</div>
+                    <div className="optimizer-gate-meta">
+                      OOS Sharpe {validationGateStatus.avgOutOfSampleSharpe.toFixed(2)} / Trades {validationGateStatus.avgOutOfSampleTrades.toFixed(1)} / Decay {validationGateStatus.decayPercent.toFixed(1)}%
+                    </div>
+                    <div className="optimizer-gate-meta">
+                      기준 {validationGateStatus.market} · {validationGateStatus.cached ? '캐시' : '실시간'} · {new Date(validationGateStatus.checkedAt).toLocaleString('ko-KR')}
+                    </div>
+                  </div>
+                )}
                 <div className="control-buttons">
                   <button
                     className="control-btn control-btn-primary"
@@ -556,10 +582,22 @@ export default function Dashboard() {
                         },
                       }
                     )}
-                    disabled={isActionExecuting('optimizer')}
+                    disabled={
+                      isActionExecuting('optimizer') ||
+                      (validationGateStatus ? !validationGateStatus.canApplyChanges : false)
+                    }
                     title="AI가 거래 기록을 분석하여 최적의 전략 파라미터를 제안합니다"
                   >
                     {isActionExecuting('optimizer') ? '분석 중...' : '전체 거래 분석'}
+                  </button>
+                  <button
+                    className="control-btn control-btn-secondary"
+                    type="button"
+                    onClick={() => void refetchValidationGate()}
+                    disabled={validationGateFetching}
+                    title="수익성 검증 게이트 상태를 즉시 다시 평가합니다"
+                  >
+                    {validationGateFetching ? '검증 중...' : '검증 상태 새로고침'}
                   </button>
                 </div>
               </div>
