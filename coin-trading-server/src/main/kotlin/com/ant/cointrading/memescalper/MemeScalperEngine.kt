@@ -24,6 +24,8 @@ import com.ant.cointrading.risk.SimpleCircuitBreakerState
 import com.ant.cointrading.risk.GenericCircuitBreakerStatePersistence
 import com.ant.cointrading.risk.DailyStatsRepository
 import com.ant.cointrading.risk.CircuitBreakerState
+import com.ant.cointrading.util.apiFailure
+import com.ant.cointrading.util.apiSuccess
 import jakarta.annotation.PostConstruct
 import org.slf4j.LoggerFactory
 import org.springframework.scheduling.annotation.Scheduled
@@ -136,47 +138,22 @@ class MemeScalperEngine(
      * - CLOSING 포지션은 즉시 모니터링 재개
      */
     private fun restoreOpenPositions() {
-        // OPEN 포지션 복원
         val openPositions = tradeRepository.findByStatus("OPEN")
         if (openPositions.isNotEmpty()) {
             log.info("OPEN 포지션 ${openPositions.size}건 복원 중...")
-            openPositions.forEach { position ->
-                val positionId = position.id ?: run {
-                    log.warn("[${position.market}] 포지션 ID 없음 - 복원 스킵")
-                    return@forEach
-                }
-                peakPrices[positionId] = position.peakPrice ?: position.entryPrice
-                peakVolumes[positionId] = position.peakVolume ?: 0.0
-                log.info("[${position.market}] OPEN 포지션 복원 완료")
-            }
+            openPositions.forEach(::restoreOpenPosition)
             log.info("=== ${openPositions.size}건 OPEN 포지션 복원 완료 ===")
         } else {
             log.info("복원할 OPEN 포지션 없음")
         }
 
-        // CLOSING 포지션 복원 (즉시 모니터링 재개)
         val closingPositions = tradeRepository.findByStatus("CLOSING")
         if (closingPositions.isNotEmpty()) {
             log.info("CLOSING 포지션 ${closingPositions.size}건 복원 중...")
-            closingPositions.forEach { position ->
-                val positionId = position.id ?: run {
-                    log.warn("[${position.market}] CLOSING 포지션 ID 없음 - 복원 스킵")
-                    return@forEach
-                }
-
-                // 피크 가격/거래량 복원
-                peakPrices[positionId] = position.peakPrice ?: position.entryPrice
-                peakVolumes[positionId] = position.peakVolume ?: 0.0
-
-                log.warn("[${position.market}] CLOSING 포지션 복원 - 주문ID: ${position.closeOrderId}, 청산시도: ${position.closeAttemptCount}회")
-
-                // 즉시 청산 상태 확인
-                monitorClosingPosition(position)
-            }
+            closingPositions.forEach(::restoreClosingPosition)
             log.info("=== ${closingPositions.size}건 CLOSING 포지션 복원 완료, 모니터링 재개 ===")
         }
 
-        // ABANDONED 포지션 로그만 출력 (재시도는 스케줄러에서 처리)
         val abandonedPositions = tradeRepository.findByStatus("ABANDONED")
         if (abandonedPositions.isNotEmpty()) {
             log.warn("ABANDONED 포지션 ${abandonedPositions.size}건 존재 - 10분마다 자동 재시도 예정")
@@ -186,6 +163,30 @@ class MemeScalperEngine(
         if (totalRestored > 0) {
             log.info("=== 총 ${totalRestored}건 포지션 복원 완료, 모니터링 재개 ===")
         }
+    }
+
+    private fun restoreOpenPosition(position: MemeScalperTradeEntity) {
+        val positionId = position.id ?: run {
+            log.warn("[${position.market}] 포지션 ID 없음 - 복원 스킵")
+            return
+        }
+        restorePeakState(position, positionId)
+        log.info("[${position.market}] OPEN 포지션 복원 완료")
+    }
+
+    private fun restoreClosingPosition(position: MemeScalperTradeEntity) {
+        val positionId = position.id ?: run {
+            log.warn("[${position.market}] CLOSING 포지션 ID 없음 - 복원 스킵")
+            return
+        }
+        restorePeakState(position, positionId)
+        log.warn("[${position.market}] CLOSING 포지션 복원 - 주문ID: ${position.closeOrderId}, 청산시도: ${position.closeAttemptCount}회")
+        monitorClosingPosition(position)
+    }
+
+    private fun restorePeakState(position: MemeScalperTradeEntity, positionId: Long) {
+        peakPrices[positionId] = position.peakPrice ?: position.entryPrice
+        peakVolumes[positionId] = position.peakVolume ?: 0.0
     }
 
     /**
@@ -270,35 +271,48 @@ class MemeScalperEngine(
     }
 
     private fun monitorOpenPositions() {
-        val openPositions = tradeRepository.findByStatus("OPEN")
-        openPositions.forEach { position ->
-            try {
-                monitorSinglePosition(position)
-            } catch (e: Exception) {
-                log.error("[${position.market}] 모니터링 오류: ${e.message}")
-            }
-        }
+        forEachPositionByStatus(
+            status = "OPEN",
+            errorPrefix = "모니터링 오류",
+            action = ::monitorSinglePosition
+        )
     }
 
     private fun monitorClosingPositions() {
-        val closingPositions = tradeRepository.findByStatus("CLOSING")
-        closingPositions.forEach { position ->
+        forEachPositionByStatus(
+            status = "CLOSING",
+            errorPrefix = "청산 모니터링 오류",
+            action = ::monitorClosingPosition
+        )
+    }
+
+    private fun checkAbandonedRetrySchedule() {
+        if (!shouldRunIntervalTask(ABANDONED_RETRY_CHECK_KEY, ABANDONED_RETRY_INTERVAL_MINUTES)) return
+        retryAbandonedPositions()
+    }
+
+    private fun forEachPositionByStatus(
+        status: String,
+        errorPrefix: String,
+        action: (MemeScalperTradeEntity) -> Unit
+    ) {
+        tradeRepository.findByStatus(status).forEach { position ->
             try {
-                monitorClosingPosition(position)
+                action(position)
             } catch (e: Exception) {
-                log.error("[${position.market}] 청산 모니터링 오류: ${e.message}")
+                log.error("[${position.market}] $errorPrefix: ${e.message}")
             }
         }
     }
 
-    private fun checkAbandonedRetrySchedule() {
-        // ABANDONED 포지션 재시도 (10분마다 체크 - 빈번한 API 호출 방지)
+    private fun shouldRunIntervalTask(taskKey: String, intervalMinutes: Long): Boolean {
         val now = Instant.now()
-        val lastCheck = cooldowns[ABANDONED_RETRY_CHECK_KEY]
-        if (lastCheck == null || ChronoUnit.MINUTES.between(lastCheck, now) >= ABANDONED_RETRY_INTERVAL_MINUTES) {
-            cooldowns[ABANDONED_RETRY_CHECK_KEY] = now
-            retryAbandonedPositions()
+        val lastCheck = cooldowns[taskKey]
+        if (lastCheck != null && ChronoUnit.MINUTES.between(lastCheck, now) < intervalMinutes) {
+            return false
         }
+        cooldowns[taskKey] = now
+        return true
     }
 
     /**
@@ -329,32 +343,16 @@ class MemeScalperEngine(
     private fun retryAbandonedPosition(position: MemeScalperTradeEntity): Boolean {
         val market = position.market
 
-        // 최종 ABANDONED 도달 여부 체크 (closeAttemptCount + 재시도 횟수)
         val totalAttempts = position.closeAttemptCount + position.abandonRetryCount
-        val maxTotalAttempts = TradingConstants.MAX_CLOSE_ATTEMPTS + 3  // 원래 시도 + 재시도 3회
+        val maxTotalAttempts = TradingConstants.MAX_CLOSE_ATTEMPTS + 3
 
         if (totalAttempts >= maxTotalAttempts) {
-            log.warn("[$market] ABANDONED 재시도 ${maxTotalAttempts}회 초과 - FAILED로 변경")
-            slackNotifier.sendWarning(
-                market,
-                """
-                ABANDONED 포지션 재시도 실패 (${maxTotalAttempts}회 초과) - 최종 FAILED
-                진입가: ${position.entryPrice}원
-                수량: ${position.quantity}
-                수동으로 빗썸에서 매도 필요 (DB 상태: FAILED)
-                """.trimIndent()
-            )
-            // 상태를 FAILED로 변경하여 더 이상 재시도되지 않도록 함
-            position.status = "FAILED"
-            position.exitReason = "ABANDONED_MAX_RETRIES"
-            position.exitTime = Instant.now()
-            tradeRepository.save(position)
+            markAbandonedAsFailed(position, maxTotalAttempts)
             return false
         }
 
-        // 잔고 확인 - 이미 없으면 CLOSED로 변경
-        val coinSymbol = market.removePrefix("KRW-")
         val actualBalance = try {
+            val coinSymbol = market.removePrefix("KRW-")
             bithumbPrivateApi.getBalances()?.find { it.currency == coinSymbol }?.balance ?: BigDecimal.ZERO
         } catch (e: Exception) {
             log.warn("[$market] 잔고 조회 실패: ${e.message}")
@@ -362,22 +360,46 @@ class MemeScalperEngine(
         }
 
         if (actualBalance <= BigDecimal.ZERO) {
-            log.info("[$market] 잔고 없음 - ABANDONED -> CLOSED 변경")
-            position.status = "CLOSED"
-            position.exitTime = Instant.now()
-            position.exitReason = "ABANDONED_NO_BALANCE"
-            tradeRepository.save(position)
+            closeAbandonedWithoutBalance(position)
             return true
         }
 
-        // 재시도: closeAttemptCount 리셋 후 다시 청산 시도
-        log.info("[$market] ABANDONED 포지션 재시도 #${totalAttempts + 1}")
-        position.closeAttemptCount = 0  // 리셋
-        position.abandonRetryCount += 1
-        position.status = "OPEN"  // OPEN으로 복귀하여 청산 로직 타도록
-        tradeRepository.save(position)
-
+        reopenAbandonedForRetry(position, totalAttempts + 1)
         return true
+    }
+
+    private fun markAbandonedAsFailed(position: MemeScalperTradeEntity, maxTotalAttempts: Int) {
+        val market = position.market
+        log.warn("[$market] ABANDONED 재시도 ${maxTotalAttempts}회 초과 - FAILED로 변경")
+        slackNotifier.sendWarning(
+            market,
+            """
+            ABANDONED 포지션 재시도 실패 (${maxTotalAttempts}회 초과) - 최종 FAILED
+            진입가: ${position.entryPrice}원
+            수량: ${position.quantity}
+            수동으로 빗썸에서 매도 필요 (DB 상태: FAILED)
+            """.trimIndent()
+        )
+        position.status = "FAILED"
+        position.exitReason = "ABANDONED_MAX_RETRIES"
+        position.exitTime = Instant.now()
+        tradeRepository.save(position)
+    }
+
+    private fun closeAbandonedWithoutBalance(position: MemeScalperTradeEntity) {
+        log.info("[${position.market}] 잔고 없음 - ABANDONED -> CLOSED 변경")
+        position.status = "CLOSED"
+        position.exitTime = Instant.now()
+        position.exitReason = "ABANDONED_NO_BALANCE"
+        tradeRepository.save(position)
+    }
+
+    private fun reopenAbandonedForRetry(position: MemeScalperTradeEntity, nextAttempt: Int) {
+        log.info("[${position.market}] ABANDONED 포지션 재시도 #$nextAttempt")
+        position.closeAttemptCount = 0
+        position.abandonRetryCount += 1
+        position.status = "OPEN"
+        tradeRepository.save(position)
     }
 
     /**
@@ -1087,7 +1109,10 @@ class MemeScalperEngine(
         circuitBreaker.reset()
         log.info("서킷 브레이커 리셋")
         val cbState = circuitBreaker.getState()
-        return mapOf("success" to true, "consecutiveLosses" to cbState.consecutiveLosses)
+        return mapOf(
+            "success" to true,
+            "consecutiveLosses" to cbState.consecutiveLosses
+        )
     }
 
     /**
@@ -1096,7 +1121,7 @@ class MemeScalperEngine(
     fun manualClose(market: String): Map<String, Any?> {
         val positions = tradeRepository.findByMarketAndStatus(market, "OPEN")
         if (positions.isEmpty()) {
-            return mapOf("success" to false, "error" to "열린 포지션 없음")
+            return apiFailure("열린 포지션 없음")
         }
 
         val results = positions.map { position ->
@@ -1108,6 +1133,6 @@ class MemeScalperEngine(
             mapOf("positionId" to position.id, "exitPrice" to exitPrice)
         }
 
-        return mapOf("success" to true, "closedPositions" to results)
+        return apiSuccess("closedPositions" to results)
     }
 }

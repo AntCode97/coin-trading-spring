@@ -26,6 +26,8 @@ import com.ant.cointrading.risk.GenericCircuitBreakerStatePersistence
 import com.ant.cointrading.risk.DailyStatsRepository
 import com.ant.cointrading.risk.CircuitBreakerState
 import com.ant.cointrading.risk.StopLossCalculator
+import com.ant.cointrading.util.apiFailure
+import com.ant.cointrading.util.apiSuccess
 import org.springframework.core.io.ClassPathResource
 import org.springframework.core.io.Resource
 import jakarta.annotation.PostConstruct
@@ -123,59 +125,22 @@ class VolumeSurgeEngine(
      * - CLOSING 포지션은 즉시 모니터링 재개
      */
     private fun restoreOpenPositions() {
-        // OPEN 포지션 복원
         val openPositions = tradeRepository.findByStatus("OPEN")
         if (openPositions.isNotEmpty()) {
             log.info("열린 포지션 ${openPositions.size}건 복원 중...")
-
-            openPositions.forEach { position ->
-                // 트레일링 스탑 고점 복원
-                if (position.trailingActive) {
-                    val highestPriceValue = position.highestPrice
-                    if (highestPriceValue != null) {
-                        val positionId = position.id ?: run {
-                            log.warn("[${position.market}] 포지션 ID 없음 - 트레일링 고점 복원 스킵")
-                            return@forEach
-                        }
-                        highestPrices[positionId] = highestPriceValue
-                        log.info("[${position.market}] 트레일링 고점 복원: $highestPriceValue")
-                    }
-                }
-
-                log.info("[${position.market}] OPEN 포지션 복원 완료 - 진입가: ${position.entryPrice}, 트레일링: ${position.trailingActive}")
-            }
-
+            openPositions.forEach(::restoreOpenPosition)
             log.info("=== ${openPositions.size}건 OPEN 포지션 복원 완료 ===")
         } else {
             log.info("복원할 OPEN 포지션 없음")
         }
 
-        // CLOSING 포지션 복원 (즉시 모니터링 재개)
         val closingPositions = tradeRepository.findByStatus("CLOSING")
         if (closingPositions.isNotEmpty()) {
             log.info("CLOSING 포지션 ${closingPositions.size}건 복원 중...")
-
-            closingPositions.forEach { position ->
-                val positionId = position.id ?: run {
-                    log.warn("[${position.market}] CLOSING 포지션 ID 없음 - 복원 스킵")
-                    return@forEach
-                }
-
-                // 트레일링 고점도 복원
-                if (position.trailingActive && position.highestPrice != null) {
-                    highestPrices[positionId] = position.highestPrice!!
-                }
-
-                log.warn("[${position.market}] CLOSING 포지션 복원 - 주문ID: ${position.closeOrderId}, 청산시도: ${position.closeAttemptCount}회")
-
-                // 즉시 청산 상태 확인
-                monitorClosingPosition(position)
-            }
-
+            closingPositions.forEach(::restoreClosingPosition)
             log.info("=== ${closingPositions.size}건 CLOSING 포지션 복원 완료, 모니터링 재개 ===")
         }
 
-        // ABANDONED 포지션 로그만 출력 (재시도는 스케줄러에서 처리)
         val abandonedPositions = tradeRepository.findByStatus("ABANDONED")
         if (abandonedPositions.isNotEmpty()) {
             log.warn("ABANDONED 포지션 ${abandonedPositions.size}건 존재 - 10분마다 자동 재시도 예정")
@@ -185,6 +150,41 @@ class VolumeSurgeEngine(
         if (totalRestored > 0) {
             log.info("=== 총 ${totalRestored}건 포지션 복원 완료, 모니터링 재개 ===")
         }
+    }
+
+    private fun restoreOpenPosition(position: VolumeSurgeTradeEntity) {
+        restoreTrailingHighestPrice(position, missingIdMessage = "포지션 ID 없음 - 트레일링 고점 복원 스킵")
+        log.info("[${position.market}] OPEN 포지션 복원 완료 - 진입가: ${position.entryPrice}, 트레일링: ${position.trailingActive}")
+    }
+
+    private fun restoreClosingPosition(position: VolumeSurgeTradeEntity) {
+        val positionId = position.id ?: run {
+            log.warn("[${position.market}] CLOSING 포지션 ID 없음 - 복원 스킵")
+            return
+        }
+        restoreTrailingHighestPrice(position, positionId)
+
+        log.warn("[${position.market}] CLOSING 포지션 복원 - 주문ID: ${position.closeOrderId}, 청산시도: ${position.closeAttemptCount}회")
+        monitorClosingPosition(position)
+    }
+
+    private fun restoreTrailingHighestPrice(position: VolumeSurgeTradeEntity, missingIdMessage: String): Boolean {
+        if (!position.trailingActive) return true
+        val highestPriceValue = position.highestPrice ?: return true
+        val positionId = position.id ?: run {
+            log.warn("[${position.market}] $missingIdMessage")
+            return false
+        }
+        highestPrices[positionId] = highestPriceValue
+        log.info("[${position.market}] 트레일링 고점 복원: $highestPriceValue")
+        return true
+    }
+
+    private fun restoreTrailingHighestPrice(position: VolumeSurgeTradeEntity, positionId: Long) {
+        if (!position.trailingActive) return
+        val highestPriceValue = position.highestPrice ?: return
+        highestPrices[positionId] = highestPriceValue
+        log.info("[${position.market}] 트레일링 고점 복원: $highestPriceValue")
     }
 
     /**
@@ -614,35 +614,48 @@ class VolumeSurgeEngine(
     }
 
     private fun monitorOpenPositions() {
-        val openPositions = tradeRepository.findByStatus("OPEN")
-        openPositions.forEach { position ->
-            try {
-                monitorSinglePosition(position)
-            } catch (e: Exception) {
-                log.error("[${position.market}] 포지션 모니터링 오류: ${e.message}")
-            }
-        }
+        forEachPositionByStatus(
+            status = "OPEN",
+            errorPrefix = "포지션 모니터링 오류",
+            action = ::monitorSinglePosition
+        )
     }
 
     private fun monitorClosingPositions() {
-        val closingPositions = tradeRepository.findByStatus("CLOSING")
-        closingPositions.forEach { position ->
+        forEachPositionByStatus(
+            status = "CLOSING",
+            errorPrefix = "청산 모니터링 오류",
+            action = ::monitorClosingPosition
+        )
+    }
+
+    private fun checkAbandonedRetrySchedule() {
+        if (!shouldRunIntervalTask(ABANDONED_RETRY_CHECK_KEY, ABANDONED_RETRY_INTERVAL_MINUTES)) return
+        retryAbandonedPositions()
+    }
+
+    private fun forEachPositionByStatus(
+        status: String,
+        errorPrefix: String,
+        action: (VolumeSurgeTradeEntity) -> Unit
+    ) {
+        tradeRepository.findByStatus(status).forEach { position ->
             try {
-                monitorClosingPosition(position)
+                action(position)
             } catch (e: Exception) {
-                log.error("[${position.market}] 청산 모니터링 오류: ${e.message}")
+                log.error("[${position.market}] $errorPrefix: ${e.message}")
             }
         }
     }
 
-    private fun checkAbandonedRetrySchedule() {
-        // ABANDONED 포지션 재시도 (10분마다 체크 - 빈번한 API 호출 방지)
+    private fun shouldRunIntervalTask(taskKey: String, intervalMinutes: Long): Boolean {
         val now = Instant.now()
-        val lastCheck = cooldowns[ABANDONED_RETRY_CHECK_KEY]
-        if (lastCheck == null || ChronoUnit.MINUTES.between(lastCheck, now) >= ABANDONED_RETRY_INTERVAL_MINUTES) {
-            cooldowns[ABANDONED_RETRY_CHECK_KEY] = now
-            retryAbandonedPositions()
+        val lastCheck = cooldowns[taskKey]
+        if (lastCheck != null && ChronoUnit.MINUTES.between(lastCheck, now) < intervalMinutes) {
+            return false
         }
+        cooldowns[taskKey] = now
+        return true
     }
 
     /**
@@ -696,32 +709,16 @@ class VolumeSurgeEngine(
     private fun retryAbandonedPosition(position: VolumeSurgeTradeEntity): Boolean {
         val market = position.market
 
-        // 최종 ABANDONED 도달 여부 체크 (closeAttemptCount + 재시도 횟수)
         val totalAttempts = position.closeAttemptCount + position.abandonRetryCount
-        val maxTotalAttempts = TradingConstants.MAX_CLOSE_ATTEMPTS + 3  // 원래 시도 + 재시도 3회
+        val maxTotalAttempts = TradingConstants.MAX_CLOSE_ATTEMPTS + 3
 
         if (totalAttempts >= maxTotalAttempts) {
-            log.warn("[$market] ABANDONED 재시도 ${maxTotalAttempts}회 초과 - FAILED로 변경")
-            slackNotifier.sendWarning(
-                market,
-                """
-                ABANDONED 포지션 재시도 실패 (${maxTotalAttempts}회 초과) - 최종 FAILED
-                진입가: ${position.entryPrice}원
-                수량: ${position.quantity}
-                수동으로 빗썸에서 매도 필요 (DB 상태: FAILED)
-                """.trimIndent()
-            )
-            // 상태를 FAILED로 변경하여 더 이상 재시도되지 않도록 함
-            position.status = "FAILED"
-            position.exitReason = "ABANDONED_MAX_RETRIES"
-            position.exitTime = Instant.now()
-            tradeRepository.save(position)
+            markAbandonedAsFailed(position, maxTotalAttempts)
             return false
         }
 
-        // 잔고 확인 - 이미 없으면 CLOSED로 변경
-        val coinSymbol = market.removePrefix("KRW-")
         val actualBalance = try {
+            val coinSymbol = market.removePrefix("KRW-")
             bithumbPrivateApi.getBalances()?.find { it.currency == coinSymbol }?.balance ?: BigDecimal.ZERO
         } catch (e: Exception) {
             log.warn("[$market] 잔고 조회 실패: ${e.message}")
@@ -729,22 +726,46 @@ class VolumeSurgeEngine(
         }
 
         if (actualBalance <= BigDecimal.ZERO) {
-            log.info("[$market] 잔고 없음 - ABANDONED -> CLOSED 변경")
-            position.status = "CLOSED"
-            position.exitTime = Instant.now()
-            position.exitReason = "ABANDONED_NO_BALANCE"
-            tradeRepository.save(position)
+            closeAbandonedWithoutBalance(position)
             return true
         }
 
-        // 재시도: closeAttemptCount 리셋 후 다시 청산 시도
-        log.info("[$market] ABANDONED 포지션 재시도 #${totalAttempts + 1}")
-        position.closeAttemptCount = 0  // 리셋
-        position.abandonRetryCount += 1
-        position.status = "OPEN"  // OPEN으로 복귀하여 청산 로직 타도록
-        tradeRepository.save(position)
-
+        reopenAbandonedForRetry(position, totalAttempts + 1)
         return true
+    }
+
+    private fun markAbandonedAsFailed(position: VolumeSurgeTradeEntity, maxTotalAttempts: Int) {
+        val market = position.market
+        log.warn("[$market] ABANDONED 재시도 ${maxTotalAttempts}회 초과 - FAILED로 변경")
+        slackNotifier.sendWarning(
+            market,
+            """
+            ABANDONED 포지션 재시도 실패 (${maxTotalAttempts}회 초과) - 최종 FAILED
+            진입가: ${position.entryPrice}원
+            수량: ${position.quantity}
+            수동으로 빗썸에서 매도 필요 (DB 상태: FAILED)
+            """.trimIndent()
+        )
+        position.status = "FAILED"
+        position.exitReason = "ABANDONED_MAX_RETRIES"
+        position.exitTime = Instant.now()
+        tradeRepository.save(position)
+    }
+
+    private fun closeAbandonedWithoutBalance(position: VolumeSurgeTradeEntity) {
+        log.info("[${position.market}] 잔고 없음 - ABANDONED -> CLOSED 변경")
+        position.status = "CLOSED"
+        position.exitTime = Instant.now()
+        position.exitReason = "ABANDONED_NO_BALANCE"
+        tradeRepository.save(position)
+    }
+
+    private fun reopenAbandonedForRetry(position: VolumeSurgeTradeEntity, nextAttempt: Int) {
+        log.info("[${position.market}] ABANDONED 포지션 재시도 #$nextAttempt")
+        position.closeAttemptCount = 0
+        position.abandonRetryCount += 1
+        position.status = "OPEN"
+        tradeRepository.save(position)
     }
 
     /**
@@ -1028,8 +1049,7 @@ class VolumeSurgeEngine(
         notifyManualTriggerStart(market, skipLlmFilter, savedAlert)
         startAsyncManualTriggerProcessing(savedAlert, market, skipLlmFilter)
 
-        return mapOf(
-            "success" to true,
+        return apiSuccess(
             "market" to market,
             "alertId" to savedAlert.id,
             "skipLlmFilter" to skipLlmFilter,
@@ -1061,11 +1081,7 @@ class VolumeSurgeEngine(
     }
 
     private fun manualTriggerFailure(market: String, error: String): Map<String, Any?> {
-        return mapOf(
-            "success" to false,
-            "market" to market,
-            "error" to error
-        )
+        return apiFailure(error, "market" to market)
     }
 
     private fun createManualTriggerAlert(market: String): VolumeSurgeAlertEntity {
@@ -1141,11 +1157,7 @@ class VolumeSurgeEngine(
 
         val openPositions = tradeRepository.findByMarketAndStatus(market, "OPEN")
         if (openPositions.isEmpty()) {
-            return mapOf(
-                "success" to false,
-                "market" to market,
-                "error" to "열린 포지션 없음"
-            )
+            return apiFailure("열린 포지션 없음", "market" to market)
         }
 
         // 수동 청산 시작 알림
@@ -1159,8 +1171,7 @@ class VolumeSurgeEngine(
 
         val results = openPositions.map { position -> manualCloseSinglePosition(market, position) }
 
-        return mapOf(
-            "success" to true,
+        return apiSuccess(
             "market" to market,
             "closedPositions" to results
         )
@@ -1174,20 +1185,15 @@ class VolumeSurgeEngine(
             val exitPrice = fetchManualCloseExitPrice(market, position)
             closePosition(position, exitPrice, "MANUAL")
 
-            mapOf(
+            apiSuccess(
                 "positionId" to position.id,
                 "exitPrice" to exitPrice,
                 "pnlAmount" to position.pnlAmount,
-                "pnlPercent" to position.pnlPercent,
-                "success" to true
+                "pnlPercent" to position.pnlPercent
             )
         } catch (e: Exception) {
             slackNotifier.sendWarning(market, "수동 청산 실패: ${e.message}")
-            mapOf(
-                "positionId" to position.id,
-                "success" to false,
-                "error" to e.message
-            )
+            apiFailure(e.message ?: "Unknown error", "positionId" to position.id)
         }
     }
 

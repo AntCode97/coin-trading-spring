@@ -31,8 +31,7 @@ class PortfolioController(
         val assets = tradingProperties.markets
         val result = portfolioOptimizer.maximizeSharpeRatio(assets, lookbackDays)
 
-        return mapOf(
-            "success" to true,
+        return success(
             "method" to "Sharpe Ratio Maximization",
             "assets" to assets,
             "weights" to result.weights.toList(),
@@ -53,8 +52,7 @@ class PortfolioController(
         val assets = tradingProperties.markets
         val result = portfolioOptimizer.calculateRiskParity(assets, lookbackDays)
 
-        return mapOf(
-            "success" to true,
+        return success(
             "method" to "Risk Parity",
             "assets" to assets,
             "weights" to result.weights.toList(),
@@ -75,8 +73,7 @@ class PortfolioController(
         val assets = tradingProperties.markets
         val result = hrpAllocator.calculateHRPWeights(assets, lookbackDays)
 
-        return mapOf(
-            "success" to true,
+        return success(
             "method" to "Hierarchical Risk Parity",
             "assets" to assets,
             "weights" to result.weights.toList(),
@@ -97,8 +94,7 @@ class PortfolioController(
         val assets = tradingProperties.markets
         val result = hrpAllocator.calculateClusteredRiskParity(assets, lookbackDays, nClusters)
 
-        return mapOf(
-            "success" to true,
+        return success(
             "method" to "Clustered Risk Parity",
             "assets" to assets,
             "weights" to result.weights.toList(),
@@ -119,8 +115,7 @@ class PortfolioController(
         val assets = tradingProperties.markets
         val frontier = portfolioOptimizer.calculateEfficientFrontier(assets, lookbackDays, nPoints)
 
-        return mapOf(
-            "success" to true,
+        return success(
             "assets" to assets,
             "frontier" to frontier.map { point ->
                 mapOf(
@@ -150,8 +145,7 @@ class PortfolioController(
             marketRegime = marketRegime
         )
 
-        return mapOf(
-            "success" to true,
+        return success(
             "positionSize" to positionSize,
             "winRate" to winRate,
             "riskReward" to riskReward,
@@ -180,8 +174,7 @@ class PortfolioController(
             riskBudget = riskBudget
         )
 
-        return mapOf(
-            "success" to true,
+        return success(
             "positionSize" to positionSize,
             "positionSizeWon" to positionSize.toLong(),
             "assetVolatility" to assetVolatility,
@@ -197,8 +190,7 @@ class PortfolioController(
     fun getKellyStatus(): Map<String, Any> {
         val status = kellySizer.getKellyStatus()
 
-        return mapOf(
-            "success" to true,
+        return success(
             "ewmaWinRate" to status.ewmaWinRate,
             "ewmaRiskReward" to status.ewmaRiskReward,
             "rawKelly" to status.rawKelly,
@@ -217,8 +209,7 @@ class PortfolioController(
     ): Map<String, Any> {
         kellySizer.loadHistoryFromDB(lookbackDays)
 
-        return mapOf(
-            "success" to true,
+        return success(
             "message" to "트레이딩 히스토리 로드 완료",
             "lookbackDays" to lookbackDays
         )
@@ -231,8 +222,7 @@ class PortfolioController(
     fun clearKellyHistory(): Map<String, Any> {
         kellySizer.clearHistory()
 
-        return mapOf(
-            "success" to true,
+        return success(
             "message" to "트레이딩 히스토리 초기화 완료"
         )
     }
@@ -251,8 +241,7 @@ class PortfolioController(
         val riskParityResult = portfolioOptimizer.calculateRiskParity(assets, lookbackDays)
         val hrpResult = hrpAllocator.calculateHRPWeights(assets, lookbackDays)
 
-        return mapOf(
-            "success" to true,
+        return success(
             "assets" to assets,
             "lookbackDays" to lookbackDays,
             "comparison" to mapOf(
@@ -297,8 +286,7 @@ class PortfolioController(
             tau = tau
         )
 
-        return mapOf(
-            "success" to true,
+        return success(
             "assets" to assets,
             "lookbackDays" to lookbackDays,
             "tau" to tau,
@@ -316,8 +304,7 @@ class PortfolioController(
     ): Map<String, Any> {
         val assets = tradingProperties.markets
 
-        return mapOf(
-            "success" to true,
+        return success(
             "assets" to assets,
             "message" to "컨플루언스 뷰 생성 기능 (준비 중)",
             "views" to emptyList<BlackLittermanModel.View>()
@@ -333,8 +320,7 @@ class PortfolioController(
     ): Map<String, Any> {
         val assets = tradingProperties.markets
 
-        return mapOf(
-            "success" to true,
+        return success(
             "assets" to assets,
             "lookbackDays" to lookbackDays,
             "message" to "모멘텀 뷰 생성 기능 (준비 중)",
@@ -351,8 +337,7 @@ class PortfolioController(
     ): Map<String, Any> {
         val assets = tradingProperties.markets
 
-        return mapOf(
-            "success" to true,
+        return success(
             "assets" to assets,
             "lookbackDays" to lookbackDays,
             "message" to "상대 뷰 생성 기능 (준비 중)",
@@ -382,8 +367,7 @@ class PortfolioController(
         // Risk Parity 가중치 계산
         val rpResult = portfolioOptimizer.calculateRiskParity(assets, lookbackDays)
 
-        return mapOf(
-            "success" to true,
+        return success(
             "method" to "Black-Litterman + Risk Parity",
             "assets" to assets,
             "blReturns" to blResult.expectedReturns.toList(),
@@ -407,8 +391,7 @@ class PortfolioController(
     ): Map<String, Any> {
         val result = factorModelCalculator.calculateCAPM(asset, marketProxy, lookbackDays)
 
-        return mapOf(
-            "success" to true,
+        return success(
             "asset" to asset,
             "marketProxy" to marketProxy,
             "alpha" to result.alpha,
@@ -431,8 +414,7 @@ class PortfolioController(
         val assets = tradingProperties.markets
         val results = factorModelCalculator.calculateMultipleCAPM(assets, marketProxy, lookbackDays)
 
-        return mapOf(
-            "success" to true,
+        return success(
             "assets" to assets,
             "marketProxy" to marketProxy,
             "results" to results.mapValues { (_, result) ->
@@ -459,8 +441,7 @@ class PortfolioController(
         val assets = tradingProperties.markets
         val result = factorModelCalculator.calculateFamaFrench(asset, assets, lookbackDays)
 
-        return mapOf(
-            "success" to true,
+        return success(
             "asset" to asset,
             "alpha" to result.alpha,
             "betaMKT" to result.betaMKT,
@@ -485,8 +466,7 @@ class PortfolioController(
         val assets = tradingProperties.markets
         val scores = tacticalAssetAllocator.calculateMomentumScores(assets, lookbackPeriod, halflife)
 
-        return mapOf(
-            "success" to true,
+        return success(
             "assets" to assets,
             "lookbackPeriod" to lookbackPeriod,
             "halflife" to halflife,
@@ -511,8 +491,7 @@ class PortfolioController(
         val assets = tradingProperties.markets
         val regime = tacticalAssetAllocator.detectMarketRegime(assets, lookbackDays)
 
-        return mapOf(
-            "success" to true,
+        return success(
             "regime" to regime.name,
             "description" to when (regime) {
                 TacticalAssetAllocator.MarketRegime.BULL -> "강세장: 상승 추세"
@@ -536,8 +515,7 @@ class PortfolioController(
         val assets = tradingProperties.markets
         val result = tacticalAssetAllocator.calculateTacticalAllocation(assets, lookbackDays, strategicMethod)
 
-        return mapOf(
-            "success" to true,
+        return success(
             "assets" to assets,
             "strategicMethod" to strategicMethod,
             "currentRegime" to result.currentRegime.name,
@@ -571,8 +549,7 @@ class PortfolioController(
             maxLeverage = maxLeverage
         )
 
-        return mapOf(
-            "success" to true,
+        return success(
             "assets" to assets,
             "baseWeights" to baseWeights,
             "adjustedWeights" to adjustedWeights,
@@ -598,8 +575,7 @@ class PortfolioController(
             assets, lookbackDays, uncertaintyRadius, targetReturn
         )
 
-        return mapOf(
-            "success" to true,
+        return success(
             "assets" to assets,
             "weights" to result.weights.toList(),
             "expectedReturn" to result.expectedReturn,
@@ -625,8 +601,7 @@ class PortfolioController(
             assets, lookbackDays, nResamples, nPoints
         )
 
-        return mapOf(
-            "success" to true,
+        return success(
             "assets" to assets,
             "nResamples" to result.nResamples,
             "averageWeights" to result.averageWeights,
@@ -653,8 +628,7 @@ class PortfolioController(
         val assets = tradingProperties.markets
         val result = robustOptimizer.robustSharpeOptimization(assets, lookbackDays, uncertaintyRadius)
 
-        return mapOf(
-            "success" to true,
+        return success(
             "assets" to assets,
             "weights" to result.weights.toList(),
             "expectedReturn" to result.expectedReturn,
@@ -683,8 +657,7 @@ class PortfolioController(
             orderSize, dailyVolume, currentPrice, isCrypto, alpha
         )
 
-        return mapOf(
-            "success" to true,
+        return success(
             "orderSize" to orderSize,
             "dailyVolume" to dailyVolume,
             "currentPrice" to currentPrice,
@@ -709,8 +682,7 @@ class PortfolioController(
             totalQuantity, executionWindow, sliceInterval
         )
 
-        return mapOf(
-            "success" to true,
+        return success(
             "totalQuantity" to totalQuantity,
             "executionWindow" to executionWindow,
             "sliceInterval" to sliceInterval,
@@ -739,8 +711,7 @@ class PortfolioController(
             targetValue, currentPrice, dailyVolume, maxImpactBp
         )
 
-        return mapOf(
-            "success" to true,
+        return success(
             "targetValue" to targetValue,
             "currentPrice" to currentPrice,
             "dailyVolume" to dailyVolume,
@@ -763,8 +734,7 @@ class PortfolioController(
             totalQuantity, dailyVolume, maxDailyParticipationRate
         )
 
-        return mapOf(
-            "success" to true,
+        return success(
             "totalQuantity" to totalQuantity,
             "dailyVolume" to dailyVolume,
             "maxDailyParticipationRate" to maxDailyParticipationRate,
@@ -776,5 +746,12 @@ class PortfolioController(
                 )
             }
         )
+    }
+
+    private fun success(vararg entries: Pair<String, Any>): Map<String, Any> {
+        return buildMap {
+            put("success", true)
+            entries.forEach { (key, value) -> put(key, value) }
+        }
     }
 }

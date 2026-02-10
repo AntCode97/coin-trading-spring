@@ -84,8 +84,7 @@ class OrderExecutor(
     fun execute(signal: TradingSignal, positionSize: BigDecimal): OrderResult {
         val side = signal.toOrderSide()
 
-        val minOrderValidation = validateMinimumOrderAmount(signal, side, positionSize)
-        if (minOrderValidation != null) return minOrderValidation
+        validateMinimumOrderAmount(signal, side, positionSize)?.let { return it }
 
         if (!tradingProperties.enabled) {
             return executeSimulated(signal, positionSize)
@@ -200,22 +199,22 @@ class OrderExecutor(
 
         } catch (e: MarketSuspendedException) {
             log.error("[$market] 거래 정지 코인: ${e.message}")
-            circuitBreaker.recordExecutionFailure(market, "거래 정지: ${e.message}")
-
-            createFailureResult(
+            return recordFailureAndBuildResult(
                 signal = signal,
                 side = side,
-                message = "거래 정지/상장 폐지 코인: ${e.message}",
+                market = market,
+                failureDetail = "거래 정지: ${e.message}",
+                userMessage = "거래 정지/상장 폐지 코인: ${e.message}",
                 rejectionReason = OrderRejectionReason.MARKET_SUSPENDED
             )
         } catch (e: Exception) {
             log.error("[$market] 주문 실행 실패: ${e.message}", e)
-            circuitBreaker.recordExecutionFailure(market, e.message ?: "Unknown error")
-
-            createFailureResult(
+            return recordFailureAndBuildResult(
                 signal = signal,
                 side = side,
-                message = "주문 실행 예외: ${e.message}",
+                market = market,
+                failureDetail = e.message ?: "Unknown error",
+                userMessage = "주문 실행 예외: ${e.message}",
                 rejectionReason = OrderRejectionReason.EXCEPTION
             )
         }
@@ -267,11 +266,12 @@ class OrderExecutor(
         market: String,
         failureReason: String
     ): OrderResult {
-        circuitBreaker.recordExecutionFailure(market, failureReason)
-        return createFailureResult(
+        return recordFailureAndBuildResult(
             signal = signal,
             side = side,
-            message = "주문 응답 없음 - API 장애 의심",
+            market = market,
+            failureDetail = failureReason,
+            userMessage = "주문 응답 없음 - API 장애 의심",
             rejectionReason = OrderRejectionReason.API_ERROR
         )
     }
@@ -283,12 +283,34 @@ class OrderExecutor(
         orderId: String,
         orderType: OrderType
     ): OrderResult {
-        circuitBreaker.recordExecutionFailure(market, "주문 상태 확인 실패")
+        return recordFailureAndBuildResult(
+            signal = signal,
+            side = side,
+            market = market,
+            failureDetail = "주문 상태 확인 실패",
+            userMessage = "주문 상태 확인 실패 - 수동 확인 필요",
+            rejectionReason = OrderRejectionReason.VERIFICATION_FAILED,
+            orderId = orderId,
+            orderType = orderType
+        )
+    }
+
+    private fun recordFailureAndBuildResult(
+        signal: TradingSignal,
+        side: OrderSide,
+        market: String,
+        failureDetail: String,
+        userMessage: String,
+        rejectionReason: OrderRejectionReason,
+        orderId: String? = null,
+        orderType: OrderType = OrderType.MARKET
+    ): OrderResult {
+        circuitBreaker.recordExecutionFailure(market, failureDetail)
         return createFailureResult(
             signal = signal,
             side = side,
-            message = "주문 상태 확인 실패 - 수동 확인 필요",
-            rejectionReason = OrderRejectionReason.VERIFICATION_FAILED,
+            message = userMessage,
+            rejectionReason = rejectionReason,
             orderId = orderId,
             orderType = orderType
         )
@@ -539,18 +561,12 @@ class OrderExecutor(
         bestQuote: Pair<BigDecimal, BigDecimal>
     ): LimitOrderPlacement? {
         val (bestAsk, bestBid) = bestQuote
-        return try {
+        return withMarketUnavailableGuard(signal) {
             when (signal.action) {
                 SignalAction.BUY -> placeLimitBuy(signal, apiMarket, positionSize, bestAsk)
                 SignalAction.SELL -> placeLimitSell(signal, apiMarket, positionSize, bestBid)
                 SignalAction.HOLD -> null
             }
-        } catch (e: BithumbApiException) {
-            if (e.isMarketUnavailable()) {
-                log.error("[${signal.market}] 거래 정지 코인 감지: ${e.errorMessage}")
-                throw MarketSuspendedException(signal.market, e.errorMessage ?: "거래가 지원되지 않습니다")
-            }
-            throw e
         }
     }
 
@@ -650,18 +666,6 @@ class OrderExecutor(
     }
 
     /**
-     * 체결률 계산
-     */
-    private fun calculateFillRate(response: OrderResponse): Double {
-        val executedVolume = response.executedVolume ?: BigDecimal.ZERO
-        val totalVolume = response.volume ?: BigDecimal.ONE
-        return if (totalVolume > BigDecimal.ZERO) {
-            executedVolume.divide(totalVolume, 4, RoundingMode.HALF_UP).toDouble()
-        } else 0.0
-    }
-
-
-    /**
      * 시장가 주문 제출
      *
      * 매도 시 실제 잔고를 확인하여 잔고 부족 에러 방지
@@ -671,7 +675,7 @@ class OrderExecutor(
         apiMarket: String,
         positionSize: BigDecimal
     ): OrderSubmitResult {
-        val response = try {
+        val response = withMarketUnavailableGuard(signal) {
             when (signal.action) {
                 SignalAction.BUY -> {
                     log.info("[${signal.market}] 시장가 매수: $positionSize KRW")
@@ -693,6 +697,14 @@ class OrderExecutor(
                 }
                 SignalAction.HOLD -> null
             }
+        }
+
+        return OrderSubmitResult(response, OrderType.MARKET, null, null)
+    }
+
+    private inline fun <T> withMarketUnavailableGuard(signal: TradingSignal, block: () -> T): T {
+        return try {
+            block()
         } catch (e: BithumbApiException) {
             if (e.isMarketUnavailable()) {
                 log.error("[${signal.market}] 거래 정지 코인 감지: ${e.errorMessage}")
@@ -700,8 +712,6 @@ class OrderExecutor(
             }
             throw e
         }
-
-        return OrderSubmitResult(response, OrderType.MARKET, null, null)
     }
 
     private fun resolveSellSizingPrice(signal: TradingSignal, positionSize: BigDecimal): BigDecimal {
@@ -815,18 +825,16 @@ class OrderExecutor(
         response: OrderResponse,
         attempt: Int
     ): Boolean {
-        val executedVolume = response.executedVolume ?: BigDecimal.ZERO
-        val totalVolume = response.volume ?: BigDecimal.ONE
-        if (executedVolume <= BigDecimal.ZERO) {
+        val fillRate = calculateFillRate(response)
+        if (fillRate <= 0.0) {
             return false
         }
 
-        val fillRate = executedVolume.divide(totalVolume, 4, RoundingMode.HALF_UP)
         log.info(
-            "[$market] 부분 체결 중: ${fillRate.multiply(BigDecimal(100))}% " +
+            "[$market] 부분 체결 중: ${String.format("%.1f", fillRate * 100)}% " +
                 "(시도 $attempt/$MAX_STATUS_CHECK_RETRIES)"
         )
-        if (fillRate.toDouble() >= TradingConstants.PARTIAL_FILL_SUCCESS_THRESHOLD) {
+        if (fillRate >= TradingConstants.PARTIAL_FILL_SUCCESS_THRESHOLD) {
             log.info("[$market] 부분 체결 임계값 초과 - 성공으로 처리")
             return true
         }
@@ -848,7 +856,7 @@ class OrderExecutor(
         orderType: OrderType = OrderType.MARKET
     ): OrderResult {
         val market = signal.market
-        val side = if (signal.action == SignalAction.BUY) OrderSide.BUY else OrderSide.SELL
+        val side = signal.toOrderSide()
 
         val executedVolume = order.executedVolume ?: BigDecimal.ZERO
         val totalVolume = order.volume ?: BigDecimal.ONE
@@ -903,9 +911,7 @@ class OrderExecutor(
         executedVolume: BigDecimal,
         totalVolume: BigDecimal
     ): Double {
-        return executedVolume.divide(totalVolume, 4, RoundingMode.HALF_UP)
-            .multiply(BigDecimal(100))
-            .toDouble()
+        return calculateFillRate(executedVolume, totalVolume) * 100
     }
 
     private fun resolveExecutedPrice(
@@ -1169,6 +1175,21 @@ class OrderExecutor(
         } else {
             BigDecimal.ZERO
         }
+    }
+
+    /**
+     * 체결률 계산
+     */
+    private fun calculateFillRate(response: OrderResponse): Double {
+        return calculateFillRate(
+            executedVolume = response.executedVolume ?: BigDecimal.ZERO,
+            totalVolume = response.volume ?: BigDecimal.ONE
+        )
+    }
+
+    private fun calculateFillRate(executedVolume: BigDecimal, totalVolume: BigDecimal): Double {
+        if (totalVolume <= BigDecimal.ZERO) return 0.0
+        return executedVolume.divide(totalVolume, 4, RoundingMode.HALF_UP).toDouble()
     }
 
     /**

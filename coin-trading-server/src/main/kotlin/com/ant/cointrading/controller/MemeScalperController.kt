@@ -8,6 +8,8 @@ import com.ant.cointrading.repository.MemeScalperDailyStatsRepository
 import com.ant.cointrading.repository.MemeScalperTradeRepository
 import com.ant.cointrading.util.DateTimeUtils.today
 import com.ant.cointrading.util.DateTimeUtils.todayRange
+import com.ant.cointrading.util.apiFailure
+import com.ant.cointrading.util.apiSuccess
 import org.springframework.web.bind.annotation.*
 import java.time.Instant
 import java.time.temporal.ChronoUnit
@@ -169,8 +171,7 @@ class MemeScalperController(
     fun scanPumps(): Map<String, Any?> {
         return try {
             val signals = memeScalperDetector.scanForPumps()
-            mapOf(
-                "success" to true,
+            apiSuccess(
                 "count" to signals.size,
                 "signals" to signals.take(10).map { signal ->
                     mapOf(
@@ -186,10 +187,7 @@ class MemeScalperController(
                 }
             )
         } catch (e: Exception) {
-            mapOf(
-                "success" to false,
-                "error" to (e.message ?: "Unknown error")
-            )
+            apiFailure(e.message ?: "Unknown error")
         }
     }
 
@@ -254,18 +252,12 @@ class MemeScalperController(
      * 수동 회고 실행
      */
     @PostMapping("/reflect")
-    fun runReflection(): Map<String, Any> {
+    fun runReflection(): Map<String, Any?> {
         return try {
             val result = memeScalperReflector.runManualReflection()
-            mapOf(
-                "success" to true,
-                "result" to result
-            )
+            apiSuccess("result" to result)
         } catch (e: Exception) {
-            mapOf(
-                "success" to false,
-                "error" to (e.message ?: "Unknown error")
-            )
+            apiFailure(e.message ?: "Unknown error")
         }
     }
 }

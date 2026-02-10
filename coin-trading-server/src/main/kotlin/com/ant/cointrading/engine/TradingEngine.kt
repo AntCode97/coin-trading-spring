@@ -8,9 +8,11 @@ import com.ant.cointrading.config.TradingProperties
 import com.ant.cointrading.model.*
 import com.ant.cointrading.notification.SlackNotifier
 import com.ant.cointrading.order.OrderExecutor
+import com.ant.cointrading.order.OrderResult
 import com.ant.cointrading.order.OrderRejectionReason
 import com.ant.cointrading.regime.HmmRegimeDetector
 import com.ant.cointrading.regime.RegimeDetector
+import com.ant.cointrading.repository.TradeEntity
 import com.ant.cointrading.repository.TradeRepository
 import com.ant.cointrading.risk.CircuitBreaker
 import com.ant.cointrading.risk.DailyLossLimitService
@@ -68,6 +70,7 @@ class TradingEngine(
 ) {
 
     companion object {
+        const val KEY_TRADING_ENABLED = "trading.enabled"
         const val KEY_REGIME_DETECTOR_TYPE = "regime.detector.type"
         const val REGIME_DETECTOR_HMM = "hmm"
         const val REGIME_DETECTOR_SIMPLE = "simple"
@@ -529,68 +532,30 @@ class TradingEngine(
         market: String,
         signal: TradingSignal,
         state: MarketState,
-        result: com.ant.cointrading.order.OrderResult
+        result: OrderResult
     ) {
         val hasExecutedFill = hasExecutedFill(result)
-        logPendingExecutionStatus(market, result, hasExecutedFill)
-        updateExecutionTracking(market, signal, state, result, hasExecutedFill)
-        notifySuccessfulTrade(market, signal, result, hasExecutedFill)
-        handlePostSellRiskSync(market, signal, result, hasExecutedFill)
-    }
-
-    private fun logPendingExecutionStatus(
-        market: String,
-        result: com.ant.cointrading.order.OrderResult,
-        hasExecutedFill: Boolean
-    ) {
-        if (hasExecutedFill || !result.isPending) {
-            return
+        if (!hasExecutedFill && result.isPending) {
+            log.info("[$market] 주문 접수됨(미체결) - 체결 전까지 루프가드/실현손익 반영을 보류합니다")
         }
-        log.info("[$market] 주문 접수됨(미체결) - 체결 전까지 루프가드/실현손익 반영을 보류합니다")
-    }
-
-    private fun updateExecutionTracking(
-        market: String,
-        signal: TradingSignal,
-        state: MarketState,
-        result: com.ant.cointrading.order.OrderResult,
-        hasExecutedFill: Boolean
-    ) {
         if (hasExecutedFill) {
             recordExecutionTimestamp(market, signal.action)
         }
         handleDcaPositionTrackingIfNeeded(market, signal, state, result, hasExecutedFill)
-    }
-
-    private fun notifySuccessfulTrade(
-        market: String,
-        signal: TradingSignal,
-        result: com.ant.cointrading.order.OrderResult,
-        hasExecutedFill: Boolean
-    ) {
-        val notificationMessage = buildTradeNotificationMessage(result, hasExecutedFill)
-        log.info("[$market] $notificationMessage")
+        log.info("[$market] ${buildTradeNotificationMessage(result, hasExecutedFill)}")
         slackNotifier.sendTradeNotification(signal, result)
-    }
 
-    private fun handlePostSellRiskSync(
-        market: String,
-        signal: TradingSignal,
-        result: com.ant.cointrading.order.OrderResult,
-        hasExecutedFill: Boolean
-    ) {
-        if (signal.action != SignalAction.SELL || !hasExecutedFill) {
-            return
+        if (signal.action == SignalAction.SELL && hasExecutedFill) {
+            recordDailyPnlFromExecutedTrade(market, result)
+            riskManager.refreshStats(market)
         }
-        recordDailyPnlFromExecutedTrade(market, result)
-        riskManager.refreshStats(market)
     }
 
     private fun handleDcaPositionTrackingIfNeeded(
         market: String,
         signal: TradingSignal,
         state: MarketState,
-        result: com.ant.cointrading.order.OrderResult,
+        result: OrderResult,
         hasExecutedFill: Boolean
     ) {
         // DCA 전략인 경우 포지션 추적 (실제 체결된 경우만 반영)
@@ -603,7 +568,7 @@ class TradingEngine(
 
     private fun resolveDcaFillData(
         market: String,
-        result: com.ant.cointrading.order.OrderResult
+        result: OrderResult
     ): DcaFillData? {
         val quantity = result.executedQuantity?.toDouble() ?: 0.0
         val price = result.price?.toDouble() ?: 0.0
@@ -651,7 +616,7 @@ class TradingEngine(
     }
 
     private fun buildTradeNotificationMessage(
-        result: com.ant.cointrading.order.OrderResult,
+        result: OrderResult,
         hasExecutedFill: Boolean
     ): String {
         return buildString {
@@ -672,7 +637,7 @@ class TradingEngine(
         }
     }
 
-    private fun handleFailedOrderResult(market: String, result: com.ant.cointrading.order.OrderResult) {
+    private fun handleFailedOrderResult(market: String, result: OrderResult) {
         val errorDetail = resolveOrderFailureDetail(result.rejectionReason, result.message)
         log.error("[$market] 주문 실패: $errorDetail")
         slackNotifier.sendError(market, "주문 실패: $errorDetail\n원인: ${result.rejectionReason}")
@@ -732,7 +697,7 @@ class TradingEngine(
             ?: (balance.avgBuyPrice ?: BigDecimal.ZERO)
     }
 
-    private fun recordDailyPnlFromExecutedTrade(market: String, result: com.ant.cointrading.order.OrderResult) {
+    private fun recordDailyPnlFromExecutedTrade(market: String, result: OrderResult) {
         val orderId = result.orderId
         if (orderId.isNullOrBlank()) {
             log.warn("[$market] orderId 없음 - 일일 손익 기록 스킵")
@@ -748,7 +713,7 @@ class TradingEngine(
         log.info("[$market] 일일 손익 반영: pnl=${String.format("%.0f", pnl)}원, orderId=$orderId")
     }
 
-    private fun resolveSellTradeForDailyPnl(market: String, orderId: String): com.ant.cointrading.repository.TradeEntity? {
+    private fun resolveSellTradeForDailyPnl(market: String, orderId: String): TradeEntity? {
         val executedTrade = tradeRepository.findTopByOrderIdOrderByCreatedAtDesc(orderId)
         if (executedTrade == null) {
             log.warn("[$market] 체결 거래 레코드 없음(orderId=$orderId) - 일일 손익 기록 스킵")
@@ -761,7 +726,7 @@ class TradingEngine(
         return executedTrade
     }
 
-    private fun hasExecutedFill(result: com.ant.cointrading.order.OrderResult): Boolean {
+    private fun hasExecutedFill(result: OrderResult): Boolean {
         return result.executedQuantity?.let { it > BigDecimal.ZERO } == true
     }
 
@@ -957,14 +922,14 @@ class TradingEngine(
         }
     }
 
-    private fun findTodayTrades(market: String): List<com.ant.cointrading.repository.TradeEntity> {
+    private fun findTodayTrades(market: String): List<TradeEntity> {
         val startOfDay = LocalDate.now(com.ant.cointrading.util.DateTimeUtils.SEOUL_ZONE)
             .atStartOfDay(com.ant.cointrading.util.DateTimeUtils.SEOUL_ZONE)
             .toInstant()
         return tradeRepository.findByMarketAndSimulatedAndCreatedAtAfter(market, false, startOfDay)
     }
 
-    private fun calculateTotalPnl(trades: List<com.ant.cointrading.repository.TradeEntity>): BigDecimal {
+    private fun calculateTotalPnl(trades: List<TradeEntity>): BigDecimal {
         return trades.mapNotNull { it.pnl }
             .fold(BigDecimal.ZERO) { acc, pnl -> acc + BigDecimal.valueOf(pnl) }
     }
@@ -1038,7 +1003,7 @@ class TradingEngine(
 
         val bearMarketCount = regimes.count { it.regime == MarketRegime.BEAR_TREND }
         val bearMarketRatio = bearMarketCount.toDouble() / regimes.size
-        val tradingEnabled = keyValueService.get("trading.enabled", "true").toBoolean()
+        val tradingEnabled = keyValueService.get(KEY_TRADING_ENABLED, "true").toBoolean()
         return RegimeSnapshot(
             totalMarkets = regimes.size,
             bearMarketCount = bearMarketCount,
@@ -1095,11 +1060,8 @@ class TradingEngine(
     private fun suspendTradingDueToRegime(bearMarketRatio: Double, durationMinutes: Long) {
         isTradingSuspendedByRegime = true
 
-        // KeyValueService에 거래 중지 상태 저장
-        keyValueService.set(
-            key = "trading.enabled",
-            value = "false",
-            category = "trading",
+        setTradingEnabledByRegime(
+            enabled = false,
             description = "레짐 기반 자동 거래 중지 (하락 추세 ${String.format("%.0f", bearMarketRatio * 100)}%)"
         )
 
@@ -1120,11 +1082,8 @@ class TradingEngine(
     private fun resumeTradingDueToRegime(bearMarketRatio: Double) {
         isTradingSuspendedByRegime = false
 
-        // KeyValueService에 거래 재개 상태 저장
-        keyValueService.set(
-            key = "trading.enabled",
-            value = "true",
-            category = "trading",
+        setTradingEnabledByRegime(
+            enabled = true,
             description = "레짐 개선으로 거래 재개 (하락 추세 ${String.format("%.0f", bearMarketRatio * 100)}%)"
         )
 
@@ -1139,7 +1098,16 @@ class TradingEngine(
         slackNotifier.sendSystemNotification("레짐 기반 거래 재개", message)
     }
 
+    private fun setTradingEnabledByRegime(enabled: Boolean, description: String) {
+        keyValueService.set(
+            key = KEY_TRADING_ENABLED,
+            value = enabled.toString(),
+            category = "trading",
+            description = description
+        )
+    }
+
     private fun isTradingEnabled(): Boolean {
-        return keyValueService.getBoolean("trading.enabled", tradingProperties.enabled)
+        return keyValueService.getBoolean(KEY_TRADING_ENABLED, tradingProperties.enabled)
     }
 }

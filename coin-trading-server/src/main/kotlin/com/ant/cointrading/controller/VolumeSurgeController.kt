@@ -7,6 +7,8 @@ import com.ant.cointrading.repository.VolumeSurgeDailySummaryRepository
 import com.ant.cointrading.repository.VolumeSurgeTradeRepository
 import com.ant.cointrading.util.DateTimeUtils.today
 import com.ant.cointrading.util.DateTimeUtils.todayRange
+import com.ant.cointrading.util.apiFailure
+import com.ant.cointrading.util.apiSuccess
 import com.ant.cointrading.volumesurge.VolumeSurgeEngine
 import com.ant.cointrading.volumesurge.VolumeSurgeReflector
 import org.springframework.web.bind.annotation.*
@@ -181,15 +183,9 @@ class VolumeSurgeController(
     fun runReflection(): Map<String, Any?> {
         return try {
             val result = volumeSurgeReflector.runManualReflection()
-            mapOf(
-                "success" to true,
-                "result" to result
-            )
+            apiSuccess("result" to result)
         } catch (e: Exception) {
-            mapOf(
-                "success" to false,
-                "error" to (e.message ?: "Unknown error")
-            )
+            apiFailure(e.message ?: "Unknown error")
         }
     }
 
@@ -211,8 +207,7 @@ class VolumeSurgeController(
     ): Map<String, Any?> {
         return try {
             val news = cryptoCompareApi.getRecentNews(symbol.uppercase(), hours)
-            mapOf(
-                "success" to true,
+            apiSuccess(
                 "symbol" to symbol.uppercase(),
                 "hours" to hours,
                 "count" to news.size,
@@ -226,10 +221,7 @@ class VolumeSurgeController(
                 }
             )
         } catch (e: Exception) {
-            mapOf(
-                "success" to false,
-                "error" to (e.message ?: "Unknown error")
-            )
+            apiFailure(e.message ?: "Unknown error")
         }
     }
 

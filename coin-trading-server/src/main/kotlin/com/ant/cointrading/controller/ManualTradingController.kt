@@ -1,6 +1,8 @@
 package com.ant.cointrading.controller
 
 import com.ant.cointrading.api.bithumb.BithumbPrivateApi
+import com.ant.cointrading.util.apiFailure
+import com.ant.cointrading.util.apiSuccess
 import org.springframework.web.bind.annotation.*
 import java.math.BigDecimal
 
@@ -44,8 +46,7 @@ class ManualTradingController(
                 bithumbPrivateApi.buyLimitOrder(market, price, quantity)
             }
 
-            return mapOf(
-                "success" to true,
+            return apiSuccess(
                 "market" to market,
                 "orderType" to orderType,
                 "orderId" to result.uuid,
@@ -55,11 +56,7 @@ class ManualTradingController(
                 "message" to "매수 주문이 완료되었습니다"
             )
         } catch (e: Exception) {
-            return mapOf(
-                "success" to false,
-                "market" to market,
-                "error" to (e.message ?: "알 수 없는 오류")
-            )
+            return apiFailure(e.message ?: "알 수 없는 오류", "market" to market)
         }
     }
 
@@ -88,8 +85,7 @@ class ManualTradingController(
                 bithumbPrivateApi.sellLimitOrder(market, price, quantity)
             }
 
-            return mapOf(
-                "success" to true,
+            return apiSuccess(
                 "market" to market,
                 "orderType" to orderType,
                 "orderId" to result.uuid,
@@ -98,11 +94,7 @@ class ManualTradingController(
                 "message" to "매도 주문이 완료되었습니다"
             )
         } catch (e: Exception) {
-            return mapOf(
-                "success" to false,
-                "market" to market,
-                "error" to (e.message ?: "알 수 없는 오류")
-            )
+            return apiFailure(e.message ?: "알 수 없는 오류", "market" to market)
         }
     }
 
@@ -116,8 +108,7 @@ class ManualTradingController(
             val currency = market.removePrefix("KRW-")
             val balance = balances.find { it.currency == currency }
 
-            return mapOf(
-                "success" to true,
+            return apiSuccess(
                 "market" to market,
                 "currency" to currency,
                 "balance" to balance?.balance,
@@ -125,11 +116,7 @@ class ManualTradingController(
                 "available" to balance?.balance
             )
         } catch (e: Exception) {
-            return mapOf(
-                "success" to false,
-                "market" to market,
-                "error" to (e.message ?: "알 수 없는 오류")
-            )
+            return apiFailure(e.message ?: "알 수 없는 오류", "market" to market)
         }
     }
 }

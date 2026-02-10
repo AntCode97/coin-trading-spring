@@ -2,6 +2,8 @@ package com.ant.cointrading.controller
 
 import com.ant.cointrading.api.binance.KimchiPremiumInfo
 import com.ant.cointrading.service.KimchiPremiumService
+import com.ant.cointrading.util.apiFailure
+import com.ant.cointrading.util.apiSuccess
 import org.springframework.web.bind.annotation.*
 import java.math.BigDecimal
 
@@ -37,16 +39,12 @@ class KimchiPremiumController(
         val premium = kimchiPremiumService.calculatePremium(symbol.uppercase())
 
         return if (premium != null) {
-            mapOf(
-                "success" to true,
+            apiSuccess(
                 "exchangeRate" to kimchiPremiumService.getExchangeRate(),
                 "premium" to premium.toResponse()
             )
         } else {
-            mapOf(
-                "success" to false,
-                "error" to "프리미엄 조회 실패: $symbol"
-            )
+            apiFailure("프리미엄 조회 실패: $symbol")
         }
     }
 
@@ -70,12 +68,11 @@ class KimchiPremiumController(
      * 환율 캐시 강제 갱신
      */
     @PostMapping("/exchange-rate/refresh")
-    fun refreshExchangeRate(): Map<String, Any> {
+    fun refreshExchangeRate(): Map<String, Any?> {
         val oldRate = kimchiPremiumService.getExchangeRate()
         val newRate = kimchiPremiumService.refreshExchangeRate()
 
-        return mapOf(
-            "success" to true,
+        return apiSuccess(
             "oldRate" to oldRate,
             "newRate" to newRate,
             "message" to "환율 캐시가 갱신되었습니다"

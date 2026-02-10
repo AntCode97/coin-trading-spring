@@ -7,6 +7,8 @@ import com.ant.cointrading.model.Candle
 import com.ant.cointrading.strategy.MeanReversionStrategy
 import com.ant.cointrading.strategy.TradingStrategy
 import com.ant.cointrading.strategy.VolatilitySurvivalStrategy
+import com.ant.cointrading.util.apiFailure
+import com.ant.cointrading.util.apiSuccess
 import org.springframework.web.bind.annotation.*
 import java.time.Instant
 import java.time.ZoneId
@@ -76,15 +78,16 @@ class BacktestController(
         val rawCandles = fetchHourlyCandles(normalizedMarket, requestedHours)
 
         if (rawCandles.isNullOrEmpty() || rawCandles.size < 100) {
-            return mapOf(
-                "success" to false,
+            val failureMessage = "백테스트 데이터 부족 (필요 최소 100개, 현재 ${rawCandles?.size ?: 0}개)"
+            return apiFailure(
+                failureMessage,
                 "market" to normalizedMarket,
                 "strategy" to strategy.name,
                 "period" to "${days}days",
                 "requestedHours" to requestedHours,
                 "usedHours" to (rawCandles?.size ?: 0),
                 "isCappedByApiLimit" to ((rawCandles?.size ?: 0) < requestedHours),
-                "message" to "백테스트 데이터 부족 (필요 최소 100개, 현재 ${rawCandles?.size ?: 0}개)"
+                "message" to failureMessage
             )
         }
 
@@ -105,8 +108,7 @@ class BacktestController(
             candles = candles
         )
 
-        return mapOf(
-            "success" to true,
+        return apiSuccess(
             "market" to normalizedMarket,
             "strategy" to strategy.name,
             "period" to "${days}days",
