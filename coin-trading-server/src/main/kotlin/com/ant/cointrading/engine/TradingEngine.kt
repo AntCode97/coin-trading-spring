@@ -213,11 +213,18 @@ class TradingEngine(
      * 모든 마켓 분석
      */
     private fun analyzeAllMarkets() {
+        forEachMarketSafely("마켓 분석 실패") { market -> analyzeMarket(market) }
+    }
+
+    private inline fun forEachMarketSafely(
+        errorPrefix: String,
+        action: (String) -> Unit
+    ) {
         tradingProperties.markets.forEach { market ->
             try {
-                analyzeMarket(market)
+                action(market)
             } catch (e: Exception) {
-                log.error("마켓 분석 실패 [$market]: ${e.message}")
+                log.error("$errorPrefix [$market]: ${e.message}")
             }
         }
     }
