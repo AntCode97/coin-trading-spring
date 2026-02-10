@@ -166,22 +166,30 @@ class MemeScalperEngine(
     }
 
     private fun restoreOpenPosition(position: MemeScalperTradeEntity) {
-        val positionId = position.id ?: run {
-            log.warn("[${position.market}] 포지션 ID 없음 - 복원 스킵")
-            return
+        withPositionId(position, context = "포지션") { positionId ->
+            restorePeakState(position, positionId)
+            log.info("[${position.market}] OPEN 포지션 복원 완료")
         }
-        restorePeakState(position, positionId)
-        log.info("[${position.market}] OPEN 포지션 복원 완료")
     }
 
     private fun restoreClosingPosition(position: MemeScalperTradeEntity) {
+        withPositionId(position, context = "CLOSING 포지션") { positionId ->
+            restorePeakState(position, positionId)
+            log.warn("[${position.market}] CLOSING 포지션 복원 - 주문ID: ${position.closeOrderId}, 청산시도: ${position.closeAttemptCount}회")
+            monitorClosingPosition(position)
+        }
+    }
+
+    private inline fun withPositionId(
+        position: MemeScalperTradeEntity,
+        context: String,
+        action: (Long) -> Unit
+    ) {
         val positionId = position.id ?: run {
-            log.warn("[${position.market}] CLOSING 포지션 ID 없음 - 복원 스킵")
+            log.warn("[${position.market}] $context ID 없음 - 복원 스킵")
             return
         }
-        restorePeakState(position, positionId)
-        log.warn("[${position.market}] CLOSING 포지션 복원 - 주문ID: ${position.closeOrderId}, 청산시도: ${position.closeAttemptCount}회")
-        monitorClosingPosition(position)
+        action(positionId)
     }
 
     private fun restorePeakState(position: MemeScalperTradeEntity, positionId: Long) {
