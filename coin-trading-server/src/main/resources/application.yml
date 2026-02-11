@@ -120,6 +120,8 @@ trading:
     min-buy-confidence-weak: ${RISK_THROTTLE_MIN_BUY_CONFIDENCE_WEAK:65.0}
     min-buy-confidence-critical: ${RISK_THROTTLE_MIN_BUY_CONFIDENCE_CRITICAL:75.0}
     cache-minutes: ${RISK_THROTTLE_CACHE_MINUTES:10}
+  close-recovery:
+    polling-ms: ${CLOSE_RECOVERY_POLLING_MS:3000}
   strategy:
     type: ${STRATEGY_TYPE:MEAN_REVERSION} # 대폭락/고변동성 장에서는 VOLATILITY_SURVIVAL 권장
     dca-interval: ${DCA_INTERVAL:86400000}

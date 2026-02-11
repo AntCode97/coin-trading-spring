@@ -6,6 +6,8 @@ import com.ant.cointrading.api.bithumb.CandleResponse
 import com.ant.cointrading.api.bithumb.TickerInfo
 import com.ant.cointrading.config.TradingConstants
 import com.ant.cointrading.config.TradingProperties
+import com.ant.cointrading.engine.CloseRecoveryQueueService
+import com.ant.cointrading.engine.CloseRecoveryStrategy
 import com.ant.cointrading.model.Candle
 import com.ant.cointrading.model.MarketRegime
 import com.ant.cointrading.model.RegimeAnalysis
@@ -55,7 +57,8 @@ class DcaEngine(
     private val dcaPositionRepository: DcaPositionRepository,
     private val slackNotifier: SlackNotifier,
     private val regimeDetector: RegimeDetector,
-    private val globalPositionManager: GlobalPositionManager
+    private val globalPositionManager: GlobalPositionManager,
+    private val closeRecoveryQueueService: CloseRecoveryQueueService
 ) {
     private val log = LoggerFactory.getLogger(javaClass)
 
@@ -88,13 +91,12 @@ class DcaEngine(
     private fun restoreOpenPositions() {
         val openPositions = dcaPositionRepository.findByStatus("OPEN")
         if (openPositions.isEmpty()) {
-            log.info("복원할 DCA 포지션 없음")
-            return
-        }
-
-        log.info("DCA 열린 포지션 ${openPositions.size}건 복원")
-        openPositions.forEach { position ->
-            log.info("[${position.market}] 포지션 복원: 수량=${position.totalQuantity}, 평균가=${position.averagePrice}원")
+            log.info("복원할 DCA OPEN 포지션 없음")
+        } else {
+            log.info("DCA 열린 포지션 ${openPositions.size}건 복원")
+            openPositions.forEach { position ->
+                log.info("[${position.market}] 포지션 복원: 수량=${position.totalQuantity}, 평균가=${position.averagePrice}원")
+            }
         }
 
         // CLOSING 포지션 복구 (서버 재시작으로 중단된 청산 재개)
@@ -105,6 +107,12 @@ class DcaEngine(
                 log.warn("[${position.market}] CLOSING 포지션 복구: 시도=${position.closeAttemptCount}")
                 // CLOSING 상태이면 다음 모니터링 사이클에서 자동 처리됨
             }
+        }
+
+        val abandonedPositions = dcaPositionRepository.findByStatus("ABANDONED")
+        if (abandonedPositions.isNotEmpty()) {
+            log.warn("ABANDONED 포지션 ${abandonedPositions.size}건 복구 큐 등록")
+            abandonedPositions.forEach { enqueueCloseRecovery(it, "RESTORE_ABANDONED") }
         }
     }
 
@@ -607,27 +615,6 @@ class DcaEngine(
     private fun retryAbandonedPosition(position: DcaPositionEntity): Boolean {
         val market = position.market
 
-        // 최종 ABANDONED 도달 여부 체크
-        val maxTotalAttempts = TradingConstants.MAX_CLOSE_ATTEMPTS + 3
-        if (position.closeAttemptCount >= maxTotalAttempts) {
-            log.warn("[$market] ABANDONED 재시도 ${maxTotalAttempts}회 초과 - FAILED로 변경")
-            slackNotifier.sendWarning(
-                market,
-                """
-                ABANDONED 포지션 재시도 실패 (${maxTotalAttempts}회 초과) - 최종 FAILED
-                진입가: ${position.averagePrice}원
-                수량: ${position.totalQuantity}
-                수동으로 빗썸에서 매도 필요 (DB 상태: FAILED)
-                """.trimIndent()
-            )
-            // 상태를 FAILED로 변경하여 더 이상 재시도되지 않도록 함
-            position.status = "FAILED"
-            position.exitReason = "ABANDONED_MAX_RETRIES"
-            position.exitedAt = Instant.now()
-            dcaPositionRepository.save(position)
-            return false
-        }
-
         // 잔고 확인 - 이미 없으면 CLOSED로 변경
         val coinSymbol = market.removePrefix("KRW-")
         val actualBalance = try {
@@ -648,12 +635,7 @@ class DcaEngine(
             return true
         }
 
-        // 재시도: closeAttemptCount 리셋 후 OPEN으로 복귀
-        log.info("[$market] ABANDONED 포지션 재시도 #${position.closeAttemptCount + 1}")
-        position.closeAttemptCount = 0
-        position.status = "OPEN"
-        dcaPositionRepository.save(position)
-
+        enqueueCloseRecovery(position, "ABANDONED_RETRY")
         return true
     }
 
@@ -892,11 +874,25 @@ class DcaEngine(
             DCA 포지션 ABANDONED: $abandonReason
             진입가: ${position.averagePrice}원 → 현재가: ${exitPrice}원
             추정 손익: ${String.format("%.0f", pnlAmount)}원 (${String.format("%.2f", pnlPercent)}%)
-            수동 확인 필요
+            자동 복구 큐에 등록됨 (백그라운드 청산 재시도)
             """.trimIndent()
         )
 
+        enqueueCloseRecovery(position, abandonReason, exitPrice)
         log.warn("[$market] ABANDONED 처리: $abandonReason, 추정 손익=${pnlAmount}원 (${pnlPercent}%)")
+    }
+
+    private fun enqueueCloseRecovery(position: DcaPositionEntity, reason: String, lastKnownPrice: Double? = null) {
+        val positionId = position.id ?: return
+        closeRecoveryQueueService.enqueue(
+            strategy = CloseRecoveryStrategy.DCA,
+            positionId = positionId,
+            market = position.market,
+            entryPrice = position.averagePrice,
+            targetQuantity = position.totalQuantity,
+            reason = reason,
+            lastKnownPrice = lastKnownPrice
+        )
     }
 
     /**

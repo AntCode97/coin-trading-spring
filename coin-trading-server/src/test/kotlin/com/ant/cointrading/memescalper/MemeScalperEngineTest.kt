@@ -5,6 +5,7 @@ import com.ant.cointrading.api.bithumb.BithumbPrivateApi
 import com.ant.cointrading.api.bithumb.BithumbPublicApi
 import com.ant.cointrading.api.bithumb.TickerInfo
 import com.ant.cointrading.config.MemeScalperProperties
+import com.ant.cointrading.engine.CloseRecoveryQueueService
 import com.ant.cointrading.engine.GlobalPositionManager
 import com.ant.cointrading.notification.SlackNotifier
 import com.ant.cointrading.order.OrderExecutor
@@ -77,6 +78,9 @@ class MemeScalperEngineTest {
     private lateinit var regimeDetector: RegimeDetector
 
     @Mock
+    private lateinit var closeRecoveryQueueService: CloseRecoveryQueueService
+
+    @Mock
     private lateinit var circuitBreakerFactory: SimpleCircuitBreakerFactory
 
     private lateinit var engine: MemeScalperEngine
@@ -102,6 +106,7 @@ class MemeScalperEngineTest {
             slackNotifier,
             globalPositionManager,
             regimeDetector,
+            closeRecoveryQueueService,
             circuitBreakerFactory
         )
 

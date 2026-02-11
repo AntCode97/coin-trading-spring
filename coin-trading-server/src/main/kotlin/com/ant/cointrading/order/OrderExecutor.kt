@@ -116,12 +116,41 @@ class OrderExecutor(
             return executeSimulated(signal, effectivePositionSize)
         }
 
-        val marketCondition = marketConditionChecker.checkMarketCondition(signal.market, effectivePositionSize)
-        if (!marketCondition.canTrade) {
+        val marketCondition = if (side == OrderSide.SELL) {
+            resolveSellSideMarketCondition(signal, effectivePositionSize)
+        } else {
+            marketConditionChecker.checkMarketCondition(signal.market, effectivePositionSize)
+        }
+
+        if (side != OrderSide.SELL && !marketCondition.canTrade) {
             return createMarketConditionFailure(signal, side, marketCondition)
         }
 
         return executeReal(signal, effectivePositionSize, marketCondition)
+    }
+
+    private fun resolveSellSideMarketCondition(
+        signal: TradingSignal,
+        positionSize: BigDecimal
+    ): MarketConditionResult {
+        return try {
+            marketConditionChecker.checkMarketCondition(signal.market, positionSize).let { checked ->
+                if (!checked.canTrade) {
+                    log.warn("[${signal.market}] SELL 주문은 시장 상태 차단 우회: ${checked.issues}")
+                }
+                checked.copy(canTrade = true)
+            }
+        } catch (e: Exception) {
+            log.warn("[${signal.market}] SELL 시장 상태 조회 실패 - 청산 우선 실행: ${e.message}")
+            MarketConditionResult(
+                canTrade = true,
+                severity = com.ant.cointrading.risk.ConditionSeverity.WARNING,
+                issues = listOf("SELL 시장 상태 조회 실패: ${e.message ?: "unknown"}"),
+                spread = null,
+                liquidityRatio = null,
+                volatility1Min = null
+            )
+        }
     }
 
     private fun applyRiskThrottle(
@@ -486,6 +515,11 @@ class OrderExecutor(
         signal: TradingSignal,
         marketCondition: MarketConditionResult
     ): OrderType {
+        if (signal.action == SignalAction.SELL) {
+            log.info("[${signal.market}] 시장가 선택: SELL 청산 주문 즉시 체결 우선")
+            return OrderType.MARKET
+        }
+
         val reasons = mutableListOf<String>()
 
         // 1. 초단기/모멘텀 전략은 시장가 사용

@@ -4,6 +4,8 @@ import com.ant.cointrading.api.bithumb.BithumbPrivateApi
 import com.ant.cointrading.api.bithumb.BithumbPublicApi
 import com.ant.cointrading.config.MemeScalperProperties
 import com.ant.cointrading.config.TradingConstants
+import com.ant.cointrading.engine.CloseRecoveryQueueService
+import com.ant.cointrading.engine.CloseRecoveryStrategy
 import com.ant.cointrading.engine.GlobalPositionManager
 import com.ant.cointrading.engine.PositionCloser
 import com.ant.cointrading.engine.PositionHelper
@@ -64,6 +66,7 @@ class MemeScalperEngine(
     private val slackNotifier: SlackNotifier,
     private val globalPositionManager: GlobalPositionManager,
     private val regimeDetector: RegimeDetector,
+    private val closeRecoveryQueueService: CloseRecoveryQueueService,
     circuitBreakerFactory: SimpleCircuitBreakerFactory
 ) {
     private val log = LoggerFactory.getLogger(javaClass)
@@ -157,6 +160,7 @@ class MemeScalperEngine(
         val abandonedPositions = tradeRepository.findByStatus("ABANDONED")
         if (abandonedPositions.isNotEmpty()) {
             log.warn("ABANDONED 포지션 ${abandonedPositions.size}건 존재 - 10분마다 자동 재시도 예정")
+            abandonedPositions.forEach { enqueueCloseRecovery(it, "RESTORE_ABANDONED") }
         }
 
         val totalRestored = openPositions.size + closingPositions.size
@@ -358,14 +362,6 @@ class MemeScalperEngine(
     private fun retryAbandonedPosition(position: MemeScalperTradeEntity): Boolean {
         val market = position.market
 
-        val totalAttempts = position.closeAttemptCount + position.abandonRetryCount
-        val maxTotalAttempts = TradingConstants.MAX_CLOSE_ATTEMPTS + 3
-
-        if (totalAttempts >= maxTotalAttempts) {
-            markAbandonedAsFailed(position, maxTotalAttempts)
-            return false
-        }
-
         val actualBalance = try {
             val coinSymbol = market.removePrefix("KRW-")
             bithumbPrivateApi.getBalances()?.find { it.currency == coinSymbol }?.balance ?: BigDecimal.ZERO
@@ -379,26 +375,8 @@ class MemeScalperEngine(
             return true
         }
 
-        reopenAbandonedForRetry(position, totalAttempts + 1)
+        enqueueCloseRecovery(position, "ABANDONED_RETRY")
         return true
-    }
-
-    private fun markAbandonedAsFailed(position: MemeScalperTradeEntity, maxTotalAttempts: Int) {
-        val market = position.market
-        log.warn("[$market] ABANDONED 재시도 ${maxTotalAttempts}회 초과 - FAILED로 변경")
-        slackNotifier.sendWarning(
-            market,
-            """
-            ABANDONED 포지션 재시도 실패 (${maxTotalAttempts}회 초과) - 최종 FAILED
-            진입가: ${position.entryPrice}원
-            수량: ${position.quantity}
-            수동으로 빗썸에서 매도 필요 (DB 상태: FAILED)
-            """.trimIndent()
-        )
-        position.status = "FAILED"
-        position.exitReason = "ABANDONED_MAX_RETRIES"
-        position.exitTime = Instant.now()
-        tradeRepository.save(position)
     }
 
     private fun closeAbandonedWithoutBalance(position: MemeScalperTradeEntity) {
@@ -406,14 +384,6 @@ class MemeScalperEngine(
         position.status = "CLOSED"
         position.exitTime = Instant.now()
         position.exitReason = "ABANDONED_NO_BALANCE"
-        tradeRepository.save(position)
-    }
-
-    private fun reopenAbandonedForRetry(position: MemeScalperTradeEntity, nextAttempt: Int) {
-        log.info("[${position.market}] ABANDONED 포지션 재시도 #$nextAttempt")
-        position.closeAttemptCount = 0
-        position.abandonRetryCount += 1
-        position.status = "OPEN"
         tradeRepository.save(position)
     }
 
@@ -909,11 +879,14 @@ class MemeScalperEngine(
             maxAttempts = TradingConstants.MAX_CLOSE_ATTEMPTS,
             backoffSeconds = CLOSE_RETRY_BACKOFF_SECONDS,
             updatePosition = { pos, status, price, qty, orderId ->
+                val isNewAttempt = status == "CLOSING" && pos.status != "CLOSING"
                 pos.status = status
                 pos.exitReason = reason
                 pos.exitPrice = price
                 pos.lastCloseAttempt = Instant.now()
-                pos.closeAttemptCount++
+                if (isNewAttempt) {
+                    pos.closeAttemptCount++
+                }
                 pos.closeOrderId = orderId
                 if (qty != pos.quantity) {
                     log.info("[$market] 매도 수량 조정: ${pos.quantity} -> $qty")
@@ -1017,10 +990,24 @@ class MemeScalperEngine(
             Meme Scalper 포지션 ABANDONED: $reason
             진입가: ${position.entryPrice}원 → 현재가: ${exitPrice}원
             추정 손익: $emoji${String.format("%.0f", safePnlAmount)}원 (${String.format("%.2f", safePnlPercent)}%)
-            수동 확인 필요
+            자동 복구 큐에 등록됨 (백그라운드 청산 재시도)
             """.trimIndent()
         )
+        enqueueCloseRecovery(position, reason, exitPrice)
         log.warn("[$market] ABANDONED 처리: $reason, 추정 손익=${safePnlAmount}원 (${safePnlPercent}%)")
+    }
+
+    private fun enqueueCloseRecovery(position: MemeScalperTradeEntity, reason: String, lastKnownPrice: Double? = null) {
+        val positionId = position.id ?: return
+        closeRecoveryQueueService.enqueue(
+            strategy = CloseRecoveryStrategy.MEME_SCALPER,
+            positionId = positionId,
+            market = position.market,
+            entryPrice = position.entryPrice,
+            targetQuantity = position.quantity,
+            reason = reason,
+            lastKnownPrice = lastKnownPrice
+        )
     }
 
     /**
