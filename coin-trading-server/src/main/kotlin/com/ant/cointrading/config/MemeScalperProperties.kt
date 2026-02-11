@@ -57,6 +57,29 @@ data class MemeScalperProperties(
     /** RSI 상한 (과매수 진입 방지) */
     var maxRsi: Int = 80,
 
+    // === 웹소켓 후보 추출 ===
+
+    /** 웹소켓 피드 기반 후보 추출 사용 여부 */
+    var useWebSocketFeed: Boolean = true,
+
+    /** 웹소켓 후보 상위 N개만 정밀 분석 */
+    var websocketCandidateLimit: Int = 40,
+
+    /** 최근 10초 최소 체결대금 (KRW) */
+    var websocketMinNotional10sKrw: Long = 30_000_000,
+
+    /** 최근 10초 최소 가격 상승률 (%) */
+    var websocketMinPriceSpikePercent: Double = 0.4,
+
+    /** 최근 10초 체결대금 스파이크 배율 (직전 60초 평균 대비) */
+    var websocketMinNotionalSpikeRatio: Double = 1.8,
+
+    /** 웹소켓 후보 최소 매수 Imbalance */
+    var websocketMinBidImbalance: Double = 0.05,
+
+    /** 웹소켓 후보 최대 스프레드 (%) */
+    var websocketMaxSpreadPercent: Double = 0.5,
+
     // === 청산 신호 ===
 
     /** 거래량 급감 비율 (피크 대비) - 매수세 이탈 */

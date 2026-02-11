@@ -1,5 +1,6 @@
 package com.ant.cointrading.memescalper
 
+import com.ant.cointrading.api.bithumb.BithumbMarketWebSocketFeed
 import com.ant.cointrading.api.bithumb.BithumbPublicApi
 import com.ant.cointrading.config.MemeScalperProperties
 import com.ant.cointrading.config.TradingConstants
@@ -10,7 +11,6 @@ import org.springframework.stereotype.Component
 import java.math.BigDecimal
 import java.time.Instant
 import java.time.temporal.ChronoUnit
-import kotlin.math.abs
 
 /**
  * 펌프 감지 결과
@@ -39,7 +39,8 @@ data class PumpSignal(
 @Component
 class MemeScalperDetector(
     private val bithumbPublicApi: BithumbPublicApi,
-    private val properties: MemeScalperProperties
+    private val properties: MemeScalperProperties,
+    private val marketWebSocketFeed: BithumbMarketWebSocketFeed? = null
 ) {
     private val log = LoggerFactory.getLogger(javaClass)
 
@@ -60,6 +61,11 @@ class MemeScalperDetector(
         // 실패 마켓 캐시 TTL (1시간)
         private val FAILURE_TTL_MINUTES = 60L
     }
+
+    private data class ScanTargets(
+        val markets: List<String>,
+        val source: String
+    )
 
     /**
      * 만료된 실패 마켓 정리
@@ -91,26 +97,80 @@ class MemeScalperDetector(
     }
 
     /**
+     * 포지션 모니터링에서 사용할 실시간 가격 (웹소켓 우선)
+     */
+    fun getRealtimePrice(market: String): Double? {
+        return marketWebSocketFeed?.latestPrice(market)
+    }
+
+    private fun resolveScanTargets(): ScanTargets {
+        if (properties.useWebSocketFeed) {
+            val candidateLimit = properties.websocketCandidateLimit.coerceAtLeast(1)
+            val pulses = marketWebSocketFeed?.topPulses(
+                limit = candidateLimit * 2,
+                minNotional10sKrw = properties.websocketMinNotional10sKrw.toDouble(),
+                minPriceSpikePercent = properties.websocketMinPriceSpikePercent,
+                minNotionalSpikeRatio = properties.websocketMinNotionalSpikeRatio,
+                minBidImbalance = properties.websocketMinBidImbalance,
+                maxSpreadPercent = properties.websocketMaxSpreadPercent
+            ).orEmpty()
+
+            val candidates = pulses
+                .map { it.market }
+                .filter { it !in properties.excludeMarkets }
+                .filter { !isMarketFailed(it) }
+                .distinct()
+                .take(candidateLimit)
+
+            if (candidates.isNotEmpty()) {
+                log.debug(
+                    "웹소켓 후보 감지: {}개 (first={}, wsReady={})",
+                    candidates.size,
+                    candidates.first(),
+                    marketWebSocketFeed?.isReady() == true
+                )
+                return ScanTargets(candidates, "WEBSOCKET")
+            }
+
+            if (marketWebSocketFeed?.isReady() == true) {
+                log.trace("웹소켓 후보 없음 - REST 전체 스캔 폴백")
+            } else {
+                log.debug("웹소켓 미준비 - REST 전체 스캔 폴백")
+            }
+        }
+
+        val markets = bithumbPublicApi.getMarketAll()
+            ?.asSequence()
+            ?.map { it.market }
+            ?.filter { it.startsWith("KRW-") }
+            ?.filter { it !in properties.excludeMarkets }
+            ?.filter { !isMarketFailed(it) }
+            ?.toList()
+            ?: emptyList()
+
+        return ScanTargets(markets, "REST")
+    }
+
+    /**
      * 전체 마켓 스캔하여 펌프 신호 감지
      */
     fun scanForPumps(): List<PumpSignal> {
         // 만료된 실패 마켓 정리
         cleanExpiredFailures()
 
-        val allMarkets = bithumbPublicApi.getMarketAll() ?: return emptyList()
+        val targets = resolveScanTargets()
+        if (targets.markets.isEmpty()) return emptyList()
 
-        // KRW 마켓만 필터링 (제외 마켓 + 실패 마켓 제외)
-        val krwMarkets = allMarkets
-            .filter { it.market.startsWith("KRW-") }
-            .filter { it.market !in properties.excludeMarkets }
-            .filter { !isMarketFailed(it.market) }
-            .map { it.market }
-
-        log.debug("스캔 대상 마켓: ${krwMarkets.size}개 (실패 캐시: ${failedMarkets.size}개)")
+        log.debug(
+            "스캔 대상 마켓: {}개 (source={}, 실패 캐시={})",
+            targets.markets.size,
+            targets.source,
+            failedMarkets.size
+        )
 
         val signals = mutableListOf<PumpSignal>()
 
-        for (market in krwMarkets) {
+        for (market in targets.markets) {
             try {
                 val signal = detectPump(market)
                 if (signal != null &&

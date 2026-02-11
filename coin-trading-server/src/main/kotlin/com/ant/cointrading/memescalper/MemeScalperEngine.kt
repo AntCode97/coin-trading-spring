@@ -756,9 +756,9 @@ class MemeScalperEngine(
         log.error("[$market] 진입가 무효(${position.entryPrice}) - 포지션 정리 필요")
 
         // 현재가로 진입가 보정 시도
-        val ticker = bithumbPublicApi.getCurrentPrice(market)?.firstOrNull()
-        if (ticker != null) {
-            position.entryPrice = ticker.tradePrice.toDouble()
+        val currentPrice = fetchCurrentPriceOrNull(market)
+        if (currentPrice != null) {
+            position.entryPrice = currentPrice
             position.entryTime = Instant.now()  // 진입 시간도 리셋
             tradeRepository.save(position)
             log.info("[$market] 진입가 보정: ${position.entryPrice}원")
@@ -768,6 +768,7 @@ class MemeScalperEngine(
     }
 
     private fun fetchCurrentPriceOrNull(market: String): Double? {
+        detector.getRealtimePrice(market)?.let { return it }
         val ticker = bithumbPublicApi.getCurrentPrice(market)?.firstOrNull() ?: return null
         return ticker.tradePrice.toDouble()
     }

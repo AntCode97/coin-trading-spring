@@ -85,6 +85,12 @@ bithumb:
   base-url: https://api.bithumb.com
   access-key: ${BITHUMB_ACCESS_KEY:}
   secret-key: ${BITHUMB_SECRET_KEY:}
+  websocket:
+    enabled: ${BITHUMB_WS_ENABLED:true}
+    url: ${BITHUMB_WS_URL:wss://ws-api.bithumb.com/websocket/v1}
+    reconnect-delay-ms: ${BITHUMB_WS_RECONNECT_DELAY_MS:5000}
+    stale-threshold-ms: ${BITHUMB_WS_STALE_THRESHOLD_MS:15000}
+    max-codes-per-subscribe: ${BITHUMB_WS_MAX_CODES_PER_SUBSCRIBE:70}
 
 # Slack Bot 알림 설정
 slack:
@@ -244,6 +250,14 @@ memescalper:
   price-spike-percent: ${MEME_SCALPER_PRICE_SPIKE:3.0}
   min-bid-imbalance: ${MEME_SCALPER_MIN_IMBALANCE:0.3}
   max-rsi: ${MEME_SCALPER_MAX_RSI:80}
+  # 웹소켓 기반 선제 후보 추출 (경보제 의존 제거)
+  use-websocket-feed: ${MEME_SCALPER_USE_WS_FEED:true}
+  websocket-candidate-limit: ${MEME_SCALPER_WS_CANDIDATE_LIMIT:40}
+  websocket-min-notional-10s-krw: ${MEME_SCALPER_WS_MIN_NOTIONAL_10S:30000000}
+  websocket-min-price-spike-percent: ${MEME_SCALPER_WS_MIN_PRICE_SPIKE:0.4}
+  websocket-min-notional-spike-ratio: ${MEME_SCALPER_WS_MIN_NOTIONAL_SPIKE:1.8}
+  websocket-min-bid-imbalance: ${MEME_SCALPER_WS_MIN_IMBALANCE:0.05}
+  websocket-max-spread-percent: ${MEME_SCALPER_WS_MAX_SPREAD:0.5}
   # 청산 신호
   volume-drop-ratio: ${MEME_SCALPER_VOLUME_DROP:0.3}
   imbalance-exit-threshold: ${MEME_SCALPER_IMBALANCE_EXIT:0.0}
