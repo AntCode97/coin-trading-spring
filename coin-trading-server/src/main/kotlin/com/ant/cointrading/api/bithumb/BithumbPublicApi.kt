@@ -40,6 +40,7 @@ class BithumbPublicApi(
     companion object {
         private const val MAX_RETRY_ATTEMPTS = 3
         private const val RETRY_DELAY_MS = 1000L
+        private val MARKET_ALL_CACHE_TTL: Duration = Duration.ofMinutes(5)
     }
 
     /**
@@ -275,9 +276,20 @@ class BithumbPublicApi(
 
     /**
      * 거래 가능 마켓 목록 조회
-     * 타임아웃/연결 에러 시 자동 재시도
+     * TTL 기반 캐시 적용 (5분) - 마켓 목록은 거의 변하지 않으므로 빈번한 API 호출 불필요
+     * 캐시 만료 시 API 갱신 시도, 실패하면 stale 캐시 반환
      */
     fun getMarketAll(): List<MarketInfo>? {
+        // 캐시가 유효하면 API 호출 없이 반환
+        val cached = cachedMarketAll
+        val cachedAt = cachedMarketAllAt
+        if (!cached.isNullOrEmpty() && cachedAt != null
+            && Duration.between(cachedAt, Instant.now()) < MARKET_ALL_CACHE_TTL
+        ) {
+            return cached
+        }
+
+        // 캐시 만료 또는 없음 - API 갱신 시도
         var lastException: Exception? = null
 
         for (attempt in 1..MAX_RETRY_ATTEMPTS) {
@@ -295,7 +307,7 @@ class BithumbPublicApi(
             } catch (e: ResourceAccessException) {
                 lastException = e
                 if (attempt < MAX_RETRY_ATTEMPTS) {
-                    log.warn("getMarketAll 실패 (연결 타임아웃), 재시도 $attempt/$MAX_RETRY_ATTEMPTS: ${e.message}")
+                    log.warn("getMarketAll 실패 (연결 에러), 재시도 $attempt/$MAX_RETRY_ATTEMPTS: ${e.message}")
                     Thread.sleep(RETRY_DELAY_MS * attempt)
                 } else {
                     log.error("getMarketAll 실패: 최대 재시도 횟수 초과")
@@ -307,16 +319,14 @@ class BithumbPublicApi(
             }
         }
 
-        // 네트워크 일시 장애면 마지막 성공 캐시를 반환해 트레이딩 파이프라인을 유지
-        val cached = cachedMarketAll
+        // 갱신 실패 - stale 캐시가 있으면 그대로 사용 (에러 이벤트 발행 안 함)
         if (!cached.isNullOrEmpty()) {
-            val lastSuccess = cachedMarketAllAt
-            val ageMinutes = if (lastSuccess != null) Duration.between(lastSuccess, Instant.now()).toMinutes() else -1
-            log.warn("getMarketAll 실패 - 캐시된 마켓 목록 사용 (age={}m, size={})", ageMinutes, cached.size)
+            val ageMinutes = if (cachedAt != null) Duration.between(cachedAt, Instant.now()).toMinutes() else -1
+            log.warn("getMarketAll 갱신 실패 - stale 캐시 사용 (age={}m, size={})", ageMinutes, cached.size)
             return cached
         }
 
-        // 모든 재시도 실패 시 이벤트 발행
+        // 캐시도 없고 API도 실패 - 이때만 에러 이벤트 발행
         eventPublisher.publishEvent(TradingErrorEvent(
             eventSource = this,
             component = "BithumbPublicApi",
