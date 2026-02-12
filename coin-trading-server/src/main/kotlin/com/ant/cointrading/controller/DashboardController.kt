@@ -2,6 +2,7 @@ package com.ant.cointrading.controller
 
 import com.ant.cointrading.api.bithumb.BithumbPrivateApi
 import com.ant.cointrading.api.bithumb.BithumbPublicApi
+import org.slf4j.LoggerFactory
 import com.ant.cointrading.config.MemeScalperProperties
 import com.ant.cointrading.config.TradingProperties
 import com.ant.cointrading.config.VolumeSurgeProperties
@@ -39,6 +40,8 @@ class DashboardController(
     private val memeScalperEngine: MemeScalperEngine,
     private val volumeSurgeEngine: VolumeSurgeEngine
 ) {
+    private val log = LoggerFactory.getLogger(javaClass)
+
     private companion object {
         const val STRATEGY_MEME_SCALPER = "Meme Scalper"
         const val STRATEGY_VOLUME_SURGE = "Volume Surge"
@@ -71,15 +74,15 @@ class DashboardController(
         val krwBalance = balances.find { it.currency == KRW }?.balance ?: BigDecimal.ZERO
         var totalAssetKrw = krwBalance.toDouble()
 
-        val coinAssets = balances.mapNotNull { balance ->
-            if (balance.currency == KRW || balance.balance <= BigDecimal.ZERO) return@mapNotNull null
+        // 코인 잔고 필터링
+        val coinBalances = balances.filter { it.currency != KRW && it.balance > BigDecimal.ZERO }
 
+        // 가격 일괄 조회 (1회 API 호출)
+        val priceMap = fetchPriceMap(coinBalances.map { "KRW-${it.currency}" })
+
+        val coinAssets = coinBalances.mapNotNull { balance ->
             val market = "KRW-${balance.currency}"
-            val currentPrice = try {
-                bithumbPublicApi.getCurrentPrice(market)?.firstOrNull()?.tradePrice?.toDouble()
-            } catch (e: Exception) {
-                null
-            }
+            val currentPrice = priceMap[market]
 
             if (currentPrice != null) {
                 val avgBuyPrice = balance.avgBuyPrice
@@ -96,7 +99,10 @@ class DashboardController(
                         ((currentPrice - avgBuyPrice.toDouble()) / avgBuyPrice.toDouble()) * 100
                     } else 0.0
                 )
-            } else null
+            } else {
+                log.warn("가격 조회 실패로 코인자산 제외: {}", market)
+                null
+            }
         }.filter { it.value >= MIN_COIN_ASSET_VALUE_KRW }
 
         // 열린 포지션 조회
@@ -131,10 +137,22 @@ class DashboardController(
     }
 
     private fun getOpenPositions(): List<PositionInfo> {
+        val memePositions = memeScalperRepository.findByStatus(STATUS_OPEN)
+        val volumePositions = volumeSurgeRepository.findByStatus(STATUS_OPEN)
+        val dcaPositions = dcaPositionRepository.findByStatus(STATUS_OPEN)
+
+        // 모든 열린 포지션의 마켓을 모아 가격 일괄 조회
+        val allMarkets = mutableSetOf<String>()
+        memePositions.forEach { allMarkets.add(it.market) }
+        volumePositions.forEach { allMarkets.add(it.market) }
+        dcaPositions.forEach { allMarkets.add(it.market) }
+
+        val priceMap = fetchPriceMap(allMarkets.toList())
+
         val positions = mutableListOf<PositionInfo>()
 
         // Meme Scalper 포지션
-        memeScalperRepository.findByStatus(STATUS_OPEN).forEach { trade ->
+        memePositions.forEach { trade ->
             positions.add(
                 buildPositionInfo(
                     market = trade.market,
@@ -142,13 +160,14 @@ class DashboardController(
                     entryPrice = trade.entryPrice,
                     quantity = trade.quantity,
                     entryTime = trade.entryTime,
-                    peakPrice = trade.peakPrice
+                    peakPrice = trade.peakPrice,
+                    priceMap = priceMap
                 )
             )
         }
 
         // Volume Surge 포지션
-        volumeSurgeRepository.findByStatus(STATUS_OPEN).forEach { trade ->
+        volumePositions.forEach { trade ->
             val takeProfitPrice = trade.entryPrice * (1 + (trade.appliedTakeProfitPercent ?: 6.0) / 100)
             val stopLossPrice = trade.entryPrice * (1 - (trade.appliedStopLossPercent ?: 3.0) / 100)
 
@@ -160,13 +179,14 @@ class DashboardController(
                     quantity = trade.quantity,
                     entryTime = trade.entryTime,
                     takeProfitPrice = takeProfitPrice,
-                    stopLossPrice = stopLossPrice
+                    stopLossPrice = stopLossPrice,
+                    priceMap = priceMap
                 )
             )
         }
 
         // DCA 포지션
-        dcaPositionRepository.findByStatus(STATUS_OPEN).forEach { pos ->
+        dcaPositions.forEach { pos ->
             positions.add(
                 buildPositionInfo(
                     market = pos.market,
@@ -175,7 +195,8 @@ class DashboardController(
                     quantity = pos.totalQuantity,
                     entryTime = pos.createdAt,
                     takeProfitPrice = pos.averagePrice * (1 + pos.takeProfitPercent / 100),
-                    stopLossPrice = pos.averagePrice * (1 + pos.stopLossPercent / 100)
+                    stopLossPrice = pos.averagePrice * (1 + pos.stopLossPercent / 100),
+                    priceMap = priceMap
                 )
             )
         }
@@ -294,11 +315,18 @@ class DashboardController(
             ?: apiFailure("알 수 없는 전략: $strategy")
     }
 
-    private fun resolveCurrentPriceOrFallback(market: String, fallback: Double): Double {
+    /**
+     * 마켓 코드 목록에 대해 현재가를 일괄 조회하여 Map으로 반환.
+     * Bithumb /v1/ticker API는 쉼표 구분 다중 마켓을 지원하므로 1회 호출로 처리.
+     */
+    private fun fetchPriceMap(markets: List<String>): Map<String, Double> {
+        if (markets.isEmpty()) return emptyMap()
         return try {
-            bithumbPublicApi.getCurrentPrice(market)?.firstOrNull()?.tradePrice?.toDouble() ?: fallback
-        } catch (_: Exception) {
-            fallback
+            val tickers = bithumbPublicApi.getCurrentPrice(markets.joinToString(","))
+            tickers?.associate { it.market to it.tradePrice.toDouble() } ?: emptyMap()
+        } catch (e: Exception) {
+            log.error("가격 일괄 조회 실패: {}", e.message)
+            emptyMap()
         }
     }
 
@@ -310,9 +338,10 @@ class DashboardController(
         entryTime: Instant,
         takeProfitPrice: Double = 0.0,
         stopLossPrice: Double = 0.0,
-        peakPrice: Double? = null
+        peakPrice: Double? = null,
+        priceMap: Map<String, Double> = emptyMap()
     ): PositionInfo {
-        val currentPrice = resolveCurrentPriceOrFallback(market, entryPrice)
+        val currentPrice = priceMap[market] ?: entryPrice
         val pnl = (currentPrice - entryPrice) * quantity
         val pnlPercent = ((currentPrice - entryPrice) / entryPrice) * 100
         return PositionInfo(
