@@ -98,46 +98,8 @@ tasks.named<org.springframework.boot.gradle.tasks.run.BootRun>("bootRun") {
     }
 }
 
-// ============================================
-// React SPA 빌드 통합
-// ============================================
-// 주의: 로컬 개발 시에는 npm run build:copy 사용
-// Docker 빌드 시에는 Dockerfile에서 자동 처리
-
-// React 빌드 후 static 폴더로 복사하는 태스크
-tasks.register<Copy>("copyReactBuild") {
-    group = "build"
-    description = "Copy React build output to Spring Boot static resources"
-
-    val reactDistDir = file("${rootProject.projectDir}/coin-trading-client/dist")
-    val generatedStaticDir = layout.buildDirectory.dir("generated/resources/react-static").get().asFile
-
-    // React 빌드 output이 존재할 때만 복사
-    onlyIf { reactDistDir.exists() }
-
-    from(reactDistDir) {
-        include("**/*")
-    }
-    into(generatedStaticDir)
-}
-
-// bootJar 전에 반드시 copyReactBuild 실행 (순서 중요!)
-tasks.named("bootJar") {
-    dependsOn("copyReactBuild")
-}
-
-// processResources도 copyReactBuild 후에 실행되도록 설정
+// 프론트엔드는 별도 배포되므로 서버 JAR에 정적 SPA 파일을 포함하지 않음
 tasks.named<org.gradle.language.jvm.tasks.ProcessResources>("processResources") {
-    // copyReactBuild가 있다면 먼저 실행
-    tasks.findByName("copyReactBuild")?.let {
-        dependsOn(it)
-    }
-
-    // Git 추적 정적 디렉토리는 패킹에서 제외하고 generated 결과만 사용
+    // src/main/resources/static/** 제외
     exclude("static/**")
-
-    // Git 추적 디렉토리(src/main/resources/static)가 아니라 generated 리소스만 병합
-    from(layout.buildDirectory.dir("generated/resources/react-static")) {
-        into("static")
-    }
 }
