@@ -28,6 +28,7 @@ import com.ant.cointrading.risk.GenericCircuitBreakerStatePersistence
 import com.ant.cointrading.risk.DailyStatsRepository
 import com.ant.cointrading.risk.CircuitBreakerState
 import com.ant.cointrading.risk.StopLossCalculator
+import com.ant.cointrading.service.BalanceReservationService
 import com.ant.cointrading.util.apiFailure
 import com.ant.cointrading.util.apiSuccess
 import org.springframework.core.io.ClassPathResource
@@ -72,6 +73,7 @@ class VolumeSurgeEngine(
     private val globalPositionManager: GlobalPositionManager,
     private val regimeDetector: RegimeDetector,
     private val closeRecoveryQueueService: CloseRecoveryQueueService,
+    private val balanceReservationService: BalanceReservationService,
     circuitBreakerFactory: SimpleCircuitBreakerFactory
 ) {
     private val log = LoggerFactory.getLogger(javaClass)
@@ -359,6 +361,12 @@ class VolumeSurgeEngine(
      * - 컨플루언스 점수가 낮아도 거래량이 충분하면 진입
      */
     private fun shouldEnter(analysis: VolumeSurgeAnalysis): Boolean {
+        // MACD BEARISH 즉시 차단 (DB 근거: BEARISH 7건 → 평균 -1.87%, 총 -1,307원)
+        if (analysis.macdSignal == "BEARISH") {
+            analysis.rejectReason = "MACD BEARISH 진입 차단"
+            return false
+        }
+
         // RSI 극단적 과매수만 거부 (Properties.maxRsi 사용)
         if (analysis.rsi > properties.maxRsi) {
             analysis.rejectReason = "RSI 극단적 과매수 (${String.format("%.1f", analysis.rsi)} > ${properties.maxRsi})"
@@ -399,6 +407,13 @@ class VolumeSurgeEngine(
         filterResult: FilterResult
     ) {
         val market = alert.market
+        val positionSize = BigDecimal(properties.positionSizeKrw)
+
+        if (!balanceReservationService.reserve("VOLUME_SURGE", market, positionSize)) {
+            log.warn("[$market] KRW 잔고 부족 - 진입 취소")
+            markAlertProcessed(alert, "REJECTED", "KRW 잔고 부족")
+            return
+        }
 
         try {
             val currentPrice = fetchCurrentPriceWithValidation(market, alert) ?: return
@@ -420,6 +435,8 @@ class VolumeSurgeEngine(
         } catch (e: Exception) {
             log.error("[$market] 포지션 진입 실패: ${e.message}", e)
             markAlertProcessed(alert, "ERROR", "주문 실행 실패: ${e.message}")
+        } finally {
+            balanceReservationService.release("VOLUME_SURGE", market)
         }
     }
 

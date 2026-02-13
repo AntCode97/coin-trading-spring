@@ -19,6 +19,7 @@ import com.ant.cointrading.regime.RegimeDetector
 import com.ant.cointrading.repository.DcaPositionEntity
 import com.ant.cointrading.repository.DcaPositionRepository
 import com.ant.cointrading.strategy.DcaStrategy
+import com.ant.cointrading.service.BalanceReservationService
 import com.ant.cointrading.engine.GlobalPositionManager
 import com.ant.cointrading.engine.PositionHelper
 import com.ant.cointrading.engine.PositionCloser
@@ -58,7 +59,8 @@ class DcaEngine(
     private val slackNotifier: SlackNotifier,
     private val regimeDetector: RegimeDetector,
     private val globalPositionManager: GlobalPositionManager,
-    private val closeRecoveryQueueService: CloseRecoveryQueueService
+    private val closeRecoveryQueueService: CloseRecoveryQueueService,
+    private val balanceReservationService: BalanceReservationService
 ) {
     private val log = LoggerFactory.getLogger(javaClass)
 
@@ -351,36 +353,46 @@ class DcaEngine(
 
         val orderAmount = BigDecimal.valueOf(tradingProperties.orderAmountKrw.toLong())
 
-        // 1. 잔고 확인 및 진입 조건 체크
-        if (!shouldEnterPosition(market)) {
+        // 0. KRW 잔고 예약 (원자적 잔고 확보)
+        if (!balanceReservationService.reserve("DCA", market, orderAmount)) {
+            log.warn("[$market] KRW 잔고 부족 - DCA 진입 취소")
             return
         }
 
-        // 2. 매수 주문 실행 및 검증
-        val executionResult = executeBuyOrderWithValidation(market, signal, orderAmount) ?: return
+        try {
+            // 1. 잔고 확인 및 진입 조건 체크 (2차 안전장치: 코인 중복 보유 + 엔진 간 충돌 방지)
+            if (!shouldEnterPosition(market)) {
+                return
+            }
 
-        // 3. 실제 잔고 확인 (API 응답만 믿지 않음)
-        if (!verifyActualBalance(market, executionResult.quantity)) {
-            log.error("[$market] 실제 잔고 확인 실패 - 포지션 생성 취소")
-            cooldowns[market] = Instant.now().plus(60, ChronoUnit.SECONDS)
-            return
+            // 2. 매수 주문 실행 및 검증
+            val executionResult = executeBuyOrderWithValidation(market, signal, orderAmount) ?: return
+
+            // 3. 실제 잔고 확인 (API 응답만 믿지 않음)
+            if (!verifyActualBalance(market, executionResult.quantity)) {
+                log.error("[$market] 실제 잔고 확인 실패 - 포지션 생성 취소")
+                cooldowns[market] = Instant.now().plus(60, ChronoUnit.SECONDS)
+                return
+            }
+
+            // 4. DCA 포지션 생성/갱신
+            dcaStrategy.recordBuy(
+                market,
+                executionResult.quantity,
+                executionResult.price,
+                executionResult.quantity * executionResult.price
+            )
+
+            // 5. 진입 후 상태 설정
+            setupPostEntryState(market, regime)
+
+            // 6. 진입 알림 발송
+            sendEntryNotification(market, executionResult, regime)
+
+            log.info("[$market] 진입 완료: 가격=${executionResult.price}, 수량=${executionResult.quantity}")
+        } finally {
+            balanceReservationService.release("DCA", market)
         }
-
-        // 4. DCA 포지션 생성/갱신
-        dcaStrategy.recordBuy(
-            market,
-            executionResult.quantity,
-            executionResult.price,
-            executionResult.quantity * executionResult.price
-        )
-
-        // 5. 진입 후 상태 설정
-        setupPostEntryState(market, regime)
-
-        // 6. 진입 알림 발송
-        sendEntryNotification(market, executionResult, regime)
-
-        log.info("[$market] 진입 완료: 가격=${executionResult.price}, 수량=${executionResult.quantity}")
     }
 
     /**

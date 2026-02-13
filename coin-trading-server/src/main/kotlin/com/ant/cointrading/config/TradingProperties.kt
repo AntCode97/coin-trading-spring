@@ -43,6 +43,8 @@ data class RiskThrottleProperties(
 data class StrategyConfig(
     var type: StrategyType = StrategyType.MEAN_REVERSION,
     var dcaInterval: Long = 86400000,           // DCA 매수 간격 (밀리초)
+    var dcaTakeProfitPercent: Double = 5.0,     // DCA 익절 비율 (%)
+    var dcaStopLossPercent: Double = -3.0,      // DCA 손절 비율 (%)
     var gridLevels: Int = 5,                     // 그리드 레벨 수
     var gridSpacingPercent: Double = 1.0,        // 그리드 간격 (%)
     var meanReversionThreshold: Double = 2.0,    // 평균회귀 임계값 (표준편차 배수)

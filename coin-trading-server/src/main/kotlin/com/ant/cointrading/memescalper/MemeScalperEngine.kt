@@ -13,6 +13,7 @@ import com.ant.cointrading.model.SignalAction
 import com.ant.cointrading.model.TradingSignal
 import com.ant.cointrading.notification.SlackNotifier
 import com.ant.cointrading.order.OrderExecutor
+import com.ant.cointrading.service.BalanceReservationService
 import com.ant.cointrading.regime.RegimeDetector
 import com.ant.cointrading.regime.detectMarketRegime
 import com.ant.cointrading.repository.MemeScalperDailyStatsEntity
@@ -67,6 +68,7 @@ class MemeScalperEngine(
     private val globalPositionManager: GlobalPositionManager,
     private val regimeDetector: RegimeDetector,
     private val closeRecoveryQueueService: CloseRecoveryQueueService,
+    private val balanceReservationService: BalanceReservationService,
     circuitBreakerFactory: SimpleCircuitBreakerFactory
 ) {
     private val log = LoggerFactory.getLogger(javaClass)
@@ -419,29 +421,26 @@ class MemeScalperEngine(
             return false
         }
 
-        // 실제 잔고 체크 - KRW 충분한지 + 이미 해당 코인 보유 시 진입 불가
-        val coinSymbol = market.removePrefix("KRW-")
+        // KRW 잔고 예약 (BalanceReservationService 원자적 체크)
         val requiredKrw = BigDecimal(properties.positionSizeKrw)
+        if (!balanceReservationService.reserve("MEME_SCALPER", market, requiredKrw)) {
+            return false
+        }
+
+        // 코인 잔고 체크 - 이미 보유 시 진입 불가 (ABANDONED 케이스 방지)
+        val coinSymbol = market.removePrefix("KRW-")
         try {
-            val balances = bithumbPrivateApi.getBalances()
-
-            // 1. KRW 잔고 체크 - 포지션 크기 + 여유분(10%)
-            val krwBalance = balances?.find { it.currency == "KRW" }?.balance ?: BigDecimal.ZERO
-            val minRequired = requiredKrw.multiply(BigDecimal("1.1"))  // 10% 여유
-            if (krwBalance < minRequired) {
-                log.warn("[$market] KRW 잔고 부족: ${krwBalance}원 < ${minRequired}원")
-                return false
-            }
-
-            // 2. 코인 잔고 체크 - 이미 보유 시 진입 불가 (ABANDONED 케이스 방지)
-            val coinBalance = balances?.find { it.currency == coinSymbol }?.balance ?: BigDecimal.ZERO
+            val coinBalance = bithumbPrivateApi.getBalances()
+                ?.find { it.currency == coinSymbol }?.balance ?: BigDecimal.ZERO
             if (coinBalance > BigDecimal.ZERO) {
                 log.warn("[$market] 이미 $coinSymbol 잔고 보유 중: $coinBalance - 중복 진입 방지")
+                balanceReservationService.release("MEME_SCALPER", market)
                 return false
             }
         } catch (e: Exception) {
             log.warn("[$market] 잔고 조회 실패, 진입 보류: ${e.message}")
-            return false  // 잔고 확인 안 되면 진입하지 않음
+            balanceReservationService.release("MEME_SCALPER", market)
+            return false
         }
 
         // RSI 과매수 체크
@@ -468,24 +467,28 @@ class MemeScalperEngine(
         val market = signal.market
         log.info("[$market] 포지션 진입 시도 - 점수=${signal.score}, 거래량=${signal.volumeSpikeRatio}x")
 
-        val regime = detectMarketRegime(bithumbPublicApi, regimeDetector, market, log)
-        val executionResult = executeBuyOrderWithValidation(market, signal, regime) ?: return
+        try {
+            val regime = detectMarketRegime(bithumbPublicApi, regimeDetector, market, log)
+            val executionResult = executeBuyOrderWithValidation(market, signal, regime) ?: return
 
-        // 실제 잔고 확인 (API 응답만 믿지 않음)
-        if (!verifyActualBalance(market, executionResult.quantity)) {
-            log.error("[$market] 실제 잔고 확인 실패 - 주문 체결되었으나 코인 잔고 없음")
-            slackNotifier.sendWarning(market, "매수 주문 체결되었으나 실제 잔고 없음 (API 응답 불일치) - 수동 확인 필요")
-            cooldowns[market] = Instant.now().plus(60, ChronoUnit.SECONDS)
-            return
+            // 실제 잔고 확인 (API 응답만 믿지 않음)
+            if (!verifyActualBalance(market, executionResult.quantity)) {
+                log.error("[$market] 실제 잔고 확인 실패 - 주문 체결되었으나 코인 잔고 없음")
+                slackNotifier.sendWarning(market, "매수 주문 체결되었으나 실제 잔고 없음 (API 응답 불일치) - 수동 확인 필요")
+                cooldowns[market] = Instant.now().plus(60, ChronoUnit.SECONDS)
+                return
+            }
+
+            if (!checkRaceCondition(market)) return
+
+            val savedTrade = createAndSaveTradeEntity(signal, executionResult, regime)
+            setupPostEntryState(market, savedTrade, signal)
+            sendEntryNotification(market, signal, executionResult)
+
+            log.info("[$market] 진입 완료: 가격=${executionResult.price}, 수량=${executionResult.quantity}")
+        } finally {
+            balanceReservationService.release("MEME_SCALPER", market)
         }
-
-        if (!checkRaceCondition(market)) return
-
-        val savedTrade = createAndSaveTradeEntity(signal, executionResult, regime)
-        setupPostEntryState(market, savedTrade, signal)
-        sendEntryNotification(market, signal, executionResult)
-
-        log.info("[$market] 진입 완료: 가격=${executionResult.price}, 수량=${executionResult.quantity}")
     }
 
     /**

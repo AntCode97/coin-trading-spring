@@ -208,8 +208,8 @@ class DcaStrategy(
                 lastPrice = price,
                 lastPriceUpdate = now,
                 currentPnlPercent = 0.0,
-                takeProfitPercent = 8.0,
-                stopLossPercent = -3.0
+                takeProfitPercent = tradingProperties.strategy.dcaTakeProfitPercent,
+                stopLossPercent = tradingProperties.strategy.dcaStopLossPercent
             )
             dcaPositionRepository.save(position)
             log.info("[$market] DCA 신규 포지션 생성: 수량=${quantity}원, 가격=${price}원")

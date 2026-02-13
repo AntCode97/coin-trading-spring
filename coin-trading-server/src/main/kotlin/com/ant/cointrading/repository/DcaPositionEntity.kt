@@ -57,11 +57,11 @@ class DcaPositionEntity(
 
     /** 익절 비율 (%) */
     @Column
-    var takeProfitPercent: Double = 15.0,
+    var takeProfitPercent: Double = 5.0,
 
     /** 손절 비율 (%) */
     @Column
-    var stopLossPercent: Double = -10.0,
+    var stopLossPercent: Double = -3.0,
 
     /** 포지션 상태 (OPEN/CLOSING/CLOSED/ABANDONED) */
     @Column(nullable = false, length = 20)
