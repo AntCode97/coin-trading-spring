@@ -109,27 +109,36 @@ class PositionCloser(
 
         log.info("[$market] 포지션 청산 시도 #${position.closeAttemptCount + 1}: $reason, 가격=$exitPrice")
 
-        // 3. 실제 잔고 확인
+        // 3. 실제 잔고 확인 (available + locked)
         val coinSymbol = PositionHelper.extractCoinSymbol(market)
-        val actualBalance = try {
-            bithumbPrivateApi.getBalances()?.find { it.currency == coinSymbol }?.balance ?: BigDecimal.ZERO
+        val coinBalance = try {
+            bithumbPrivateApi.getBalances()?.find { it.currency == coinSymbol }
         } catch (e: Exception) {
             log.warn("[$market] 잔고 조회 실패: ${e.message}, 재시도 유도")
-            // 잔고 조회 실패 시 OPEN으로 복원하여 나중에 재시도
             updatePosition(position, "OPEN", exitPrice, position.quantity, null)
             slackNotifier.sendWarning(market, "잔고 조회 실패로 청산 지연: ${e.message}")
             return
         }
 
+        val available = coinBalance?.balance ?: BigDecimal.ZERO
+        val locked = coinBalance?.locked ?: BigDecimal.ZERO
+        val totalBalance = available + locked
+
         // 4. 실제 잔고 없으면 청산 완료로 간주
-        if (actualBalance <= BigDecimal.ZERO) {
-            log.info("[$market] 실제 잔고 없음 - 청산 완료로 간주")
+        if (totalBalance <= BigDecimal.ZERO) {
+            log.info("[$market] 실제 잔고 없음 (available=0, locked=0) - 청산 완료로 간주")
             updatePosition(position, "CLOSED", exitPrice, 0.0, null)
             return
         }
 
-        // 5. 매도 수량 결정
-        val sellQuantity = actualBalance.coerceAtMost(BigDecimal(position.quantity))
+        // 4-1. available=0이지만 locked에 잔고 있으면 pending 주문 존재 → 대기
+        if (available <= BigDecimal.ZERO && locked > BigDecimal.ZERO) {
+            log.info("[$market] 코인이 locked 상태 (pending 주문 존재, locked=$locked) - 청산 대기")
+            return
+        }
+
+        // 5. 매도 수량 결정 (available 기준)
+        val sellQuantity = available.coerceAtMost(BigDecimal(position.quantity))
 
         // 6. 0 수량 체크
         if (sellQuantity <= BigDecimal.ZERO) {
@@ -195,13 +204,15 @@ class PositionCloser(
         } else if (executedQty != null && executedQty <= BigDecimal.ZERO) {
             // 주문은 성공했지만 체결 수량 0 - API 엣지 케이스
             log.warn("[$market] 주문 완료지만 체결 수량 0 - 잔고 재확인 필요")
-            // 잔고 재확인 후 남아있으면 OPEN으로 복원
-            val recheckBalance = try {
-                bithumbPrivateApi.getBalances()?.find { it.currency == coinSymbol }?.balance ?: BigDecimal.ZERO
+            // 잔고 재확인 후 남아있으면 OPEN으로 복원 (available + locked)
+            val recheckCoin = try {
+                bithumbPrivateApi.getBalances()?.find { it.currency == coinSymbol }
             } catch (e: Exception) {
                 log.warn("[$market] 재확인 실패: ${e.message}")
-                BigDecimal.ZERO
+                null
             }
+            val recheckBalance = (recheckCoin?.balance ?: BigDecimal.ZERO) +
+                (recheckCoin?.locked ?: BigDecimal.ZERO)
             if (recheckBalance > BigDecimal.ZERO) {
                 log.info("[$market] 잔고 여전히 존재 - OPEN으로 복원")
                 updatePosition(position, "OPEN", exitPrice, recheckBalance.toDouble(), null)

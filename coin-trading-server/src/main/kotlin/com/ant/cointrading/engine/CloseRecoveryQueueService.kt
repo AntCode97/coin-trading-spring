@@ -265,7 +265,10 @@ class CloseRecoveryQueueService(
         val symbol = PositionHelper.extractCoinSymbol(market)
         return try {
             val balances = bithumbPrivateApi.getBalances() ?: return null
-            balances.find { it.currency == symbol }?.balance ?: BigDecimal.ZERO
+            val coin = balances.find { it.currency == symbol }
+            val available = coin?.balance ?: BigDecimal.ZERO
+            val locked = coin?.locked ?: BigDecimal.ZERO
+            available + locked
         } catch (e: Exception) {
             null
         }

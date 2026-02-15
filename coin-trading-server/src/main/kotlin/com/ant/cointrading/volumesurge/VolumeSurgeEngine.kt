@@ -397,6 +397,39 @@ class VolumeSurgeEngine(
     }
 
     /**
+     * 실제 잔고 확인 (API 응답만 믿지 않음)
+     *
+     * 빗썸 API는 주문 체결 응답을 보내지만, 실제 잔고가 증가하지 않는 경우가 있음.
+     * 주문 실행 후 반드시 실제 잔고를 확인하여 포지션 생성 여부를 결정해야 함.
+     */
+    private fun verifyActualBalance(market: String, expectedQuantity: Double): Boolean {
+        return try {
+            val coinSymbol = PositionHelper.extractCoinSymbol(market)
+            val balances = bithumbPrivateApi.getBalances() ?: run {
+                log.error("[$market] 잔고 조회 실패 - null 응답")
+                return false
+            }
+
+            val coinBalance = balances.find { it.currency == coinSymbol }
+            val actualBalance = (coinBalance?.balance ?: BigDecimal.ZERO) +
+                (coinBalance?.locked ?: BigDecimal.ZERO)
+
+            val minAcceptableBalance = BigDecimal(expectedQuantity).multiply(BigDecimal("0.9"))
+
+            if (actualBalance < minAcceptableBalance) {
+                log.error("[$market] 잔고 불일치: 예상=${String.format("%.4f", expectedQuantity)}, 실제=${actualBalance}")
+                return false
+            }
+
+            log.info("[$market] 잔고 확인 완료: $actualBalance")
+            true
+        } catch (e: Exception) {
+            log.error("[$market] 잔고 확인 중 예외 발생: ${e.message}", e)
+            false
+        }
+    }
+
+    /**
      * 포지션 진입
      *
      * 켄트백: 각 하위 작업을 명확한 메서드로 분리 (Compose Method 패턴)
@@ -421,6 +454,14 @@ class VolumeSurgeEngine(
             val executionResult = executeBuyOrderWithValidation(
                 market, currentPrice, filterResult, regime, alert
             ) ?: return
+
+            // 실제 잔고 확인 (API 응답만 믿지 않음)
+            if (!verifyActualBalance(market, executionResult.quantity.toDouble())) {
+                log.error("[$market] 실제 잔고 확인 실패 - 포지션 생성 취소")
+                slackNotifier.sendWarning(market, "매수 체결되었으나 실제 잔고 없음 - 수동 확인 필요")
+                markAlertProcessed(alert, "ERROR", "실제 잔고 확인 실패")
+                return
+            }
 
             val riskParams = calculateRiskManagementParams(market, executionResult.price, filterResult)
             val savedTrade = createAndSaveTradeEntity(
@@ -506,6 +547,15 @@ class VolumeSurgeEngine(
         }
 
         log.info("[$market] 매수 체결: 가격=$executedPrice, 수량=$executedQuantity")
+
+        // 체결 금액이 최소 매도금액 미만이면 dust 포지션 방지
+        val positionValue = executedPrice.multiply(executedQuantity)
+        if (positionValue < TradingConstants.MIN_ORDER_AMOUNT_KRW) {
+            log.warn("[$market] 체결 금액이 최소 매도금액 미달 (${positionValue}원 < ${TradingConstants.MIN_ORDER_AMOUNT_KRW}원) - dust 포지션 방지")
+            slackNotifier.sendWarning(market, "매수 체결 금액이 최소 주문금액 미달 (${positionValue}원) - 수동 확인 필요")
+            markAlertProcessed(alert, "ERROR", "체결 금액 최소 매도금액 미달: ${positionValue}원")
+            return null
+        }
 
         return OrderExecutionResult(
             price = executedPrice,
@@ -751,8 +801,9 @@ class VolumeSurgeEngine(
         val market = position.market
 
         val actualBalance = try {
-            val coinSymbol = market.removePrefix("KRW-")
-            bithumbPrivateApi.getBalances()?.find { it.currency == coinSymbol }?.balance ?: BigDecimal.ZERO
+            val coinSymbol = PositionHelper.extractCoinSymbol(market)
+            val coin = bithumbPrivateApi.getBalances()?.find { it.currency == coinSymbol }
+            (coin?.balance ?: BigDecimal.ZERO) + (coin?.locked ?: BigDecimal.ZERO)
         } catch (e: Exception) {
             log.warn("[$market] 잔고 조회 실패: ${e.message}")
             return false
