@@ -3,6 +3,7 @@ package com.ant.cointrading.controller
 import com.ant.cointrading.regime.HmmRegimeDetector
 import com.ant.cointrading.service.KeyValueService
 import com.ant.cointrading.service.ModelSelector
+import com.ant.cointrading.service.TradingAmountService
 import com.ant.cointrading.util.apiFailure
 import com.ant.cointrading.util.apiSuccess
 import org.slf4j.LoggerFactory
@@ -28,7 +29,8 @@ import org.springframework.web.bind.annotation.*
 class SettingsController(
     private val keyValueService: KeyValueService,
     private val modelSelector: ModelSelector,
-    private val hmmRegimeDetector: HmmRegimeDetector
+    private val hmmRegimeDetector: HmmRegimeDetector,
+    private val tradingAmountService: TradingAmountService,
 ) {
 
     private val log = LoggerFactory.getLogger(SettingsController::class.java)
@@ -272,6 +274,35 @@ class SettingsController(
         )
     }
 
+    // ===========================================
+    // 전략별 거래 금액 API
+    // ===========================================
+
+    @GetMapping("/trading-amounts")
+    fun getTradingAmounts(): ResponseEntity<Map<String, Any?>> {
+        val amounts = tradingAmountService.getAllAmounts()
+        return okSuccess(
+            "amounts" to amounts,
+            "minOrderAmountKrw" to TradingAmountService.MIN_ORDER_AMOUNT_KRW,
+        )
+    }
+
+    @PostMapping("/trading-amounts")
+    fun setTradingAmount(@RequestBody request: SetTradingAmountRequest): ResponseEntity<Map<String, Any?>> {
+        log.info("거래 금액 변경 요청: ${request.strategyCode} = ${request.amountKrw}원")
+
+        return try {
+            val success = tradingAmountService.setAmount(request.strategyCode, request.amountKrw)
+            if (success) {
+                okSuccess("message" to "${request.strategyCode} 거래 금액이 ${request.amountKrw}원으로 변경되었습니다")
+            } else {
+                okFailure("거래 금액 저장 실패")
+            }
+        } catch (e: IllegalArgumentException) {
+            okFailure(e.message ?: "잘못된 요청")
+        }
+    }
+
     private fun ok(vararg entries: Pair<String, Any?>): ResponseEntity<Map<String, Any?>> {
         return ResponseEntity.ok(buildMap { entries.forEach { (key, value) -> put(key, value) } })
     }
@@ -300,4 +331,9 @@ data class SetModelRequest(
 
 data class SetRegimeDetectorRequest(
     val type: String
+)
+
+data class SetTradingAmountRequest(
+    val strategyCode: String,
+    val amountKrw: Long,
 )

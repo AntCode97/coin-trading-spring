@@ -432,6 +432,26 @@ export const systemControlApi = {
   // Settings
   refreshCache: (): Promise<SystemControlResult> =>
     api.post('/settings/cache/refresh').then(res => normalizeSystemControlResult(res.data)),
+
+  // Trading Amounts
+  getTradingAmounts: (): Promise<TradingAmountsResponse> =>
+    api.get('/settings/trading-amounts').then(res => res.data),
+
+  setTradingAmount: (strategyCode: string, amountKrw: number): Promise<SystemControlResult> =>
+    api.post('/settings/trading-amounts', { strategyCode, amountKrw }).then(res => normalizeSystemControlResult(res.data)),
 };
+
+export interface StrategyTradingAmount {
+  strategyCode: string;
+  label: string;
+  amountKrw: number;
+  defaultAmountKrw: number;
+}
+
+export interface TradingAmountsResponse {
+  success: boolean;
+  amounts: StrategyTradingAmount[];
+  minOrderAmountKrw: number;
+}
 
 export default api;

@@ -8,8 +8,10 @@ import {
   type FundingStatus,
   type PositionInfo,
   type RiskThrottleStatus,
+  type StrategyTradingAmount,
   type SyncResult,
   type SystemControlResult,
+  type TradingAmountsResponse,
   type ValidationGateStatus,
 } from '../api';
 import {
@@ -193,6 +195,43 @@ export default function Dashboard() {
     enabled: systemControlExpanded,
     refetchInterval: systemControlExpanded ? 60000 : false,
   });
+
+  // 거래 금액 설정
+  const [editingAmounts, setEditingAmounts] = useState<Record<string, string>>({});
+
+  const { data: tradingAmountsData, refetch: refetchTradingAmounts } = useQuery<TradingAmountsResponse>({
+    queryKey: ['trading-amounts'],
+    queryFn: () => systemControlApi.getTradingAmounts(),
+    enabled: systemControlExpanded,
+  });
+
+  const handleAmountChange = (strategyCode: string, value: string) => {
+    setEditingAmounts(prev => ({ ...prev, [strategyCode]: value }));
+  };
+
+  const handleAmountSave = async (strategyCode: string) => {
+    const raw = editingAmounts[strategyCode];
+    if (raw === undefined) return;
+
+    const amount = parseInt(raw, 10);
+    const minAmount = tradingAmountsData?.minOrderAmountKrw ?? 5100;
+
+    if (isNaN(amount) || amount < minAmount) {
+      notify(`최소 주문 금액은 ${minAmount.toLocaleString()}원입니다`, 'error');
+      return;
+    }
+
+    await executeSystemAction(
+      `amount-${strategyCode}`,
+      () => systemControlApi.setTradingAmount(strategyCode, amount),
+    );
+    setEditingAmounts(prev => {
+      const next = { ...prev };
+      delete next[strategyCode];
+      return next;
+    });
+    await refetchTradingAmounts();
+  };
 
   const currentDate = requestDate ? new Date(`${requestDate}T00:00:00`) : new Date();
 
@@ -653,6 +692,44 @@ export default function Dashboard() {
                   >
                     {isActionExecuting('ms-reflection') ? '분석 중...' : '단타 매매 분석'}
                   </button>
+                </div>
+              </div>
+
+              <div className="control-group">
+                <h3 className="control-group-title">거래 금액 설정</h3>
+                <div className="trading-amount-list">
+                  {tradingAmountsData?.amounts?.map((item: StrategyTradingAmount) => {
+                    const editing = editingAmounts[item.strategyCode];
+                    const displayValue = editing ?? String(item.amountKrw);
+                    const isChanged = editing !== undefined && editing !== String(item.amountKrw);
+                    return (
+                      <div className="trading-amount-row" key={item.strategyCode}>
+                        <span className="trading-amount-label">{item.label}</span>
+                        <div className="trading-amount-input-group">
+                          <input
+                            className="trading-amount-input"
+                            type="number"
+                            min={tradingAmountsData.minOrderAmountKrw}
+                            step={1000}
+                            value={displayValue}
+                            onChange={e => handleAmountChange(item.strategyCode, e.target.value)}
+                          />
+                          <span className="trading-amount-unit">원</span>
+                          <button
+                            className="control-btn control-btn-small"
+                            type="button"
+                            disabled={!isChanged || isActionExecuting(`amount-${item.strategyCode}`)}
+                            onClick={() => void handleAmountSave(item.strategyCode)}
+                          >
+                            {isActionExecuting(`amount-${item.strategyCode}`) ? '...' : '저장'}
+                          </button>
+                        </div>
+                      </div>
+                    );
+                  })}
+                  <div className="trading-amount-hint">
+                    최소 주문: {(tradingAmountsData?.minOrderAmountKrw ?? 5100).toLocaleString()}원
+                  </div>
                 </div>
               </div>
 

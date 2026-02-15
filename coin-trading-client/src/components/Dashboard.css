@@ -583,6 +583,73 @@ body {
   color: var(--text-secondary);
 }
 
+.control-btn-small {
+  padding: 4px 10px;
+  font-size: 11px;
+  min-width: auto;
+}
+
+/* Trading Amount Settings */
+.trading-amount-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.trading-amount-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.trading-amount-label {
+  font-size: 13px;
+  color: var(--text-primary);
+  min-width: 80px;
+  flex-shrink: 0;
+}
+
+.trading-amount-input-group {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.trading-amount-input {
+  width: 100px;
+  padding: 5px 8px;
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-sm);
+  background: var(--bg-secondary);
+  color: var(--text-primary);
+  font-size: 13px;
+  text-align: right;
+  -moz-appearance: textfield;
+}
+
+.trading-amount-input::-webkit-outer-spin-button,
+.trading-amount-input::-webkit-inner-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+
+.trading-amount-input:focus {
+  outline: none;
+  border-color: var(--toss-blue);
+}
+
+.trading-amount-unit {
+  font-size: 12px;
+  color: var(--text-tertiary);
+}
+
+.trading-amount-hint {
+  font-size: 11px;
+  color: var(--text-tertiary);
+  margin-top: 2px;
+}
+
 /* Tooltip style for button title attribute */
 .control-btn[title]:hover::after {
   content: attr(title);

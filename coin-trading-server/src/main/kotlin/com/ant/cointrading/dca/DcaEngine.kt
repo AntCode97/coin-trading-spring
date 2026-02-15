@@ -20,6 +20,7 @@ import com.ant.cointrading.repository.DcaPositionEntity
 import com.ant.cointrading.repository.DcaPositionRepository
 import com.ant.cointrading.strategy.DcaStrategy
 import com.ant.cointrading.service.BalanceReservationService
+import com.ant.cointrading.service.TradingAmountService
 import com.ant.cointrading.engine.GlobalPositionManager
 import com.ant.cointrading.engine.PositionHelper
 import com.ant.cointrading.engine.PositionCloser
@@ -60,7 +61,8 @@ class DcaEngine(
     private val regimeDetector: RegimeDetector,
     private val globalPositionManager: GlobalPositionManager,
     private val closeRecoveryQueueService: CloseRecoveryQueueService,
-    private val balanceReservationService: BalanceReservationService
+    private val balanceReservationService: BalanceReservationService,
+    private val tradingAmountService: TradingAmountService,
 ) {
     private val log = LoggerFactory.getLogger(javaClass)
 
@@ -209,7 +211,7 @@ class DcaEngine(
 
         // 실제 잔고 체크 - KRW 충분한지 + 이미 해당 코인 보유 시 진입 불가
         val coinSymbol = PositionHelper.extractCoinSymbol(market)
-        val requiredKrw = BigDecimal(tradingProperties.orderAmountKrw.toLong())
+        val requiredKrw = tradingAmountService.getAmount("dca")
 
         try {
             val balances = bithumbPrivateApi.getBalances() ?: return false
@@ -351,7 +353,7 @@ class DcaEngine(
     ) {
         log.info("[$market] DCA 진입 시도: 신뢰도=${signal.confidence}%, 이유=${signal.reason}")
 
-        val orderAmount = BigDecimal.valueOf(tradingProperties.orderAmountKrw.toLong())
+        val orderAmount = tradingAmountService.getAmount("dca")
 
         // 0. KRW 잔고 예약 (원자적 잔고 확보)
         if (!balanceReservationService.reserve("DCA", market, orderAmount)) {

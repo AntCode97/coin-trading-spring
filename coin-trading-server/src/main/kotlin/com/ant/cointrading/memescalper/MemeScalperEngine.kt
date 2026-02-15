@@ -14,6 +14,7 @@ import com.ant.cointrading.model.TradingSignal
 import com.ant.cointrading.notification.SlackNotifier
 import com.ant.cointrading.order.OrderExecutor
 import com.ant.cointrading.service.BalanceReservationService
+import com.ant.cointrading.service.TradingAmountService
 import com.ant.cointrading.regime.RegimeDetector
 import com.ant.cointrading.regime.detectMarketRegime
 import com.ant.cointrading.repository.MemeScalperDailyStatsEntity
@@ -69,6 +70,7 @@ class MemeScalperEngine(
     private val regimeDetector: RegimeDetector,
     private val closeRecoveryQueueService: CloseRecoveryQueueService,
     private val balanceReservationService: BalanceReservationService,
+    private val tradingAmountService: TradingAmountService,
     circuitBreakerFactory: SimpleCircuitBreakerFactory
 ) {
     private val log = LoggerFactory.getLogger(javaClass)
@@ -422,7 +424,7 @@ class MemeScalperEngine(
         }
 
         // KRW 잔고 예약 (BalanceReservationService 원자적 체크)
-        val requiredKrw = BigDecimal(properties.positionSizeKrw)
+        val requiredKrw = tradingAmountService.getAmount("memescalper")
         if (!balanceReservationService.reserve("MEME_SCALPER", market, requiredKrw)) {
             return false
         }
@@ -499,7 +501,7 @@ class MemeScalperEngine(
         signal: PumpSignal,
         regime: String?
     ): OrderExecutionResult? {
-        val positionSize = BigDecimal(properties.positionSizeKrw)
+        val positionSize = tradingAmountService.getAmount("memescalper")
 
         val buySignal = TradingSignal(
             market = market,

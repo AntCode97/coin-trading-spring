@@ -29,6 +29,7 @@ import com.ant.cointrading.risk.DailyStatsRepository
 import com.ant.cointrading.risk.CircuitBreakerState
 import com.ant.cointrading.risk.StopLossCalculator
 import com.ant.cointrading.service.BalanceReservationService
+import com.ant.cointrading.service.TradingAmountService
 import com.ant.cointrading.util.apiFailure
 import com.ant.cointrading.util.apiSuccess
 import org.springframework.core.io.ClassPathResource
@@ -74,6 +75,7 @@ class VolumeSurgeEngine(
     private val regimeDetector: RegimeDetector,
     private val closeRecoveryQueueService: CloseRecoveryQueueService,
     private val balanceReservationService: BalanceReservationService,
+    private val tradingAmountService: TradingAmountService,
     circuitBreakerFactory: SimpleCircuitBreakerFactory
 ) {
     private val log = LoggerFactory.getLogger(javaClass)
@@ -440,7 +442,7 @@ class VolumeSurgeEngine(
         filterResult: FilterResult
     ) {
         val market = alert.market
-        val positionSize = BigDecimal(properties.positionSizeKrw)
+        val positionSize = tradingAmountService.getAmount("volumesurge")
 
         if (!balanceReservationService.reserve("VOLUME_SURGE", market, positionSize)) {
             log.warn("[$market] KRW 잔고 부족 - 진입 취소")
@@ -507,7 +509,7 @@ class VolumeSurgeEngine(
         regime: String?,
         alert: VolumeSurgeAlertEntity
     ): OrderExecutionResult? {
-        val positionSize = BigDecimal(properties.positionSizeKrw)
+        val positionSize = tradingAmountService.getAmount("volumesurge")
         log.info("[$market] 시장가 매수 시도: 금액=${positionSize}원")
 
         val buySignal = TradingSignal(
