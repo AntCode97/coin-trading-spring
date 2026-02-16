@@ -873,6 +873,101 @@ body {
   font-weight: 600;
 }
 
+.toss-suspended-section {
+  margin-bottom: var(--space-xl);
+  padding: var(--space-lg);
+  border-radius: var(--radius-lg);
+  border: 1px solid rgba(239, 68, 68, 0.3);
+  background: rgba(239, 68, 68, 0.04);
+}
+
+.toss-suspended-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-md);
+  margin-bottom: var(--space-md);
+}
+
+.toss-suspended-title {
+  font-size: 15px;
+  font-weight: 600;
+  color: #FCA5A5;
+}
+
+.toss-suspended-count {
+  font-size: 12px;
+  font-weight: 600;
+  color: #FCA5A5;
+  padding: 3px 10px;
+  border-radius: var(--radius-sm);
+  border: 1px solid rgba(239, 68, 68, 0.35);
+  background: rgba(239, 68, 68, 0.12);
+}
+
+.toss-suspended-list {
+  display: grid;
+  gap: var(--space-sm);
+}
+
+.toss-suspended-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-md);
+  padding: 10px 12px;
+  border-radius: var(--radius-md);
+  border: 1px solid rgba(239, 68, 68, 0.22);
+  background: rgba(20, 20, 20, 0.7);
+}
+
+.toss-suspended-main {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.toss-suspended-name {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.toss-suspended-reason {
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.toss-suspended-meta {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 2px;
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.toss-suspended-restart-btn {
+  border: 1px solid rgba(245, 158, 11, 0.5);
+  background: rgba(245, 158, 11, 0.12);
+  color: #FBBF24;
+  border-radius: var(--radius-sm);
+  padding: 6px 10px;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all var(--duration-fast) var(--easing-default);
+}
+
+.toss-suspended-restart-btn:hover:not(:disabled) {
+  background: rgba(245, 158, 11, 0.2);
+}
+
+.toss-suspended-restart-btn:disabled {
+  opacity: 0.5;
+  cursor: wait;
+}
+
 .toss-toolbar {
   display: flex;
   gap: var(--space-sm);
@@ -1055,6 +1150,15 @@ body {
 
   .toss-risk-overview {
     grid-template-columns: 1fr;
+  }
+
+  .toss-suspended-item {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+
+  .toss-suspended-meta {
+    align-items: flex-start;
   }
 }
 

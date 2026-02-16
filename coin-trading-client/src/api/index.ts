@@ -84,12 +84,24 @@ export interface DashboardData {
   currentDateStr: string;
   requestDate: string;  // YYYY-MM-DD format
   activeStrategies: StrategyInfo[];
+  suspendedStrategies: SuspendedStrategyInfo[];
 }
 
 export interface StrategyInfo {
   name: string;
   description: string;
   code: string;
+}
+
+export interface SuspendedStrategyInfo {
+  name: string;
+  code: string;
+  reason: string;
+  consecutiveLosses: number;
+  dailyPnl: number;
+  dailyLossPercent?: number | null;
+  actionType: 'VOLUME_SURGE' | 'MEME_SCALPER' | 'MAIN_TRADING';
+  market?: string | null;
 }
 
 export interface SyncResult {
@@ -396,6 +408,9 @@ export const systemControlApi = {
 
   resetMemeScalperCircuitBreaker: (): Promise<SystemControlResult> =>
     api.post('/meme-scalper/reset').then(res => normalizeSystemControlResult(res.data)),
+
+  resetMainTradingCircuitBreaker: (market: string): Promise<SystemControlResult> =>
+    api.post(`/trading/circuit-breaker/reset/${encodeURIComponent(market)}`).then(res => normalizeSystemControlResult(res.data)),
 
   // Kimchi Premium
   refreshExchangeRate: (): Promise<SystemControlResult> =>

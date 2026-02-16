@@ -14,6 +14,7 @@ import com.ant.cointrading.memescalper.MemeScalperEngine
 import com.ant.cointrading.repository.DcaPositionRepository
 import com.ant.cointrading.repository.MemeScalperTradeRepository
 import com.ant.cointrading.repository.VolumeSurgeTradeRepository
+import com.ant.cointrading.risk.CircuitBreaker
 import com.ant.cointrading.util.apiFailure
 import com.ant.cointrading.volumesurge.VolumeSurgeEngine
 import org.springframework.web.bind.annotation.GetMapping
@@ -42,7 +43,8 @@ class DashboardController(
     private val dcaEngine: DcaEngine,
     private val memeScalperEngine: MemeScalperEngine,
     private val volumeSurgeEngine: VolumeSurgeEngine,
-    private val activePositionManager: ActivePositionManager
+    private val activePositionManager: ActivePositionManager,
+    private val circuitBreaker: CircuitBreaker
 ) {
     private val log = LoggerFactory.getLogger(javaClass)
 
@@ -136,7 +138,8 @@ class DashboardController(
             totalStats = totalStats,
             currentDateStr = currentDateStr,
             requestDate = requestDate,
-            activeStrategies = buildActiveStrategies()
+            activeStrategies = buildActiveStrategies(),
+            suspendedStrategies = buildSuspendedStrategies()
         )
     }
 
@@ -494,6 +497,74 @@ class DashboardController(
         }
     }
 
+    private fun buildSuspendedStrategies(): List<SuspendedStrategyInfo> {
+        val statuses = buildList {
+            if (volumeSurgeProperties.enabled) {
+                add(Triple(STRATEGY_VOLUME_SURGE, "volumesurge", volumeSurgeEngine.getStatus()))
+            }
+            if (memeScalperProperties.enabled) {
+                add(Triple(STRATEGY_MEME_SCALPER, "memescalper", memeScalperEngine.getStatus()))
+            }
+        }
+
+        val strategySuspended = statuses.mapNotNull { (name, code, status) ->
+            val canTrade = status["canTrade"] as? Boolean ?: true
+            val consecutiveLosses = (status["consecutiveLosses"] as? Number)?.toInt() ?: 0
+            val dailyPnl = (status["dailyPnl"] as? Number)?.toDouble() ?: 0.0
+
+            if (canTrade || consecutiveLosses <= 0) {
+                null
+            } else {
+                SuspendedStrategyInfo(
+                    name = name,
+                    code = code,
+                    reason = "연속 손실 ${consecutiveLosses}회로 중단",
+                    consecutiveLosses = consecutiveLosses,
+                    dailyPnl = dailyPnl,
+                    dailyLossPercent = null,
+                    actionType = if (code == "volumesurge") "VOLUME_SURGE" else "MEME_SCALPER",
+                    market = null
+                )
+            }
+        }
+
+        return strategySuspended + buildMainTradingSuspendedStrategies()
+    }
+
+    private fun buildMainTradingSuspendedStrategies(): List<SuspendedStrategyInfo> {
+        if (!tradingProperties.enabled) {
+            return emptyList()
+        }
+
+        val status = circuitBreaker.getStatus()
+        val marketStates = status["marketStates"] as? Map<*, *> ?: return emptyList()
+
+        return marketStates.mapNotNull { (marketKey, rawState) ->
+            val market = marketKey as? String ?: return@mapNotNull null
+            val state = rawState as? Map<*, *> ?: return@mapNotNull null
+
+            val isOpen = state["isOpen"] as? Boolean ?: false
+            val consecutiveLosses = (state["consecutiveLosses"] as? Number)?.toInt() ?: 0
+            if (!isOpen || consecutiveLosses <= 0) {
+                return@mapNotNull null
+            }
+
+            val dailyLossPercent = (state["dailyLossPercent"] as? Number)?.toDouble()
+            val reason = state["reason"] as? String ?: "연속 손실 ${consecutiveLosses}회로 중단"
+
+            SuspendedStrategyInfo(
+                name = "$STRATEGY_MEAN_REVERSION ($market)",
+                code = "meanreversion",
+                reason = reason,
+                consecutiveLosses = consecutiveLosses,
+                dailyPnl = 0.0,
+                dailyLossPercent = dailyLossPercent,
+                actionType = "MAIN_TRADING",
+                market = market
+            )
+        }
+    }
+
     private fun isWithinRange(time: Instant?, start: Instant, end: Instant): Boolean {
         return time != null && time.isAfter(start) && time.isBefore(end)
     }
@@ -545,13 +616,25 @@ data class DashboardResponse(
     val totalStats: StatsInfo,
     val currentDateStr: String,
     val requestDate: String,  // YYYY-MM-DD format
-    val activeStrategies: List<StrategyInfo> = emptyList()
+    val activeStrategies: List<StrategyInfo> = emptyList(),
+    val suspendedStrategies: List<SuspendedStrategyInfo> = emptyList()
 )
 
 data class StrategyInfo(
     val name: String,           // 전략 이름 (예: "Meme Scalper")
     val description: String,    // 설명 (예: "단타 매매")
     val code: String            // 코드 (CSS class용)
+)
+
+data class SuspendedStrategyInfo(
+    val name: String,
+    val code: String,
+    val reason: String,
+    val consecutiveLosses: Int,
+    val dailyPnl: Double,
+    val dailyLossPercent: Double?,
+    val actionType: String,
+    val market: String?
 )
 
 data class CoinAsset(

@@ -8,6 +8,7 @@ import {
   type FundingStatus,
   type PositionInfo,
   type RiskThrottleStatus,
+  type SuspendedStrategyInfo,
   type StrategyTradingAmount,
   type SyncResult,
   type SystemControlResult,
@@ -304,6 +305,8 @@ export default function Dashboard() {
     };
   }, [data]);
 
+  const suspendedStrategies: SuspendedStrategyInfo[] = data?.suspendedStrategies ?? [];
+
   const executeSystemAction = async (
     actionName: string,
     apiCall: () => Promise<ActionResponse>,
@@ -464,6 +467,57 @@ export default function Dashboard() {
           return extractActionMessage(result);
         },
         refreshOpportunities: true,
+      }
+    );
+  };
+
+  const getSuspendedActionName = (strategy: SuspendedStrategyInfo): string =>
+    `restart-${strategy.actionType}-${strategy.market ?? strategy.code}`;
+
+  const handleRestartSuspendedStrategy = async (strategy: SuspendedStrategyInfo) => {
+    const actionName = getSuspendedActionName(strategy);
+    const confirmTitle = `${strategy.name} 재시작`;
+    const confirmDescription = '연속 손실 카운터를 즉시 리셋하고 전략을 다시 활성화합니다.';
+
+    if (strategy.actionType === 'MAIN_TRADING' && strategy.market) {
+      await executeSystemAction(
+        actionName,
+        () => systemControlApi.resetMainTradingCircuitBreaker(strategy.market as string),
+        {
+          confirm: {
+            title: confirmTitle,
+            description: confirmDescription,
+            confirmLabel: '재시작',
+          },
+        }
+      );
+      return;
+    }
+
+    if (strategy.actionType === 'VOLUME_SURGE') {
+      await executeSystemAction(
+        actionName,
+        () => systemControlApi.resetVolumeSurgeCircuitBreaker(),
+        {
+          confirm: {
+            title: confirmTitle,
+            description: confirmDescription,
+            confirmLabel: '재시작',
+          },
+        }
+      );
+      return;
+    }
+
+    await executeSystemAction(
+      actionName,
+      () => systemControlApi.resetMemeScalperCircuitBreaker(),
+      {
+        confirm: {
+          title: confirmTitle,
+          description: confirmDescription,
+          confirmLabel: '재시작',
+        },
       }
     );
   };
@@ -874,6 +928,49 @@ export default function Dashboard() {
             <strong className="metric-value">{riskSummary.losingExposure.toLocaleString('ko-KR')}원</strong>
           </div>
         </section>
+
+        {suspendedStrategies.length > 0 && (
+          <section className="toss-suspended-section">
+            <div className="toss-suspended-header">
+              <h2 className="toss-suspended-title">연속 손실로 중단된 전략</h2>
+              <span className="toss-suspended-count">{suspendedStrategies.length}개</span>
+            </div>
+            <div className="toss-suspended-list">
+              {suspendedStrategies.map((strategy) => (
+                <div className="toss-suspended-item" key={`${strategy.code}-${strategy.name}`}>
+                  <div className="toss-suspended-main">
+                    <span className="toss-suspended-name">{strategy.name}</span>
+                    <span className="toss-suspended-reason">{strategy.reason}</span>
+                  </div>
+                  <div className="toss-suspended-meta">
+                    <span>연속 손실 {strategy.consecutiveLosses}회</span>
+                    {strategy.dailyPnl !== 0 ? (
+                      <span>일일 손익 {strategy.dailyPnl.toLocaleString('ko-KR')}원</span>
+                    ) : (
+                      strategy.dailyLossPercent != null && (
+                        <span>일일 손실 {strategy.dailyLossPercent.toFixed(2)}%</span>
+                      )
+                    )}
+                  </div>
+                  {(() => {
+                    const actionName = getSuspendedActionName(strategy);
+                    const restarting = isActionExecuting(actionName);
+                    return (
+                  <button
+                    className="toss-suspended-restart-btn"
+                    type="button"
+                    onClick={() => void handleRestartSuspendedStrategy(strategy)}
+                    disabled={hasExecutingAction && !restarting}
+                  >
+                    {restarting ? '재시작 중...' : '재시작'}
+                  </button>
+                    );
+                  })()}
+                </div>
+              ))}
+            </div>
+          </section>
+        )}
 
         <div className="toss-main-grid">
           <div className="toss-left-column">
