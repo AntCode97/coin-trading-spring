@@ -738,18 +738,18 @@ export default function Dashboard() {
                     type="button"
                     onClick={() => void executeSystemAction('vs-reflection', () => systemControlApi.runVolumeSurgeReflection())}
                     disabled={isActionExecuting('vs-reflection')}
-                    title="전일 Volume Surge 트레이드 회고를 수동 실행합니다"
+                    title="Volume Surge 일일 회고를 수동 실행합니다"
                   >
-                    {isActionExecuting('vs-reflection') ? '회고 중...' : '전일 거래량 급등 회고 실행'}
+                    {isActionExecuting('vs-reflection') ? '회고 중...' : 'Volume Surge 일일 회고'}
                   </button>
                   <button
                     className="control-btn"
                     type="button"
                     onClick={() => void executeSystemAction('ms-reflection', () => systemControlApi.runMemeScalperReflection())}
                     disabled={isActionExecuting('ms-reflection')}
-                    title="전일 Meme Scalper 트레이드 회고를 수동 실행합니다"
+                    title="Meme Scalper 일일 회고를 수동 실행합니다"
                   >
-                    {isActionExecuting('ms-reflection') ? '회고 중...' : '전일 단타 매매 회고 실행'}
+                    {isActionExecuting('ms-reflection') ? '회고 중...' : 'Meme Scalper 일일 회고'}
                   </button>
                 </div>
                 <p className="control-helper-text">매일 01:00 자동 회고 외에도 필요할 때 수동 실행할 수 있습니다.</p>
