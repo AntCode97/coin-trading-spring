@@ -95,6 +95,10 @@ interface VolumeSurgeTradeRepository : JpaRepository<VolumeSurgeTradeEntity, Lon
     """)
     fun avgHoldingMinutesBetween(start: Instant, end: Instant): Double?
 
+    /** 특정 기간 내 청산된 트레이드 조회 (실패 패턴 리포트용) */
+    @Query("SELECT t FROM VolumeSurgeTradeEntity t WHERE t.status = 'CLOSED' AND t.createdAt BETWEEN :start AND :end")
+    fun findClosedBetween(start: Instant, end: Instant): List<VolumeSurgeTradeEntity>
+
     /** 회고 안된 트레이드 조회 */
     @Query("SELECT t FROM VolumeSurgeTradeEntity t WHERE t.status = 'CLOSED' AND t.reflectionNotes IS NULL ORDER BY t.createdAt DESC")
     fun findUnreflectedTrades(): List<VolumeSurgeTradeEntity>

@@ -76,6 +76,8 @@ class VolumeSurgeEngine(
     private val closeRecoveryQueueService: CloseRecoveryQueueService,
     private val balanceReservationService: BalanceReservationService,
     private val tradingAmountService: TradingAmountService,
+    private val tradeFailureTagger: TradeFailureTagger,
+    private val patternFailureTracker: PatternFailureTracker,
     circuitBreakerFactory: SimpleCircuitBreakerFactory
 ) {
     private val log = LoggerFactory.getLogger(javaClass)
@@ -346,6 +348,20 @@ class VolumeSurgeEngine(
         market: String,
         analysis: VolumeSurgeAnalysis
     ): Boolean {
+        // 패턴 피드백 루프: 연속 실패 패턴 차단 확인
+        val (blocked, reason) = patternFailureTracker.checkEntryBlocked(
+            rsi = analysis.rsi,
+            macdSignal = analysis.macdSignal,
+            bbPosition = analysis.bollingerPosition,
+            volumeRatio = analysis.volumeRatio,
+            confluenceScore = analysis.confluenceScore
+        )
+        if (blocked) {
+            log.info("[$market] 패턴 차단: $reason")
+            markAlertProcessed(alert, "REJECTED", reason ?: "패턴 차단")
+            return false
+        }
+
         if (shouldEnter(analysis)) {
             return true
         }
@@ -1070,6 +1086,9 @@ class VolumeSurgeEngine(
         position.status = "CLOSED"
 
         tradeRepository.save(position)
+
+        // 실패 패턴 태깅 (손실 거래 자동 분류, 수익 거래 카운터 리셋)
+        tradeFailureTagger.tagIfFailed(position)
 
         // 트레일링 추적 제거
         highestPrices.remove(positionId)

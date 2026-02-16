@@ -34,7 +34,8 @@ class VolumeSurgeReflector(
     private val keyValueService: KeyValueService,
     private val slackNotifier: SlackNotifier,
     private val reflectorTools: VolumeSurgeReflectorTools,
-    private val slackTools: SlackTools
+    private val slackTools: SlackTools,
+    private val patternFailureTracker: PatternFailureTracker
 ) {
     private val log = LoggerFactory.getLogger(javaClass)
 
@@ -174,6 +175,7 @@ class VolumeSurgeReflector(
         val successCases = summarizeTradeCases(trades, isSuccess = true)
         val failureCases = summarizeTradeCases(trades, isSuccess = false)
         val kellyAnalysis = buildKellyAnalysis(stats, trades)
+        val failurePatternAnalysis = buildFailurePatternAnalysis(trades)
 
         return """
             오늘 날짜: ${stats.date}
@@ -193,6 +195,7 @@ class VolumeSurgeReflector(
 
             === 실패 케이스 (최대 5건) ===
             $failureCases
+            $failurePatternAnalysis
 
             === 분석 요청 ===
             1. Kelly Criterion 상태 분석
@@ -201,6 +204,7 @@ class VolumeSurgeReflector(
                - 진입 조건 강화 (컨플루언스 최소 ${properties.minConfluenceScore}점)
                - 거래량 비율 높이기 (현재 ${properties.minVolumeRatio}x)
             3. R:R 비율 개선 제안 (현재 ${properties.takeProfitPercent / kotlin.math.abs(properties.stopLossPercent)}:1)
+            4. 실패 패턴 분석: 차단된 패턴이 적절한지, 차단 정책 조정이 필요한지 검토
 
             위 데이터를 분석하고 도구를 사용하여:
             1. getTodayStats로 통계 확인
@@ -208,6 +212,61 @@ class VolumeSurgeReflector(
             3. 패턴 분석 후 saveReflection으로 회고 저장
             4. 필요시 suggestParameterChange로 파라미터 변경 제안
         """.trimIndent()
+    }
+
+    private fun buildFailurePatternAnalysis(trades: List<VolumeSurgeTradeEntity>): String {
+        val taggedTrades = trades.filter { it.failurePattern != null }
+        if (taggedTrades.isEmpty()) {
+            val consecutiveFailures = patternFailureTracker.getConsecutiveFailures()
+            val suspensions = patternFailureTracker.getSuspensionStatus()
+            if (consecutiveFailures.isEmpty() && suspensions.isEmpty()) return ""
+
+            val sb = StringBuilder("\n=== 실패 패턴 피드백 ===\n")
+            if (consecutiveFailures.isNotEmpty()) {
+                sb.appendLine("연속 실패 현황:")
+                consecutiveFailures.forEach { (pattern, count) ->
+                    val label = runCatching { FailurePattern.valueOf(pattern) }.getOrNull()?.label ?: pattern
+                    sb.appendLine("  - $label: ${count}연패")
+                }
+            }
+            if (suspensions.isNotEmpty()) {
+                sb.appendLine("차단 패턴:")
+                suspensions.forEach { (_, info) ->
+                    val label = runCatching { FailurePattern.valueOf(info.pattern) }.getOrNull()?.label ?: info.pattern
+                    sb.appendLine("  - $label: ${info.consecutiveFailures}연패 (해제: ${info.suspendedUntil})")
+                }
+            }
+            return sb.toString()
+        }
+
+        val sb = StringBuilder("\n=== 실패 패턴 피드백 ===\n")
+        sb.appendLine("오늘 태깅된 실패: ${taggedTrades.size}건")
+
+        taggedTrades.groupBy { it.failurePattern }.forEach { (pattern, patternTrades) ->
+            val label = runCatching { FailurePattern.valueOf(pattern!!) }.getOrNull()?.label ?: pattern
+            val avgPnl = patternTrades.mapNotNull { it.pnlPercent }.average()
+            sb.appendLine("  - $label: ${patternTrades.size}건 (평균 ${String.format("%.2f", avgPnl)}%)")
+        }
+
+        val consecutiveFailures = patternFailureTracker.getConsecutiveFailures().filter { it.value > 0 }
+        if (consecutiveFailures.isNotEmpty()) {
+            sb.appendLine("연속 실패 현황:")
+            consecutiveFailures.forEach { (pattern, count) ->
+                val label = runCatching { FailurePattern.valueOf(pattern) }.getOrNull()?.label ?: pattern
+                sb.appendLine("  - $label: ${count}연패")
+            }
+        }
+
+        val suspensions = patternFailureTracker.getSuspensionStatus()
+        if (suspensions.isNotEmpty()) {
+            sb.appendLine("현재 차단 패턴:")
+            suspensions.forEach { (_, info) ->
+                val label = runCatching { FailurePattern.valueOf(info.pattern) }.getOrNull()?.label ?: info.pattern
+                sb.appendLine("  - $label: ${info.consecutiveFailures}연패 (해제: ${info.suspendedUntil})")
+            }
+        }
+
+        return sb.toString()
     }
 
     private fun summarizeTradeCases(

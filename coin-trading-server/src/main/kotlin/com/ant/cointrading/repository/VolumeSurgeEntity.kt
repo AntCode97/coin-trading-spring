@@ -181,6 +181,16 @@ class VolumeSurgeTradeEntity(
     @Column(columnDefinition = "TEXT")
     var lessonLearned: String? = null,
 
+    // === 실패 패턴 피드백 ===
+
+    /** 실패 패턴 분류 (STOP_LOSS 청산 시 자동 태깅) */
+    @Column(length = 50)
+    var failurePattern: String? = null,
+
+    /** 실패 태그 상세 (JSON: 진입 시점 지표 조합) */
+    @Column(length = 500)
+    var failureTag: String? = null,
+
     // === 트레일링 스탑 관련 ===
 
     /** 트레일링 활성화 여부 */
