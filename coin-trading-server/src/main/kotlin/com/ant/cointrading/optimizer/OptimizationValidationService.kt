@@ -3,6 +3,7 @@ package com.ant.cointrading.optimizer
 import com.ant.cointrading.backtesting.WalkForwardAnalysisResult
 import com.ant.cointrading.backtesting.WalkForwardOptimizer
 import com.ant.cointrading.config.LlmProperties
+import com.ant.cointrading.config.TradingProperties
 import org.slf4j.LoggerFactory
 import org.springframework.stereotype.Component
 import java.time.Instant
@@ -32,7 +33,8 @@ data class OptimizationGateStatus(
 @Component
 class OptimizationValidationService(
     private val walkForwardOptimizer: WalkForwardOptimizer,
-    private val llmProperties: LlmProperties
+    private val llmProperties: LlmProperties,
+    private val tradingProperties: TradingProperties
 ) {
     private val log = LoggerFactory.getLogger(javaClass)
 
@@ -63,8 +65,10 @@ class OptimizationValidationService(
     private fun evaluateGate(market: String): OptimizationGateStatus {
         val validation = llmProperties.validation
         val slippageRate = validation.executionSlippageBps / 10_000.0
+        val strategyName = tradingProperties.strategy.type.name
         val analysis = walkForwardOptimizer.runWalkForwardAnalysis(
             market = market,
+            strategyName = strategyName,
             slippageRate = slippageRate
         )
         return buildStatus(analysis, validation.executionSlippageBps, cached = false)

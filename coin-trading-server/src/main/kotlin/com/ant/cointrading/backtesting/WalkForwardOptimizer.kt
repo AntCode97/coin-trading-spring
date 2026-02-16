@@ -47,7 +47,7 @@ class WalkForwardOptimizer(
     companion object {
         const val MIN_DATA_POINTS = 100
         const val TRAIN_PERIOD_MONTHS = 6  // 학습 기간: 6개월
-        const val TEST_PERIOD_DAYS = 7      // 테스트 기간: 7일
+        const val TEST_PERIOD_DAYS = 21
         const val STEP_DAYS = 7             // 스텝: 7일
     }
 
@@ -360,7 +360,8 @@ class WalkForwardOptimizer(
         parameterGrid: Map<String, List<*>>? = null,
         slippageRate: Double = 0.0
     ): WalkForwardAnalysisResult {
-        log.info("=== Walk-Forward Analysis 시작 ($market) ===")
+        val strategyMode = resolveStrategyMode(strategyName)
+        log.info("=== Walk-Forward Analysis 시작 ($market, $strategyMode) ===")
 
         // 1. 전체 데이터 로드
         val endDate = LocalDate.now()
@@ -383,11 +384,7 @@ class WalkForwardOptimizer(
         val candles = historyEntities.map { it.toCandle() }
 
         // 2. 파라미터 그리드 설정 (기본값)
-        val grid = parameterGrid ?: mapOf(
-            "bollingerPeriod" to listOf(20, 30, 50),
-            "bollingerStdDev" to listOf(1.5, 2.0, 2.5),
-            "minBreakoutVolumeRatio" to listOf(1.2, 1.5, 2.0)
-        )
+        val grid = parameterGrid ?: defaultParameterGrid(strategyMode)
 
         // 3. Walk-Forward 윈도우 생성
         val windows = createWalkForwardWindows(candles)
@@ -409,6 +406,7 @@ class WalkForwardOptimizer(
                 // In-sample 최적화
                 val inSampleResult = optimizeInSample(
                     trainCandles = window.trainCandles,
+                    strategyMode = strategyMode,
                     parameterGrid = grid,
                     slippageRate = slippageRate
                 )
@@ -416,6 +414,7 @@ class WalkForwardOptimizer(
                 // Out-of-sample 테스트
                 val outOfSampleResult = testOutOfSample(
                     testCandles = window.testCandles,
+                    strategyMode = strategyMode,
                     bestParams = inSampleResult.bestParams,
                     slippageRate = slippageRate
                 )
@@ -466,7 +465,7 @@ class WalkForwardOptimizer(
 
         val result = WalkForwardAnalysisResult(
             market = market,
-            strategyName = strategyName,
+            strategyName = strategyMode,
             totalWindows = windows.size,
             validWindows = validWindows,
             avgInSampleSharpe = avgInSampleSharpe,
@@ -550,6 +549,7 @@ class WalkForwardOptimizer(
      */
     private fun optimizeInSample(
         trainCandles: List<Candle>,
+        strategyMode: String,
         parameterGrid: Map<String, List<*>>,
         slippageRate: Double
     ): InSampleOptimizationResult {
@@ -560,12 +560,7 @@ class WalkForwardOptimizer(
 
         for (params in combinations) {
             try {
-                val strategy = DynamicBreakoutStrategy(
-                    bollingerPeriod = params["bollingerPeriod"] as Int,
-                    bollingerStdDev = params["bollingerStdDev"] as Double,
-                    minBreakoutVolumeRatio = params["minBreakoutVolumeRatio"] as Double,
-                    positionSizeKrw = tradingProperties.orderAmountKrw.toDouble()
-                )
+                val strategy = createStrategy(strategyMode, params)
 
                 val result = simulator.simulate(
                     strategy = strategy,
@@ -595,15 +590,11 @@ class WalkForwardOptimizer(
      */
     private fun testOutOfSample(
         testCandles: List<Candle>,
+        strategyMode: String,
         bestParams: Map<String, Any>,
         slippageRate: Double
     ): OutOfSampleTestResult {
-        val strategy = DynamicBreakoutStrategy(
-            bollingerPeriod = bestParams["bollingerPeriod"] as Int,
-            bollingerStdDev = bestParams["bollingerStdDev"] as Double,
-            minBreakoutVolumeRatio = bestParams["minBreakoutVolumeRatio"] as Double,
-            positionSizeKrw = tradingProperties.orderAmountKrw.toDouble()
-        )
+        val strategy = createStrategy(strategyMode, bestParams)
 
         val result = simulator.simulate(
             strategy = strategy,
@@ -631,6 +622,131 @@ class WalkForwardOptimizer(
         val trainCandles: List<Candle>,
         val testCandles: List<Candle>
     )
+
+    private fun resolveStrategyMode(strategyName: String): String {
+        val normalized = strategyName.uppercase()
+        return if (normalized.contains("MEAN_REVERSION")) "MEAN_REVERSION" else "BREAKOUT"
+    }
+
+    private fun defaultParameterGrid(strategyMode: String): Map<String, List<*>> {
+        return if (strategyMode == "MEAN_REVERSION") {
+            mapOf(
+                "bollingerPeriod" to listOf(14, 20, 30),
+                "bollingerStdDev" to listOf(1.6, 1.8, 2.0),
+                "rsiPeriod" to listOf(10, 14),
+                "rsiOversold" to listOf(20, 25, 30, 35),
+                "rsiOverbought" to listOf(65, 70, 75, 80),
+                "minVolumeRatio" to listOf(0.8, 1.0, 1.2)
+            )
+        } else {
+            mapOf(
+                "bollingerPeriod" to listOf(20, 30, 50),
+                "bollingerStdDev" to listOf(1.5, 2.0, 2.5),
+                "minBreakoutVolumeRatio" to listOf(0.8, 1.0, 1.2, 1.5, 2.0)
+            )
+        }
+    }
+
+    private fun createStrategy(strategyMode: String, params: Map<String, Any>): BacktestableStrategy {
+        return if (strategyMode == "MEAN_REVERSION") {
+            DynamicMeanReversionStrategy(
+                bollingerPeriod = (params["bollingerPeriod"] as Number).toInt(),
+                bollingerStdDev = (params["bollingerStdDev"] as Number).toDouble(),
+                rsiPeriod = (params["rsiPeriod"] as Number).toInt(),
+                rsiOversold = (params["rsiOversold"] as Number).toDouble(),
+                rsiOverbought = (params["rsiOverbought"] as Number).toDouble(),
+                minVolumeRatio = (params["minVolumeRatio"] as Number).toDouble(),
+                positionSizeKrw = tradingProperties.orderAmountKrw.toDouble()
+            )
+        } else {
+            DynamicBreakoutStrategy(
+                bollingerPeriod = (params["bollingerPeriod"] as Number).toInt(),
+                bollingerStdDev = (params["bollingerStdDev"] as Number).toDouble(),
+                minBreakoutVolumeRatio = (params["minBreakoutVolumeRatio"] as Number).toDouble(),
+                positionSizeKrw = tradingProperties.orderAmountKrw.toDouble()
+            )
+        }
+    }
+
+    private class DynamicMeanReversionStrategy(
+        private val bollingerPeriod: Int,
+        private val bollingerStdDev: Double,
+        private val rsiPeriod: Int,
+        private val rsiOversold: Double,
+        private val rsiOverbought: Double,
+        private val minVolumeRatio: Double,
+        private val positionSizeKrw: Double
+    ) : BacktestableStrategy {
+
+        override val name: String = "MEAN_REVERSION_DYNAMIC"
+
+        override fun analyzeForBacktest(
+            candles: List<Candle>,
+            currentIndex: Int,
+            initialCapital: Double,
+            currentPrice: java.math.BigDecimal,
+            currentPosition: Double
+        ): BacktestSignal {
+            if (candles.size < bollingerPeriod || currentIndex < bollingerPeriod) {
+                return BacktestSignal(BacktestAction.HOLD, reason = "데이터 부족")
+            }
+
+            val availableCandles = candles.subList(0, currentIndex + 1)
+            val (upperBand, lowerBand, _) = calculateBollingerBands(availableCandles, bollingerPeriod, bollingerStdDev)
+            val currentPriceDouble = currentPrice.toDouble()
+            val volumeRatio = calculateVolumeRatio(availableCandles)
+            val rsi = calculateRsi(availableCandles, rsiPeriod)
+
+            val nearLowerBand = currentPriceDouble <= lowerBand * 1.005
+            val nearUpperBand = currentPriceDouble >= upperBand * 0.995
+
+            return when {
+                currentPosition == 0.0 && nearLowerBand && rsi <= rsiOversold && volumeRatio >= minVolumeRatio -> {
+                    BacktestSignal(
+                        BacktestAction.BUY,
+                        confidence = 75.0,
+                        reason = "MeanReversion 진입 (RSI ${String.format("%.1f", rsi)}, 거래량 ${String.format("%.1f", volumeRatio)}x)"
+                    )
+                }
+                currentPosition > 0 && (nearUpperBand || rsi >= rsiOverbought) -> {
+                    BacktestSignal(
+                        BacktestAction.SELL,
+                        confidence = 75.0,
+                        reason = "MeanReversion 청산 (RSI ${String.format("%.1f", rsi)})"
+                    )
+                }
+                else -> BacktestSignal(BacktestAction.HOLD)
+            }
+        }
+
+        private fun calculateRsi(candles: List<Candle>, period: Int): Double {
+            if (candles.size <= period) {
+                return 50.0
+            }
+
+            val closes = candles.takeLast(period + 1).map { it.close.toDouble() }
+            var gains = 0.0
+            var losses = 0.0
+
+            for (i in 1 until closes.size) {
+                val change = closes[i] - closes[i - 1]
+                if (change > 0) {
+                    gains += change
+                } else {
+                    losses += -change
+                }
+            }
+
+            val avgGain = gains / period
+            val avgLoss = losses / period
+            if (avgLoss == 0.0) {
+                return 100.0
+            }
+
+            val rs = avgGain / avgLoss
+            return 100.0 - (100.0 / (1.0 + rs))
+        }
+    }
 }
 
 /**
