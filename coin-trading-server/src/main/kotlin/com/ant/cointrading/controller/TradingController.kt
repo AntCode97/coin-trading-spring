@@ -3,6 +3,7 @@ package com.ant.cointrading.controller
 import com.ant.cointrading.config.TradingProperties
 import com.ant.cointrading.engine.TradingEngine
 import com.ant.cointrading.model.*
+import com.ant.cointrading.risk.CircuitBreaker
 import com.ant.cointrading.risk.RiskThrottleDecision
 import com.ant.cointrading.risk.RiskThrottleService
 import com.ant.cointrading.risk.RiskManager
@@ -19,6 +20,7 @@ class TradingController(
     private val tradingEngine: TradingEngine,
     private val strategySelector: StrategySelector,
     private val riskManager: RiskManager,
+    private val circuitBreaker: CircuitBreaker,
     private val riskThrottleService: RiskThrottleService,
     private val tradingProperties: TradingProperties
 ) {
@@ -123,6 +125,16 @@ class TradingController(
         "tradingEnabled" to tradingProperties.enabled.toString(),
         "markets" to tradingProperties.markets.joinToString(",")
     )
+
+    @PostMapping("/circuit-breaker/reset/{market}")
+    fun resetCircuitBreaker(@PathVariable market: String): Map<String, Any> {
+        circuitBreaker.resetMarketCircuit(market)
+        return mapOf(
+            "success" to true,
+            "message" to "[$market] 메인 트레이딩 서킷 브레이커를 재시작했습니다.",
+            "data" to mapOf("market" to market)
+        )
+    }
 }
 
 data class StrategyConfigResponse(
