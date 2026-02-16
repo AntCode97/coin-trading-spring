@@ -932,6 +932,111 @@ body {
   color: #FCA5A5;
 }
 
+/* ====== APM (Active Position Manager) ====== */
+
+/* 레짐 배지 */
+.apm-regime-badge {
+  font-size: 10px;
+  font-weight: 600;
+  padding: 2px 6px;
+  border-radius: 4px;
+  letter-spacing: 0.02em;
+}
+.apm-regime-badge.bull { background: rgba(16, 185, 129, 0.15); color: #6EE7B7; }
+.apm-regime-badge.bear { background: rgba(239, 68, 68, 0.15); color: #FCA5A5; }
+.apm-regime-badge.sideways { background: rgba(245, 158, 11, 0.15); color: #FDE68A; }
+.apm-regime-badge.high-volatility { background: rgba(249, 115, 22, 0.15); color: #FDBA74; }
+.apm-regime-badge.regime-shift { animation: apm-pulse 1.5s ease-in-out infinite; }
+
+@keyframes apm-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.5; }
+}
+
+/* 다이버전스 경고 아이콘 */
+.apm-divergence-icon {
+  font-size: 13px;
+  cursor: help;
+}
+.apm-divergence-icon.moderate { color: #FBBF24; }
+.apm-divergence-icon.strong { color: #FCA5A5; }
+
+/* APM 정보 행 */
+.apm-info-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 0;
+  flex-wrap: wrap;
+}
+
+/* APM 액션 태그 */
+.apm-action-tag {
+  font-size: 11px;
+  font-weight: 600;
+  padding: 2px 8px;
+  border-radius: 4px;
+}
+.apm-action-tag.tighten { background: rgba(245, 158, 11, 0.15); color: #FBBF24; }
+.apm-action-tag.break-even { background: rgba(59, 130, 246, 0.15); color: #93C5FD; }
+.apm-action-tag.profit-lock { background: rgba(16, 185, 129, 0.15); color: #6EE7B7; }
+.apm-action-tag.exit { background: rgba(239, 68, 68, 0.2); color: #FCA5A5; animation: apm-pulse 1s ease-in-out infinite; }
+.apm-action-tag.widen { background: rgba(249, 115, 22, 0.15); color: #FDBA74; }
+.apm-action-tag.default { background: rgba(156, 163, 175, 0.15); color: #D1D5DB; }
+
+/* Progressive Stage 태그 */
+.apm-stage-tag {
+  font-size: 10px;
+  font-weight: 700;
+  padding: 2px 6px;
+  border-radius: 3px;
+}
+.apm-stage-tag.break-even { background: rgba(59, 130, 246, 0.2); color: #93C5FD; }
+.apm-stage-tag.profit-lock { background: rgba(16, 185, 129, 0.2); color: #6EE7B7; }
+
+/* 조정된 SL/TP 값 */
+.apm-adjusted-value {
+  font-size: 11px;
+  color: var(--text-secondary);
+  font-family: 'JetBrains Mono', monospace;
+}
+
+/* 컨플루언스 바 */
+.apm-confluence-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 2px 0;
+}
+.apm-confluence-label {
+  font-size: 10px;
+  color: var(--text-secondary);
+  min-width: 50px;
+}
+.apm-confluence-bar {
+  flex: 1;
+  height: 5px;
+  background: var(--bg-tertiary);
+  border-radius: 3px;
+  overflow: hidden;
+  max-width: 120px;
+}
+.apm-confluence-fill {
+  height: 100%;
+  border-radius: 3px;
+  transition: width 0.5s ease;
+}
+.apm-confluence-fill.high { background: #10B981; }
+.apm-confluence-fill.medium { background: #FBBF24; }
+.apm-confluence-fill.low { background: #F97316; }
+.apm-confluence-fill.critical { background: #EF4444; }
+.apm-confluence-value {
+  font-size: 10px;
+  color: var(--text-secondary);
+  font-family: 'JetBrains Mono', monospace;
+  min-width: 55px;
+}
+
 .toss-empty-state.compact {
   padding: var(--space-xl);
 }

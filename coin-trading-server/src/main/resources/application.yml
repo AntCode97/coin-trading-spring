@@ -297,6 +297,34 @@ memescalper:
   min-trading-value-krw: ${MEME_SCALPER_MIN_TRADING_VALUE:1000000000}  # 10억 (저유동성 잡코인 제외)
   max-trading-value-krw: ${MEME_SCALPER_MAX_TRADING_VALUE:50000000000}
 
+# Active Position Manager (능동적 포지션 관리 - TP/SL 동적 조정)
+active-position-manager:
+  enabled: true
+  volume-surge:
+    analyze-interval-seconds: 60
+    regime-shift-exit: true
+    break-even-trigger: 1.0
+    profit-lock-trigger: 3.0
+    profit-lock-min: 1.0
+    confluence-degradation: 30
+    divergence-stop-tighten: 0.5
+  meme-scalper:
+    analyze-interval-seconds: 30
+    regime-shift-exit: false
+    break-even-trigger: 0.5
+    profit-lock-trigger: 1.5
+    profit-lock-min: 0.3
+    confluence-degradation: 20
+    divergence-stop-tighten: 0.3
+  dca:
+    analyze-interval-seconds: 300
+    regime-shift-exit: true
+    break-even-trigger: 3.0
+    profit-lock-trigger: 8.0
+    profit-lock-min: 3.0
+    confluence-degradation: 40
+    divergence-stop-tighten: 1.0
+
 # Actuator
 management:
   endpoints:

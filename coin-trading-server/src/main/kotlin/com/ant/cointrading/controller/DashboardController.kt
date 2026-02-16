@@ -7,6 +7,9 @@ import com.ant.cointrading.config.MemeScalperProperties
 import com.ant.cointrading.config.TradingProperties
 import com.ant.cointrading.config.VolumeSurgeProperties
 import com.ant.cointrading.dca.DcaEngine
+import com.ant.cointrading.engine.ActivePositionManager
+import com.ant.cointrading.engine.ReassessmentAction
+import com.ant.cointrading.indicator.DivergenceType
 import com.ant.cointrading.memescalper.MemeScalperEngine
 import com.ant.cointrading.repository.DcaPositionRepository
 import com.ant.cointrading.repository.MemeScalperTradeRepository
@@ -38,7 +41,8 @@ class DashboardController(
     private val dcaPositionRepository: DcaPositionRepository,
     private val dcaEngine: DcaEngine,
     private val memeScalperEngine: MemeScalperEngine,
-    private val volumeSurgeEngine: VolumeSurgeEngine
+    private val volumeSurgeEngine: VolumeSurgeEngine,
+    private val activePositionManager: ActivePositionManager
 ) {
     private val log = LoggerFactory.getLogger(javaClass)
 
@@ -153,6 +157,9 @@ class DashboardController(
 
         // Meme Scalper 포지션
         memePositions.forEach { trade ->
+            val cached = activePositionManager.getCachedAnalysis(trade.market)
+            val lastAction = activePositionManager.getLastReassessment(trade.market, "MEME_SCALPER")
+
             positions.add(
                 buildPositionInfo(
                     market = trade.market,
@@ -161,7 +168,17 @@ class DashboardController(
                     quantity = trade.quantity,
                     entryTime = trade.entryTime,
                     peakPrice = trade.peakPrice,
-                    priceMap = priceMap
+                    priceMap = priceMap,
+                    regime = cached?.regime?.regime?.name,
+                    entryRegime = trade.regime,
+                    lastApmAction = lastAction?.action?.name,
+                    lastApmReason = lastAction?.reason,
+                    divergenceWarning = cached?.divergence?.let {
+                        if (it.type == DivergenceType.BEARISH && it.hasDivergence) "${it.type}_${it.strength}" else null
+                    },
+                    adjustedStopLoss = trade.appliedStopLossPercent,
+                    adjustedTakeProfit = trade.appliedTakeProfitPercent,
+                    progressiveStage = resolveProgressiveStage(trade.appliedStopLossPercent, lastAction)
                 )
             )
         }
@@ -170,6 +187,8 @@ class DashboardController(
         volumePositions.forEach { trade ->
             val takeProfitPrice = trade.entryPrice * (1 + (trade.appliedTakeProfitPercent ?: 6.0) / 100)
             val stopLossPrice = trade.entryPrice * (1 - (trade.appliedStopLossPercent ?: 3.0) / 100)
+            val cached = activePositionManager.getCachedAnalysis(trade.market)
+            val lastAction = activePositionManager.getLastReassessment(trade.market, "VOLUME_SURGE")
 
             positions.add(
                 buildPositionInfo(
@@ -180,13 +199,28 @@ class DashboardController(
                     entryTime = trade.entryTime,
                     takeProfitPrice = takeProfitPrice,
                     stopLossPrice = stopLossPrice,
-                    priceMap = priceMap
+                    priceMap = priceMap,
+                    regime = cached?.regime?.regime?.name,
+                    entryRegime = trade.regime,
+                    confluenceScore = cached?.confluenceScore,
+                    entryConfluenceScore = trade.confluenceScore,
+                    lastApmAction = lastAction?.action?.name,
+                    lastApmReason = lastAction?.reason,
+                    divergenceWarning = cached?.divergence?.let {
+                        if (it.type == DivergenceType.BEARISH && it.hasDivergence) "${it.type}_${it.strength}" else null
+                    },
+                    adjustedStopLoss = trade.appliedStopLossPercent,
+                    adjustedTakeProfit = trade.appliedTakeProfitPercent,
+                    progressiveStage = resolveProgressiveStage(trade.appliedStopLossPercent, lastAction)
                 )
             )
         }
 
         // DCA 포지션
         dcaPositions.forEach { pos ->
+            val cached = activePositionManager.getCachedAnalysis(pos.market)
+            val lastAction = activePositionManager.getLastReassessment(pos.market, "DCA")
+
             positions.add(
                 buildPositionInfo(
                     market = pos.market,
@@ -196,7 +230,15 @@ class DashboardController(
                     entryTime = pos.createdAt,
                     takeProfitPrice = pos.averagePrice * (1 + pos.takeProfitPercent / 100),
                     stopLossPrice = pos.averagePrice * (1 + pos.stopLossPercent / 100),
-                    priceMap = priceMap
+                    priceMap = priceMap,
+                    regime = cached?.regime?.regime?.name,
+                    entryRegime = pos.entryRegime,
+                    lastApmAction = lastAction?.action?.name,
+                    lastApmReason = lastAction?.reason,
+                    divergenceWarning = cached?.divergence?.let {
+                        if (it.type == DivergenceType.BEARISH && it.hasDivergence) "${it.type}_${it.strength}" else null
+                    },
+                    progressiveStage = resolveProgressiveStage(null, lastAction)
                 )
             )
         }
@@ -339,7 +381,17 @@ class DashboardController(
         takeProfitPrice: Double = 0.0,
         stopLossPrice: Double = 0.0,
         peakPrice: Double? = null,
-        priceMap: Map<String, Double> = emptyMap()
+        priceMap: Map<String, Double> = emptyMap(),
+        regime: String? = null,
+        entryRegime: String? = null,
+        confluenceScore: Int? = null,
+        entryConfluenceScore: Int? = null,
+        lastApmAction: String? = null,
+        lastApmReason: String? = null,
+        divergenceWarning: String? = null,
+        progressiveStage: String? = null,
+        adjustedStopLoss: Double? = null,
+        adjustedTakeProfit: Double? = null
     ): PositionInfo {
         val currentPrice = priceMap[market] ?: entryPrice
         val pnl = (currentPrice - entryPrice) * quantity
@@ -356,8 +408,29 @@ class DashboardController(
             takeProfitPrice = takeProfitPrice,
             stopLossPrice = stopLossPrice,
             entryTime = entryTime.toString(),
-            peakPrice = peakPrice
+            peakPrice = peakPrice,
+            regime = regime,
+            entryRegime = entryRegime,
+            confluenceScore = confluenceScore,
+            entryConfluenceScore = entryConfluenceScore,
+            lastApmAction = lastApmAction,
+            lastApmReason = lastApmReason,
+            divergenceWarning = divergenceWarning,
+            progressiveStage = progressiveStage,
+            adjustedStopLoss = adjustedStopLoss,
+            adjustedTakeProfit = adjustedTakeProfit
         )
+    }
+
+    private fun resolveProgressiveStage(
+        appliedStopLossPercent: Double?,
+        lastAction: com.ant.cointrading.engine.PositionReassessment?
+    ): String {
+        return when (lastAction?.action) {
+            ReassessmentAction.PROFIT_LOCK -> "PROFIT_LOCK"
+            ReassessmentAction.BREAK_EVEN_STOP -> "BREAK_EVEN"
+            else -> if (appliedStopLossPercent != null && appliedStopLossPercent <= 0.1) "BREAK_EVEN" else "NONE"
+        }
     }
 
     private fun buildClosedTradeInfo(
@@ -503,7 +576,18 @@ data class PositionInfo(
     val takeProfitPrice: Double,
     val stopLossPrice: Double,
     val entryTime: String,
-    val peakPrice: Double?
+    val peakPrice: Double?,
+    // APM 필드 (nullable - APM 미적용 시 null)
+    val regime: String? = null,
+    val entryRegime: String? = null,
+    val confluenceScore: Int? = null,
+    val entryConfluenceScore: Int? = null,
+    val lastApmAction: String? = null,
+    val lastApmReason: String? = null,
+    val divergenceWarning: String? = null,
+    val progressiveStage: String? = null,
+    val adjustedStopLoss: Double? = null,
+    val adjustedTakeProfit: Double? = null
 )
 
 data class ClosedTradeInfo(

@@ -34,6 +34,17 @@ export interface PositionInfo {
   stopLossPrice: number;
   entryTime: string;
   peakPrice?: number;
+  // APM 필드
+  regime?: string;
+  entryRegime?: string;
+  confluenceScore?: number;
+  entryConfluenceScore?: number;
+  lastApmAction?: string;
+  lastApmReason?: string;
+  divergenceWarning?: string;
+  progressiveStage?: string;
+  adjustedStopLoss?: number;
+  adjustedTakeProfit?: number;
 }
 
 export interface ClosedTradeInfo {

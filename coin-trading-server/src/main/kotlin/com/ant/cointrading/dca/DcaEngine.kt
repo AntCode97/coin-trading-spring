@@ -403,6 +403,15 @@ class DcaEngine(
     private fun setupPostEntryState(market: String, regime: RegimeAnalysis) {
         val cooldownMinutes = tradingProperties.strategy.dcaInterval / 60_000
         cooldowns[market] = Instant.now().plus(cooldownMinutes, ChronoUnit.MINUTES)
+
+        // 진입 시 레짐 저장 (ActivePositionManager용)
+        val openPositions = dcaPositionRepository.findByMarketAndStatus(market, "OPEN")
+        openPositions.forEach { pos ->
+            if (pos.entryRegime == "UNKNOWN") {
+                pos.entryRegime = regime.regime.name
+                dcaPositionRepository.save(pos)
+            }
+        }
     }
 
     /**

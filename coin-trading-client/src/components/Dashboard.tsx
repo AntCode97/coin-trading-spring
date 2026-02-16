@@ -942,6 +942,26 @@ export default function Dashboard() {
                             }`}>
                               {position.strategy}
                             </span>
+                            {position.regime && (
+                              <span className={`apm-regime-badge ${
+                                position.regime === 'BULL_TREND' ? 'bull' :
+                                position.regime === 'BEAR_TREND' ? 'bear' :
+                                position.regime === 'SIDEWAYS' ? 'sideways' :
+                                'high-volatility'
+                              } ${position.entryRegime && position.regime !== position.entryRegime ? 'regime-shift' : ''}`}>
+                                {position.entryRegime && position.regime !== position.entryRegime
+                                  ? `${position.entryRegime?.replace('_TREND', '')} → ${position.regime?.replace('_TREND', '')}`
+                                  : position.regime?.replace('_TREND', '')
+                                }
+                              </span>
+                            )}
+                            {position.divergenceWarning && (
+                              <span className={`apm-divergence-icon ${
+                                position.divergenceWarning.includes('STRONG') ? 'strong' : 'moderate'
+                              }`} title={`약세 다이버전스: ${position.divergenceWarning}`}>
+                                &#9888;
+                              </span>
+                            )}
                             {highRisk && (
                               <span className={`toss-risk-chip ${stopLossBreached ? 'danger' : 'warning'}`}>
                                 {stopLossBreached ? '손절선 이탈' : '손실 주의'}
@@ -974,6 +994,65 @@ export default function Dashboard() {
                                 </span>
                               </div>
                             </div>
+
+                            {/* APM 상세 정보 */}
+                            {(position.lastApmAction && position.lastApmAction !== 'HOLD') && (
+                              <div className="apm-info-row">
+                                {position.progressiveStage && position.progressiveStage !== 'NONE' && (
+                                  <span className={`apm-stage-tag ${
+                                    position.progressiveStage === 'PROFIT_LOCK' ? 'profit-lock' : 'break-even'
+                                  }`}>
+                                    {position.progressiveStage === 'PROFIT_LOCK' ? '수익잠금' : '본전방어'}
+                                  </span>
+                                )}
+                                <span className={`apm-action-tag ${
+                                  position.lastApmAction === 'IMMEDIATE_EXIT' ? 'exit' :
+                                  position.lastApmAction === 'TIGHTEN_STOP' ? 'tighten' :
+                                  position.lastApmAction === 'BREAK_EVEN_STOP' ? 'break-even' :
+                                  position.lastApmAction === 'PROFIT_LOCK' ? 'profit-lock' :
+                                  position.lastApmAction === 'WIDEN_STOP' ? 'widen' :
+                                  'default'
+                                }`} title={position.lastApmReason || ''}>
+                                  {position.lastApmAction === 'TIGHTEN_STOP' ? '손절축소' :
+                                   position.lastApmAction === 'BREAK_EVEN_STOP' ? '본전방어' :
+                                   position.lastApmAction === 'PROFIT_LOCK' ? '수익잠금' :
+                                   position.lastApmAction === 'IMMEDIATE_EXIT' ? '긴급청산' :
+                                   position.lastApmAction === 'WIDEN_STOP' ? '손절확대' :
+                                   position.lastApmAction === 'LOWER_TARGET' ? '목표하향' :
+                                   position.lastApmAction}
+                                </span>
+                                {position.adjustedStopLoss != null && (
+                                  <span className="apm-adjusted-value">
+                                    SL: {position.adjustedStopLoss.toFixed(2)}%
+                                  </span>
+                                )}
+                                {position.adjustedTakeProfit != null && (
+                                  <span className="apm-adjusted-value">
+                                    TP: {position.adjustedTakeProfit.toFixed(2)}%
+                                  </span>
+                                )}
+                              </div>
+                            )}
+
+                            {/* 컨플루언스 바 (Volume Surge만) */}
+                            {position.entryConfluenceScore != null && (
+                              <div className="apm-confluence-row">
+                                <span className="apm-confluence-label">컨플루언스</span>
+                                <div className="apm-confluence-bar">
+                                  <div
+                                    className={`apm-confluence-fill ${
+                                      (position.confluenceScore ?? 0) >= 80 ? 'high' :
+                                      (position.confluenceScore ?? 0) >= 60 ? 'medium' :
+                                      (position.confluenceScore ?? 0) >= 40 ? 'low' : 'critical'
+                                    }`}
+                                    style={{ width: `${Math.min(position.confluenceScore ?? 0, 100)}%` }}
+                                  />
+                                </div>
+                                <span className="apm-confluence-value">
+                                  {position.entryConfluenceScore} → {position.confluenceScore ?? '?'}
+                                </span>
+                              </div>
+                            )}
 
                             <div className="toss-position-action">
                               <div className={`toss-pnl-box ${positive ? 'toss-pnl-positive' : 'toss-pnl-negative'} ${highRisk ? 'toss-pnl-danger' : ''}`}>

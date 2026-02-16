@@ -98,6 +98,14 @@ class MemeScalperTradeEntity(
     @Column
     var peakVolume: Double? = null,
 
+    /** 적용된 손절 비율 (%) - ActivePositionManager가 동적 갱신. 0이면 미조정(properties 기본값 사용) */
+    @Column(nullable = false)
+    var appliedStopLossPercent: Double = 0.0,
+
+    /** 적용된 익절 비율 (%) - ActivePositionManager가 동적 갱신. 0이면 미조정(properties 기본값 사용) */
+    @Column(nullable = false)
+    var appliedTakeProfitPercent: Double = 0.0,
+
     // === 상태 관리 ===
 
     /** 포지션 상태 (OPEN/CLOSING/CLOSED/ABANDONED) */

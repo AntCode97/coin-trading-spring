@@ -63,6 +63,10 @@ class DcaPositionEntity(
     @Column
     var stopLossPercent: Double = -3.0,
 
+    /** 진입 시점 시장 레짐 (BULL_TREND/BEAR_TREND/SIDEWAYS/HIGH_VOLATILITY/UNKNOWN) */
+    @Column(nullable = false, length = 30)
+    var entryRegime: String = "UNKNOWN",
+
     /** 포지션 상태 (OPEN/CLOSING/CLOSED/ABANDONED) */
     @Column(nullable = false, length = 20)
     override var status: String = "OPEN",

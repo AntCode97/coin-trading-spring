@@ -796,12 +796,15 @@ class MemeScalperEngine(
     ): String? {
         // 5. 익절 체크 (수수료 0.08% 고려 - 최소 0.1% 이상 수익 시에만)
         // NOTE: 익절 체크가 손절/트레일링보다 우선되어야 함
-        if (pnlPercent >= properties.takeProfitPercent && pnlPercent > MIN_PROFIT_PERCENT) {
+        // ActivePositionManager가 동적 갱신한 개별 TP/SL 우선 적용
+        val effectiveTP = if (position.appliedTakeProfitPercent > 0) position.appliedTakeProfitPercent else properties.takeProfitPercent
+        if (pnlPercent >= effectiveTP && pnlPercent > MIN_PROFIT_PERCENT) {
             return "TAKE_PROFIT"
         }
 
         // 6. 손절 체크 (손절은 최소 보유 시간 이후에만)
-        if (pnlPercent <= properties.stopLossPercent) {
+        val effectiveSL = if (position.appliedStopLossPercent > 0) -position.appliedStopLossPercent else properties.stopLossPercent
+        if (pnlPercent <= effectiveSL) {
             return "STOP_LOSS"
         }
 
