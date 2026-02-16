@@ -9,8 +9,8 @@ import com.ant.cointrading.repository.VolumeSurgeTradeRepository
 import com.ant.cointrading.service.KeyValueService
 import com.ant.cointrading.service.ModelSelector
 import com.ant.cointrading.stats.TradeStatsCalculator
+import com.ant.cointrading.util.DateTimeUtils.dayRange
 import com.ant.cointrading.util.DateTimeUtils.today
-import com.ant.cointrading.util.DateTimeUtils.todayRange
 import jakarta.annotation.PostConstruct
 import org.slf4j.LoggerFactory
 import org.springframework.scheduling.annotation.Scheduled
@@ -41,6 +41,7 @@ class VolumeSurgeReflector(
 
     companion object {
         const val KEY_LAST_REFLECTION = "volumesurge.last_reflection"
+        const val KEY_REFLECTION_TARGET_DATE = "volumesurge.reflection.target_date"
     }
 
     private lateinit var systemPrompt: String
@@ -103,16 +104,17 @@ class VolumeSurgeReflector(
      * 회고 실행
      */
     private fun reflect(): String {
-        val (startOfDay, endOfDay) = todayRange()
-        val today = today()
+        val targetDate = today().minusDays(1)
+        val (startOfDay, endOfDay) = dayRange(targetDate)
+        keyValueService.set(KEY_REFLECTION_TARGET_DATE, targetDate.toString())
 
         val todayTrades = tradeRepository.findByCreatedAtBetweenOrderByCreatedAtDesc(startOfDay, endOfDay)
         if (todayTrades.isEmpty()) {
-            log.info("오늘 트레이드 없음")
-            return "오늘 트레이드가 없어 회고를 건너뜁니다."
+            log.info("회고 대상일 트레이드 없음: {}", targetDate)
+            return "$targetDate 트레이드가 없어 회고를 건너뜁니다."
         }
 
-        val stats = calculateDailyStats(today, startOfDay, endOfDay, todayTrades)
+        val stats = calculateDailyStats(targetDate, startOfDay, endOfDay, todayTrades)
         val userPrompt = buildUserPrompt(stats, todayTrades)
 
         return requestReflectionFromLlm(userPrompt)

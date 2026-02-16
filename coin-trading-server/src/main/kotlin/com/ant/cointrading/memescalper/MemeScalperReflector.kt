@@ -10,8 +10,8 @@ import com.ant.cointrading.repository.MemeScalperTradeRepository
 import com.ant.cointrading.service.KeyValueService
 import com.ant.cointrading.service.ModelSelector
 import com.ant.cointrading.stats.TradeStatsCalculator
+import com.ant.cointrading.util.DateTimeUtils.dayRange
 import com.ant.cointrading.util.DateTimeUtils.today
-import com.ant.cointrading.util.DateTimeUtils.todayRange
 import jakarta.annotation.PostConstruct
 import org.slf4j.LoggerFactory
 import org.springframework.ai.tool.annotation.Tool
@@ -44,6 +44,7 @@ class MemeScalperReflector(
 
     companion object {
         const val KEY_LAST_REFLECTION = "memescalper.last_reflection"
+        const val KEY_REFLECTION_TARGET_DATE = "memescalper.reflection.target_date"
     }
 
     private val systemPrompt = """
@@ -145,17 +146,18 @@ class MemeScalperReflector(
      * 회고 실행
      */
     private fun reflect(): String {
-        val (startOfDay) = todayRange()
-        val today = today()
+        val targetDate = today().minusDays(1)
+        val (startOfDay, endOfDay) = dayRange(targetDate)
+        keyValueService.set(KEY_REFLECTION_TARGET_DATE, targetDate.toString())
 
-        val todayTrades = findReflectableTradesSince(startOfDay)
+        val todayTrades = findReflectableTrades(startOfDay, endOfDay)
 
         if (todayTrades.isEmpty()) {
-            log.info("오늘 트레이드 없음")
-            return "오늘 트레이드가 없어 회고를 건너뜁니다."
+            log.info("회고 대상일 트레이드 없음: {}", targetDate)
+            return "$targetDate 트레이드가 없어 회고를 건너뜁니다."
         }
 
-        val stats = calculateDailyStats(today, todayTrades)
+        val stats = calculateDailyStats(targetDate, todayTrades)
         val userPrompt = buildUserPrompt(stats, todayTrades)
 
         try {
@@ -169,8 +171,9 @@ class MemeScalperReflector(
         }
     }
 
-    private fun findReflectableTradesSince(startInclusive: Instant): List<MemeScalperTradeEntity> {
+    private fun findReflectableTrades(startInclusive: Instant, endExclusive: Instant): List<MemeScalperTradeEntity> {
         return tradeRepository.findByCreatedAtAfter(startInclusive)
+            .filter { it.createdAt.isBefore(endExclusive) }
             .filter { it.status in REFLECTION_TARGET_STATUSES }
     }
 
@@ -227,7 +230,7 @@ class MemeScalperReflector(
         val exitReasonSummary = buildExitReasonSummary(stats)
 
         return """
-            오늘 날짜: ${stats.date}
+            회고 대상 날짜: ${stats.date}
 
             === 오늘 통계 ===
             총 트레이드: ${stats.totalTrades}건
@@ -246,8 +249,8 @@ class MemeScalperReflector(
             $failureCases
 
             위 데이터를 분석하고 도구를 사용하여:
-            1. getTodayStats로 통계 확인
-            2. getTodayTrades로 상세 트레이드 조회
+            1. getTodayStats로 회고 대상일 통계 확인
+            2. getTodayTrades로 회고 대상일 상세 트레이드 조회
             3. 패턴 분석 후 saveReflection으로 회고 저장
             4. TIMEOUT 비율이 30% 이상이면 진입 조건 강화 제안
             5. 승률이 50% 미만이면 파라미터 변경 제안
@@ -357,11 +360,11 @@ class MemeScalperReflectorTools(
     fun getTodayStats(): String {
         log.info("[Tool] getTodayStats")
 
-        val (startOfDay) = todayRange()
-        val today = today()
+        val targetDate = resolveTargetDate()
+        val (startOfDay, endOfDay) = dayRange(targetDate)
 
         // CLOSED + ABANDONED 모두 포함
-        val trades = findReflectableTradesSince(startOfDay)
+        val trades = findReflectableTrades(startOfDay, endOfDay)
 
         val totalPnl = trades.sumOf { it.pnlAmount ?: 0.0 }
         val winCount = trades.count { (it.pnlAmount ?: 0.0) > 0 }
@@ -374,7 +377,7 @@ class MemeScalperReflectorTools(
             .joinToString("\n") { "  ${it.key}: ${it.value}건" }
 
         return """
-            === 오늘 통계 ($today) ===
+            === 회고 대상일 통계 ($targetDate) ===
             총 트레이드: ${trades.size}건
             총 손익: ${String.format("%.0f", totalPnl)}원
             승리/패배: $winCount / $loseCount
@@ -391,13 +394,14 @@ class MemeScalperReflectorTools(
     ): String {
         log.info("[Tool] getTodayTrades: limit=$limit")
 
-        val (startOfDay) = todayRange()
-        val trades = findReflectableTradesSince(startOfDay)
+        val targetDate = resolveTargetDate()
+        val (startOfDay, endOfDay) = dayRange(targetDate)
+        val trades = findReflectableTrades(startOfDay, endOfDay)
             .sortedByDescending { it.createdAt }
             .take(limit)
 
         if (trades.isEmpty()) {
-            return "오늘 트레이드가 없습니다."
+            return "$targetDate 트레이드가 없습니다."
         }
 
         return trades.joinToString("\n\n") { trade ->
@@ -421,13 +425,13 @@ class MemeScalperReflectorTools(
     ): String {
         log.info("[Tool] saveReflection")
 
-        val (startOfDay) = todayRange()
-        val today = today()
+        val targetDate = resolveTargetDate()
+        val (startOfDay, endOfDay) = dayRange(targetDate)
 
         // 오늘 통계 계산 (CLOSED + ABANDONED)
-        val trades = findReflectableTradesSince(startOfDay)
+        val trades = findReflectableTrades(startOfDay, endOfDay)
 
-        val stats = statsRepository.findByDate(today) ?: MemeScalperDailyStatsEntity(date = today)
+        val stats = statsRepository.findByDate(targetDate) ?: MemeScalperDailyStatsEntity(date = targetDate)
         stats.totalTrades = trades.size
         stats.winningTrades = trades.count { (it.pnlAmount ?: 0.0) > 0 }
         stats.losingTrades = trades.count { (it.pnlAmount ?: 0.0) <= 0 }
@@ -442,7 +446,7 @@ class MemeScalperReflectorTools(
 
         // KeyValue에도 회고 저장
         keyValueService.set(
-            key = "memescalper.reflection.${today}",
+            key = "memescalper.reflection.${targetDate}",
             value = """
                 === 회고 요약 ===
                 $summary
@@ -609,6 +613,12 @@ class MemeScalperReflectorTools(
             .filter { it.status in REFLECTION_TARGET_STATUSES }
     }
 
+    private fun findReflectableTrades(startInclusive: Instant, endExclusive: Instant): List<MemeScalperTradeEntity> {
+        return tradeRepository.findByCreatedAtAfter(startInclusive)
+            .filter { it.createdAt.isBefore(endExclusive) }
+            .filter { it.status in REFLECTION_TARGET_STATUSES }
+    }
+
     private fun simulateBacktestFilter(
         paramName: String,
         newValue: Double,
@@ -696,6 +706,13 @@ class MemeScalperReflectorTools(
     private fun averageOrNull(values: List<Double>): Double? {
         if (values.isEmpty()) return null
         return values.average().takeIf { !it.isNaN() }
+    }
+
+    private fun resolveTargetDate(): LocalDate {
+        return keyValueService.get(MemeScalperReflector.KEY_REFLECTION_TARGET_DATE, "")
+            .takeIf { it.isNotBlank() }
+            ?.let { runCatching { LocalDate.parse(it) }.getOrNull() }
+            ?: today().minusDays(1)
     }
 
     @Tool(description = "시스템 개선 아이디어를 제안합니다. Slack 알림이 발송됩니다.")

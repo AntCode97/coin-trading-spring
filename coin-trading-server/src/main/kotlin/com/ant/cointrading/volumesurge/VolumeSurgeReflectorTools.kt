@@ -5,8 +5,8 @@ import com.ant.cointrading.repository.*
 import com.ant.cointrading.service.KeyValueService
 import com.ant.cointrading.notification.SlackNotifier
 import com.ant.cointrading.util.DateTimeUtils.SEOUL_ZONE
+import com.ant.cointrading.util.DateTimeUtils.dayRange
 import com.ant.cointrading.util.DateTimeUtils.today
-import com.ant.cointrading.util.DateTimeUtils.todayRange
 import com.fasterxml.jackson.databind.ObjectMapper
 import org.slf4j.LoggerFactory
 import org.springframework.ai.tool.annotation.Tool
@@ -119,8 +119,8 @@ class VolumeSurgeReflectorTools(
     fun getTodayStats(): String {
         log.info("[Tool] getTodayStats")
 
-        val today = today()
-        val (startOfDay, endOfDay) = todayRange()
+        val targetDate = resolveTargetDate()
+        val (startOfDay, endOfDay) = dayRange(targetDate)
 
         val totalAlerts = alertRepository.countByDetectedAtBetween(startOfDay, endOfDay)
         val approvedAlerts = alertRepository.countApprovedBetween(startOfDay, endOfDay)
@@ -130,7 +130,7 @@ class VolumeSurgeReflectorTools(
         val avgHolding = tradeRepository.avgHoldingMinutesBetween(startOfDay, endOfDay)
 
         return """
-            === 오늘 통계 ($today) ===
+            === 회고 대상일 통계 ($targetDate) ===
             총 경보: ${totalAlerts}건
             승인된 경보: ${approvedAlerts}건
             총 손익: ${String.format("%.0f", totalPnl)}원
@@ -145,14 +145,14 @@ class VolumeSurgeReflectorTools(
     ): String {
         log.info("[Tool] getTodayTrades: limit=$limit")
 
-        val today = today()
-        val (startOfDay, endOfDay) = todayRange()
+        val targetDate = resolveTargetDate()
+        val (startOfDay, endOfDay) = dayRange(targetDate)
 
         val trades = tradeRepository.findByCreatedAtBetweenOrderByCreatedAtDesc(startOfDay, endOfDay)
             .take(limit)
 
         if (trades.isEmpty()) {
-            return "오늘 트레이드가 없습니다."
+            return "$targetDate 트레이드가 없습니다."
         }
 
         return trades.joinToString("\n\n") { trade ->
@@ -179,11 +179,11 @@ class VolumeSurgeReflectorTools(
     ): String {
         log.info("[Tool] saveReflection")
 
-        val today = today()
+        val targetDate = resolveTargetDate()
 
         // 기존 요약이 있으면 업데이트, 없으면 생성
-        val existingSummary = summaryRepository.findByDate(today)
-        val summaryEntity = existingSummary ?: VolumeSurgeDailySummaryEntity(date = today)
+        val existingSummary = summaryRepository.findByDate(targetDate)
+        val summaryEntity = existingSummary ?: VolumeSurgeDailySummaryEntity(date = targetDate)
 
         summaryEntity.reflectionSummary = """
             === 회고 요약 ===
@@ -262,9 +262,9 @@ class VolumeSurgeReflectorTools(
             paramConfig.accessor.set(newValue)
 
             // 3. DB 요약에 변경 기록 저장
-            val today = today()
-            val existingSummary = summaryRepository.findByDate(today)
-                ?: VolumeSurgeDailySummaryEntity(date = today)
+            val targetDate = resolveTargetDate()
+            val existingSummary = summaryRepository.findByDate(targetDate)
+                ?: VolumeSurgeDailySummaryEntity(date = targetDate)
 
             val changeRecord = mapOf(
                 "param" to paramName,
@@ -340,11 +340,11 @@ class VolumeSurgeReflectorTools(
     ): String {
         log.info("[Tool] suggestSystemImprovement: $title ($priority)")
 
-        val today = today()
+        val targetDate = resolveTargetDate()
 
         // DB에 제안 기록 저장
-        val existingSummary = summaryRepository.findByDate(today)
-            ?: VolumeSurgeDailySummaryEntity(date = today)
+        val existingSummary = summaryRepository.findByDate(targetDate)
+            ?: VolumeSurgeDailySummaryEntity(date = targetDate)
 
         // 기존 반영 노트에 추가
         val existingNotes = existingSummary.reflectionSummary ?: ""
@@ -601,6 +601,13 @@ class VolumeSurgeReflectorTools(
             평균 컨플루언스: ${String.format("%.0f", pattern.avgConfluence)}
             주요 청산사유: ${pattern.commonExitReason}
         """.trimIndent()
+    }
+
+    private fun resolveTargetDate(): java.time.LocalDate {
+        return keyValueService.get(VolumeSurgeReflector.KEY_REFLECTION_TARGET_DATE, "")
+            .takeIf { it.isNotBlank() }
+            ?.let { runCatching { java.time.LocalDate.parse(it) }.getOrNull() }
+            ?: today().minusDays(1)
     }
 
     private fun averageOrZero(values: List<Double>): Double {
