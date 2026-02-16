@@ -524,6 +524,11 @@ export default function Dashboard() {
 
   const isActionExecuting = (actionName: string): boolean => executingAction === actionName;
   const hasExecutingAction = executingAction !== null;
+  const optimizerBlockedByGate = validationGateStatus ? !validationGateStatus.canApplyChanges : false;
+  const optimizerDisabled = isActionExecuting('optimizer') || optimizerBlockedByGate;
+  const optimizerDisabledMessage = isActionExecuting('optimizer')
+    ? '분석 작업이 진행 중입니다.'
+    : (optimizerBlockedByGate ? (validationGateStatus?.reason ?? '검증 게이트에 의해 차단되었습니다.') : null);
 
   if (isLoading) {
     return (
@@ -702,14 +707,14 @@ export default function Dashboard() {
                         },
                       }
                     )}
-                    disabled={
-                      isActionExecuting('optimizer') ||
-                      (validationGateStatus ? !validationGateStatus.canApplyChanges : false)
-                    }
-                    title="AI가 거래 기록을 분석하여 최적의 전략 파라미터를 제안합니다"
+                    disabled={optimizerDisabled}
+                    title={optimizerDisabledMessage ?? 'AI가 거래 기록을 분석하여 최적의 전략 파라미터를 제안합니다'}
                   >
                     {isActionExecuting('optimizer') ? '분석 중...' : '전체 거래 분석'}
                   </button>
+                  {optimizerDisabledMessage && (
+                    <p className="control-helper-text blocked">{optimizerDisabledMessage}</p>
+                  )}
                   <button
                     className="control-btn control-btn-secondary"
                     type="button"

@@ -552,7 +552,18 @@ body {
 
 .control-btn:disabled {
   opacity: 0.5;
-  cursor: wait;
+  cursor: not-allowed;
+}
+
+.control-helper-text {
+  font-size: 12px;
+  line-height: 1.4;
+  color: var(--text-secondary);
+  margin-top: 2px;
+}
+
+.control-helper-text.blocked {
+  color: #FCA5A5;
 }
 
 /* Control Button Variants */
