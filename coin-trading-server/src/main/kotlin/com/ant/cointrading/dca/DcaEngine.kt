@@ -75,7 +75,7 @@ class DcaEngine(
     companion object {
         private const val SCAN_INTERVAL_MS = 60_000L  // 1분
         private const val MONITOR_INTERVAL_MS = 5_000L // 5초
-        private const val CLOSE_RETRY_BACKOFF_SECONDS = 10L  // 청산 재시도 백오프
+        private const val CLOSE_RETRY_BACKOFF_SECONDS = 5L  // 청산 재시도 백오프
         // MIN_ORDER_AMOUNT_KRW는 TradingConstants.MIN_ORDER_AMOUNT_KRW 사용
     }
 
@@ -225,7 +225,8 @@ class DcaEngine(
             }
 
             // 2. 코인 잔고 체크 - 이미 보유 시 진입 불가 (엣지 케이스 방지)
-            val coinBalance = balances.find { it.currency == coinSymbol }?.balance ?: BigDecimal.ZERO
+            val coin = balances.find { it.currency == coinSymbol }
+            val coinBalance = (coin?.balance ?: BigDecimal.ZERO) + (coin?.locked ?: BigDecimal.ZERO)
             if (coinBalance > BigDecimal.ZERO) {
                 log.warn("[$market] 이미 $coinSymbol 잔고 보유 중: $coinBalance - 중복 진입 방지")
                 return false
@@ -265,6 +266,12 @@ class DcaEngine(
         if (!orderResult.success) {
             log.error("[$market] 매수 주문 실패: ${orderResult.message}")
             cooldowns[market] = Instant.now().plus(5, ChronoUnit.MINUTES)
+            return null
+        }
+
+        if (orderResult.isPending && (orderResult.executedQuantity == null || orderResult.executedQuantity <= BigDecimal.ZERO)) {
+            log.warn("[$market] 미체결 주문 상태로 DCA 진입 보류: orderId=${orderResult.orderId}, pendingOrderId=${orderResult.pendingOrderId}")
+            cooldowns[market] = Instant.now().plus(1, ChronoUnit.MINUTES)
             return null
         }
 
@@ -316,7 +323,8 @@ class DcaEngine(
                 return false
             }
 
-            val actualBalance = balances.find { it.currency == coinSymbol }?.balance ?: BigDecimal.ZERO
+            val coin = balances.find { it.currency == coinSymbol }
+            val actualBalance = (coin?.balance ?: BigDecimal.ZERO) + (coin?.locked ?: BigDecimal.ZERO)
 
             // 예상 수량의 90% 이상이면 성공으로 간주 (부분 체결/수수료 고려)
             val minAcceptableBalance = BigDecimal(expectedQuantity).multiply(BigDecimal("0.9"))
@@ -589,15 +597,16 @@ class DcaEngine(
         PositionHelper.monitorClosingPosition(
             bithumbPrivateApi = bithumbPrivateApi,
             position = position,  // DcaPositionEntity가 PositionEntity를 구현하므로 직접 전달
-            waitTimeoutSeconds = 30L,
-            errorTimeoutMinutes = 5L,
+            waitTimeoutSeconds = 10L,
+            errorTimeoutMinutes = 2L,
             onOrderDone = { actualPrice ->
                 // 주문 체결 완료 - 실제 체결 수량 확인
                 val actualQuantity = try {
                     val coinSymbol = PositionHelper.extractCoinSymbol(market)
                     val balances = bithumbPrivateApi.getBalances()
                     val beforeQuantity = position.totalQuantity
-                    val currentBalance = balances?.find { it.currency == coinSymbol }?.balance?.toDouble() ?: 0.0
+                    val coin = balances?.find { it.currency == coinSymbol }
+                    val currentBalance = ((coin?.balance ?: BigDecimal.ZERO) + (coin?.locked ?: BigDecimal.ZERO)).toDouble()
                     val soldQuantity = beforeQuantity - currentBalance
                     if (soldQuantity > 0) soldQuantity else position.totalQuantity
                 } catch (e: Exception) {
@@ -641,7 +650,8 @@ class DcaEngine(
         // 잔고 확인 - 이미 없으면 CLOSED로 변경
         val coinSymbol = market.removePrefix("KRW-")
         val actualBalance = try {
-            bithumbPrivateApi.getBalances()?.find { it.currency == coinSymbol }?.balance ?: BigDecimal.ZERO
+            val coin = bithumbPrivateApi.getBalances()?.find { it.currency == coinSymbol }
+            (coin?.balance ?: BigDecimal.ZERO) + (coin?.locked ?: BigDecimal.ZERO)
         } catch (e: Exception) {
             log.warn("[$market] 잔고 조회 실패: ${e.message}")
             return false
@@ -764,7 +774,8 @@ class DcaEngine(
         val coinSymbol = PositionHelper.extractCoinSymbol(market)
         return try {
             val balances = bithumbPrivateApi.getBalances() ?: return BigDecimal.ZERO
-            val coinBalance = balances.find { it.currency == coinSymbol }?.balance ?: BigDecimal.ZERO
+            val coin = balances.find { it.currency == coinSymbol }
+            val coinBalance = (coin?.balance ?: BigDecimal.ZERO) + (coin?.locked ?: BigDecimal.ZERO)
 
             when {
                 coinBalance <= BigDecimal.ZERO -> BigDecimal.ZERO
@@ -803,6 +814,11 @@ class DcaEngine(
 
         if (!orderResult.success) {
             log.error("[$market] 매도 주문 실패: ${orderResult.message}")
+            return null
+        }
+
+        if (orderResult.isPending && (orderResult.executedQuantity == null || orderResult.executedQuantity <= BigDecimal.ZERO)) {
+            log.warn("[$market] 미체결 매도 주문 상태 - 청산 보류: orderId=${orderResult.orderId}, pendingOrderId=${orderResult.pendingOrderId}")
             return null
         }
 
