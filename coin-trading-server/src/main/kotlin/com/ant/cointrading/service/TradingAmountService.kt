@@ -3,6 +3,7 @@ package com.ant.cointrading.service
 import com.ant.cointrading.config.MemeScalperProperties
 import com.ant.cointrading.config.TradingProperties
 import com.ant.cointrading.config.VolumeSurgeProperties
+import com.ant.cointrading.repository.TradeRepository
 import org.slf4j.LoggerFactory
 import org.springframework.stereotype.Service
 import java.math.BigDecimal
@@ -20,6 +21,7 @@ class TradingAmountService(
     private val tradingProperties: TradingProperties,
     private val volumeSurgeProperties: VolumeSurgeProperties,
     private val memeScalperProperties: MemeScalperProperties,
+    private val tradeRepository: TradeRepository,
 ) {
     private val log = LoggerFactory.getLogger(javaClass)
 
@@ -40,6 +42,13 @@ class TradingAmountService(
         if (stored > 0) return BigDecimal.valueOf(stored)
 
         return getDefaultAmount(strategyCode)
+    }
+
+    fun getAdaptiveAmount(strategyCode: String): BigDecimal {
+        val base = getAmount(strategyCode)
+        val multiplier = calculateStrategyMultiplier(strategyCode)
+        val adjusted = base.multiply(BigDecimal.valueOf(multiplier)).toLong()
+        return BigDecimal.valueOf(adjusted.coerceAtLeast(MIN_ORDER_AMOUNT_KRW))
     }
 
     fun setAmount(strategyCode: String, amountKrw: Long): Boolean {
@@ -74,6 +83,47 @@ class TradingAmountService(
             "memescalper" -> BigDecimal.valueOf(memeScalperProperties.positionSizeKrw.toLong())
             else -> BigDecimal.valueOf(10000)
         }
+    }
+
+    private fun calculateStrategyMultiplier(strategyCode: String): Double {
+        val target = normalizeStrategy(resolveStrategyName(strategyCode))
+        val recent = tradeRepository
+            .findTop1000BySimulatedOrderByCreatedAtDesc(false)
+            .asSequence()
+            .filter { it.side.equals("SELL", ignoreCase = true) }
+            .filter { normalizeStrategy(it.strategy) == target }
+            .mapNotNull { it.pnlPercent }
+            .take(30)
+            .toList()
+
+        if (recent.size < 8) return 1.0
+
+        val winRate = recent.count { it > 0.0 }.toDouble() / recent.size
+        val avgPnlPercent = recent.average()
+
+        return when {
+            avgPnlPercent >= 0.6 && winRate >= 0.55 -> 1.20
+            avgPnlPercent >= 0.2 && winRate >= 0.45 -> 1.00
+            avgPnlPercent >= -0.2 && winRate >= 0.40 -> 0.85
+            avgPnlPercent >= -0.8 -> 0.65
+            else -> 0.45
+        }
+    }
+
+    private fun resolveStrategyName(strategyCode: String): String {
+        return when (strategyCode.lowercase()) {
+            "dca" -> "DCA"
+            "volumesurge" -> "VOLUME_SURGE"
+            "memescalper" -> "MEME_SCALPER"
+            else -> strategyCode
+        }
+    }
+
+    private fun normalizeStrategy(strategy: String?): String {
+        return strategy
+            ?.uppercase()
+            ?.replace(Regex("[^A-Z0-9]"), "")
+            .orEmpty()
     }
 }
 

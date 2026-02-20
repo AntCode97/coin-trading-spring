@@ -463,7 +463,7 @@ class VolumeSurgeEngine(
         filterResult: FilterResult
     ) {
         val market = alert.market
-        val positionSize = tradingAmountService.getAmount("volumesurge")
+        val positionSize = tradingAmountService.getAdaptiveAmount("volumesurge")
 
         if (!balanceReservationService.reserve("VOLUME_SURGE", market, positionSize)) {
             log.warn("[$market] KRW 잔고 부족 - 진입 취소")
@@ -530,7 +530,7 @@ class VolumeSurgeEngine(
         regime: String?,
         alert: VolumeSurgeAlertEntity
     ): OrderExecutionResult? {
-        val positionSize = tradingAmountService.getAmount("volumesurge")
+        val positionSize = tradingAmountService.getAdaptiveAmount("volumesurge")
         log.info("[$market] 시장가 매수 시도: 금액=${positionSize}원")
 
         val buySignal = TradingSignal(

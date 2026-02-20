@@ -424,7 +424,7 @@ class MemeScalperEngine(
         }
 
         // KRW 잔고 예약 (BalanceReservationService 원자적 체크)
-        val requiredKrw = tradingAmountService.getAmount("memescalper")
+        val requiredKrw = tradingAmountService.getAdaptiveAmount("memescalper")
         if (!balanceReservationService.reserve("MEME_SCALPER", market, requiredKrw)) {
             return false
         }
@@ -501,7 +501,7 @@ class MemeScalperEngine(
         signal: PumpSignal,
         regime: String?
     ): OrderExecutionResult? {
-        val positionSize = tradingAmountService.getAmount("memescalper")
+        val positionSize = tradingAmountService.getAdaptiveAmount("memescalper")
 
         val buySignal = TradingSignal(
             market = market,

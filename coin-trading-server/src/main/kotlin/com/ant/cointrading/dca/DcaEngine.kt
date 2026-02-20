@@ -211,7 +211,7 @@ class DcaEngine(
 
         // 실제 잔고 체크 - KRW 충분한지 + 이미 해당 코인 보유 시 진입 불가
         val coinSymbol = PositionHelper.extractCoinSymbol(market)
-        val requiredKrw = tradingAmountService.getAmount("dca")
+        val requiredKrw = tradingAmountService.getAdaptiveAmount("dca")
 
         try {
             val balances = bithumbPrivateApi.getBalances() ?: return false
@@ -361,7 +361,7 @@ class DcaEngine(
     ) {
         log.info("[$market] DCA 진입 시도: 신뢰도=${signal.confidence}%, 이유=${signal.reason}")
 
-        val orderAmount = tradingAmountService.getAmount("dca")
+        val orderAmount = tradingAmountService.getAdaptiveAmount("dca")
 
         // 0. KRW 잔고 예약 (원자적 잔고 확보)
         if (!balanceReservationService.reserve("DCA", market, orderAmount)) {
