@@ -391,11 +391,16 @@ class VolumeSurgeEngine(
             return false
         }
 
+        if (analysis.rsi >= 72.0 && analysis.volumeRatio < 3.0) {
+            analysis.rejectReason = "과열 진입 차단 (RSI ${String.format("%.1f", analysis.rsi)}, 거래량 ${String.format("%.1f", analysis.volumeRatio)}x)"
+            return false
+        }
+
         // 거래량이 충분하면 컨플루언스 기준 완화
         val effectiveMinConfluence = when {
-            analysis.volumeRatio >= 5.0 -> 30  // 500%+ 거래량이면 30점만
-            analysis.volumeRatio >= 3.0 -> 40  // 300%+ 거래량이면 40점
-            analysis.volumeRatio >= 2.0 -> 50  // 200%+ 거래량이면 50점
+            analysis.volumeRatio >= 5.0 -> 40
+            analysis.volumeRatio >= 3.0 -> 50
+            analysis.volumeRatio >= 2.0 -> 60
             else -> properties.minConfluenceScore  // 기본값
         }
 
@@ -405,7 +410,7 @@ class VolumeSurgeEngine(
         }
 
         // 최소 거래량은 유지 (필터에서 이미 검증됨)
-        val effectiveMinVolume = 1.5  // 150% 이상
+        val effectiveMinVolume = properties.minVolumeRatio
         if (analysis.volumeRatio < effectiveMinVolume) {
             analysis.rejectReason = "거래량 비율 부족 (${String.format("%.1f", analysis.volumeRatio)} < $effectiveMinVolume)"
             return false
@@ -546,9 +551,14 @@ class VolumeSurgeEngine(
             return null
         }
 
+        if (orderResult.isPending && (orderResult.executedQuantity == null || orderResult.executedQuantity <= BigDecimal.ZERO)) {
+            log.warn("[$market] 미체결 주문 상태로 진입 보류: orderId=${orderResult.orderId}, pendingOrderId=${orderResult.pendingOrderId}")
+            markAlertProcessed(alert, "ERROR", "미체결 주문 상태 - 포지션 진입 보류")
+            return null
+        }
+
         val executedPrice = orderResult.price.orDefault(currentPrice)
         val executedQuantity = orderResult.executedQuantity.orZero()
-            .let { if (it.isPositive()) it else orderResult.quantity.orZero() }
 
         if (executedPrice <= BigDecimal.ZERO || executedQuantity <= BigDecimal.ZERO) {
             log.error("[$market] 유효하지 않은 체결 데이터: 가격=$executedPrice, 수량=$executedQuantity")
@@ -775,8 +785,8 @@ class VolumeSurgeEngine(
         PositionHelper.monitorClosingPosition(
             bithumbPrivateApi = bithumbPrivateApi,
             position = position,
-            waitTimeoutSeconds = 30L,
-            errorTimeoutMinutes = 5L,
+            waitTimeoutSeconds = 10L,
+            errorTimeoutMinutes = 2L,
             onOrderDone = { actualPrice ->
                 finalizeClose(position, actualPrice, position.exitReason ?: "UNKNOWN")
                 log.info("[${position.market}] 청산 주문 체결 확인: ${position.closeOrderId}")
@@ -982,7 +992,7 @@ class VolumeSurgeEngine(
             reason = reason,
             strategyName = "Volume Surge",
             maxAttempts = TradingConstants.MAX_CLOSE_ATTEMPTS,
-            backoffSeconds = TradingConstants.CLOSE_RETRY_BACKOFF_SECONDS,
+            backoffSeconds = 5L,
             updatePosition = { pos, status, price, qty, orderId ->
                 val isNewAttempt = status == "CLOSING" && pos.status != "CLOSING"
                 pos.status = status

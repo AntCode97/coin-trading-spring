@@ -202,7 +202,8 @@ object PositionHelper {
                         // 잔고 확인 - 여전히 코인이 있으면 재매도 필요
                         val coinSymbol = extractCoinSymbol(market)
                         val actualBalance = try {
-                            bithumbPrivateApi.getBalances()?.find { it.currency == coinSymbol }?.balance ?: BigDecimal.ZERO
+                            val coin = bithumbPrivateApi.getBalances()?.find { it.currency == coinSymbol }
+                            (coin?.balance ?: BigDecimal.ZERO) + (coin?.locked ?: BigDecimal.ZERO)
                         } catch (e: Exception) {
                             log.warn("[$market] 잔고 조회 실패: ${e.message}")
                             BigDecimal.ZERO

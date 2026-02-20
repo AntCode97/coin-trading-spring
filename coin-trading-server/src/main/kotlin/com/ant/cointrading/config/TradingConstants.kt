@@ -57,7 +57,8 @@ object TradingConstants {
         "ORDER_BOOK_IMBALANCE",  // 초단기 전략
         "MOMENTUM",              // 모멘텀 전략
         "BREAKOUT",              // 돌파 전략
-        "MEME_SCALPER"           // 세력 코인 초단타
+        "MEME_SCALPER",          // 세력 코인 초단타
+        "VOLUME_SURGE"
     )
 
     // === 슬리피지 임계값 ===
