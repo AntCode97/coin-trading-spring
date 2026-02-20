@@ -57,7 +57,8 @@ class RiskThrottleService(
             )
         }
 
-        val cacheKey = "${market.uppercase()}|${strategy.uppercase()}"
+        val normalizedStrategy = normalizeStrategy(strategy)
+        val cacheKey = "${market.uppercase()}|$normalizedStrategy"
         val currentCached = cache[cacheKey]
         if (!forceRefresh && currentCached != null && isFresh(currentCached.evaluatedAt, config.cacheMinutes)) {
             return currentCached.decision.copy(cached = true)
@@ -76,14 +77,31 @@ class RiskThrottleService(
         strategy: String,
         config: RiskThrottleProperties
     ): RiskThrottleDecision {
-        val closedTrades = tradeRepository
+        val normalizedStrategy = normalizeStrategy(strategy)
+
+        val marketClosedTrades = tradeRepository
             .findTop200ByMarketAndSimulatedOrderByCreatedAtDesc(market, false)
             .asSequence()
             .filter { it.side.equals("SELL", ignoreCase = true) }
-            .filter { it.strategy.equals(strategy, ignoreCase = true) }
+            .filter { normalizeStrategy(it.strategy) == normalizedStrategy }
             .mapNotNull { it.pnlPercent }
             .take(config.lookbackTrades)
             .toList()
+
+        val closedTrades = if (marketClosedTrades.size >= config.minClosedTrades) {
+            marketClosedTrades
+        } else {
+            tradeRepository
+                .findTop1000BySimulatedOrderByCreatedAtDesc(false)
+                .asSequence()
+                .filter { it.side.equals("SELL", ignoreCase = true) }
+                .filter { normalizeStrategy(it.strategy) == normalizedStrategy }
+                .mapNotNull { it.pnlPercent }
+                .take(config.lookbackTrades)
+                .toList()
+        }
+
+        val usingGlobalFallback = marketClosedTrades.size < config.minClosedTrades
 
         val sampleSize = closedTrades.size
         if (sampleSize < config.minClosedTrades) {
@@ -91,7 +109,7 @@ class RiskThrottleService(
                 multiplier = 1.0,
                 severity = "INSUFFICIENT_DATA",
                 blockNewBuys = false,
-                reason = "샘플 부족(${sampleSize}/${config.minClosedTrades}) - 기본 크기 유지",
+                reason = "샘플 부족(${sampleSize}/${config.minClosedTrades}) - 기본 크기 유지 (strategy=$normalizedStrategy)",
                 sampleSize = sampleSize,
                 recentConsecutiveLosses = 0,
                 winRate = 0.0,
@@ -119,7 +137,7 @@ class RiskThrottleService(
                     multiplier = criticalMultiplier,
                     severity = "CRITICAL",
                     blockNewBuys = shouldBlockNewBuys,
-                    reason = "최근 성과 악화(강한 축소): win=${formatPercent(winRate * 100)}, avg=${formatPercent(avgPnlPercent)}, 연속손실=${recentConsecutiveLosses}회",
+                    reason = "최근 성과 악화(강한 축소): win=${formatPercent(winRate * 100)}, avg=${formatPercent(avgPnlPercent)}, 연속손실=${recentConsecutiveLosses}회${fallbackTag(usingGlobalFallback)}",
                     sampleSize = sampleSize,
                     recentConsecutiveLosses = recentConsecutiveLosses,
                     winRate = winRate,
@@ -133,7 +151,7 @@ class RiskThrottleService(
                     multiplier = weakMultiplier,
                     severity = "WEAK",
                     blockNewBuys = false,
-                    reason = "최근 성과 둔화(완화 축소): win=${formatPercent(winRate * 100)}, avg=${formatPercent(avgPnlPercent)}, 연속손실=${recentConsecutiveLosses}회",
+                    reason = "최근 성과 둔화(완화 축소): win=${formatPercent(winRate * 100)}, avg=${formatPercent(avgPnlPercent)}, 연속손실=${recentConsecutiveLosses}회${fallbackTag(usingGlobalFallback)}",
                     sampleSize = sampleSize,
                     recentConsecutiveLosses = recentConsecutiveLosses,
                     winRate = winRate,
@@ -147,7 +165,7 @@ class RiskThrottleService(
                     multiplier = 1.0,
                     severity = "NORMAL",
                     blockNewBuys = false,
-                    reason = "최근 성과 양호: win=${formatPercent(winRate * 100)}, avg=${formatPercent(avgPnlPercent)}, 연속손실=${recentConsecutiveLosses}회",
+                    reason = "최근 성과 양호: win=${formatPercent(winRate * 100)}, avg=${formatPercent(avgPnlPercent)}, 연속손실=${recentConsecutiveLosses}회${fallbackTag(usingGlobalFallback)}",
                     sampleSize = sampleSize,
                     recentConsecutiveLosses = recentConsecutiveLosses,
                     winRate = winRate,
@@ -177,6 +195,17 @@ class RiskThrottleService(
 
     private fun isFresh(evaluatedAt: Instant, cacheMinutes: Long): Boolean {
         return ChronoUnit.MINUTES.between(evaluatedAt, Instant.now()) < cacheMinutes
+    }
+
+    private fun normalizeStrategy(strategy: String?): String {
+        return strategy
+            ?.uppercase()
+            ?.replace(Regex("[^A-Z0-9]"), "")
+            .orEmpty()
+    }
+
+    private fun fallbackTag(usingGlobalFallback: Boolean): String {
+        return if (usingGlobalFallback) " [전략 전체 샘플 적용]" else ""
     }
 
     private fun formatPercent(value: Double): String = String.format("%.2f%%", value)
