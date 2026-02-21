@@ -177,4 +177,5 @@ interface GuidedTradeRepository : JpaRepository<GuidedTradeEntity, Long> {
 
 interface GuidedTradeEventRepository : JpaRepository<GuidedTradeEventEntity, Long> {
     fun findByTradeIdOrderByCreatedAtAsc(tradeId: Long): List<GuidedTradeEventEntity>
+    fun findTopByTradeIdAndEventTypeOrderByCreatedAtDesc(tradeId: Long, eventType: String): GuidedTradeEventEntity?
 }

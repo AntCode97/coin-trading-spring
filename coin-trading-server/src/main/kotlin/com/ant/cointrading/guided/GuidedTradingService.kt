@@ -32,6 +32,7 @@ class GuidedTradingService(
     private companion object {
         val OPEN_STATUSES = listOf(GuidedTradeEntity.STATUS_PENDING_ENTRY, GuidedTradeEntity.STATUS_OPEN)
         val D = BigDecimal.ZERO
+        const val DCA_MIN_INTERVAL_SECONDS = 90L
     }
 
     fun getMarketBoard(
@@ -183,6 +184,11 @@ class GuidedTradingService(
         val amountKrw = BigDecimal.valueOf(request.amountKrw.coerceAtLeast(5100))
         val requestedLimitPrice = request.limitPrice?.let { BigDecimal.valueOf(it) }
         var selectedLimitPrice: BigDecimal? = null
+        val trailingTriggerPercent = (request.trailingTriggerPercent ?: 2.0).coerceIn(0.5, 20.0)
+        val trailingOffsetPercent = (request.trailingOffsetPercent ?: 1.0).coerceIn(0.2, 10.0)
+        val dcaStepPercent = (request.dcaStepPercent ?: 2.0).coerceIn(0.5, 15.0)
+        val maxDcaCount = (request.maxDcaCount ?: 2).coerceIn(0, 3)
+        val halfTakeProfitRatio = (request.halfTakeProfitRatio ?: 0.5).coerceIn(0.2, 0.8)
 
         val submitted = try {
             when (orderType) {
@@ -231,12 +237,12 @@ class GuidedTradingService(
             remainingQuantity = executedQuantity,
             stopLossPrice = BigDecimal.valueOf(request.stopLossPrice ?: recommendation.stopLossPrice),
             takeProfitPrice = BigDecimal.valueOf(request.takeProfitPrice ?: recommendation.takeProfitPrice),
-            trailingTriggerPercent = BigDecimal.valueOf(request.trailingTriggerPercent ?: 2.0),
-            trailingOffsetPercent = BigDecimal.valueOf(request.trailingOffsetPercent ?: 1.0),
+            trailingTriggerPercent = BigDecimal.valueOf(trailingTriggerPercent),
+            trailingOffsetPercent = BigDecimal.valueOf(trailingOffsetPercent),
             trailingActive = false,
-            dcaStepPercent = BigDecimal.valueOf(request.dcaStepPercent ?: 2.0),
-            maxDcaCount = request.maxDcaCount ?: 2,
-            halfTakeProfitRatio = BigDecimal.valueOf(request.halfTakeProfitRatio ?: 0.5),
+            dcaStepPercent = BigDecimal.valueOf(dcaStepPercent),
+            maxDcaCount = maxDcaCount,
+            halfTakeProfitRatio = BigDecimal.valueOf(halfTakeProfitRatio),
             recommendationReason = recommendation.rationale.joinToString(" | "),
             lastAction = "ENTRY_SUBMITTED"
         )
@@ -384,7 +390,7 @@ class GuidedTradingService(
             return
         }
 
-        if (trade.dcaCount < trade.maxDcaCount) {
+        if (trade.dcaCount < trade.maxDcaCount && canExecuteDcaNow(trade)) {
             val nextTrigger = trade.averageEntryPrice.multiply(
                 BigDecimal.ONE.subtract(
                     trade.dcaStepPercent.multiply(BigDecimal.valueOf((trade.dcaCount + 1).toLong()))
@@ -441,7 +447,13 @@ class GuidedTradingService(
         val executedQty = orderInfo.executedVolume ?: BigDecimal.ZERO
         if (executedQty <= BigDecimal.ZERO) return
 
-        val execPrice = orderInfo.price ?: currentPrice
+        val execPrice = resolveEntryPrice(
+            order = orderInfo,
+            orderType = GuidedTradeEntity.ORDER_TYPE_MARKET,
+            investedAmount = addAmount,
+            selectedLimitPrice = null,
+            fallbackPrice = currentPrice
+        )
         val prevValue = trade.averageEntryPrice.multiply(trade.entryQuantity)
         val addValue = execPrice.multiply(executedQty)
         val newQty = trade.entryQuantity.add(executedQty)
@@ -458,6 +470,14 @@ class GuidedTradingService(
         trade.lastAction = "DCA_${trade.dcaCount}"
         guidedTradeRepository.save(trade)
         appendEvent(trade.id!!, "DCA_BUY", execPrice, executedQty, "물타기 ${trade.dcaCount}/${trade.maxDcaCount}")
+    }
+
+    private fun canExecuteDcaNow(trade: GuidedTradeEntity): Boolean {
+        val lastDca = guidedTradeEventRepository
+            .findTopByTradeIdAndEventTypeOrderByCreatedAtDesc(trade.id ?: return true, "DCA_BUY")
+            ?: return true
+        val elapsed = Instant.now().epochSecond - lastDca.createdAt.epochSecond
+        return elapsed >= DCA_MIN_INTERVAL_SECONDS
     }
 
     private fun getActualHoldingQuantity(market: String): BigDecimal {
