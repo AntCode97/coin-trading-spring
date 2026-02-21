@@ -3,6 +3,8 @@ package com.ant.cointrading.controller
 import com.ant.cointrading.guided.GuidedChartResponse
 import com.ant.cointrading.guided.GuidedMarketItem
 import com.ant.cointrading.guided.GuidedRecommendation
+import com.ant.cointrading.guided.GuidedMarketSortBy
+import com.ant.cointrading.guided.GuidedSortDirection
 import com.ant.cointrading.guided.GuidedStartRequest
 import com.ant.cointrading.guided.GuidedTradeView
 import com.ant.cointrading.guided.GuidedTradingService
@@ -21,8 +23,11 @@ class GuidedTradingController(
 ) {
 
     @GetMapping("/markets")
-    fun getMarketBoard(): List<GuidedMarketItem> {
-        return guidedTradingService.getMarketBoard()
+    fun getMarketBoard(
+        @RequestParam(defaultValue = "TURNOVER") sortBy: GuidedMarketSortBy,
+        @RequestParam(defaultValue = "DESC") sortDirection: GuidedSortDirection
+    ): List<GuidedMarketItem> {
+        return guidedTradingService.getMarketBoard(sortBy, sortDirection)
     }
 
     @GetMapping("/chart")

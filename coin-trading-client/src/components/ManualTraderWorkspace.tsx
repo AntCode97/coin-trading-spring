@@ -17,11 +17,32 @@ import {
   guidedTradingApi,
   type GuidedChartResponse,
   type GuidedMarketItem,
+  type GuidedMarketSortBy,
+  type GuidedSortDirection,
   type GuidedStartRequest,
 } from '../api';
 import './ManualTraderWorkspace.css';
 
 const KRW_FORMATTER = new Intl.NumberFormat('ko-KR');
+const STORAGE_KEY = 'guided-trader.preferences.v1';
+
+type WorkspacePrefs = {
+  selectedMarket?: string;
+  interval?: string;
+  sortBy?: GuidedMarketSortBy;
+  sortDirection?: GuidedSortDirection;
+};
+
+function loadPrefs(): WorkspacePrefs {
+  if (typeof window === 'undefined') return {};
+  try {
+    const raw = window.localStorage.getItem(STORAGE_KEY);
+    if (!raw) return {};
+    return JSON.parse(raw) as WorkspacePrefs;
+  } catch {
+    return {};
+  }
+}
 
 function asUtc(secondsOrMillis: number): UTCTimestamp {
   const sec = secondsOrMillis > 10_000_000_000 ? Math.floor(secondsOrMillis / 1000) : Math.floor(secondsOrMillis);
@@ -37,9 +58,12 @@ function formatPct(value: number): string {
 }
 
 export default function ManualTraderWorkspace() {
-  const [selectedMarket, setSelectedMarket] = useState<string>('KRW-BTC');
-  const [interval, setIntervalValue] = useState<string>('minute30');
+  const prefs = useMemo(() => loadPrefs(), []);
+  const [selectedMarket, setSelectedMarket] = useState<string>(prefs.selectedMarket ?? 'KRW-BTC');
+  const [interval, setIntervalValue] = useState<string>(prefs.interval ?? 'minute30');
   const [search, setSearch] = useState<string>('');
+  const [sortBy, setSortBy] = useState<GuidedMarketSortBy>(prefs.sortBy ?? 'TURNOVER');
+  const [sortDirection, setSortDirection] = useState<GuidedSortDirection>(prefs.sortDirection ?? 'DESC');
   const [amountKrw, setAmountKrw] = useState<number>(20000);
   const [orderType, setOrderType] = useState<'MARKET' | 'LIMIT'>('LIMIT');
   const [limitPrice, setLimitPrice] = useState<number | ''>('');
@@ -53,8 +77,8 @@ export default function ManualTraderWorkspace() {
   const priceLinesRef = useRef<IPriceLine[]>([]);
 
   const marketsQuery = useQuery<GuidedMarketItem[]>({
-    queryKey: ['guided-markets'],
-    queryFn: () => guidedTradingApi.getMarkets(),
+    queryKey: ['guided-markets', sortBy, sortDirection],
+    queryFn: () => guidedTradingApi.getMarkets(sortBy, sortDirection),
     refetchInterval: 15000,
   });
 
@@ -100,6 +124,17 @@ export default function ManualTraderWorkspace() {
       row.symbol.toLowerCase().includes(keyword)
     );
   }, [marketsQuery.data, search]);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const next: WorkspacePrefs = {
+      selectedMarket,
+      interval,
+      sortBy,
+      sortDirection,
+    };
+    window.localStorage.setItem(STORAGE_KEY, JSON.stringify(next));
+  }, [selectedMarket, interval, sortBy, sortDirection]);
 
   useEffect(() => {
     const container = chartContainerRef.current;
@@ -230,6 +265,16 @@ export default function ManualTraderWorkspace() {
           text: event.eventType,
         };
       });
+    const latestCandle = payload.candles[payload.candles.length - 1];
+    if (latestCandle) {
+      markers.push({
+        time: asUtc(latestCandle.timestamp),
+        position: 'aboveBar',
+        color: '#f5c542',
+        shape: 'circle',
+        text: `예상 승률 ${payload.recommendation.predictedWinRate.toFixed(1)}%`,
+      });
+    }
     createSeriesMarkers(series, markers);
 
     chart.timeScale().fitContent();
@@ -272,6 +317,19 @@ export default function ManualTraderWorkspace() {
               onChange={(event) => setSearch(event.target.value)}
               placeholder="코인 검색 (BTC, 비트코인)"
             />
+            <div className="guided-sort-controls">
+              <select value={sortBy} onChange={(event) => setSortBy(event.target.value as GuidedMarketSortBy)}>
+                <option value="TURNOVER">거래대금</option>
+                <option value="CHANGE_RATE">변동률</option>
+                <option value="VOLUME">거래량</option>
+                <option value="SURGE_RATE">급등률</option>
+                <option value="MARKET_CAP_FLOW">시총변동(대체)</option>
+              </select>
+              <select value={sortDirection} onChange={(event) => setSortDirection(event.target.value as GuidedSortDirection)}>
+                <option value="DESC">높은순</option>
+                <option value="ASC">낮은순</option>
+              </select>
+            </div>
           </div>
           <div className="guided-market-list">
             {filteredMarkets.map((item) => (
@@ -288,6 +346,7 @@ export default function ManualTraderWorkspace() {
                 <div className="price-wrap">
                   <strong>{KRW_FORMATTER.format(item.tradePrice)}</strong>
                   <span className={item.changeRate >= 0 ? 'up' : 'down'}>{formatPct(item.changeRate)}</span>
+                  <small>거래대금 {KRW_FORMATTER.format(item.accTradePrice)}</small>
                 </div>
               </button>
             ))}
@@ -310,7 +369,29 @@ export default function ManualTraderWorkspace() {
               ))}
             </div>
           </div>
-          <div className="guided-chart" ref={chartContainerRef} />
+          <div className="guided-chart-shell">
+            <div className="guided-chart" ref={chartContainerRef} />
+            {recommendation && (
+              <div className="guided-winrate-overlay">
+                <div className="winrate-header">
+                  <span>지금 진입 예상 승률</span>
+                  <strong>{recommendation.predictedWinRate.toFixed(1)}%</strong>
+                </div>
+                <div className="winrate-bar">
+                  <div
+                    className="winrate-fill"
+                    style={{ width: `${Math.min(100, Math.max(0, recommendation.predictedWinRate))}%` }}
+                  />
+                </div>
+                <div className="winrate-factors">
+                  <span>추세 {(recommendation.winRateBreakdown.trend * 100).toFixed(0)}</span>
+                  <span>눌림 {(recommendation.winRateBreakdown.pullback * 100).toFixed(0)}</span>
+                  <span>변동성 {(recommendation.winRateBreakdown.volatility * 100).toFixed(0)}</span>
+                  <span>RR {(recommendation.winRateBreakdown.riskReward * 100).toFixed(0)}</span>
+                </div>
+              </div>
+            )}
+          </div>
 
           {recommendation && (
             <div className="guided-recommendation">
@@ -333,6 +414,14 @@ export default function ManualTraderWorkspace() {
               <div>
                 <span>신뢰도</span>
                 <strong>{(recommendation.confidence * 100).toFixed(1)}%</strong>
+              </div>
+              <div>
+                <span>예상 승률</span>
+                <strong>{recommendation.predictedWinRate.toFixed(1)}%</strong>
+              </div>
+              <div>
+                <span>Risk/Reward</span>
+                <strong>{recommendation.riskRewardRatio.toFixed(2)}R</strong>
               </div>
             </div>
           )}

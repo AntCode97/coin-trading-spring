@@ -489,7 +489,19 @@ export interface GuidedMarketItem {
   changeRate: number;
   changePrice: number;
   accTradePrice: number;
+  accTradeVolume: number;
+  surgeRate: number;
+  marketCapFlowScore: number;
 }
+
+export type GuidedMarketSortBy =
+  | 'TURNOVER'
+  | 'CHANGE_RATE'
+  | 'VOLUME'
+  | 'SURGE_RATE'
+  | 'MARKET_CAP_FLOW';
+
+export type GuidedSortDirection = 'ASC' | 'DESC';
 
 export interface GuidedCandle {
   timestamp: number;
@@ -507,6 +519,14 @@ export interface GuidedRecommendation {
   stopLossPrice: number;
   takeProfitPrice: number;
   confidence: number;
+  predictedWinRate: number;
+  riskRewardRatio: number;
+  winRateBreakdown: {
+    trend: number;
+    pullback: number;
+    volatility: number;
+    riskReward: number;
+  };
   suggestedOrderType: string;
   rationale: string[];
 }
@@ -574,8 +594,11 @@ export interface GuidedStartRequest {
 }
 
 export const guidedTradingApi = {
-  getMarkets: (): Promise<GuidedMarketItem[]> =>
-    api.get('/guided-trading/markets').then((res) => res.data),
+  getMarkets: (
+    sortBy: GuidedMarketSortBy = 'TURNOVER',
+    sortDirection: GuidedSortDirection = 'DESC'
+  ): Promise<GuidedMarketItem[]> =>
+    api.get('/guided-trading/markets', { params: { sortBy, sortDirection } }).then((res) => res.data),
 
   getChart: (
     market: string,

@@ -14,6 +14,8 @@ import org.springframework.transaction.annotation.Transactional
 import java.math.BigDecimal
 import java.math.RoundingMode
 import java.time.Instant
+import kotlin.math.abs
+import kotlin.math.ln
 import kotlin.math.max
 
 @Service
@@ -30,7 +32,10 @@ class GuidedTradingService(
         val D = BigDecimal.ZERO
     }
 
-    fun getMarketBoard(): List<GuidedMarketItem> {
+    fun getMarketBoard(
+        sortBy: GuidedMarketSortBy = GuidedMarketSortBy.TURNOVER,
+        sortDirection: GuidedSortDirection = GuidedSortDirection.DESC
+    ): List<GuidedMarketItem> {
         val markets = bithumbPublicApi.getMarketAll()
             ?.filter { it.market.startsWith("KRW-") }
             ?: emptyList()
@@ -49,9 +54,15 @@ class GuidedTradingService(
                 tradePrice = ticker.tradePrice.toDouble(),
                 changeRate = ticker.changeRate?.toDouble()?.times(100.0) ?: 0.0,
                 changePrice = ticker.changePrice?.toDouble() ?: 0.0,
-                accTradePrice = ticker.accTradePrice?.toDouble() ?: 0.0
+                accTradePrice = ticker.accTradePrice?.toDouble() ?: 0.0,
+                accTradeVolume = ticker.accTradeVolume?.toDouble() ?: 0.0,
+                surgeRate = calculateSurgeRate(
+                    openingPrice = ticker.openingPrice?.toDouble(),
+                    highPrice = ticker.highPrice?.toDouble(),
+                    tradePrice = ticker.tradePrice.toDouble()
+                )
             )
-        }.sortedByDescending { it.accTradePrice }
+        }.sortedWith(buildMarketComparator(sortBy, sortDirection))
     }
 
     fun getChartData(market: String, interval: String, count: Int): GuidedChartResponse {
@@ -435,6 +446,8 @@ class GuidedTradingService(
     private fun buildRecommendation(market: String, candles: List<CandleResponse>): GuidedRecommendation {
         if (candles.size < 30) {
             val current = bithumbPublicApi.getCurrentPrice(market)?.firstOrNull()?.tradePrice?.toDouble() ?: 0.0
+            val fallbackWinRate = 38.0
+            val calibration = calibratePredictedWinRate(market, fallbackWinRate)
             return GuidedRecommendation(
                 market = market,
                 currentPrice = current,
@@ -442,8 +455,16 @@ class GuidedTradingService(
                 stopLossPrice = current * 0.985,
                 takeProfitPrice = current * 1.03,
                 confidence = 0.45,
+                predictedWinRate = calibration.calibrated,
+                riskRewardRatio = 2.0,
+                winRateBreakdown = GuidedWinRateBreakdown(
+                    trend = 0.4,
+                    pullback = 0.35,
+                    volatility = 0.5,
+                    riskReward = 0.55
+                ),
                 suggestedOrderType = "MARKET",
-                rationale = listOf("캔들 데이터 부족으로 보수적 추천")
+                rationale = listOfNotNull("캔들 데이터 부족으로 보수적 추천", calibration.note)
             )
         }
 
@@ -464,8 +485,24 @@ class GuidedTradingService(
         val recommended = max(candidate, support20 * 1.001)
         val stopLoss = recommended - max(recommended * 0.01, atr14 * 1.4)
         val takeProfit = recommended + (recommended - stopLoss) * 2.2
+        val riskRewardRatio = ((takeProfit - recommended) / max(recommended - stopLoss, 1.0)).coerceIn(0.5, 5.0)
         val diffPct = kotlin.math.abs(current - recommended) / current
         val orderType = if (diffPct < 0.0025) "MARKET" else "LIMIT"
+
+        val trendScore = when {
+            current > sma20 && sma20 > sma60 -> 0.82
+            current > sma20 -> 0.65
+            current > sma60 -> 0.52
+            else -> 0.36
+        }
+        val pullbackDepth = ((current - recommended) / current).coerceIn(0.0, 0.04)
+        val pullbackScore = (0.9 - (pullbackDepth / 0.04) * 0.45).coerceIn(0.35, 0.9)
+        val atrPercent = (atr14 / current * 100.0).coerceIn(0.1, 5.0)
+        val volatilityScore = (0.92 - (atrPercent / 5.0) * 0.55).coerceIn(0.3, 0.92)
+        val rrScore = ((riskRewardRatio - 1.0) / 2.2).coerceIn(0.0, 1.0) * 0.6 + 0.35
+        val weighted = trendScore * 0.34 + pullbackScore * 0.24 + volatilityScore * 0.20 + rrScore * 0.22
+        val predictedWinRate = (35.0 + weighted * 47.0).coerceIn(35.0, 82.0)
+        val calibration = calibratePredictedWinRate(market, predictedWinRate)
 
         val confidence = (0.45 + momentum * 0.35 + (if (diffPct < 0.01) 0.15 else 0.05)).coerceIn(0.2, 0.95)
 
@@ -474,6 +511,7 @@ class GuidedTradingService(
             add("지지선(20봉 저점)=${formatPrice(support20)}")
             add("ATR14=${formatPrice(atr14)} 기반 손절 폭 적용")
             add("RR 2.2 기준 익절/손절 자동 설정")
+            calibration.note?.let { add(it) }
         }
 
         return GuidedRecommendation(
@@ -483,9 +521,76 @@ class GuidedTradingService(
             stopLossPrice = stopLoss,
             takeProfitPrice = takeProfit,
             confidence = confidence,
+            predictedWinRate = calibration.calibrated,
+            riskRewardRatio = riskRewardRatio,
+            winRateBreakdown = GuidedWinRateBreakdown(
+                trend = trendScore,
+                pullback = pullbackScore,
+                volatility = volatilityScore,
+                riskReward = rrScore
+            ),
             suggestedOrderType = orderType,
             rationale = reasons
         )
+    }
+
+    private fun calibratePredictedWinRate(market: String, baseWinRate: Double): WinRateCalibration {
+        val marketSamples = guidedTradeRepository
+            .findTop80ByMarketAndStatusOrderByCreatedAtDesc(market, GuidedTradeEntity.STATUS_CLOSED)
+        val globalSamples = guidedTradeRepository
+            .findTop200ByStatusOrderByCreatedAtDesc(GuidedTradeEntity.STATUS_CLOSED)
+
+        val samples = when {
+            marketSamples.size >= 12 -> marketSamples
+            globalSamples.isNotEmpty() -> globalSamples
+            else -> marketSamples
+        }
+
+        if (samples.size < 8) {
+            return WinRateCalibration(baseWinRate.coerceIn(30.0, 86.0), null)
+        }
+
+        val winRate = samples.count {
+            it.realizedPnl > BigDecimal.ZERO || it.realizedPnlPercent > BigDecimal.ZERO
+        }.toDouble() / samples.size.toDouble() * 100.0
+        val avgPnlPercent = samples.map { it.realizedPnlPercent.toDouble() }.average().takeIf { !it.isNaN() } ?: 0.0
+
+        val sampleWeight = (samples.size / 40.0).coerceIn(0.25, 1.0)
+        val adjustByWinRate = ((winRate - 50.0) * 0.35).coerceIn(-11.0, 11.0)
+        val adjustByPnl = (avgPnlPercent * 0.9).coerceIn(-8.0, 8.0)
+        val totalAdjust = ((adjustByWinRate + adjustByPnl) * sampleWeight).coerceIn(-9.0, 9.0)
+
+        val calibrated = (baseWinRate + totalAdjust).coerceIn(30.0, 86.0)
+        val note = "최근 실거래 보정: ${if (totalAdjust >= 0) "+" else ""}${String.format("%.1f", totalAdjust)}%p (표본 ${samples.size}건)"
+        return WinRateCalibration(calibrated, note)
+    }
+
+    private fun buildMarketComparator(
+        sortBy: GuidedMarketSortBy,
+        sortDirection: GuidedSortDirection
+    ): Comparator<GuidedMarketItem> {
+        val metricComparator = when (sortBy) {
+            GuidedMarketSortBy.TURNOVER -> compareBy<GuidedMarketItem> { it.accTradePrice }
+            GuidedMarketSortBy.CHANGE_RATE -> compareBy { it.changeRate }
+            GuidedMarketSortBy.VOLUME -> compareBy { it.accTradeVolume }
+            GuidedMarketSortBy.SURGE_RATE -> compareBy { it.surgeRate }
+            GuidedMarketSortBy.MARKET_CAP_FLOW -> compareBy { it.marketCapFlowScore }
+        }
+        return if (sortDirection == GuidedSortDirection.DESC) {
+            metricComparator.reversed().thenBy { it.market }
+        } else {
+            metricComparator.thenBy { it.market }
+        }
+    }
+
+    private fun calculateSurgeRate(
+        openingPrice: Double?,
+        highPrice: Double?,
+        tradePrice: Double
+    ): Double {
+        if (openingPrice == null || openingPrice <= 0.0) return 0.0
+        val peak = max(highPrice ?: tradePrice, tradePrice)
+        return ((peak - openingPrice) / openingPrice * 100.0).coerceIn(-99.0, 500.0)
     }
 
     private fun calcAtr(candles: List<CandleResponse>, period: Int): Double {
@@ -579,8 +684,29 @@ data class GuidedMarketItem(
     val tradePrice: Double,
     val changeRate: Double,
     val changePrice: Double,
-    val accTradePrice: Double
-)
+    val accTradePrice: Double,
+    val accTradeVolume: Double,
+    val surgeRate: Double
+) {
+    val marketCapFlowScore: Double
+        get() {
+            val liquidityFactor = ln(max(accTradePrice, 1.0))
+            return abs(changeRate) * liquidityFactor
+        }
+}
+
+enum class GuidedMarketSortBy {
+    TURNOVER,
+    CHANGE_RATE,
+    VOLUME,
+    SURGE_RATE,
+    MARKET_CAP_FLOW
+}
+
+enum class GuidedSortDirection {
+    ASC,
+    DESC
+}
 
 data class GuidedCandle(
     val timestamp: Long,
@@ -598,8 +724,23 @@ data class GuidedRecommendation(
     val stopLossPrice: Double,
     val takeProfitPrice: Double,
     val confidence: Double,
+    val predictedWinRate: Double,
+    val riskRewardRatio: Double,
+    val winRateBreakdown: GuidedWinRateBreakdown,
     val suggestedOrderType: String,
     val rationale: List<String>
+)
+
+data class GuidedWinRateBreakdown(
+    val trend: Double,
+    val pullback: Double,
+    val volatility: Double,
+    val riskReward: Double
+)
+
+private data class WinRateCalibration(
+    val calibrated: Double,
+    val note: String?
 )
 
 data class GuidedTradeEventView(

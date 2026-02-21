@@ -171,6 +171,8 @@ class GuidedTradeEventEntity(
 interface GuidedTradeRepository : JpaRepository<GuidedTradeEntity, Long> {
     fun findByStatusIn(statuses: List<String>): List<GuidedTradeEntity>
     fun findTopByMarketAndStatusInOrderByCreatedAtDesc(market: String, statuses: List<String>): GuidedTradeEntity?
+    fun findTop80ByMarketAndStatusOrderByCreatedAtDesc(market: String, status: String): List<GuidedTradeEntity>
+    fun findTop200ByStatusOrderByCreatedAtDesc(status: String): List<GuidedTradeEntity>
 }
 
 interface GuidedTradeEventRepository : JpaRepository<GuidedTradeEventEntity, Long> {

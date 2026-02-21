@@ -46,6 +46,22 @@
   padding: 8px 10px;
 }
 
+.guided-sort-controls {
+  margin-top: 8px;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 6px;
+}
+
+.guided-sort-controls select {
+  background: #111722;
+  border: 1px solid #2a3445;
+  color: #e5ecf7;
+  border-radius: 8px;
+  padding: 7px 8px;
+  font-size: 12px;
+}
+
 .guided-market-list {
   max-height: 560px;
   overflow: auto;
@@ -98,6 +114,11 @@
   font-size: 12px;
 }
 
+.guided-market-row .price-wrap small {
+  font-size: 11px;
+  color: #8f9aad;
+}
+
 .guided-chart-panel {
   padding: 10px;
 }
@@ -135,10 +156,62 @@
   height: 460px;
 }
 
+.guided-chart-shell {
+  position: relative;
+}
+
+.guided-winrate-overlay {
+  position: absolute;
+  top: 10px;
+  left: 10px;
+  z-index: 3;
+  width: min(320px, calc(100% - 20px));
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 10px;
+  background: rgba(9, 13, 19, 0.84);
+  backdrop-filter: blur(4px);
+  padding: 8px;
+}
+
+.guided-winrate-overlay .winrate-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  color: #dce6f8;
+  font-size: 12px;
+}
+
+.guided-winrate-overlay .winrate-header strong {
+  color: #f5c542;
+  font-size: 15px;
+}
+
+.guided-winrate-overlay .winrate-bar {
+  margin-top: 7px;
+  height: 8px;
+  border-radius: 999px;
+  background: #202939;
+  overflow: hidden;
+}
+
+.guided-winrate-overlay .winrate-fill {
+  height: 100%;
+  background: linear-gradient(90deg, #f07b56 0%, #f3be46 50%, #49d28f 100%);
+}
+
+.guided-winrate-overlay .winrate-factors {
+  margin-top: 6px;
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 4px;
+  font-size: 10px;
+  color: #aab6cb;
+}
+
 .guided-recommendation {
   margin-top: 10px;
   display: grid;
-  grid-template-columns: repeat(5, minmax(0, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(110px, 1fr));
   gap: 8px;
 }
 
