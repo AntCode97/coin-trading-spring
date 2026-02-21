@@ -367,8 +367,7 @@ class MemeScalperEngine(
         val market = position.market
 
         val actualBalance = try {
-            val coinSymbol = market.removePrefix("KRW-")
-            bithumbPrivateApi.getBalances()?.find { it.currency == coinSymbol }?.balance ?: BigDecimal.ZERO
+            getCoinTotalBalance(market)
         } catch (e: Exception) {
             log.warn("[$market] 잔고 조회 실패: ${e.message}")
             return false
@@ -432,8 +431,7 @@ class MemeScalperEngine(
         // 코인 잔고 체크 - 이미 보유 시 진입 불가 (ABANDONED 케이스 방지)
         val coinSymbol = market.removePrefix("KRW-")
         try {
-            val coinBalance = bithumbPrivateApi.getBalances()
-                ?.find { it.currency == coinSymbol }?.balance ?: BigDecimal.ZERO
+            val coinBalance = getCoinTotalBalance(market)
             if (coinBalance > BigDecimal.ZERO) {
                 log.warn("[$market] 이미 $coinSymbol 잔고 보유 중: $coinBalance - 중복 진입 방지")
                 balanceReservationService.release("MEME_SCALPER", market)
@@ -569,13 +567,11 @@ class MemeScalperEngine(
      */
     private fun verifyActualBalance(market: String, expectedQuantity: Double): Boolean {
         return try {
-            val coinSymbol = PositionHelper.extractCoinSymbol(market)
-            val balances = bithumbPrivateApi.getBalances() ?: run {
-                log.error("[$market] 잔고 조회 실패 - null 응답")
+            val actualBalance = getCoinTotalBalance(market)
+            if (actualBalance == BigDecimal.ZERO) {
+                log.error("[$market] 잔고 없음 또는 조회 실패")
                 return false
             }
-
-            val actualBalance = balances.find { it.currency == coinSymbol }?.balance ?: BigDecimal.ZERO
 
             // 예상 수량의 90% 이상이면 성공으로 간주 (부분 체결/수수료 고려)
             val minAcceptableBalance = BigDecimal(expectedQuantity).multiply(BigDecimal("0.9"))
@@ -705,6 +701,21 @@ class MemeScalperEngine(
     private fun monitorSinglePosition(position: MemeScalperTradeEntity) {
         val market = position.market
 
+        val actualHolding = getCoinTotalBalance(market).toDouble()
+        if (actualHolding <= 0.0 && position.quantity > 0.0) {
+            log.warn("[$market] 수동 개입 감지(실보유 0) - MemeScalper 포지션 자동 종료")
+            position.status = "CLOSED"
+            position.exitReason = "MANUAL_INTERVENTION"
+            position.exitTime = Instant.now()
+            tradeRepository.save(position)
+            return
+        }
+        if (actualHolding > 0.0 && actualHolding < position.quantity * 0.95) {
+            log.info("[$market] 실보유 수량 동기화: ${position.quantity} -> $actualHolding")
+            position.quantity = actualHolding
+            tradeRepository.save(position)
+        }
+
         // ID 필수 체크
         val positionId = resolvePositionId(position) ?: return
 
@@ -776,6 +787,13 @@ class MemeScalperEngine(
         detector.getRealtimePrice(market)?.let { return it }
         val ticker = bithumbPublicApi.getCurrentPrice(market)?.firstOrNull() ?: return null
         return ticker.tradePrice.toDouble()
+    }
+
+    private fun getCoinTotalBalance(market: String): BigDecimal {
+        val coinSymbol = PositionHelper.extractCoinSymbol(market)
+        val balances = bithumbPrivateApi.getBalances() ?: return BigDecimal.ZERO
+        val coin = balances.find { it.currency.equals(coinSymbol, ignoreCase = true) }
+        return (coin?.balance ?: BigDecimal.ZERO) + (coin?.locked ?: BigDecimal.ZERO)
     }
 
     private fun updatePeakPriceIfNeeded(position: MemeScalperTradeEntity, positionId: Long, currentPrice: Double) {

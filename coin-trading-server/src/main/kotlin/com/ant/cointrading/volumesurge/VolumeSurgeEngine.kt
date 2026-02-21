@@ -427,15 +427,11 @@ class VolumeSurgeEngine(
      */
     private fun verifyActualBalance(market: String, expectedQuantity: Double): Boolean {
         return try {
-            val coinSymbol = PositionHelper.extractCoinSymbol(market)
-            val balances = bithumbPrivateApi.getBalances() ?: run {
-                log.error("[$market] 잔고 조회 실패 - null 응답")
+            val actualBalance = getCoinTotalBalance(market)
+            if (actualBalance == BigDecimal.ZERO) {
+                log.error("[$market] 잔고 없음 또는 조회 실패")
                 return false
             }
-
-            val coinBalance = balances.find { it.currency == coinSymbol }
-            val actualBalance = (coinBalance?.balance ?: BigDecimal.ZERO) +
-                (coinBalance?.locked ?: BigDecimal.ZERO)
 
             val minAcceptableBalance = BigDecimal(expectedQuantity).multiply(BigDecimal("0.9"))
 
@@ -829,9 +825,7 @@ class VolumeSurgeEngine(
         val market = position.market
 
         val actualBalance = try {
-            val coinSymbol = PositionHelper.extractCoinSymbol(market)
-            val coin = bithumbPrivateApi.getBalances()?.find { it.currency == coinSymbol }
-            (coin?.balance ?: BigDecimal.ZERO) + (coin?.locked ?: BigDecimal.ZERO)
+            getCoinTotalBalance(market)
         } catch (e: Exception) {
             log.warn("[$market] 잔고 조회 실패: ${e.message}")
             return false
@@ -859,6 +853,21 @@ class VolumeSurgeEngine(
      */
     private fun monitorSinglePosition(position: VolumeSurgeTradeEntity) {
         val market = position.market
+
+        val actualHolding = getCoinTotalBalance(market).toDouble()
+        if (actualHolding <= 0.0 && position.quantity > 0.0) {
+            log.warn("[$market] 수동 개입 감지(실보유 0) - VolumeSurge 포지션 자동 종료")
+            position.status = "CLOSED"
+            position.exitTime = Instant.now()
+            position.exitReason = "MANUAL_INTERVENTION"
+            tradeRepository.save(position)
+            return
+        }
+        if (actualHolding > 0.0 && actualHolding < position.quantity * 0.95) {
+            log.info("[$market] 실보유 수량 동기화: ${position.quantity} -> $actualHolding")
+            position.quantity = actualHolding
+            tradeRepository.save(position)
+        }
 
         // ID 필수 체크 - ID 없으면 ABANDONED 처리
         val positionId = position.id ?: run {
@@ -930,6 +939,13 @@ class VolumeSurgeEngine(
     private fun fetchCurrentPriceOrNull(market: String): Double? {
         val ticker = bithumbPublicApi.getCurrentPrice(market)?.firstOrNull() ?: return null
         return ticker.tradePrice.toDouble()
+    }
+
+    private fun getCoinTotalBalance(market: String): BigDecimal {
+        val coinSymbol = PositionHelper.extractCoinSymbol(market)
+        val balances = bithumbPrivateApi.getBalances() ?: return BigDecimal.ZERO
+        val coin = balances.find { it.currency.equals(coinSymbol, ignoreCase = true) }
+        return (coin?.balance ?: BigDecimal.ZERO) + (coin?.locked ?: BigDecimal.ZERO)
     }
 
     private fun resolveAppliedStopLoss(position: VolumeSurgeTradeEntity): Double {

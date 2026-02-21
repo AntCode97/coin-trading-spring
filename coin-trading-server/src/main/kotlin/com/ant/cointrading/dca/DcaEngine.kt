@@ -517,6 +517,21 @@ class DcaEngine(
     private fun monitorSinglePosition(position: DcaPositionEntity) {
         val market = position.market
 
+        val actualHolding = getCoinTotalBalance(market).toDouble()
+        if (actualHolding <= 0.0 && position.totalQuantity > 0.0) {
+            log.warn("[$market] 수동 개입 감지(실보유 0) - DCA 포지션 자동 종료")
+            position.status = "CLOSED"
+            position.exitReason = "MANUAL_INTERVENTION"
+            position.exitedAt = Instant.now()
+            dcaPositionRepository.save(position)
+            return
+        }
+        if (actualHolding > 0.0 && actualHolding < position.totalQuantity * 0.95) {
+            log.info("[$market] 실보유 수량 동기화: ${position.totalQuantity} -> $actualHolding")
+            position.totalQuantity = actualHolding
+            dcaPositionRepository.save(position)
+        }
+
         // 0. 진입가 무결성 검증 - 진입가가 0이면 거래 불가능
         if (position.averagePrice <= 0) {
             log.error("[$market] 진입가 무효(${position.averagePrice}) - 포지션 정리 필요")
@@ -774,7 +789,7 @@ class DcaEngine(
         val coinSymbol = PositionHelper.extractCoinSymbol(market)
         return try {
             val balances = bithumbPrivateApi.getBalances() ?: return BigDecimal.ZERO
-            val coin = balances.find { it.currency == coinSymbol }
+            val coin = balances.find { it.currency.equals(coinSymbol, ignoreCase = true) }
             val coinBalance = (coin?.balance ?: BigDecimal.ZERO) + (coin?.locked ?: BigDecimal.ZERO)
 
             when {
@@ -786,6 +801,13 @@ class DcaEngine(
             log.warn("[$market] 잔고 조회 실패: ${e.message}")
             BigDecimal.ZERO
         }
+    }
+
+    private fun getCoinTotalBalance(market: String): BigDecimal {
+        val coinSymbol = PositionHelper.extractCoinSymbol(market)
+        val balances = bithumbPrivateApi.getBalances() ?: return BigDecimal.ZERO
+        val coin = balances.find { it.currency.equals(coinSymbol, ignoreCase = true) }
+        return (coin?.balance ?: BigDecimal.ZERO) + (coin?.locked ?: BigDecimal.ZERO)
     }
 
     /**
