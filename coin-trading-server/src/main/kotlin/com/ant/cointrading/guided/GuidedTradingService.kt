@@ -2,6 +2,7 @@ package com.ant.cointrading.guided
 
 import com.ant.cointrading.api.bithumb.BithumbPrivateApi
 import com.ant.cointrading.api.bithumb.BithumbPublicApi
+import com.ant.cointrading.api.bithumb.BithumbApiException
 import com.ant.cointrading.api.bithumb.OrderResponse
 import com.ant.cointrading.api.bithumb.TradeResponse
 import com.ant.cointrading.repository.GuidedTradeEntity
@@ -180,17 +181,32 @@ class GuidedTradingService(
 
         val orderType = (request.orderType ?: recommendation.suggestedOrderType).trim().uppercase()
         val amountKrw = BigDecimal.valueOf(request.amountKrw.coerceAtLeast(5100))
-        val limitPrice = request.limitPrice?.let { BigDecimal.valueOf(it) }
+        val requestedLimitPrice = request.limitPrice?.let { BigDecimal.valueOf(it) }
+        var selectedLimitPrice: BigDecimal? = null
 
-        val submitted = when (orderType) {
-            GuidedTradeEntity.ORDER_TYPE_LIMIT -> {
-                val selectedPrice = limitPrice ?: BigDecimal.valueOf(recommendation.recommendedEntryPrice)
-                val quantity = amountKrw.divide(selectedPrice, 8, RoundingMode.DOWN)
-                bithumbPrivateApi.buyLimitOrder(market, selectedPrice, quantity)
+        val submitted = try {
+            when (orderType) {
+                GuidedTradeEntity.ORDER_TYPE_LIMIT -> {
+                    val selectedPrice = normalizeLimitPrice(
+                        market,
+                        requestedLimitPrice ?: BigDecimal.valueOf(recommendation.recommendedEntryPrice)
+                    )
+                    selectedLimitPrice = selectedPrice
+                    require(selectedPrice > BigDecimal.ZERO) { "지정가가 유효하지 않습니다." }
+                    if (requestedLimitPrice != null && selectedPrice != requestedLimitPrice) {
+                        log.info("[$market] 지정가 보정 적용: requested=${requestedLimitPrice.toPlainString()} -> normalized=${selectedPrice.toPlainString()}")
+                    }
+
+                    val quantity = amountKrw.divide(selectedPrice, 8, RoundingMode.DOWN)
+                    require(quantity > BigDecimal.ZERO) { "주문 수량이 0입니다. 주문금액 또는 지정가를 확인하세요." }
+                    bithumbPrivateApi.buyLimitOrder(market, selectedPrice, quantity)
+                }
+                else -> {
+                    bithumbPrivateApi.buyMarketOrder(market, amountKrw)
+                }
             }
-            else -> {
-                bithumbPrivateApi.buyMarketOrder(market, amountKrw)
-            }
+        } catch (e: BithumbApiException) {
+            throw IllegalArgumentException(buildOrderErrorMessage(e))
         }
 
         val order = bithumbPrivateApi.getOrder(submitted.uuid) ?: submitted
@@ -198,7 +214,7 @@ class GuidedTradingService(
         val tickerPrice = bithumbPublicApi.getCurrentPrice(market)?.firstOrNull()?.tradePrice
         val referencePrice = when {
             order.price != null && order.price > BigDecimal.ZERO -> order.price
-            limitPrice != null -> limitPrice
+            selectedLimitPrice != null -> selectedLimitPrice
             tickerPrice != null -> tickerPrice
             else -> BigDecimal.valueOf(recommendation.recommendedEntryPrice)
         }
@@ -722,6 +738,35 @@ class GuidedTradingService(
     }
 
     private fun formatPrice(price: Double): String = String.format("%.0f", price)
+
+    private fun normalizeLimitPrice(market: String, requestedPrice: BigDecimal): BigDecimal {
+        val orderbook = bithumbPublicApi.getOrderbook(market)?.firstOrNull()
+        val units = orderbook?.orderbookUnits.orEmpty()
+
+        val step = units
+            .map { it.askPrice }
+            .zipWithNext { a, b -> a.subtract(b).abs() }
+            .filter { it > BigDecimal.ZERO }
+            .minOrNull()
+
+        if (step != null && step > BigDecimal.ZERO) {
+            val steps = requestedPrice.divide(step, 0, RoundingMode.HALF_UP)
+            return step.multiply(steps).stripTrailingZeros()
+        }
+
+        val referencePrice = units.firstOrNull()?.askPrice ?: requestedPrice
+        val scale = referencePrice.stripTrailingZeros().scale().coerceIn(0, 10)
+        return requestedPrice.setScale(scale, RoundingMode.HALF_UP)
+    }
+
+    private fun buildOrderErrorMessage(e: BithumbApiException): String {
+        return when {
+            e.isInsufficientFunds() -> "주문 실패: 잔고가 부족합니다. 주문금액을 낮추거나 잔고를 확인하세요."
+            e.isInvalidOrder() -> "주문 실패: 가격/수량 형식이 유효하지 않습니다. 지정가 소수점 또는 최소 주문금액을 확인하세요."
+            e.isMarketUnavailable() -> "주문 실패: 현재 해당 마켓은 거래가 불가능합니다."
+            else -> e.errorMessage ?: "주문 실패: 거래소 응답 오류"
+        }
+    }
 
     private fun resolveCurrentOrder(position: GuidedTradeEntity?): GuidedOrderView? {
         val orderId = when {

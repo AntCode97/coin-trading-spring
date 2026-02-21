@@ -9,6 +9,7 @@ import com.ant.cointrading.guided.GuidedSortDirection
 import com.ant.cointrading.guided.GuidedStartRequest
 import com.ant.cointrading.guided.GuidedTradeView
 import com.ant.cointrading.guided.GuidedTradingService
+import org.springframework.http.HttpStatus
 import org.springframework.web.bind.annotation.GetMapping
 import org.springframework.web.bind.annotation.PathVariable
 import org.springframework.web.bind.annotation.PostMapping
@@ -16,6 +17,7 @@ import org.springframework.web.bind.annotation.RequestBody
 import org.springframework.web.bind.annotation.RequestMapping
 import org.springframework.web.bind.annotation.RequestParam
 import org.springframework.web.bind.annotation.RestController
+import org.springframework.web.server.ResponseStatusException
 
 @RestController
 @RequestMapping("/api/guided-trading")
@@ -56,7 +58,11 @@ class GuidedTradingController(
 
     @PostMapping("/start")
     fun startTrading(@RequestBody request: GuidedStartRequest): GuidedTradeView {
-        return guidedTradingService.startAutoTrading(request)
+        return try {
+            guidedTradingService.startAutoTrading(request)
+        } catch (e: IllegalArgumentException) {
+            throw ResponseStatusException(HttpStatus.BAD_REQUEST, e.message ?: "요청값 오류")
+        }
     }
 
     @PostMapping("/stop")
