@@ -506,6 +506,8 @@ class GuidedTradingService(
                 takeProfitPrice = current * 1.03,
                 confidence = 0.45,
                 predictedWinRate = calibration.calibrated,
+                recommendedEntryWinRate = calibration.calibrated,
+                marketEntryWinRate = calibration.calibrated,
                 riskRewardRatio = 2.0,
                 winRateBreakdown = GuidedWinRateBreakdown(
                     trend = 0.4,
@@ -551,8 +553,21 @@ class GuidedTradingService(
         val volatilityScore = (0.92 - (atrPercent / 5.0) * 0.55).coerceIn(0.3, 0.92)
         val rrScore = ((riskRewardRatio - 1.0) / 2.2).coerceIn(0.0, 1.0) * 0.6 + 0.35
         val weighted = trendScore * 0.34 + pullbackScore * 0.24 + volatilityScore * 0.20 + rrScore * 0.22
-        val predictedWinRate = (35.0 + weighted * 47.0).coerceIn(35.0, 82.0)
-        val calibration = calibratePredictedWinRate(market, predictedWinRate)
+
+        val recommendedBaseWinRate = (35.0 + weighted * 47.0).coerceIn(35.0, 82.0)
+
+        val marketStopLoss = current - max(current * 0.01, atr14 * 1.4)
+        val marketTakeProfit = current + (current - marketStopLoss) * 2.2
+        val marketRiskRewardRatio = ((marketTakeProfit - current) / max(current - marketStopLoss, 1.0)).coerceIn(0.5, 5.0)
+        val marketPullbackScore = 0.46
+        val marketRrScore = ((marketRiskRewardRatio - 1.0) / 2.2).coerceIn(0.0, 1.0) * 0.6 + 0.35
+        val marketWeighted = trendScore * 0.34 + marketPullbackScore * 0.24 + volatilityScore * 0.20 + marketRrScore * 0.22
+        val marketEntryPenalty = ((current - recommended) / current * 100.0 * 1.6).coerceIn(-6.0, 10.0)
+        val marketBaseWinRate = (35.0 + marketWeighted * 47.0 - marketEntryPenalty).coerceIn(30.0, 82.0)
+
+        val calibration = calibratePredictedWinRate(market, recommendedBaseWinRate)
+        val calibratedRecommendedWinRate = calibration.calibrated
+        val calibratedMarketWinRate = (marketBaseWinRate + (calibration.calibrated - recommendedBaseWinRate)).coerceIn(28.0, 84.0)
 
         val confidence = (0.45 + momentum * 0.35 + (if (diffPct < 0.01) 0.15 else 0.05)).coerceIn(0.2, 0.95)
 
@@ -571,7 +586,9 @@ class GuidedTradingService(
             stopLossPrice = stopLoss,
             takeProfitPrice = takeProfit,
             confidence = confidence,
-            predictedWinRate = calibration.calibrated,
+            predictedWinRate = calibratedRecommendedWinRate,
+            recommendedEntryWinRate = calibratedRecommendedWinRate,
+            marketEntryWinRate = calibratedMarketWinRate,
             riskRewardRatio = riskRewardRatio,
             winRateBreakdown = GuidedWinRateBreakdown(
                 trend = trendScore,
@@ -858,6 +875,8 @@ data class GuidedRecommendation(
     val takeProfitPrice: Double,
     val confidence: Double,
     val predictedWinRate: Double,
+    val recommendedEntryWinRate: Double,
+    val marketEntryWinRate: Double,
     val riskRewardRatio: Double,
     val winRateBreakdown: GuidedWinRateBreakdown,
     val suggestedOrderType: String,

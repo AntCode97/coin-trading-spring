@@ -520,6 +520,8 @@ export interface GuidedRecommendation {
   takeProfitPrice: number;
   confidence: number;
   predictedWinRate: number;
+  recommendedEntryWinRate: number;
+  marketEntryWinRate: number;
   riskRewardRatio: number;
   winRateBreakdown: {
     trend: number;

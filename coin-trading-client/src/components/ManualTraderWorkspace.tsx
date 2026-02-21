@@ -332,16 +332,6 @@ export default function ManualTraderWorkspace() {
           text: event.eventType,
         };
       });
-    const latestCandle = payload.candles[payload.candles.length - 1];
-    if (latestCandle) {
-      markers.push({
-        time: asUtc(latestCandle.timestamp),
-        position: 'aboveBar',
-        color: '#f5c542',
-        shape: 'circle',
-        text: `예상 승률 ${payload.recommendation.predictedWinRate.toFixed(1)}%`,
-      });
-    }
     createSeriesMarkers(series, markers);
 
     if (shouldAutoFitRef.current) {
@@ -488,13 +478,13 @@ export default function ManualTraderWorkspace() {
             {recommendation && (
               <div className="guided-winrate-overlay">
                 <div className="winrate-header">
-                  <span>지금 진입 예상 승률</span>
-                  <strong>{recommendation.predictedWinRate.toFixed(1)}%</strong>
+                  <span>추천가 기준 예상 승률</span>
+                  <strong>{(recommendation.recommendedEntryWinRate ?? recommendation.predictedWinRate).toFixed(1)}%</strong>
                 </div>
                 <div className="winrate-bar">
                   <div
                     className="winrate-fill"
-                    style={{ width: `${Math.min(100, Math.max(0, recommendation.predictedWinRate))}%` }}
+                    style={{ width: `${Math.min(100, Math.max(0, recommendation.recommendedEntryWinRate ?? recommendation.predictedWinRate))}%` }}
                   />
                 </div>
                 <div className="winrate-factors">
@@ -530,8 +520,12 @@ export default function ManualTraderWorkspace() {
                 <strong>{(recommendation.confidence * 100).toFixed(1)}%</strong>
               </div>
               <div>
-                <span>예상 승률</span>
-                <strong>{recommendation.predictedWinRate.toFixed(1)}%</strong>
+                <span>추천가 승률</span>
+                <strong>{(recommendation.recommendedEntryWinRate ?? recommendation.predictedWinRate).toFixed(1)}%</strong>
+              </div>
+              <div>
+                <span>현재가 승률</span>
+                <strong>{(recommendation.marketEntryWinRate ?? recommendation.predictedWinRate).toFixed(1)}%</strong>
               </div>
               <div>
                 <span>Risk/Reward</span>
