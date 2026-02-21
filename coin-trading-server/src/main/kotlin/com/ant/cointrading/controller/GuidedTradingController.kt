@@ -4,6 +4,7 @@ import com.ant.cointrading.guided.GuidedChartResponse
 import com.ant.cointrading.guided.GuidedMarketItem
 import com.ant.cointrading.guided.GuidedRecommendation
 import com.ant.cointrading.guided.GuidedMarketSortBy
+import com.ant.cointrading.guided.GuidedRealtimeTickerView
 import com.ant.cointrading.guided.GuidedSortDirection
 import com.ant.cointrading.guided.GuidedStartRequest
 import com.ant.cointrading.guided.GuidedTradeView
@@ -46,6 +47,11 @@ class GuidedTradingController(
         @RequestParam(defaultValue = "120") count: Int
     ): GuidedRecommendation {
         return guidedTradingService.getRecommendation(market.uppercase(), interval, count)
+    }
+
+    @GetMapping("/ticker")
+    fun getRealtimeTicker(@RequestParam market: String): GuidedRealtimeTickerView? {
+        return guidedTradingService.getRealtimeTicker(market.uppercase())
     }
 
     @PostMapping("/start")

@@ -2,8 +2,8 @@ package com.ant.cointrading.guided
 
 import com.ant.cointrading.api.bithumb.BithumbPrivateApi
 import com.ant.cointrading.api.bithumb.BithumbPublicApi
-import com.ant.cointrading.api.bithumb.CandleResponse
 import com.ant.cointrading.api.bithumb.OrderResponse
+import com.ant.cointrading.api.bithumb.TradeResponse
 import com.ant.cointrading.repository.GuidedTradeEntity
 import com.ant.cointrading.repository.GuidedTradeEventEntity
 import com.ant.cointrading.repository.GuidedTradeEventRepository
@@ -67,9 +67,24 @@ class GuidedTradingService(
     }
 
     fun getChartData(market: String, interval: String, count: Int): GuidedChartResponse {
-        val candles = bithumbPublicApi.getOhlcv(market, interval, count.coerceIn(30, 300), null)
-            ?.sortedBy { it.timestamp }
-            ?: emptyList()
+        val normalizedInterval = interval.lowercase()
+        val candles = if (normalizedInterval == "tick") {
+            buildTickCandles(market, count.coerceIn(100, 500))
+        } else {
+            bithumbPublicApi.getOhlcv(market, interval, count.coerceIn(30, 300), null)
+                ?.sortedBy { it.timestamp }
+                ?.map {
+                    GuidedCandle(
+                        timestamp = it.timestamp,
+                        open = it.openingPrice.toDouble(),
+                        high = it.highPrice.toDouble(),
+                        low = it.lowPrice.toDouble(),
+                        close = it.tradePrice.toDouble(),
+                        volume = it.candleAccTradeVolume.toDouble()
+                    )
+                }
+                ?: emptyList()
+        }
 
         val recommendation = buildRecommendation(market, candles)
         val position = getActiveTrade(market)
@@ -101,19 +116,10 @@ class GuidedTradingService(
 
         return GuidedChartResponse(
             market = market,
-            interval = interval,
-            candles = candles.map {
-                GuidedCandle(
-                    timestamp = it.timestamp,
-                    open = it.openingPrice.toDouble(),
-                    high = it.highPrice.toDouble(),
-                    low = it.lowPrice.toDouble(),
-                    close = it.tradePrice.toDouble(),
-                    volume = it.candleAccTradeVolume.toDouble()
-                )
-            },
+            interval = normalizedInterval,
+            candles = candles,
             recommendation = recommendation,
-            activePosition = position?.toView(currentPrice = candles.lastOrNull()?.tradePrice?.toDouble()),
+            activePosition = position?.toView(currentPrice = candles.lastOrNull()?.close),
             events = events,
             orderbook = orderbook,
             orderSnapshot = GuidedOrderSnapshotView(
@@ -125,10 +131,35 @@ class GuidedTradingService(
     }
 
     fun getRecommendation(market: String, interval: String = "minute30", count: Int = 120): GuidedRecommendation {
-        val candles = bithumbPublicApi.getOhlcv(market, interval, count.coerceIn(30, 300), null)
-            ?.sortedBy { it.timestamp }
-            ?: emptyList()
+        val candles = if (interval.lowercase() == "tick") {
+            buildTickCandles(market, count.coerceIn(100, 500))
+        } else {
+            bithumbPublicApi.getOhlcv(market, interval, count.coerceIn(30, 300), null)
+                ?.sortedBy { it.timestamp }
+                ?.map {
+                    GuidedCandle(
+                        timestamp = it.timestamp,
+                        open = it.openingPrice.toDouble(),
+                        high = it.highPrice.toDouble(),
+                        low = it.lowPrice.toDouble(),
+                        close = it.tradePrice.toDouble(),
+                        volume = it.candleAccTradeVolume.toDouble()
+                    )
+                }
+                ?: emptyList()
+        }
         return buildRecommendation(market, candles)
+    }
+
+    fun getRealtimeTicker(market: String): GuidedRealtimeTickerView? {
+        val ticker = bithumbPublicApi.getCurrentPrice(market).orEmpty().firstOrNull() ?: return null
+        return GuidedRealtimeTickerView(
+            market = ticker.market,
+            tradePrice = ticker.tradePrice.toDouble(),
+            changeRate = ticker.changeRate?.toDouble()?.times(100.0),
+            tradeVolume = ticker.tradeVolume?.toDouble(),
+            timestamp = ticker.timestamp
+        )
     }
 
     fun getActivePosition(market: String): GuidedTradeView? {
@@ -462,7 +493,7 @@ class GuidedTradingService(
         )
     }
 
-    private fun buildRecommendation(market: String, candles: List<CandleResponse>): GuidedRecommendation {
+    private fun buildRecommendation(market: String, candles: List<GuidedCandle>): GuidedRecommendation {
         if (candles.size < 30) {
             val current = bithumbPublicApi.getCurrentPrice(market)?.firstOrNull()?.tradePrice?.toDouble() ?: 0.0
             val fallbackWinRate = 38.0
@@ -487,9 +518,9 @@ class GuidedTradingService(
             )
         }
 
-        val closes = candles.map { it.tradePrice.toDouble() }
-        val highs = candles.map { it.highPrice.toDouble() }
-        val lows = candles.map { it.lowPrice.toDouble() }
+        val closes = candles.map { it.close }
+        val highs = candles.map { it.high }
+        val lows = candles.map { it.low }
         val current = closes.last()
         val sma20 = closes.takeLast(20).average()
         val sma60 = closes.takeLast(60.coerceAtMost(closes.size)).average()
@@ -612,14 +643,43 @@ class GuidedTradingService(
         return ((peak - openingPrice) / openingPrice * 100.0).coerceIn(-99.0, 500.0)
     }
 
-    private fun calcAtr(candles: List<CandleResponse>, period: Int): Double {
+    private fun buildTickCandles(market: String, count: Int): List<GuidedCandle> {
+        val ticks = bithumbPublicApi.getTradesTicks(market, count)
+            ?.sortedBy { it.timestamp }
+            ?: return emptyList()
+
+        if (ticks.isEmpty()) return emptyList()
+
+        val grouped = ticks.groupBy { it.timestamp / 1000L }
+        return grouped.entries.sortedBy { it.key }.map { (sec, secTicks) ->
+            secTicks.toGuidedCandle(sec)
+        }
+    }
+
+    private fun List<TradeResponse>.toGuidedCandle(secondTs: Long): GuidedCandle {
+        val open = first().tradePrice.toDouble()
+        val close = last().tradePrice.toDouble()
+        val high = maxOf { it.tradePrice.toDouble() }
+        val low = minOf { it.tradePrice.toDouble() }
+        val volume = sumOf { it.tradeVolume.toDouble() }
+        return GuidedCandle(
+            timestamp = secondTs,
+            open = open,
+            high = high,
+            low = low,
+            close = close,
+            volume = volume
+        )
+    }
+
+    private fun calcAtr(candles: List<GuidedCandle>, period: Int): Double {
         if (candles.size < 2) return 0.0
         val trValues = mutableListOf<Double>()
         for (i in 1 until candles.size) {
             val cur = candles[i]
-            val prevClose = candles[i - 1].tradePrice.toDouble()
-            val high = cur.highPrice.toDouble()
-            val low = cur.lowPrice.toDouble()
+            val prevClose = candles[i - 1].close
+            val high = cur.high
+            val low = cur.low
             val tr = max(
                 high - low,
                 max(kotlin.math.abs(high - prevClose), kotlin.math.abs(low - prevClose))
@@ -902,6 +962,14 @@ data class GuidedOrderView(
     val remainingVolume: Double?,
     val executedVolume: Double?,
     val createdAt: String?
+)
+
+data class GuidedRealtimeTickerView(
+    val market: String,
+    val tradePrice: Double,
+    val changeRate: Double?,
+    val tradeVolume: Double?,
+    val timestamp: Long?
 )
 
 data class GuidedStartRequest(

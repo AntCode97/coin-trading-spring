@@ -16,9 +16,11 @@ import {
 import {
   guidedTradingApi,
   type GuidedChartResponse,
+  type GuidedCandle,
   type GuidedMarketItem,
   type GuidedMarketSortBy,
   type GuidedSortDirection,
+  type GuidedRealtimeTicker,
   type GuidedStartRequest,
 } from '../api';
 import './ManualTraderWorkspace.css';
@@ -75,6 +77,31 @@ function formatPct(value: number): string {
   return `${value >= 0 ? '+' : ''}${value.toFixed(2)}%`;
 }
 
+function intervalSeconds(interval: string): number {
+  if (interval === 'tick') return 1;
+  if (interval === 'day') return 86400;
+  if (interval.startsWith('minute')) {
+    const minute = Number(interval.replace('minute', ''));
+    if (Number.isFinite(minute) && minute > 0) return minute * 60;
+  }
+  return 60;
+}
+
+function toBucketStart(epochSec: number, interval: string): number {
+  const step = intervalSeconds(interval);
+  return Math.floor(epochSec / step) * step;
+}
+
+function toCandlestick(candle: GuidedCandle): CandlestickData<Time> {
+  return {
+    time: asUtc(candle.timestamp),
+    open: candle.open,
+    high: candle.high,
+    low: candle.low,
+    close: candle.close,
+  };
+}
+
 export default function ManualTraderWorkspace() {
   const prefs = useMemo(() => loadPrefs(), []);
   const [selectedMarket, setSelectedMarket] = useState<string>(prefs.selectedMarket ?? 'KRW-BTC');
@@ -94,6 +121,7 @@ export default function ManualTraderWorkspace() {
   const candleSeriesRef = useRef<ISeriesApi<'Candlestick'> | null>(null);
   const priceLinesRef = useRef<IPriceLine[]>([]);
   const shouldAutoFitRef = useRef<boolean>(true);
+  const liveCandlesRef = useRef<CandlestickData<Time>[]>([]);
 
   const marketsQuery = useQuery<GuidedMarketItem[]>({
     queryKey: ['guided-markets', sortBy, sortDirection],
@@ -103,8 +131,14 @@ export default function ManualTraderWorkspace() {
 
   const chartQuery = useQuery<GuidedChartResponse>({
     queryKey: ['guided-chart', selectedMarket, interval],
-    queryFn: () => guidedTradingApi.getChart(selectedMarket, interval, 180),
+    queryFn: () => guidedTradingApi.getChart(selectedMarket, interval, interval === 'tick' ? 500 : 180),
     refetchInterval: 5000,
+  });
+
+  const tickerQuery = useQuery<GuidedRealtimeTicker | null>({
+    queryKey: ['guided-realtime-ticker', selectedMarket],
+    queryFn: () => guidedTradingApi.getRealtimeTicker(selectedMarket),
+    refetchInterval: 1000,
   });
 
   const startMutation = useMutation({
@@ -215,7 +249,20 @@ export default function ManualTraderWorkspace() {
 
   useEffect(() => {
     shouldAutoFitRef.current = true;
+    liveCandlesRef.current = [];
   }, [selectedMarket, interval]);
+
+  useEffect(() => {
+    const chart = chartRef.current;
+    if (!chart) return;
+    chart.applyOptions({
+      timeScale: {
+        borderColor: '#2d3543',
+        timeVisible: true,
+        secondsVisible: interval === 'tick',
+      },
+    });
+  }, [interval]);
 
   useEffect(() => {
     const series = candleSeriesRef.current;
@@ -223,14 +270,9 @@ export default function ManualTraderWorkspace() {
     const payload = chartQuery.data;
     if (!series || !chart || !payload) return;
 
-    const candlesticks: CandlestickData<Time>[] = payload.candles.map((candle) => ({
-      time: asUtc(candle.timestamp),
-      open: candle.open,
-      high: candle.high,
-      low: candle.low,
-      close: candle.close,
-    }));
+    const candlesticks: CandlestickData<Time>[] = payload.candles.map((candle) => toCandlestick(candle));
     series.setData(candlesticks);
+    liveCandlesRef.current = candlesticks;
 
     priceLinesRef.current.forEach((line) => series.removePriceLine(line));
     priceLinesRef.current = [];
@@ -309,6 +351,50 @@ export default function ManualTraderWorkspace() {
   }, [chartQuery.data, events]);
 
   useEffect(() => {
+    const series = candleSeriesRef.current;
+    const ticker = tickerQuery.data;
+    const payload = chartQuery.data;
+    if (!series || !ticker || !payload) return;
+    if (ticker.tradePrice <= 0) return;
+
+    const nowSec = ticker.timestamp
+      ? (ticker.timestamp > 10_000_000_000 ? Math.floor(ticker.timestamp / 1000) : Math.floor(ticker.timestamp))
+      : Math.floor(Date.now() / 1000);
+    const bucket = toBucketStart(nowSec, interval);
+
+    const candles = [...liveCandlesRef.current];
+    if (candles.length === 0) return;
+
+    const last = candles[candles.length - 1];
+    const lastSec = Number(last.time);
+    if (bucket < lastSec) return;
+
+    if (bucket === lastSec) {
+      const updated: CandlestickData<Time> = {
+        ...last,
+        high: Math.max(last.high, ticker.tradePrice),
+        low: Math.min(last.low, ticker.tradePrice),
+        close: ticker.tradePrice,
+      };
+      candles[candles.length - 1] = updated;
+      liveCandlesRef.current = candles;
+      series.update(updated);
+      return;
+    }
+
+    const next: CandlestickData<Time> = {
+      time: asUtc(bucket),
+      open: last.close,
+      high: ticker.tradePrice,
+      low: ticker.tradePrice,
+      close: ticker.tradePrice,
+    };
+    candles.push(next);
+    liveCandlesRef.current = candles;
+    series.update(next);
+  }, [tickerQuery.data, interval, chartQuery.data]);
+
+  useEffect(() => {
     if (!recommendation) return;
     if (orderType === 'LIMIT') {
       setLimitPrice(Math.round(recommendation.recommendedEntryPrice));
@@ -385,14 +471,14 @@ export default function ManualTraderWorkspace() {
           <div className="guided-chart-toolbar">
             <strong>{selectedMarket}</strong>
             <div className="intervals">
-              {['minute1', 'minute10', 'minute30', 'minute60', 'day'].map((item) => (
+              {['tick', 'minute1', 'minute10', 'minute30', 'minute60', 'day'].map((item) => (
                 <button
                   key={item}
                   className={interval === item ? 'active' : ''}
                   onClick={() => setIntervalValue(item)}
                   type="button"
                 >
-                  {item.replace('minute', '') === 'day' ? '일' : `${item.replace('minute', '')}분`}
+                  {item === 'tick' ? '틱' : item.replace('minute', '') === 'day' ? '일' : `${item.replace('minute', '')}분`}
                 </button>
               ))}
             </div>
@@ -479,12 +565,12 @@ export default function ManualTraderWorkspace() {
                 <div className="head">매수호가</div>
                 <div className="head">매수수량</div>
                 {orderbook.units.slice(0, 6).map((unit, idx) => (
-                  <>
-                    <div key={`askp-${idx}`} className="ask">{formatPlain(unit.askPrice)}</div>
-                    <div key={`asks-${idx}`}>{formatPlain(unit.askSize)}</div>
-                    <div key={`bidp-${idx}`} className="bid">{formatPlain(unit.bidPrice)}</div>
-                    <div key={`bids-${idx}`}>{formatPlain(unit.bidSize)}</div>
-                  </>
+                  <div key={`row-${idx}`} className="guided-orderbook-row">
+                    <div className="ask">{formatPlain(unit.askPrice)}</div>
+                    <div>{formatPlain(unit.askSize)}</div>
+                    <div className="bid">{formatPlain(unit.bidPrice)}</div>
+                    <div>{formatPlain(unit.bidSize)}</div>
+                  </div>
                 ))}
               </div>
             </div>

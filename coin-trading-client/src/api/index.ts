@@ -608,6 +608,14 @@ export interface GuidedOrderSnapshot {
   completedOrders: GuidedOrderItem[];
 }
 
+export interface GuidedRealtimeTicker {
+  market: string;
+  tradePrice: number;
+  changeRate?: number | null;
+  tradeVolume?: number | null;
+  timestamp?: number | null;
+}
+
 export interface GuidedChartResponse {
   market: string;
   interval: string;
@@ -656,6 +664,9 @@ export const guidedTradingApi = {
 
   getPosition: (market: string): Promise<GuidedTradePosition | null> =>
     api.get(`/guided-trading/position/${encodeURIComponent(market)}`).then((res) => res.data),
+
+  getRealtimeTicker: (market: string): Promise<GuidedRealtimeTicker | null> =>
+    api.get('/guided-trading/ticker', { params: { market } }).then((res) => res.data),
 
   start: (payload: GuidedStartRequest): Promise<GuidedTradePosition> =>
     api.post('/guided-trading/start', payload).then((res) => res.data),
