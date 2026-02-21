@@ -1,0 +1,253 @@
+.guided-workspace {
+  margin-bottom: 20px;
+  padding: 16px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 14px;
+  background: linear-gradient(180deg, rgba(25, 29, 38, 0.95) 0%, rgba(14, 18, 24, 0.95) 100%);
+}
+
+.guided-header h2 {
+  margin: 0;
+  font-size: 20px;
+}
+
+.guided-header p {
+  margin: 6px 0 0;
+  color: #8f9aad;
+  font-size: 13px;
+}
+
+.guided-grid {
+  margin-top: 14px;
+  display: grid;
+  grid-template-columns: minmax(240px, 310px) 1fr minmax(240px, 320px);
+  gap: 12px;
+}
+
+.guided-market-board,
+.guided-chart-panel,
+.guided-order-panel {
+  border: 1px solid rgba(255, 255, 255, 0.07);
+  border-radius: 12px;
+  background: rgba(11, 14, 20, 0.72);
+}
+
+.guided-board-toolbar {
+  padding: 10px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.guided-board-toolbar input {
+  width: 100%;
+  background: #111722;
+  border: 1px solid #2a3445;
+  color: #e5ecf7;
+  border-radius: 8px;
+  padding: 8px 10px;
+}
+
+.guided-market-list {
+  max-height: 560px;
+  overflow: auto;
+}
+
+.guided-market-row {
+  width: 100%;
+  border: 0;
+  background: transparent;
+  color: #d7dfec;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 10px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.04);
+  cursor: pointer;
+  text-align: left;
+}
+
+.guided-market-row:hover,
+.guided-market-row.active {
+  background: rgba(46, 92, 255, 0.16);
+}
+
+.guided-market-row .name-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.guided-market-row .name-wrap span {
+  font-size: 12px;
+  color: #8f9aad;
+}
+
+.guided-market-row .price-wrap {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 2px;
+}
+
+.guided-market-row .price-wrap .up {
+  color: #ff6078;
+  font-size: 12px;
+}
+
+.guided-market-row .price-wrap .down {
+  color: #5d91ff;
+  font-size: 12px;
+}
+
+.guided-chart-panel {
+  padding: 10px;
+}
+
+.guided-chart-toolbar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 8px;
+}
+
+.guided-chart-toolbar .intervals {
+  display: flex;
+  gap: 6px;
+}
+
+.guided-chart-toolbar .intervals button {
+  border: 1px solid #364157;
+  background: #151c29;
+  color: #c9d3e8;
+  border-radius: 6px;
+  padding: 4px 8px;
+  cursor: pointer;
+  font-size: 12px;
+}
+
+.guided-chart-toolbar .intervals button.active {
+  background: #2b5cff;
+  border-color: #2b5cff;
+  color: #fff;
+}
+
+.guided-chart {
+  width: 100%;
+  height: 460px;
+}
+
+.guided-recommendation {
+  margin-top: 10px;
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.guided-recommendation > div {
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 8px;
+  padding: 8px;
+  background: rgba(16, 20, 27, 0.72);
+}
+
+.guided-recommendation span {
+  display: block;
+  font-size: 11px;
+  color: #8f9aad;
+}
+
+.guided-recommendation strong {
+  display: block;
+  margin-top: 2px;
+  font-size: 13px;
+}
+
+.guided-order-panel {
+  padding: 12px;
+}
+
+.guided-order-panel h3 {
+  margin: 0 0 10px;
+}
+
+.guided-order-panel label {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-bottom: 8px;
+  font-size: 12px;
+  color: #a7b3ca;
+}
+
+.guided-order-panel input,
+.guided-order-panel select {
+  background: #111722;
+  border: 1px solid #2a3445;
+  color: #e8eefb;
+  border-radius: 8px;
+  padding: 8px;
+}
+
+.guided-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.guided-actions button {
+  flex: 1;
+  border: 1px solid #2f4f9f;
+  background: #1a2f62;
+  color: #e8f0ff;
+  border-radius: 8px;
+  padding: 8px;
+  cursor: pointer;
+}
+
+.guided-actions button.danger {
+  border-color: #8d2f3f;
+  background: #3d1e29;
+}
+
+.guided-actions button:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.guided-position-card {
+  margin-top: 12px;
+  border: 1px solid rgba(255, 255, 255, 0.09);
+  background: rgba(14, 19, 28, 0.85);
+  border-radius: 10px;
+  padding: 10px;
+}
+
+.guided-position-card h4 {
+  margin: 0 0 8px;
+  font-size: 14px;
+}
+
+.guided-position-card p {
+  margin: 0 0 4px;
+  font-size: 12px;
+  color: #b9c3d8;
+}
+
+.guided-status {
+  margin-top: 10px;
+  font-size: 12px;
+  color: #f6c766;
+}
+
+@media (max-width: 1200px) {
+  .guided-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .guided-market-list {
+    max-height: 260px;
+  }
+
+  .guided-recommendation {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}

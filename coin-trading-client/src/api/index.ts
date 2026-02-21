@@ -480,4 +480,125 @@ export interface TradingAmountsResponse {
   minOrderAmountKrw: number;
 }
 
+export interface GuidedMarketItem {
+  market: string;
+  symbol: string;
+  koreanName: string;
+  englishName?: string | null;
+  tradePrice: number;
+  changeRate: number;
+  changePrice: number;
+  accTradePrice: number;
+}
+
+export interface GuidedCandle {
+  timestamp: number;
+  open: number;
+  high: number;
+  low: number;
+  close: number;
+  volume: number;
+}
+
+export interface GuidedRecommendation {
+  market: string;
+  currentPrice: number;
+  recommendedEntryPrice: number;
+  stopLossPrice: number;
+  takeProfitPrice: number;
+  confidence: number;
+  suggestedOrderType: string;
+  rationale: string[];
+}
+
+export interface GuidedTradeEvent {
+  id: number;
+  tradeId: number;
+  eventType: string;
+  price?: number | null;
+  quantity?: number | null;
+  message?: string | null;
+  createdAt: string;
+}
+
+export interface GuidedTradePosition {
+  tradeId: number;
+  market: string;
+  status: string;
+  entryOrderType: string;
+  entryOrderId?: string | null;
+  averageEntryPrice: number;
+  currentPrice: number;
+  entryQuantity: number;
+  remainingQuantity: number;
+  stopLossPrice: number;
+  takeProfitPrice: number;
+  trailingActive: boolean;
+  trailingPeakPrice?: number | null;
+  trailingStopPrice?: number | null;
+  dcaCount: number;
+  maxDcaCount: number;
+  halfTakeProfitDone: boolean;
+  unrealizedPnlPercent: number;
+  realizedPnl: number;
+  realizedPnlPercent: number;
+  lastAction?: string | null;
+  recommendationReason?: string | null;
+  createdAt: string;
+  updatedAt: string;
+  closedAt?: string | null;
+  exitReason?: string | null;
+}
+
+export interface GuidedChartResponse {
+  market: string;
+  interval: string;
+  candles: GuidedCandle[];
+  recommendation: GuidedRecommendation;
+  activePosition?: GuidedTradePosition | null;
+  events: GuidedTradeEvent[];
+}
+
+export interface GuidedStartRequest {
+  market: string;
+  amountKrw: number;
+  orderType?: string;
+  limitPrice?: number;
+  stopLossPrice?: number;
+  takeProfitPrice?: number;
+  trailingTriggerPercent?: number;
+  trailingOffsetPercent?: number;
+  maxDcaCount?: number;
+  dcaStepPercent?: number;
+  halfTakeProfitRatio?: number;
+}
+
+export const guidedTradingApi = {
+  getMarkets: (): Promise<GuidedMarketItem[]> =>
+    api.get('/guided-trading/markets').then((res) => res.data),
+
+  getChart: (
+    market: string,
+    interval = 'minute30',
+    count = 120
+  ): Promise<GuidedChartResponse> =>
+    api.get('/guided-trading/chart', { params: { market, interval, count } }).then((res) => res.data),
+
+  getRecommendation: (
+    market: string,
+    interval = 'minute30',
+    count = 120
+  ): Promise<GuidedRecommendation> =>
+    api.get('/guided-trading/recommendation', { params: { market, interval, count } }).then((res) => res.data),
+
+  getPosition: (market: string): Promise<GuidedTradePosition | null> =>
+    api.get(`/guided-trading/position/${encodeURIComponent(market)}`).then((res) => res.data),
+
+  start: (payload: GuidedStartRequest): Promise<GuidedTradePosition> =>
+    api.post('/guided-trading/start', payload).then((res) => res.data),
+
+  stop: (market: string): Promise<GuidedTradePosition> =>
+    api.post('/guided-trading/stop', null, { params: { market } }).then((res) => res.data),
+};
+
 export default api;

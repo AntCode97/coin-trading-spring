@@ -17,6 +17,8 @@ import com.ant.cointrading.risk.SimpleCircuitBreakerStatePersistence
 import com.ant.cointrading.repository.MemeScalperDailyStatsRepository
 import com.ant.cointrading.repository.MemeScalperTradeEntity
 import com.ant.cointrading.repository.MemeScalperTradeRepository
+import com.ant.cointrading.service.BalanceReservationService
+import com.ant.cointrading.service.TradingAmountService
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.DisplayName
 import org.junit.jupiter.api.Nested
@@ -81,6 +83,12 @@ class MemeScalperEngineTest {
     private lateinit var closeRecoveryQueueService: CloseRecoveryQueueService
 
     @Mock
+    private lateinit var balanceReservationService: BalanceReservationService
+
+    @Mock
+    private lateinit var tradingAmountService: TradingAmountService
+
+    @Mock
     private lateinit var circuitBreakerFactory: SimpleCircuitBreakerFactory
 
     private lateinit var engine: MemeScalperEngine
@@ -107,6 +115,8 @@ class MemeScalperEngineTest {
             globalPositionManager,
             regimeDetector,
             closeRecoveryQueueService,
+            balanceReservationService,
+            tradingAmountService,
             circuitBreakerFactory
         )
 

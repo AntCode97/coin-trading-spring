@@ -53,6 +53,8 @@ class VolumeSurgeReflectorToolsTest {
 
     @BeforeEach
     fun setup() {
+        whenever(keyValueService.get(any(), any())).thenReturn("")
+
         tools = VolumeSurgeReflectorTools(
             alertRepository = alertRepository,
             tradeRepository = tradeRepository,

@@ -22,6 +22,8 @@ import com.ant.cointrading.risk.SimpleCircuitBreakerFactory
 import com.ant.cointrading.risk.SimpleCircuitBreakerState
 import com.ant.cointrading.risk.SimpleCircuitBreakerStatePersistence
 import com.ant.cointrading.risk.StopLossCalculator
+import com.ant.cointrading.service.BalanceReservationService
+import com.ant.cointrading.service.TradingAmountService
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.DisplayName
 import org.junit.jupiter.api.Nested
@@ -96,6 +98,18 @@ class VolumeSurgeEngineTest {
     private lateinit var closeRecoveryQueueService: CloseRecoveryQueueService
 
     @Mock
+    private lateinit var balanceReservationService: BalanceReservationService
+
+    @Mock
+    private lateinit var tradingAmountService: TradingAmountService
+
+    @Mock
+    private lateinit var tradeFailureTagger: TradeFailureTagger
+
+    @Mock
+    private lateinit var patternFailureTracker: PatternFailureTracker
+
+    @Mock
     private lateinit var circuitBreakerFactory: SimpleCircuitBreakerFactory
 
     private lateinit var engine: VolumeSurgeEngine
@@ -126,6 +140,10 @@ class VolumeSurgeEngineTest {
             globalPositionManager,
             regimeDetector,
             closeRecoveryQueueService,
+            balanceReservationService,
+            tradingAmountService,
+            tradeFailureTagger,
+            patternFailureTracker,
             circuitBreakerFactory
         )
     }

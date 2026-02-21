@@ -1,0 +1,60 @@
+package com.ant.cointrading.controller
+
+import com.ant.cointrading.guided.GuidedChartResponse
+import com.ant.cointrading.guided.GuidedMarketItem
+import com.ant.cointrading.guided.GuidedRecommendation
+import com.ant.cointrading.guided.GuidedStartRequest
+import com.ant.cointrading.guided.GuidedTradeView
+import com.ant.cointrading.guided.GuidedTradingService
+import org.springframework.web.bind.annotation.GetMapping
+import org.springframework.web.bind.annotation.PathVariable
+import org.springframework.web.bind.annotation.PostMapping
+import org.springframework.web.bind.annotation.RequestBody
+import org.springframework.web.bind.annotation.RequestMapping
+import org.springframework.web.bind.annotation.RequestParam
+import org.springframework.web.bind.annotation.RestController
+
+@RestController
+@RequestMapping("/api/guided-trading")
+class GuidedTradingController(
+    private val guidedTradingService: GuidedTradingService
+) {
+
+    @GetMapping("/markets")
+    fun getMarketBoard(): List<GuidedMarketItem> {
+        return guidedTradingService.getMarketBoard()
+    }
+
+    @GetMapping("/chart")
+    fun getChart(
+        @RequestParam market: String,
+        @RequestParam(defaultValue = "minute30") interval: String,
+        @RequestParam(defaultValue = "120") count: Int
+    ): GuidedChartResponse {
+        return guidedTradingService.getChartData(market.uppercase(), interval, count)
+    }
+
+    @GetMapping("/recommendation")
+    fun getRecommendation(
+        @RequestParam market: String,
+        @RequestParam(defaultValue = "minute30") interval: String,
+        @RequestParam(defaultValue = "120") count: Int
+    ): GuidedRecommendation {
+        return guidedTradingService.getRecommendation(market.uppercase(), interval, count)
+    }
+
+    @PostMapping("/start")
+    fun startTrading(@RequestBody request: GuidedStartRequest): GuidedTradeView {
+        return guidedTradingService.startAutoTrading(request)
+    }
+
+    @PostMapping("/stop")
+    fun stopTrading(@RequestParam market: String): GuidedTradeView {
+        return guidedTradingService.stopAutoTrading(market.uppercase())
+    }
+
+    @GetMapping("/position/{market}")
+    fun getPosition(@PathVariable market: String): GuidedTradeView? {
+        return guidedTradingService.getActivePosition(market.uppercase())
+    }
+}

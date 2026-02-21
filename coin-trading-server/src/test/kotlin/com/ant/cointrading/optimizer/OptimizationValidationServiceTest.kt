@@ -4,6 +4,7 @@ import com.ant.cointrading.backtesting.WalkForwardAnalysisResult
 import com.ant.cointrading.backtesting.WalkForwardOptimizer
 import com.ant.cointrading.backtesting.WalkForwardWindowResult
 import com.ant.cointrading.config.LlmProperties
+import com.ant.cointrading.config.TradingProperties
 import com.ant.cointrading.config.ValidationProperties
 import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertTrue
@@ -39,7 +40,8 @@ class OptimizationValidationServiceTest {
                     maxSharpeDecayPercent = 35.0,
                     maxOutOfSampleDrawdownPercent = 25.0
                 )
-            )
+            ),
+            tradingProperties = TradingProperties()
         )
 
         whenever(
@@ -71,7 +73,8 @@ class OptimizationValidationServiceTest {
                     maxSharpeDecayPercent = 35.0,
                     maxOutOfSampleDrawdownPercent = 25.0
                 )
-            )
+            ),
+            tradingProperties = TradingProperties()
         )
 
         whenever(
