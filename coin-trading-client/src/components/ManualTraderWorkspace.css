@@ -303,6 +303,17 @@
   font-size: 13px;
 }
 
+.guided-link-button {
+  margin-top: 5px;
+  border: 0;
+  background: transparent;
+  color: #f5c542;
+  font-size: 11px;
+  padding: 0;
+  cursor: pointer;
+  text-decoration: underline;
+}
+
 .guided-order-panel {
   padding: 12px;
 }

@@ -386,10 +386,17 @@ export default function ManualTraderWorkspace() {
 
   useEffect(() => {
     if (!recommendation) return;
-    if (orderType === 'LIMIT') {
-      setLimitPrice(Math.round(recommendation.recommendedEntryPrice));
+    if (orderType === 'LIMIT' && limitPrice === '') {
+      setLimitPrice(recommendation.recommendedEntryPrice);
     }
-  }, [recommendation, orderType]);
+  }, [recommendation, orderType, limitPrice]);
+
+  const handleApplyRecommendedLimit = () => {
+    if (!recommendation) return;
+    setOrderType('LIMIT');
+    setLimitPrice(recommendation.recommendedEntryPrice);
+    setStatusMessage('추천 매수가를 지정가에 적용했습니다.');
+  };
 
   const handleStart = () => {
     if (!recommendation) return;
@@ -506,6 +513,9 @@ export default function ManualTraderWorkspace() {
               <div>
                 <span>추천 매수가</span>
                 <strong>{formatKrw(recommendation.recommendedEntryPrice)}</strong>
+                <button type="button" className="guided-link-button" onClick={handleApplyRecommendedLimit}>
+                  지정가에 적용
+                </button>
               </div>
               <div>
                 <span>손절가</span>
