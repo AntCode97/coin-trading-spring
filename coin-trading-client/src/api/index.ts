@@ -570,6 +570,44 @@ export interface GuidedTradePosition {
   exitReason?: string | null;
 }
 
+export interface GuidedOrderbookUnit {
+  askPrice: number;
+  askSize: number;
+  bidPrice: number;
+  bidSize: number;
+}
+
+export interface GuidedOrderbook {
+  market: string;
+  timestamp?: number | null;
+  bestAsk?: number | null;
+  bestBid?: number | null;
+  spread?: number | null;
+  spreadPercent?: number | null;
+  totalAskSize?: number | null;
+  totalBidSize?: number | null;
+  units: GuidedOrderbookUnit[];
+}
+
+export interface GuidedOrderItem {
+  uuid: string;
+  side: string;
+  ordType: string;
+  state?: string | null;
+  market: string;
+  price?: number | null;
+  volume?: number | null;
+  remainingVolume?: number | null;
+  executedVolume?: number | null;
+  createdAt?: string | null;
+}
+
+export interface GuidedOrderSnapshot {
+  currentOrder?: GuidedOrderItem | null;
+  pendingOrders: GuidedOrderItem[];
+  completedOrders: GuidedOrderItem[];
+}
+
 export interface GuidedChartResponse {
   market: string;
   interval: string;
@@ -577,6 +615,8 @@ export interface GuidedChartResponse {
   recommendation: GuidedRecommendation;
   activePosition?: GuidedTradePosition | null;
   events: GuidedTradeEvent[];
+  orderbook?: GuidedOrderbook | null;
+  orderSnapshot: GuidedOrderSnapshot;
 }
 
 export interface GuidedStartRequest {

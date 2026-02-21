@@ -3,6 +3,7 @@ package com.ant.cointrading.guided
 import com.ant.cointrading.api.bithumb.BithumbPrivateApi
 import com.ant.cointrading.api.bithumb.BithumbPublicApi
 import com.ant.cointrading.api.bithumb.CandleResponse
+import com.ant.cointrading.api.bithumb.OrderResponse
 import com.ant.cointrading.repository.GuidedTradeEntity
 import com.ant.cointrading.repository.GuidedTradeEventEntity
 import com.ant.cointrading.repository.GuidedTradeEventRepository
@@ -86,6 +87,18 @@ class GuidedTradingService(
             }
         } ?: emptyList()
 
+        val orderbook = bithumbPublicApi.getOrderbook(market)?.firstOrNull()?.toView()
+        val pendingOrders = bithumbPrivateApi.getOrders(market, "wait", 1, 30).orEmpty()
+            .map { it.toOrderView() }
+        val completedOrders = (
+            bithumbPrivateApi.getOrders(market, "done", 1, 30).orEmpty() +
+                bithumbPrivateApi.getOrders(market, "cancel", 1, 30).orEmpty()
+            )
+            .sortedByDescending { it.createdAt ?: "" }
+            .take(30)
+            .map { it.toOrderView() }
+        val currentOrder = resolveCurrentOrder(position)
+
         return GuidedChartResponse(
             market = market,
             interval = interval,
@@ -101,7 +114,13 @@ class GuidedTradingService(
             },
             recommendation = recommendation,
             activePosition = position?.toView(currentPrice = candles.lastOrNull()?.tradePrice?.toDouble()),
-            events = events
+            events = events,
+            orderbook = orderbook,
+            orderSnapshot = GuidedOrderSnapshotView(
+                currentOrder = currentOrder,
+                pendingOrders = pendingOrders,
+                completedOrders = completedOrders
+            )
         )
     }
 
@@ -627,6 +646,16 @@ class GuidedTradingService(
 
     private fun formatPrice(price: Double): String = String.format("%.0f", price)
 
+    private fun resolveCurrentOrder(position: GuidedTradeEntity?): GuidedOrderView? {
+        val orderId = when {
+            position?.lastExitOrderId?.isNotBlank() == true -> position.lastExitOrderId
+            position?.entryOrderId?.isNotBlank() == true -> position.entryOrderId
+            else -> null
+        } ?: return null
+
+        return bithumbPrivateApi.getOrder(orderId)?.toOrderView()
+    }
+
     private fun BigDecimal.max(other: BigDecimal): BigDecimal {
         return if (this > other) this else other
     }
@@ -672,6 +701,50 @@ class GuidedTradingService(
             updatedAt = updatedAt,
             closedAt = closedAt,
             exitReason = exitReason
+        )
+    }
+
+    private fun com.ant.cointrading.api.bithumb.OrderbookInfo.toView(): GuidedOrderbookView {
+        val units = this.orderbookUnits.orEmpty().take(10).map {
+            GuidedOrderbookUnitView(
+                askPrice = it.askPrice.toDouble(),
+                askSize = it.askSize.toDouble(),
+                bidPrice = it.bidPrice.toDouble(),
+                bidSize = it.bidSize.toDouble()
+            )
+        }
+        val best = units.firstOrNull()
+        val spread = if (best != null) (best.askPrice - best.bidPrice) else null
+        val spreadPercent = if (best != null && best.askPrice > 0.0) {
+            (spread ?: 0.0) / best.askPrice * 100.0
+        } else {
+            null
+        }
+        return GuidedOrderbookView(
+            market = this.market,
+            timestamp = this.timestamp,
+            bestAsk = best?.askPrice,
+            bestBid = best?.bidPrice,
+            spread = spread,
+            spreadPercent = spreadPercent,
+            totalAskSize = this.totalAskSize?.toDouble(),
+            totalBidSize = this.totalBidSize?.toDouble(),
+            units = units
+        )
+    }
+
+    private fun OrderResponse.toOrderView(): GuidedOrderView {
+        return GuidedOrderView(
+            uuid = uuid,
+            side = side,
+            ordType = ordType,
+            state = state,
+            market = market,
+            price = price?.toDouble(),
+            volume = volume?.toDouble(),
+            remainingVolume = remainingVolume?.toDouble(),
+            executedVolume = executedVolume?.toDouble(),
+            createdAt = createdAt
         )
     }
 }
@@ -788,7 +861,47 @@ data class GuidedChartResponse(
     val candles: List<GuidedCandle>,
     val recommendation: GuidedRecommendation,
     val activePosition: GuidedTradeView?,
-    val events: List<GuidedTradeEventView>
+    val events: List<GuidedTradeEventView>,
+    val orderbook: GuidedOrderbookView?,
+    val orderSnapshot: GuidedOrderSnapshotView
+)
+
+data class GuidedOrderbookView(
+    val market: String,
+    val timestamp: Long?,
+    val bestAsk: Double?,
+    val bestBid: Double?,
+    val spread: Double?,
+    val spreadPercent: Double?,
+    val totalAskSize: Double?,
+    val totalBidSize: Double?,
+    val units: List<GuidedOrderbookUnitView>
+)
+
+data class GuidedOrderbookUnitView(
+    val askPrice: Double,
+    val askSize: Double,
+    val bidPrice: Double,
+    val bidSize: Double
+)
+
+data class GuidedOrderSnapshotView(
+    val currentOrder: GuidedOrderView?,
+    val pendingOrders: List<GuidedOrderView>,
+    val completedOrders: List<GuidedOrderView>
+)
+
+data class GuidedOrderView(
+    val uuid: String,
+    val side: String,
+    val ordType: String,
+    val state: String?,
+    val market: String,
+    val price: Double?,
+    val volume: Double?,
+    val remainingVolume: Double?,
+    val executedVolume: Double?,
+    val createdAt: String?
 )
 
 data class GuidedStartRequest(

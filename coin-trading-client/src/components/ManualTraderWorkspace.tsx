@@ -50,7 +50,25 @@ function asUtc(secondsOrMillis: number): UTCTimestamp {
 }
 
 function formatKrw(value: number): string {
-  return `${KRW_FORMATTER.format(Math.round(value))}원`;
+  if (!Number.isFinite(value)) return '-';
+  if (Math.abs(value) >= 1000) {
+    return `${value.toLocaleString('ko-KR', { maximumFractionDigits: 2 })}원`;
+  }
+  if (Math.abs(value) >= 1) {
+    return `${value.toLocaleString('ko-KR', { maximumFractionDigits: 6 })}원`;
+  }
+  return `${value.toLocaleString('ko-KR', { maximumFractionDigits: 10 })}원`;
+}
+
+function formatPlain(value: number): string {
+  if (!Number.isFinite(value)) return '-';
+  if (Math.abs(value) >= 1000) {
+    return value.toLocaleString('ko-KR', { maximumFractionDigits: 2 });
+  }
+  if (Math.abs(value) >= 1) {
+    return value.toLocaleString('ko-KR', { maximumFractionDigits: 6 });
+  }
+  return value.toLocaleString('ko-KR', { maximumFractionDigits: 10 });
 }
 
 function formatPct(value: number): string {
@@ -75,6 +93,7 @@ export default function ManualTraderWorkspace() {
   const chartRef = useRef<IChartApi | null>(null);
   const candleSeriesRef = useRef<ISeriesApi<'Candlestick'> | null>(null);
   const priceLinesRef = useRef<IPriceLine[]>([]);
+  const shouldAutoFitRef = useRef<boolean>(true);
 
   const marketsQuery = useQuery<GuidedMarketItem[]>({
     queryKey: ['guided-markets', sortBy, sortDirection],
@@ -113,6 +132,8 @@ export default function ManualTraderWorkspace() {
   const recommendation = chartQuery.data?.recommendation;
   const activePosition = chartQuery.data?.activePosition;
   const events = chartQuery.data?.events ?? [];
+  const orderbook = chartQuery.data?.orderbook;
+  const orderSnapshot = chartQuery.data?.orderSnapshot;
 
   const filteredMarkets = useMemo(() => {
     const keyword = search.trim().toLowerCase();
@@ -191,6 +212,10 @@ export default function ManualTraderWorkspace() {
       priceLinesRef.current = [];
     };
   }, []);
+
+  useEffect(() => {
+    shouldAutoFitRef.current = true;
+  }, [selectedMarket, interval]);
 
   useEffect(() => {
     const series = candleSeriesRef.current;
@@ -277,7 +302,10 @@ export default function ManualTraderWorkspace() {
     }
     createSeriesMarkers(series, markers);
 
-    chart.timeScale().fitContent();
+    if (shouldAutoFitRef.current) {
+      chart.timeScale().fitContent();
+      shouldAutoFitRef.current = false;
+    }
   }, [chartQuery.data, events]);
 
   useEffect(() => {
@@ -344,7 +372,7 @@ export default function ManualTraderWorkspace() {
                   <span>{item.market}</span>
                 </div>
                 <div className="price-wrap">
-                  <strong>{KRW_FORMATTER.format(item.tradePrice)}</strong>
+                  <strong>{formatKrw(item.tradePrice)}</strong>
                   <span className={item.changeRate >= 0 ? 'up' : 'down'}>{formatPct(item.changeRate)}</span>
                   <small>거래대금 {KRW_FORMATTER.format(item.accTradePrice)}</small>
                 </div>
@@ -425,6 +453,42 @@ export default function ManualTraderWorkspace() {
               </div>
             </div>
           )}
+
+          {orderbook && (
+            <div className="guided-orderbook-card">
+              <div className="guided-orderbook-head">
+                <strong>빗썸 호가</strong>
+                <span>
+                  스프레드 {orderbook.spread != null ? formatPlain(orderbook.spread) : '-'}
+                  {orderbook.spreadPercent != null ? ` (${orderbook.spreadPercent.toFixed(3)}%)` : ''}
+                </span>
+              </div>
+              <div className="guided-orderbook-best">
+                <div>
+                  <span>최우선 매도</span>
+                  <strong>{orderbook.bestAsk != null ? formatKrw(orderbook.bestAsk) : '-'}</strong>
+                </div>
+                <div>
+                  <span>최우선 매수</span>
+                  <strong>{orderbook.bestBid != null ? formatKrw(orderbook.bestBid) : '-'}</strong>
+                </div>
+              </div>
+              <div className="guided-orderbook-grid">
+                <div className="head">매도호가</div>
+                <div className="head">매도수량</div>
+                <div className="head">매수호가</div>
+                <div className="head">매수수량</div>
+                {orderbook.units.slice(0, 6).map((unit, idx) => (
+                  <>
+                    <div key={`askp-${idx}`} className="ask">{formatPlain(unit.askPrice)}</div>
+                    <div key={`asks-${idx}`}>{formatPlain(unit.askSize)}</div>
+                    <div key={`bidp-${idx}`} className="bid">{formatPlain(unit.bidPrice)}</div>
+                    <div key={`bids-${idx}`}>{formatPlain(unit.bidSize)}</div>
+                  </>
+                ))}
+              </div>
+            </div>
+          )}
         </div>
 
         <aside className="guided-order-panel">
@@ -454,6 +518,7 @@ export default function ManualTraderWorkspace() {
               <input
                 type="number"
                 value={limitPrice}
+                step="any"
                 onChange={(event) => setLimitPrice(event.target.value ? Number(event.target.value) : '')}
               />
             </label>
@@ -461,23 +526,25 @@ export default function ManualTraderWorkspace() {
 
           <label>
             손절가(커스텀)
-            <input
-              type="number"
-              value={customStopLoss}
-              placeholder={recommendation ? Math.round(recommendation.stopLossPrice).toString() : ''}
-              onChange={(event) => setCustomStopLoss(event.target.value ? Number(event.target.value) : '')}
-            />
-          </label>
+              <input
+                type="number"
+                value={customStopLoss}
+                step="any"
+                placeholder={recommendation ? recommendation.stopLossPrice.toString() : ''}
+                onChange={(event) => setCustomStopLoss(event.target.value ? Number(event.target.value) : '')}
+              />
+            </label>
 
           <label>
             익절가(커스텀)
-            <input
-              type="number"
-              value={customTakeProfit}
-              placeholder={recommendation ? Math.round(recommendation.takeProfitPrice).toString() : ''}
-              onChange={(event) => setCustomTakeProfit(event.target.value ? Number(event.target.value) : '')}
-            />
-          </label>
+              <input
+                type="number"
+                value={customTakeProfit}
+                step="any"
+                placeholder={recommendation ? recommendation.takeProfitPrice.toString() : ''}
+                onChange={(event) => setCustomTakeProfit(event.target.value ? Number(event.target.value) : '')}
+              />
+            </label>
 
           <div className="guided-actions">
             <button type="button" onClick={handleStart} disabled={startMutation.isPending || !recommendation}>
@@ -497,6 +564,44 @@ export default function ManualTraderWorkspace() {
               <p>미실현: {formatPct(activePosition.unrealizedPnlPercent)}</p>
               <p>절반익절: {activePosition.halfTakeProfitDone ? '완료' : '대기'}</p>
               <p>물타기: {activePosition.dcaCount}/{activePosition.maxDcaCount}</p>
+            </div>
+          )}
+
+          {orderSnapshot && (
+            <div className="guided-orders-card">
+              <h4>내 주문 현황</h4>
+              <div className="orders-section">
+                <span>현재 주문</span>
+                {orderSnapshot.currentOrder ? (
+                  <p>
+                    {orderSnapshot.currentOrder.side.toUpperCase()} / {orderSnapshot.currentOrder.ordType.toUpperCase()} / {orderSnapshot.currentOrder.state ?? '-'}
+                    {' · '}
+                    가격 {orderSnapshot.currentOrder.price != null ? formatPlain(orderSnapshot.currentOrder.price) : '-'}
+                    {' · '}
+                    체결 {orderSnapshot.currentOrder.executedVolume != null ? formatPlain(orderSnapshot.currentOrder.executedVolume) : '-'}
+                  </p>
+                ) : (
+                  <p>없음</p>
+                )}
+              </div>
+              <div className="orders-section">
+                <span>대기중 주문 ({orderSnapshot.pendingOrders.length})</span>
+                {orderSnapshot.pendingOrders.slice(0, 5).map((o) => (
+                  <p key={o.uuid}>
+                    {o.side.toUpperCase()} {formatPlain(o.price ?? 0)} · 잔량 {formatPlain(o.remainingVolume ?? 0)}
+                  </p>
+                ))}
+                {orderSnapshot.pendingOrders.length === 0 && <p>없음</p>}
+              </div>
+              <div className="orders-section">
+                <span>완료/취소 주문 ({orderSnapshot.completedOrders.length})</span>
+                {orderSnapshot.completedOrders.slice(0, 6).map((o) => (
+                  <p key={o.uuid}>
+                    {o.state ?? '-'} · {o.side.toUpperCase()} · 체결 {formatPlain(o.executedVolume ?? 0)}
+                  </p>
+                ))}
+                {orderSnapshot.completedOrders.length === 0 && <p>없음</p>}
+              </div>
             </div>
           )}
 
