@@ -212,12 +212,13 @@ class GuidedTradingService(
         val order = bithumbPrivateApi.getOrder(submitted.uuid) ?: submitted
         val executedQuantity = order.executedVolume ?: BigDecimal.ZERO
         val tickerPrice = bithumbPublicApi.getCurrentPrice(market)?.firstOrNull()?.tradePrice
-        val referencePrice = when {
-            order.price != null && order.price > BigDecimal.ZERO -> order.price
-            selectedLimitPrice != null -> selectedLimitPrice
-            tickerPrice != null -> tickerPrice
-            else -> BigDecimal.valueOf(recommendation.recommendedEntryPrice)
-        }
+        val referencePrice = resolveEntryPrice(
+            order = order,
+            orderType = orderType,
+            investedAmount = amountKrw,
+            selectedLimitPrice = selectedLimitPrice,
+            fallbackPrice = tickerPrice ?: BigDecimal.valueOf(recommendation.recommendedEntryPrice)
+        )
 
         val trade = GuidedTradeEntity(
             market = market,
@@ -282,7 +283,13 @@ class GuidedTradingService(
         val executed = order.executedVolume ?: BigDecimal.ZERO
 
         if (executed > BigDecimal.ZERO) {
-            val filledPrice = order.price ?: trade.averageEntryPrice
+            val filledPrice = resolveEntryPrice(
+                order = order,
+                orderType = trade.entryOrderType,
+                investedAmount = trade.targetAmountKrw,
+                selectedLimitPrice = trade.averageEntryPrice,
+                fallbackPrice = trade.averageEntryPrice
+            )
             trade.averageEntryPrice = filledPrice
             trade.entryQuantity = executed
             trade.remainingQuantity = executed
@@ -307,6 +314,33 @@ class GuidedTradingService(
 
     private fun manageOpenTrade(trade: GuidedTradeEntity) {
         val currentPrice = bithumbPublicApi.getCurrentPrice(trade.market)?.firstOrNull()?.tradePrice ?: return
+
+        val actualHolding = getActualHoldingQuantity(trade.market)
+        if (actualHolding <= BigDecimal.ZERO && trade.remainingQuantity > BigDecimal.ZERO) {
+            trade.remainingQuantity = BigDecimal.ZERO
+            trade.status = GuidedTradeEntity.STATUS_CLOSED
+            trade.closedAt = Instant.now()
+            trade.exitReason = "MANUAL_INTERVENTION"
+            trade.lastAction = "AUTO_CLOSED_MANUAL_INTERVENTION"
+            guidedTradeRepository.save(trade)
+            appendEvent(trade.id!!, "MANUAL_INTERVENTION_CLOSE", currentPrice, null, "수동 매도 감지로 자동매매 종료")
+            return
+        }
+
+        if (actualHolding > BigDecimal.ZERO && actualHolding < trade.remainingQuantity) {
+            val shrinkRatio = if (trade.remainingQuantity > BigDecimal.ZERO) {
+                actualHolding.divide(trade.remainingQuantity, 8, RoundingMode.HALF_UP)
+            } else {
+                BigDecimal.ONE
+            }
+            if (shrinkRatio < BigDecimal("0.95")) {
+                trade.remainingQuantity = actualHolding
+                trade.lastAction = "BALANCE_SYNC"
+                guidedTradeRepository.save(trade)
+                appendEvent(trade.id!!, "BALANCE_SYNC", currentPrice, actualHolding, "수동 체결 감지로 보유 수량 동기화")
+            }
+        }
+
         if (trade.remainingQuantity <= BigDecimal.ZERO) {
             trade.status = GuidedTradeEntity.STATUS_CLOSED
             trade.closedAt = Instant.now()
@@ -387,7 +421,19 @@ class GuidedTradingService(
     }
 
     private fun executeDcaBuy(trade: GuidedTradeEntity, currentPrice: BigDecimal) {
-        val addAmount = trade.targetAmountKrw.multiply(BigDecimal("0.5")).setScale(0, RoundingMode.DOWN)
+        val maxExposure = trade.targetAmountKrw.multiply(BigDecimal("2.0"))
+        val currentExposure = trade.averageEntryPrice.multiply(trade.entryQuantity)
+        val remainingBudget = maxExposure.subtract(currentExposure)
+        if (remainingBudget <= BigDecimal.ZERO) {
+            trade.lastAction = "DCA_BUDGET_LIMIT"
+            guidedTradeRepository.save(trade)
+            return
+        }
+
+        val addAmount = minOf(
+            trade.targetAmountKrw.multiply(BigDecimal("0.5")),
+            remainingBudget
+        ).setScale(0, RoundingMode.DOWN)
         if (addAmount < BigDecimal(5100)) return
 
         val order = bithumbPrivateApi.buyMarketOrder(trade.market, addAmount)
@@ -412,6 +458,14 @@ class GuidedTradingService(
         trade.lastAction = "DCA_${trade.dcaCount}"
         guidedTradeRepository.save(trade)
         appendEvent(trade.id!!, "DCA_BUY", execPrice, executedQty, "물타기 ${trade.dcaCount}/${trade.maxDcaCount}")
+    }
+
+    private fun getActualHoldingQuantity(market: String): BigDecimal {
+        val currency = market.substringAfter("KRW-")
+        val balance = bithumbPrivateApi.getBalances()
+            ?.firstOrNull { it.currency.equals(currency, ignoreCase = true) }
+            ?: return BigDecimal.ZERO
+        return balance.balance.add(balance.locked ?: BigDecimal.ZERO)
     }
 
     private fun closeAllByMarket(trade: GuidedTradeEntity, reason: String) {
@@ -757,6 +811,41 @@ class GuidedTradingService(
         val referencePrice = units.firstOrNull()?.askPrice ?: requestedPrice
         val scale = referencePrice.stripTrailingZeros().scale().coerceIn(0, 10)
         return requestedPrice.setScale(scale, RoundingMode.HALF_UP)
+    }
+
+    private fun resolveEntryPrice(
+        order: OrderResponse,
+        orderType: String,
+        investedAmount: BigDecimal,
+        selectedLimitPrice: BigDecimal?,
+        fallbackPrice: BigDecimal
+    ): BigDecimal {
+        if (orderType == GuidedTradeEntity.ORDER_TYPE_LIMIT) {
+            return when {
+                order.price != null && order.price > BigDecimal.ZERO -> order.price
+                selectedLimitPrice != null && selectedLimitPrice > BigDecimal.ZERO -> selectedLimitPrice
+                else -> fallbackPrice
+            }
+        }
+
+        val executedQty = order.executedVolume ?: BigDecimal.ZERO
+        if (executedQty > BigDecimal.ZERO) {
+            val invested = when {
+                order.locked != null && order.locked > BigDecimal.ZERO -> order.locked
+                investedAmount > BigDecimal.ZERO -> investedAmount
+                order.price != null && order.price > BigDecimal.ZERO -> order.price
+                else -> BigDecimal.ZERO
+            }
+            if (invested > BigDecimal.ZERO) {
+                return invested.divide(executedQty, 8, RoundingMode.HALF_UP)
+            }
+        }
+
+        return when {
+            order.price != null && order.price > BigDecimal.ZERO -> order.price
+            selectedLimitPrice != null && selectedLimitPrice > BigDecimal.ZERO -> selectedLimitPrice
+            else -> fallbackPrice
+        }
     }
 
     private fun buildOrderErrorMessage(e: BithumbApiException): String {
