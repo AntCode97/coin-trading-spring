@@ -56,6 +56,9 @@ bin/
 ### Playwright MCP ###
 .playwright-mcp/
 
+### Desktop App Logo Sources ###
+desktopapp_*.png
+
 ### Generated Static Assets ###
 coin-trading-server/src/main/resources/static/assets/
 coin-trading-server/src/main/resources/static/index.html
