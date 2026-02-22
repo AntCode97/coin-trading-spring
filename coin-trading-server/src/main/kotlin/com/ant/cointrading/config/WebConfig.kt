@@ -35,13 +35,7 @@ class WebConfig(
         registry.addInterceptor(desktopAccessInterceptor)
             .addPathPatterns(
                 "/api/manual-trading/**",
-                "/api/guided-trading/**",
-                "/api/dashboard/manual-close",
-                "/api/funding/manual-entry",
-                "/api/funding/manual-close",
-                "/api/volume-surge/manual-close/**",
-                "/api/meme-scalper/manual-close/**",
-                "/api/dca/manual-close/**"
+                "/api/guided-trading/**"
             )
     }
 }
