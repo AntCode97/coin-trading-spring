@@ -617,14 +617,11 @@ class GuidedTradingService(
         val sell = try {
             bithumbPrivateApi.sellMarketOrder(trade.market, requestedQty)
         } catch (e: Exception) {
-            log.error("[${trade.market}] 매도 주문 실패: ${e.message}. DB 강제 종료.", e)
-            trade.status = GuidedTradeEntity.STATUS_CLOSED
-            trade.closedAt = Instant.now()
-            trade.exitReason = "${reason}_SELL_FAILED"
-            trade.lastAction = "CLOSE_SELL_FAILED: ${e.message?.take(80)}"
+            log.error("[${trade.market}] 매도 주문 실패: ${e.message}", e)
+            trade.lastAction = "SELL_FAILED: ${e.message?.take(80)}"
             guidedTradeRepository.save(trade)
-            appendEvent(trade.id!!, "CLOSE_SELL_FAILED", currentPrice, requestedQty, "매도 실패로 DB 종료: ${e.message?.take(120)}")
-            return
+            appendEvent(trade.id!!, "SELL_FAILED", currentPrice, requestedQty, "매도 실패: ${e.message?.take(120)}")
+            throw IllegalStateException("[${trade.market}] 매도 주문 실패 — 빗썸에서 직접 매도하세요. 원인: ${e.message}")
         }
         val sellInfo = bithumbPrivateApi.getOrder(sell.uuid) ?: sell
         val executedQty = (sellInfo.executedVolume ?: requestedQty).min(requestedQty)

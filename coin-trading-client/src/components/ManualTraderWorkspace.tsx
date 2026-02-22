@@ -289,7 +289,10 @@ export default function ManualTraderWorkspace() {
       void chartQuery.refetch();
     },
     onError: (e: unknown) => {
-      setStatusMessage(e instanceof Error ? e.message : '정지 실패');
+      const axiosMsg = (e as { response?: { data?: { message?: string } } })?.response?.data?.message;
+      const msg = axiosMsg || (e instanceof Error ? e.message : '정지 실패');
+      setStatusMessage(msg);
+      alert(msg);
     },
   });
 

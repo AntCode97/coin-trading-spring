@@ -70,7 +70,13 @@ class GuidedTradingController(
 
     @PostMapping("/stop")
     fun stopTrading(@RequestParam market: String): GuidedTradeView {
-        return guidedTradingService.stopAutoTrading(market.uppercase())
+        return try {
+            guidedTradingService.stopAutoTrading(market.uppercase())
+        } catch (e: IllegalStateException) {
+            throw ResponseStatusException(HttpStatus.BAD_REQUEST, e.message ?: "청산 실패")
+        } catch (e: IllegalArgumentException) {
+            throw ResponseStatusException(HttpStatus.BAD_REQUEST, e.message ?: "요청값 오류")
+        }
     }
 
     @PostMapping("/partial-take-profit")
