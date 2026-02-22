@@ -10,8 +10,8 @@
     "lint": "eslint .",
     "preview": "vite preview",
     "build:copy": "npm run build && mkdir -p ../coin-trading-server/src/main/resources/static && cp -r dist/* ../coin-trading-server/src/main/resources/static/",
-    "desktop:dev": "concurrently -k \"cross-env VITE_DESKTOP_MODE=true VITE_API_BASE_URL=http://183.101.185.112:1104/api vite\" \"wait-on http://localhost:5173 && cross-env ELECTRON_START_URL=http://localhost:5173 electron .\"",
-    "desktop:build:web": "cross-env VITE_DESKTOP_MODE=true VITE_API_BASE_URL=http://183.101.185.112:1104/api npm run build",
+    "desktop:dev": "concurrently -k \"cross-env VITE_DESKTOP_MODE=true VITE_API_BASE_URL=http://183.101.185.112:1104/api VITE_DESKTOP_TRADING_TOKEN=kxDClilIjXeP1aUN3mVNfQeBqXtL3PXl vite\" \"wait-on http://localhost:5173 && cross-env ELECTRON_START_URL=http://localhost:5173 electron .\"",
+    "desktop:build:web": "cross-env VITE_DESKTOP_MODE=true VITE_API_BASE_URL=http://183.101.185.112:1104/api VITE_DESKTOP_TRADING_TOKEN=kxDClilIjXeP1aUN3mVNfQeBqXtL3PXl npm run build",
     "desktop:start": "cross-env ELECTRON_START_URL=file://$PWD/dist/index.html electron .",
     "desktop:dmg": "npm run desktop:build:web && electron-builder --mac dmg --publish never",
     "guard:public-surface": "node scripts/check-public-surface.mjs"

@@ -32,7 +32,6 @@ services:
     environment:
       - TZ=Asia/Seoul
       - SLACK_WEBHOOK_URL=${SLACK_WEBHOOK_URL:-}
-      - DESKTOP_ACCESS_ENABLED=false
     restart: unless-stopped
     logging:
       driver: "json-file"
