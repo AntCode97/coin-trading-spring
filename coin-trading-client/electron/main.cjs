@@ -5,8 +5,10 @@ const path = require('node:path');
 
 const { runOAuthFlow, refreshAccessToken } = require('./oauth/auth-flow.cjs');
 const { saveToken, loadToken, deleteToken, isTokenExpired } = require('./oauth/token-store.cjs');
+const { McpClient } = require('./mcp/mcp-client.cjs');
 
 let staticServer = null;
+let mcpClient = null;
 
 function registerOAuthIpc() {
   ipcMain.handle('oauth:start-login', async () => {
@@ -27,7 +29,7 @@ function registerOAuthIpc() {
         return null;
       }
     }
-    return { accessToken: token.accessToken };
+    return { accessToken: token.accessToken, accountId: token.accountId || null };
   });
 
   ipcMain.handle('oauth:check-status', async () => {
@@ -40,6 +42,43 @@ function registerOAuthIpc() {
   ipcMain.handle('oauth:logout', async () => {
     deleteToken();
     return { ok: true };
+  });
+}
+
+function registerMcpIpc() {
+  ipcMain.handle('mcp:connect', async (_event, mcpUrl) => {
+    try {
+      mcpClient = new McpClient(mcpUrl);
+      const result = await mcpClient.connect();
+      return { ok: true, tools: result.tools || [] };
+    } catch (e) {
+      mcpClient = null;
+      return { ok: false, error: e.message, tools: [] };
+    }
+  });
+
+  ipcMain.handle('mcp:list-tools', async () => {
+    if (!mcpClient) return { tools: [] };
+    try {
+      const result = await mcpClient.listTools();
+      return { tools: result.tools || [] };
+    } catch (e) {
+      return { tools: [], error: e.message };
+    }
+  });
+
+  ipcMain.handle('mcp:call-tool', async (_event, name, args) => {
+    if (!mcpClient) return { content: [], isError: true, error: 'MCP 미연결' };
+    try {
+      const result = await mcpClient.callTool(name, args);
+      return result;
+    } catch (e) {
+      return { content: [{ type: 'text', text: e.message }], isError: true };
+    }
+  });
+
+  ipcMain.handle('mcp:status', async () => {
+    return { connected: mcpClient?.connected ?? false };
   });
 }
 
@@ -123,6 +162,7 @@ async function createWindow() {
 
 app.whenReady().then(() => {
   registerOAuthIpc();
+  registerMcpIpc();
   void createWindow();
 
   app.on('activate', () => {

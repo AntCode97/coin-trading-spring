@@ -14,6 +14,7 @@ import {
   type UTCTimestamp,
 } from 'lightweight-charts';
 import {
+  getApiBaseUrl,
   guidedTradingApi,
   type GuidedAgentContextResponse,
   type GuidedChartResponse,
@@ -28,9 +29,13 @@ import {
   checkConnection,
   startLogin,
   logout,
-  requestAdvice,
-  type AgentAdvice,
+  sendChatMessage,
+  clearConversation,
+  connectMcp,
+  CODEX_MODELS,
   type AgentAction,
+  type ChatMessage,
+  type CodexModelId,
   type LlmConnectionStatus,
 } from '../lib/llmService';
 import './ManualTraderWorkspace.css';
@@ -112,6 +117,30 @@ function toCandlestick(candle: GuidedCandle): CandlestickData<Time> {
   };
 }
 
+// KST 시간 포맷터
+function formatKstTime(epochSec: number): string {
+  const d = new Date(epochSec * 1000);
+  return d.toLocaleTimeString('ko-KR', { timeZone: 'Asia/Seoul', hour: '2-digit', minute: '2-digit' });
+}
+
+function formatKstDateTime(epochSec: number): string {
+  const d = new Date(epochSec * 1000);
+  return d.toLocaleDateString('ko-KR', {
+    timeZone: 'Asia/Seoul',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+  });
+}
+
+// MCP URL을 API Base URL에서 도출
+function deriveMcpUrl(): string {
+  const apiBase = getApiBaseUrl().replace(/\/$/, '');
+  // http://host:port/api → http://host:port/mcp
+  return apiBase.replace(/\/api$/, '/mcp');
+}
+
 export default function ManualTraderWorkspace() {
   const prefs = useMemo(() => loadPrefs(), []);
   const [selectedMarket, setSelectedMarket] = useState<string>(prefs.selectedMarket ?? 'KRW-BTC');
@@ -125,14 +154,23 @@ export default function ManualTraderWorkspace() {
   const [customStopLoss, setCustomStopLoss] = useState<number | ''>('');
   const [customTakeProfit, setCustomTakeProfit] = useState<number | ''>('');
   const [statusMessage, setStatusMessage] = useState<string>('');
-  const [agentPrompt, setAgentPrompt] = useState<string>('');
-  const [agentAutoRefresh, setAgentAutoRefresh] = useState<boolean>(true);
-  const [includeChartScreenshot, setIncludeChartScreenshot] = useState<boolean>(false);
-  const [agentAdvice, setAgentAdvice] = useState<AgentAdvice | null>(null);
-  const [agentBusy, setAgentBusy] = useState<boolean>(false);
-  const [agentError, setAgentError] = useState<string>('');
-  const [streamingText, setStreamingText] = useState<string>('');
   const [llmStatus, setLlmStatus] = useState<LlmConnectionStatus>('checking');
+
+  // 탭 상태
+  const [activeTab, setActiveTab] = useState<'order' | 'chat'>('chat');
+
+  // 채팅 상태
+  const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
+  const [chatInput, setChatInput] = useState('');
+  const [chatBusy, setChatBusy] = useState(false);
+  const [chatStreamText, setChatStreamText] = useState('');
+  const [autoContext, setAutoContext] = useState(true);
+  const [autoAnalysis, setAutoAnalysis] = useState(false);
+  const [showTools, setShowTools] = useState(false);
+  const [chatModel, setChatModel] = useState<CodexModelId>('gpt-5.3-codex');
+  const [mcpTools, setMcpTools] = useState<McpTool[]>([]);
+  const [mcpConnected, setMcpConnected] = useState(false);
+  const chatEndRef = useRef<HTMLDivElement | null>(null);
 
   const openAiConnected = llmStatus === 'connected';
   const providerChecking = llmStatus === 'checking';
@@ -166,7 +204,7 @@ export default function ManualTraderWorkspace() {
     queryKey: ['guided-agent-context', selectedMarket, interval],
     queryFn: () => guidedTradingApi.getAgentContext(selectedMarket, interval, interval === 'tick' ? 300 : 120, 20),
     enabled: true,
-    refetchInterval: agentAutoRefresh ? 7000 : false,
+    refetchInterval: 7000,
   });
 
   const startMutation = useMutation({
@@ -196,7 +234,6 @@ export default function ManualTraderWorkspace() {
   const events = chartQuery.data?.events ?? [];
   const orderbook = chartQuery.data?.orderbook;
   const orderSnapshot = chartQuery.data?.orderSnapshot;
-  const agentContext = agentContextQuery.data;
 
   const filteredMarkets = useMemo(() => {
     const keyword = search.trim().toLowerCase();
@@ -209,17 +246,30 @@ export default function ManualTraderWorkspace() {
     );
   }, [marketsQuery.data, search]);
 
+  // MCP 연결 및 도구 목록 로드
+  useEffect(() => {
+    const mcpUrl = deriveMcpUrl();
+    connectMcp(mcpUrl)
+      .then((tools) => {
+        setMcpTools(tools);
+        setMcpConnected(tools.length > 0);
+      })
+      .catch(() => { /* MCP 실패해도 채팅은 가능 */ });
+  }, []);
+
+  // 채팅 스크롤
+  useEffect(() => {
+    chatEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+  }, [chatMessages, chatStreamText]);
+
+  // 저장
   useEffect(() => {
     if (typeof window === 'undefined') return;
-    const next: WorkspacePrefs = {
-      selectedMarket,
-      interval,
-      sortBy,
-      sortDirection,
-    };
+    const next: WorkspacePrefs = { selectedMarket, interval, sortBy, sortDirection };
     window.localStorage.setItem(STORAGE_KEY, JSON.stringify(next));
   }, [selectedMarket, interval, sortBy, sortDirection]);
 
+  // 차트 초기화
   useEffect(() => {
     const container = chartContainerRef.current;
     if (!container) return;
@@ -236,13 +286,15 @@ export default function ManualTraderWorkspace() {
           vertLines: { color: '#1f2530' },
           horzLines: { color: '#1f2530' },
         },
-        rightPriceScale: {
-          borderColor: '#2d3543',
-        },
+        rightPriceScale: { borderColor: '#2d3543' },
         timeScale: {
           borderColor: '#2d3543',
           timeVisible: true,
           secondsVisible: false,
+          tickMarkFormatter: (time: UTCTimestamp) => formatKstTime(time as number),
+        },
+        localization: {
+          timeFormatter: (time: number) => formatKstDateTime(time),
         },
       });
 
@@ -267,9 +319,7 @@ export default function ManualTraderWorkspace() {
 
     return () => {
       resizeObserver.disconnect();
-      if (chartRef.current) {
-        chartRef.current.remove();
-      }
+      if (chartRef.current) chartRef.current.remove();
       chartRef.current = null;
       candleSeriesRef.current = null;
       priceLinesRef.current = [];
@@ -299,7 +349,7 @@ export default function ManualTraderWorkspace() {
     const payload = chartQuery.data;
     if (!series || !chart || !payload) return;
 
-    const candlesticks: CandlestickData<Time>[] = payload.candles.map((candle) => toCandlestick(candle));
+    const candlesticks: CandlestickData<Time>[] = payload.candles.map(toCandlestick);
     series.setData(candlesticks);
     liveCandlesRef.current = candlesticks;
 
@@ -308,42 +358,15 @@ export default function ManualTraderWorkspace() {
 
     priceLinesRef.current.push(series.createPriceLine({
       price: payload.recommendation.recommendedEntryPrice,
-      color: '#f5c542',
-      lineStyle: 2,
-      lineWidth: 1,
-      title: '추천 매수가',
+      color: '#f5c542', lineStyle: 2, lineWidth: 1, title: '추천 매수가',
     }));
 
     if (payload.activePosition) {
-      priceLinesRef.current.push(series.createPriceLine({
-        price: payload.activePosition.averageEntryPrice,
-        color: '#41dba6',
-        lineStyle: 1,
-        lineWidth: 2,
-        title: '내 매수가',
-      }));
-      priceLinesRef.current.push(series.createPriceLine({
-        price: payload.activePosition.takeProfitPrice,
-        color: '#ff4d67',
-        lineStyle: 2,
-        lineWidth: 1,
-        title: '익절',
-      }));
-      priceLinesRef.current.push(series.createPriceLine({
-        price: payload.activePosition.stopLossPrice,
-        color: '#4c88ff',
-        lineStyle: 2,
-        lineWidth: 1,
-        title: '손절',
-      }));
+      priceLinesRef.current.push(series.createPriceLine({ price: payload.activePosition.averageEntryPrice, color: '#41dba6', lineStyle: 1, lineWidth: 2, title: '내 매수가' }));
+      priceLinesRef.current.push(series.createPriceLine({ price: payload.activePosition.takeProfitPrice, color: '#ff4d67', lineStyle: 2, lineWidth: 1, title: '익절' }));
+      priceLinesRef.current.push(series.createPriceLine({ price: payload.activePosition.stopLossPrice, color: '#4c88ff', lineStyle: 2, lineWidth: 1, title: '손절' }));
       if (payload.activePosition.trailingStopPrice) {
-        priceLinesRef.current.push(series.createPriceLine({
-          price: payload.activePosition.trailingStopPrice,
-          color: '#b084ff',
-          lineStyle: 0,
-          lineWidth: 1,
-          title: '트레일링',
-        }));
+        priceLinesRef.current.push(series.createPriceLine({ price: payload.activePosition.trailingStopPrice, color: '#b084ff', lineStyle: 0, lineWidth: 1, title: '트레일링' }));
       }
     }
 
@@ -351,13 +374,11 @@ export default function ManualTraderWorkspace() {
       .filter((event) => event.price != null)
       .map((event) => {
         const isExit = event.eventType.includes('CLOSE') || event.eventType.includes('TAKE');
-        const position: 'aboveBar' | 'belowBar' = isExit ? 'aboveBar' : 'belowBar';
-        const shape: 'arrowDown' | 'arrowUp' = isExit ? 'arrowDown' : 'arrowUp';
         return {
           time: asUtc(new Date(event.createdAt).getTime()),
-          position,
+          position: (isExit ? 'aboveBar' : 'belowBar') as 'aboveBar' | 'belowBar',
           color: isExit ? '#ff6078' : '#3ecf9f',
-          shape,
+          shape: (isExit ? 'arrowDown' : 'arrowUp') as 'arrowDown' | 'arrowUp',
           text: event.eventType,
         };
       });
@@ -369,6 +390,7 @@ export default function ManualTraderWorkspace() {
     }
   }, [chartQuery.data, events]);
 
+  // 실시간 캔들 업데이트
   useEffect(() => {
     const series = candleSeriesRef.current;
     const ticker = tickerQuery.data;
@@ -432,16 +454,8 @@ export default function ManualTraderWorkspace() {
     try {
       const status = await checkConnection();
       setLlmStatus(status);
-      if (status === 'connected') {
-        setStatusMessage('OpenAI 연결 확인 완료.');
-      } else if (status === 'expired') {
-        setStatusMessage('토큰이 만료되었습니다. 다시 로그인하세요.');
-      } else {
-        setStatusMessage('OpenAI 미연결 상태입니다.');
-      }
     } catch {
       setLlmStatus('error');
-      setStatusMessage('OpenAI 상태 확인 실패');
     }
   }, []);
 
@@ -450,52 +464,41 @@ export default function ManualTraderWorkspace() {
     try {
       await startLogin();
       setLlmStatus('connected');
-      setStatusMessage('OpenAI 로그인이 완료되었습니다.');
+      setStatusMessage('OpenAI 로그인 완료.');
     } catch (error) {
       setLlmStatus('error');
-      const message = error instanceof Error ? error.message : 'OpenAI 로그인 실패';
-      setStatusMessage(message);
+      setStatusMessage(error instanceof Error ? error.message : 'OpenAI 로그인 실패');
     }
   }, []);
 
   const handleLogout = useCallback(async () => {
     await logout();
     setLlmStatus('disconnected');
+    clearConversation();
+    setChatMessages([]);
     setStatusMessage('OpenAI 로그아웃 완료.');
   }, []);
 
+  // 에이전트 액션 실행
   const applyAgentActionToOrderForm = (action: AgentAction) => {
     const normalizedType = action.type.toUpperCase();
     if (normalizedType === 'ADD' || normalizedType === 'WAIT_RETEST') {
       setOrderType('LIMIT');
-      if (typeof action.targetPrice === 'number' && Number.isFinite(action.targetPrice)) {
-        setLimitPrice(action.targetPrice);
-      }
+      if (typeof action.targetPrice === 'number' && Number.isFinite(action.targetPrice)) setLimitPrice(action.targetPrice);
       if (typeof action.sizePercent === 'number' && Number.isFinite(action.sizePercent)) {
-        const adjusted = Math.max(5100, Math.round((amountKrw * action.sizePercent) / 100));
-        setAmountKrw(adjusted);
+        setAmountKrw(Math.max(5100, Math.round((amountKrw * action.sizePercent) / 100)));
       }
-      setStatusMessage(`에이전트 액션(${action.title})을 주문 폼에 반영했습니다.`);
+      setStatusMessage(`에이전트 액션(${action.title})을 주문 폼에 반영.`);
+      setActiveTab('order');
       return;
     }
-
-    if (normalizedType === 'PARTIAL_TP') {
-      if (typeof action.targetPrice === 'number' && Number.isFinite(action.targetPrice)) {
-        setCustomTakeProfit(action.targetPrice);
-      }
-      setStatusMessage(`부분 익절 가이드(${action.title})를 익절가에 반영했습니다.`);
+    if (normalizedType === 'PARTIAL_TP' || normalizedType === 'FULL_EXIT') {
+      if (typeof action.targetPrice === 'number') setCustomTakeProfit(action.targetPrice);
+      setStatusMessage(`${action.title}을 확인하세요.`);
+      setActiveTab('order');
       return;
     }
-
-    if (normalizedType === 'FULL_EXIT') {
-      if (typeof action.targetPrice === 'number' && Number.isFinite(action.targetPrice)) {
-        setCustomTakeProfit(action.targetPrice);
-      }
-      setStatusMessage(`전량 청산 가이드(${action.title})를 확인하세요. 즉시 청산은 포지션 정지 버튼을 사용하세요.`);
-      return;
-    }
-
-    setStatusMessage(`관망/대기 액션(${action.title})을 확인했습니다.`);
+    setStatusMessage(`관망/대기 액션(${action.title}) 확인.`);
   };
 
   const executeAgentAction = async (action: AgentAction) => {
@@ -504,77 +507,45 @@ export default function ManualTraderWorkspace() {
     const requiresConfirm = urgency === 'HIGH' || normalizedType === 'FULL_EXIT' || normalizedType === 'PARTIAL_TP';
 
     if (requiresConfirm) {
-      const ok = window.confirm(`에이전트 액션을 실행합니다.\n\n[${normalizedType}] ${action.title}\n${action.reason}`);
-      if (!ok) {
-        setStatusMessage(`액션(${action.title}) 실행을 취소했습니다.`);
-        return;
-      }
+      const ok = window.confirm(`[${normalizedType}] ${action.title}\n${action.reason}`);
+      if (!ok) return;
     }
 
     if (normalizedType === 'FULL_EXIT') {
-      if (!activePosition) {
-        setStatusMessage('청산할 활성 포지션이 없습니다.');
-        return;
-      }
+      if (!activePosition) { setStatusMessage('청산할 포지션 없음.'); return; }
       stopMutation.mutate();
-      setStatusMessage(`에이전트 액션(${action.title})에 따라 포지션 정지/청산을 실행합니다.`);
       return;
     }
-
     if (normalizedType === 'PARTIAL_TP') {
-      if (!activePosition) {
-        setStatusMessage('부분 익절할 활성 포지션이 없습니다.');
-        return;
-      }
-      const ratio = typeof action.sizePercent === 'number' && Number.isFinite(action.sizePercent)
-        ? Math.max(0.1, Math.min(0.9, action.sizePercent / 100))
-        : 0.5;
+      if (!activePosition) { setStatusMessage('익절할 포지션 없음.'); return; }
+      const ratio = typeof action.sizePercent === 'number' ? Math.max(0.1, Math.min(0.9, action.sizePercent / 100)) : 0.5;
       try {
         await guidedTradingApi.partialTakeProfit(selectedMarket, ratio);
         void chartQuery.refetch();
-        setStatusMessage(`에이전트 액션(${action.title})에 따라 부분 익절 ${Math.round(ratio * 100)}%를 실행했습니다.`);
+        setStatusMessage(`부분 익절 ${Math.round(ratio * 100)}% 실행.`);
       } catch (e) {
-        setStatusMessage(e instanceof Error ? e.message : '부분 익절 실행 실패');
+        setStatusMessage(e instanceof Error ? e.message : '부분 익절 실패');
       }
       return;
     }
-
     if (normalizedType === 'ADD' || normalizedType === 'WAIT_RETEST') {
-      if (activePosition) {
-        applyAgentActionToOrderForm(action);
-        setStatusMessage('현재 API는 추가 매수를 직접 지원하지 않아 주문 폼 반영으로 처리했습니다.');
-        return;
-      }
-
       applyAgentActionToOrderForm(action);
-      const recommendationRef = recommendation;
-      if (!recommendationRef) {
-        setStatusMessage('추천 정보가 없어 즉시 실행할 수 없습니다.');
-        return;
+      if (!activePosition && recommendation) {
+        const payload: GuidedStartRequest = {
+          market: selectedMarket, amountKrw, orderType,
+          limitPrice: orderType === 'LIMIT' && typeof limitPrice === 'number' ? limitPrice : undefined,
+          stopLossPrice: typeof customStopLoss === 'number' ? customStopLoss : recommendation.stopLossPrice,
+          takeProfitPrice: typeof customTakeProfit === 'number' ? customTakeProfit : recommendation.takeProfitPrice,
+        };
+        startMutation.mutate(payload);
       }
-
-      const payload: GuidedStartRequest = {
-        market: selectedMarket,
-        amountKrw,
-        orderType,
-        limitPrice: orderType === 'LIMIT' && typeof limitPrice === 'number' ? limitPrice : undefined,
-        stopLossPrice: typeof customStopLoss === 'number' ? customStopLoss : recommendationRef.stopLossPrice,
-        takeProfitPrice: typeof customTakeProfit === 'number' ? customTakeProfit : recommendationRef.takeProfitPrice,
-      };
-      startMutation.mutate(payload);
-      setStatusMessage(`에이전트 액션(${action.title})을 즉시 실행했습니다.`);
-      return;
     }
-
-    setStatusMessage(`액션(${action.title})은 실행 가능한 자동화 타입이 아니어서 반영만 수행합니다.`);
   };
 
   const handleStart = () => {
     if (!recommendation) return;
     const payload: GuidedStartRequest = {
-      market: selectedMarket,
-      amountKrw,
-      orderType,
+      market: selectedMarket, amountKrw, orderType,
       limitPrice: orderType === 'LIMIT' && typeof limitPrice === 'number' ? limitPrice : undefined,
       stopLossPrice: typeof customStopLoss === 'number' ? customStopLoss : recommendation.stopLossPrice,
       takeProfitPrice: typeof customTakeProfit === 'number' ? customTakeProfit : recommendation.takeProfitPrice,
@@ -582,95 +553,116 @@ export default function ManualTraderWorkspace() {
     startMutation.mutate(payload);
   };
 
-  const buildFallbackAgentContext = (): GuidedAgentContextResponse | null => {
-    const chart = chartQuery.data;
-    if (!chart) return null;
-
-    return {
-      market: selectedMarket,
-      generatedAt: new Date().toISOString(),
-      chart,
-      recentClosedTrades: [],
-      performance: {
-        sampleSize: 0,
-        winCount: 0,
-        lossCount: 0,
-        winRate: 0,
-        avgPnlPercent: 0,
-      },
-    };
-  };
-
-  const runAgentAnalysis = useCallback(async () => {
-    if (agentBusy) return;
+  // 채팅 메시지 전송
+  const handleSendChat = useCallback(async () => {
+    if (chatBusy || !chatInput.trim()) return;
     if (llmStatus !== 'connected') {
-      setAgentError('OpenAI가 연결되지 않았습니다. 로그인 후 다시 시도하세요.');
+      setStatusMessage('OpenAI 미연결 상태.');
       return;
     }
 
-    let context = agentContextQuery.data ?? null;
-    if (!context) {
-      try {
-        context = await guidedTradingApi.getAgentContext(
-          selectedMarket,
-          interval,
-          interval === 'tick' ? 300 : 120,
-          20
-        );
-      } catch {
-        context = buildFallbackAgentContext();
-      }
-    }
+    const userText = chatInput.trim();
+    setChatInput('');
+    setChatBusy(true);
+    setChatStreamText('');
 
-    if (!context) {
-      setAgentError('에이전트 컨텍스트를 생성할 수 없습니다. 차트 데이터를 먼저 로드한 뒤 다시 시도하세요.');
-      return;
-    }
-
-    setAgentBusy(true);
-    setAgentError('');
-    setStreamingText('');
     try {
-      const advice = await requestAdvice({
+      const context = autoContext ? (agentContextQuery.data ?? null) : null;
+      const llmTools = mcpTools;
+
+      const newMessages = await sendChatMessage({
+        userMessage: userText,
+        model: chatModel,
         context,
-        userPrompt: agentPrompt,
-        onStreamDelta: (accumulated) => setStreamingText(accumulated),
+        mcpTools: llmTools.length > 0 ? llmTools : undefined,
+        onStreamDelta: (text) => setChatStreamText(text),
+        onToolCall: (name, args) => {
+          setChatMessages((prev) => [
+            ...prev,
+            {
+              id: crypto.randomUUID(),
+              role: 'tool' as const,
+              content: '',
+              timestamp: Date.now(),
+              toolCall: { name, args },
+            },
+          ]);
+        },
+        onToolResult: (name, result) => {
+          setChatMessages((prev) => {
+            const updated = [...prev];
+            for (let i = updated.length - 1; i >= 0; i--) {
+              if (updated[i].toolCall?.name === name && !updated[i].toolCall?.result) {
+                updated[i] = {
+                  ...updated[i],
+                  toolCall: { ...updated[i].toolCall!, result },
+                };
+                break;
+              }
+            }
+            return updated;
+          });
+        },
       });
 
-      setAgentAdvice(advice);
-      setStreamingText('');
-      if (context.performance.sampleSize === 0) {
-        setStatusMessage('에이전트 분석 완료 (일부 히스토리 컨텍스트 부족)');
-      } else {
-        setStatusMessage('에이전트 분석 완료');
-      }
+      // 도구 메시지는 이미 onToolCall/onToolResult에서 추가됨
+      // user/assistant 메시지만 추가
+      setChatMessages((prev) => [
+        ...prev,
+        ...newMessages.filter((m) => m.role === 'user' || m.role === 'assistant'),
+      ]);
+      setChatStreamText('');
     } catch (e) {
-      const message = e instanceof Error ? e.message : '에이전트 분석 실패';
-      setAgentError(message);
-      setStatusMessage(message);
+      const errMsg = e instanceof Error ? e.message : '채팅 오류';
+      setChatMessages((prev) => [
+        ...prev,
+        { id: crypto.randomUUID(), role: 'system', content: errMsg, timestamp: Date.now() },
+      ]);
     } finally {
-      setAgentBusy(false);
+      setChatBusy(false);
     }
-  }, [
-    agentBusy,
-    agentContextQuery.data,
-    selectedMarket,
-    interval,
-    agentPrompt,
-    llmStatus,
-  ]);
+  }, [chatBusy, chatInput, chatModel, llmStatus, autoContext, agentContextQuery.data, mcpTools]);
 
+  // 자동 분석
   useEffect(() => {
-    if (!agentAutoRefresh) return;
+    if (!autoAnalysis || llmStatus !== 'connected') return;
     const timer = window.setInterval(() => {
-      void runAgentAnalysis();
+      if (chatBusy) return;
+      const context = agentContextQuery.data ?? null;
+      if (!context) return;
+      setChatBusy(true);
+      setChatStreamText('');
+      const llmTools = mcpTools;
+      sendChatMessage({
+        userMessage: '현재 시점 분석과 조언을 부탁합니다.',
+        model: chatModel,
+        context,
+        mcpTools: llmTools.length > 0 ? llmTools : undefined,
+        onStreamDelta: (text) => setChatStreamText(text),
+      })
+        .then((msgs) => {
+          setChatMessages((prev) => [...prev, ...msgs]);
+          setChatStreamText('');
+        })
+        .catch(() => { /* 자동 분석 실패 무시 */ })
+        .finally(() => setChatBusy(false));
     }, 15000);
     return () => window.clearInterval(timer);
-  }, [agentAutoRefresh, runAgentAnalysis]);
+  }, [autoAnalysis, chatModel, llmStatus, chatBusy, agentContextQuery.data, mcpTools]);
 
   useEffect(() => {
     void handleCheckStatus();
   }, [handleCheckStatus]);
+
+  // 마켓 변경시 대화 초기화
+  useEffect(() => {
+    clearConversation();
+    setChatMessages([]);
+  }, [selectedMarket]);
+
+  // ---------- 렌더링 ----------
+
+  const totalToolCount = mcpTools.length;
 
   return (
     <section className="guided-workspace">
@@ -682,6 +674,7 @@ export default function ManualTraderWorkspace() {
       </header>
 
       <div className="guided-grid">
+        {/* 좌측: 마켓 보드 */}
         <aside className="guided-market-board">
           <div className="guided-board-toolbar">
             <input
@@ -725,6 +718,7 @@ export default function ManualTraderWorkspace() {
           </div>
         </aside>
 
+        {/* 중앙: 차트 */}
         <div className="guided-chart-panel">
           <div className="guided-chart-toolbar">
             <strong>{selectedMarket}</strong>
@@ -736,7 +730,7 @@ export default function ManualTraderWorkspace() {
                   onClick={() => setIntervalValue(item)}
                   type="button"
                 >
-                  {item === 'tick' ? '틱' : item.replace('minute', '') === 'day' ? '일' : `${item.replace('minute', '')}분`}
+                  {item === 'tick' ? '틱' : item === 'day' ? '일' : `${item.replace('minute', '')}분`}
                 </button>
               ))}
             </div>
@@ -767,41 +761,17 @@ export default function ManualTraderWorkspace() {
 
           {recommendation && (
             <div className="guided-recommendation">
+              <div><span>현재가</span><strong>{formatKrw(recommendation.currentPrice)}</strong></div>
               <div>
-                <span>현재가</span>
-                <strong>{formatKrw(recommendation.currentPrice)}</strong>
+                <span>추천 매수가</span><strong>{formatKrw(recommendation.recommendedEntryPrice)}</strong>
+                <button type="button" className="guided-link-button" onClick={handleApplyRecommendedLimit}>지정가에 적용</button>
               </div>
-              <div>
-                <span>추천 매수가</span>
-                <strong>{formatKrw(recommendation.recommendedEntryPrice)}</strong>
-                <button type="button" className="guided-link-button" onClick={handleApplyRecommendedLimit}>
-                  지정가에 적용
-                </button>
-              </div>
-              <div>
-                <span>손절가</span>
-                <strong>{formatKrw(recommendation.stopLossPrice)}</strong>
-              </div>
-              <div>
-                <span>익절가</span>
-                <strong>{formatKrw(recommendation.takeProfitPrice)}</strong>
-              </div>
-              <div>
-                <span>신뢰도</span>
-                <strong>{(recommendation.confidence * 100).toFixed(1)}%</strong>
-              </div>
-              <div>
-                <span>추천가 승률</span>
-                <strong>{(recommendation.recommendedEntryWinRate ?? recommendation.predictedWinRate).toFixed(1)}%</strong>
-              </div>
-              <div>
-                <span>현재가 승률</span>
-                <strong>{(recommendation.marketEntryWinRate ?? recommendation.predictedWinRate).toFixed(1)}%</strong>
-              </div>
-              <div>
-                <span>Risk/Reward</span>
-                <strong>{recommendation.riskRewardRatio.toFixed(2)}R</strong>
-              </div>
+              <div><span>손절가</span><strong>{formatKrw(recommendation.stopLossPrice)}</strong></div>
+              <div><span>익절가</span><strong>{formatKrw(recommendation.takeProfitPrice)}</strong></div>
+              <div><span>신뢰도</span><strong>{(recommendation.confidence * 100).toFixed(1)}%</strong></div>
+              <div><span>추천가 승률</span><strong>{(recommendation.recommendedEntryWinRate ?? recommendation.predictedWinRate).toFixed(1)}%</strong></div>
+              <div><span>현재가 승률</span><strong>{(recommendation.marketEntryWinRate ?? recommendation.predictedWinRate).toFixed(1)}%</strong></div>
+              <div><span>Risk/Reward</span><strong>{recommendation.riskRewardRatio.toFixed(2)}R</strong></div>
             </div>
           )}
 
@@ -815,20 +785,12 @@ export default function ManualTraderWorkspace() {
                 </span>
               </div>
               <div className="guided-orderbook-best">
-                <div>
-                  <span>최우선 매도</span>
-                  <strong>{orderbook.bestAsk != null ? formatKrw(orderbook.bestAsk) : '-'}</strong>
-                </div>
-                <div>
-                  <span>최우선 매수</span>
-                  <strong>{orderbook.bestBid != null ? formatKrw(orderbook.bestBid) : '-'}</strong>
-                </div>
+                <div><span>최우선 매도</span><strong>{orderbook.bestAsk != null ? formatKrw(orderbook.bestAsk) : '-'}</strong></div>
+                <div><span>최우선 매수</span><strong>{orderbook.bestBid != null ? formatKrw(orderbook.bestBid) : '-'}</strong></div>
               </div>
               <div className="guided-orderbook-grid">
-                <div className="head">매도호가</div>
-                <div className="head">매도수량</div>
-                <div className="head">매수호가</div>
-                <div className="head">매수수량</div>
+                <div className="head">매도호가</div><div className="head">매도수량</div>
+                <div className="head">매수호가</div><div className="head">매수수량</div>
                 {orderbook.units.slice(0, 6).map((unit, idx) => (
                   <div key={`row-${idx}`} className="guided-orderbook-row">
                     <div className="ask">{formatPlain(unit.askPrice)}</div>
@@ -842,254 +804,249 @@ export default function ManualTraderWorkspace() {
           )}
         </div>
 
+        {/* 우측: 탭 기반 패널 */}
         <aside className="guided-order-panel">
-          <h3>포지션 시작</h3>
-          <label>
-            주문금액(KRW)
-            <input
-              type="number"
-              min={5100}
-              step={1000}
-              value={amountKrw}
-              onChange={(event) => setAmountKrw(Number(event.target.value || 0))}
-            />
-          </label>
-
-          <label>
-            주문 방식
-            <select value={orderType} onChange={(event) => setOrderType(event.target.value as 'MARKET' | 'LIMIT')}>
-              <option value="LIMIT">지정가</option>
-              <option value="MARKET">시장가</option>
-            </select>
-          </label>
-
-          {orderType === 'LIMIT' && (
-            <label>
-              지정가
-              <input
-                type="number"
-                value={limitPrice}
-                step="any"
-                onChange={(event) => setLimitPrice(event.target.value ? Number(event.target.value) : '')}
-              />
-            </label>
-          )}
-
-          <label>
-            손절가(커스텀)
-              <input
-                type="number"
-                value={customStopLoss}
-                step="any"
-                placeholder={recommendation ? recommendation.stopLossPrice.toString() : ''}
-                onChange={(event) => setCustomStopLoss(event.target.value ? Number(event.target.value) : '')}
-              />
-            </label>
-
-          <label>
-            익절가(커스텀)
-              <input
-                type="number"
-                value={customTakeProfit}
-                step="any"
-                placeholder={recommendation ? recommendation.takeProfitPrice.toString() : ''}
-                onChange={(event) => setCustomTakeProfit(event.target.value ? Number(event.target.value) : '')}
-              />
-            </label>
-
-          <div className="guided-actions">
-            <button type="button" onClick={handleStart} disabled={startMutation.isPending || !recommendation}>
-              {startMutation.isPending ? '주문 중...' : '자동매매 시작'}
+          {/* 탭 바 */}
+          <div className="guided-tab-bar">
+            <button
+              type="button"
+              className={activeTab === 'order' ? 'active' : ''}
+              onClick={() => setActiveTab('order')}
+            >
+              주문/포지션
             </button>
-            <button type="button" className="danger" onClick={() => stopMutation.mutate()} disabled={stopMutation.isPending || !activePosition}>
-              {stopMutation.isPending ? '정지 중...' : '포지션 정지'}
+            <button
+              type="button"
+              className={activeTab === 'chat' ? 'active' : ''}
+              onClick={() => setActiveTab('chat')}
+            >
+              AI 채팅
             </button>
           </div>
 
-          {activePosition && (
-            <div className="guided-position-card">
-              <h4>진행 포지션</h4>
-              <p>상태: {activePosition.status}</p>
-              <p>평균가: {formatKrw(activePosition.averageEntryPrice)}</p>
-              <p>보유수량: {activePosition.remainingQuantity.toFixed(6)}</p>
-              <p>미실현: {formatPct(activePosition.unrealizedPnlPercent)}</p>
-              <p>절반익절: {activePosition.halfTakeProfitDone ? '완료' : '대기'}</p>
-              <p>물타기: {activePosition.dcaCount}/{activePosition.maxDcaCount}</p>
-            </div>
-          )}
-
-          {orderSnapshot && (
-            <div className="guided-orders-card">
-              <h4>내 주문 현황</h4>
-              <div className="orders-section">
-                <span>현재 주문</span>
-                {orderSnapshot.currentOrder ? (
-                  <p>
-                    {orderSnapshot.currentOrder.side.toUpperCase()} / {orderSnapshot.currentOrder.ordType.toUpperCase()} / {orderSnapshot.currentOrder.state ?? '-'}
-                    {' · '}
-                    가격 {orderSnapshot.currentOrder.price != null ? formatPlain(orderSnapshot.currentOrder.price) : '-'}
-                    {' · '}
-                    체결 {orderSnapshot.currentOrder.executedVolume != null ? formatPlain(orderSnapshot.currentOrder.executedVolume) : '-'}
-                  </p>
-                ) : (
-                  <p>없음</p>
-                )}
-              </div>
-              <div className="orders-section">
-                <span>대기중 주문 ({orderSnapshot.pendingOrders.length})</span>
-                {orderSnapshot.pendingOrders.slice(0, 5).map((o) => (
-                  <p key={o.uuid}>
-                    {o.side.toUpperCase()} {formatPlain(o.price ?? 0)} · 잔량 {formatPlain(o.remainingVolume ?? 0)}
-                  </p>
-                ))}
-                {orderSnapshot.pendingOrders.length === 0 && <p>없음</p>}
-              </div>
-              <div className="orders-section">
-                <span>완료/취소 주문 ({orderSnapshot.completedOrders.length})</span>
-                {orderSnapshot.completedOrders.slice(0, 6).map((o) => (
-                  <p key={o.uuid}>
-                    {o.state ?? '-'} · {o.side.toUpperCase()} · 체결 {formatPlain(o.executedVolume ?? 0)}
-                  </p>
-                ))}
-                {orderSnapshot.completedOrders.length === 0 && <p>없음</p>}
-              </div>
-            </div>
-          )}
-
-          <div className="guided-copilot-card">
-            <div className="guided-copilot-head">
-              <h4>AI 코파일럿</h4>
-              <div className="guided-copilot-controls">
-                <button
-                  type="button"
-                  onClick={() => void runAgentAnalysis()}
-                  disabled={agentBusy}
-                >
-                  {agentBusy ? '분석 중...' : '지금 분석'}
+          {/* 주문/포지션 탭 */}
+          {activeTab === 'order' && (
+            <div className="guided-tab-content">
+              <h3>포지션 시작</h3>
+              <label>
+                주문금액(KRW)
+                <input type="number" min={5100} step={1000} value={amountKrw} onChange={(e) => setAmountKrw(Number(e.target.value || 0))} />
+              </label>
+              <label>
+                주문 방식
+                <select value={orderType} onChange={(e) => setOrderType(e.target.value as 'MARKET' | 'LIMIT')}>
+                  <option value="LIMIT">지정가</option>
+                  <option value="MARKET">시장가</option>
+                </select>
+              </label>
+              {orderType === 'LIMIT' && (
+                <label>지정가<input type="number" value={limitPrice} step="any" onChange={(e) => setLimitPrice(e.target.value ? Number(e.target.value) : '')} /></label>
+              )}
+              <label>손절가(커스텀)<input type="number" value={customStopLoss} step="any" placeholder={recommendation ? recommendation.stopLossPrice.toString() : ''} onChange={(e) => setCustomStopLoss(e.target.value ? Number(e.target.value) : '')} /></label>
+              <label>익절가(커스텀)<input type="number" value={customTakeProfit} step="any" placeholder={recommendation ? recommendation.takeProfitPrice.toString() : ''} onChange={(e) => setCustomTakeProfit(e.target.value ? Number(e.target.value) : '')} /></label>
+              <div className="guided-actions">
+                <button type="button" onClick={handleStart} disabled={startMutation.isPending || !recommendation}>
+                  {startMutation.isPending ? '주문 중...' : '자동매매 시작'}
+                </button>
+                <button type="button" className="danger" onClick={() => stopMutation.mutate()} disabled={stopMutation.isPending || !activePosition}>
+                  {stopMutation.isPending ? '정지 중...' : '포지션 정지'}
                 </button>
               </div>
-            </div>
 
-            <div className="guided-copilot-connection-grid">
-              <div className="guided-copilot-login-row">
-                <div className="guided-provider-status">
-                  <span>OpenAI 연결</span>
-                  <strong className={openAiConnected ? 'ok' : 'off'}>
-                    {llmStatus === 'checking'
-                      ? '확인 중'
-                      : llmStatus === 'error'
-                        ? '오류'
-                        : llmStatus === 'expired'
-                          ? '만료'
-                          : openAiConnected
-                            ? '연결됨'
-                            : '미연결'}
-                  </strong>
+              {activePosition && (
+                <div className="guided-position-card">
+                  <h4>진행 포지션</h4>
+                  <p>상태: {activePosition.status}</p>
+                  <p>평균가: {formatKrw(activePosition.averageEntryPrice)}</p>
+                  <p>보유수량: {activePosition.remainingQuantity.toFixed(6)}</p>
+                  <p>미실현: {formatPct(activePosition.unrealizedPnlPercent)}</p>
+                  <p>절반익절: {activePosition.halfTakeProfitDone ? '완료' : '대기'}</p>
+                  <p>물타기: {activePosition.dcaCount}/{activePosition.maxDcaCount}</p>
                 </div>
-                <div className="guided-copilot-controls">
+              )}
+
+              {orderSnapshot && (
+                <div className="guided-orders-card">
+                  <h4>내 주문 현황</h4>
+                  <div className="orders-section">
+                    <span>현재 주문</span>
+                    {orderSnapshot.currentOrder ? (
+                      <p>
+                        {orderSnapshot.currentOrder.side.toUpperCase()} / {orderSnapshot.currentOrder.ordType.toUpperCase()} / {orderSnapshot.currentOrder.state ?? '-'}
+                        {' · '}가격 {orderSnapshot.currentOrder.price != null ? formatPlain(orderSnapshot.currentOrder.price) : '-'}
+                        {' · '}체결 {orderSnapshot.currentOrder.executedVolume != null ? formatPlain(orderSnapshot.currentOrder.executedVolume) : '-'}
+                      </p>
+                    ) : (<p>없음</p>)}
+                  </div>
+                  <div className="orders-section">
+                    <span>대기중 주문 ({orderSnapshot.pendingOrders.length})</span>
+                    {orderSnapshot.pendingOrders.slice(0, 5).map((o) => (
+                      <p key={o.uuid}>{o.side.toUpperCase()} {formatPlain(o.price ?? 0)} · 잔량 {formatPlain(o.remainingVolume ?? 0)}</p>
+                    ))}
+                    {orderSnapshot.pendingOrders.length === 0 && <p>없음</p>}
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* AI 채팅 탭 */}
+          {activeTab === 'chat' && (
+            <div className="guided-chat-panel">
+              {/* 상태바 */}
+              <div className="guided-chat-statusbar">
+                <div className="guided-provider-status">
+                  <span className={`guided-status-dot ${openAiConnected ? 'ok' : 'off'}`} />
+                  <span>
+                    {llmStatus === 'checking' ? '확인 중' : llmStatus === 'error' ? '오류' : llmStatus === 'expired' ? '만료' : openAiConnected ? 'OpenAI 연결됨' : '미연결'}
+                  </span>
+                </div>
+                <div className="guided-chat-status-actions">
                   {openAiConnected ? (
-                    <button type="button" onClick={() => void handleLogout()}>
-                      로그아웃
-                    </button>
+                    <button type="button" onClick={() => void handleLogout()}>로그아웃</button>
                   ) : (
                     <button type="button" onClick={() => void handleLogin()} disabled={providerChecking}>
-                      {providerChecking ? '확인 중...' : 'OpenAI 로그인'}
+                      {providerChecking ? '확인 중...' : '로그인'}
                     </button>
                   )}
-                  <button type="button" onClick={() => void handleCheckStatus()} disabled={providerChecking}>
-                    상태 확인
+                </div>
+              </div>
+              <div className="guided-model-selector">
+                <label>모델</label>
+                <select value={chatModel} onChange={(e) => setChatModel(e.target.value as CodexModelId)}>
+                  {CODEX_MODELS.map((m) => (
+                    <option key={m.id} value={m.id}>{m.label}</option>
+                  ))}
+                </select>
+              </div>
+
+              {/* 도구 목록 접이식 */}
+              <button
+                type="button"
+                className="guided-tools-toggle"
+                onClick={() => setShowTools(!showTools)}
+              >
+                사용 가능 도구 ({totalToolCount}개) {showTools ? '▲' : '▼'}
+              </button>
+              {showTools && (
+                <div className="guided-tools-list">
+                  {mcpTools.map((tool) => (
+                    <div key={tool.name} className="guided-tool-item">
+                      <code>{tool.name}</code>
+                      <span>{tool.description || ''}</span>
+                    </div>
+                  ))}
+                  {mcpTools.length === 0 && <p className="guided-tools-empty">{mcpConnected ? '등록된 도구 없음' : 'MCP 연결 중...'}</p>}
+                </div>
+              )}
+
+              {/* 채팅 메시지 영역 */}
+              <div className="guided-chat-messages">
+                {chatMessages.length === 0 && !chatBusy && (
+                  <div className="guided-chat-empty">
+                    <p>AI 트레이딩 코파일럿</p>
+                    <small>"{selectedMarket} 지금 어때?" 같은 질문을 입력하세요.</small>
+                    <small>MCP 도구를 호출하여 실시간 데이터를 분석합니다.</small>
+                  </div>
+                )}
+
+                {chatMessages.map((msg) => {
+                  if (msg.role === 'tool' && msg.toolCall) {
+                    return (
+                      <div key={msg.id} className="guided-chat-message tool-call">
+                        <div className="guided-chat-tool-header">도구 호출</div>
+                        <code>{msg.toolCall.name}({msg.toolCall.args})</code>
+                        {msg.toolCall.result && (
+                          <pre className="guided-chat-tool-result">
+                            {msg.toolCall.result.length > 300 ? msg.toolCall.result.slice(0, 300) + '...' : msg.toolCall.result}
+                          </pre>
+                        )}
+                      </div>
+                    );
+                  }
+
+                  return (
+                    <div key={msg.id} className={`guided-chat-message ${msg.role}`}>
+                      <div className="guided-chat-role">
+                        {msg.role === 'user' ? '나' : msg.role === 'assistant' ? 'AI' : '시스템'}
+                      </div>
+                      <div className="guided-chat-content">{msg.content}</div>
+                      {msg.actions && msg.actions.length > 0 && (
+                        <div className="guided-chat-actions">
+                          {msg.actions.map((action, idx) => (
+                            <div key={idx} className="guided-chat-action-item">
+                              <div className="guided-chat-action-top">
+                                <strong>{action.title}</strong>
+                                <span className={`urgency ${action.urgency.toLowerCase()}`}>{action.urgency}</span>
+                              </div>
+                              <p>{action.reason}</p>
+                              <small>
+                                {action.targetPrice != null ? `목표가 ${formatKrw(action.targetPrice)} · ` : ''}
+                                {action.sizePercent != null ? `비중 ${action.sizePercent}%` : ''}
+                              </small>
+                              <div className="guided-chat-action-buttons">
+                                <button type="button" onClick={() => applyAgentActionToOrderForm(action)}>주문 반영</button>
+                                <button type="button" onClick={() => void executeAgentAction(action)}>즉시 실행</button>
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                      <small className="guided-chat-time">
+                        {new Date(msg.timestamp).toLocaleTimeString('ko-KR', { timeZone: 'Asia/Seoul' })}
+                      </small>
+                    </div>
+                  );
+                })}
+
+                {chatBusy && chatStreamText && (
+                  <div className="guided-chat-message assistant streaming">
+                    <div className="guided-chat-role">AI</div>
+                    <div className="guided-chat-content">{chatStreamText}</div>
+                  </div>
+                )}
+
+                {chatBusy && !chatStreamText && (
+                  <div className="guided-chat-message assistant streaming">
+                    <div className="guided-chat-role">AI</div>
+                    <div className="guided-chat-content guided-chat-thinking">분석 중...</div>
+                  </div>
+                )}
+
+                <div ref={chatEndRef} />
+              </div>
+
+              {/* 입력 영역 */}
+              <div className="guided-chat-input-area">
+                <div className="guided-chat-input-row">
+                  <input
+                    value={chatInput}
+                    onChange={(e) => setChatInput(e.target.value)}
+                    onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); void handleSendChat(); } }}
+                    placeholder={`${selectedMarket} 분석 질문...`}
+                    disabled={chatBusy || !openAiConnected}
+                  />
+                  <button
+                    type="button"
+                    onClick={() => void handleSendChat()}
+                    disabled={chatBusy || !chatInput.trim() || !openAiConnected}
+                  >
+                    전송
                   </button>
+                </div>
+                <div className="guided-chat-toggles">
+                  <label>
+                    <input type="checkbox" checked={autoContext} onChange={(e) => setAutoContext(e.target.checked)} />
+                    자동 컨텍스트
+                  </label>
+                  <label>
+                    <input type="checkbox" checked={autoAnalysis} onChange={(e) => setAutoAnalysis(e.target.checked)} />
+                    15초 자동 분석
+                  </label>
                 </div>
               </div>
             </div>
-
-            <label className="guided-copilot-prompt">
-              추가 지시(선택)
-              <input
-                value={agentPrompt}
-                onChange={(event) => setAgentPrompt(event.target.value)}
-                placeholder="예: 공격적 물타기 금지, 손절 우선"
-              />
-            </label>
-
-            <label className="guided-copilot-auto">
-              <input
-                type="checkbox"
-                checked={agentAutoRefresh}
-                onChange={(event) => setAgentAutoRefresh(event.target.checked)}
-              />
-              15초 자동 분석
-            </label>
-
-            <label className="guided-copilot-auto">
-              <input
-                type="checkbox"
-                checked={includeChartScreenshot}
-                onChange={(event) => setIncludeChartScreenshot(event.target.checked)}
-              />
-              차트 스크린샷 포함
-            </label>
-
-            {agentContext && (
-              <p className="guided-copilot-analysis">
-                최근 승률 {agentContext.performance.winRate.toFixed(1)}%
-              </p>
-            )}
-            {!openAiConnected && (
-              <p className="guided-copilot-error">
-                {llmStatus === 'error'
-                  ? 'OpenAI 연결 오류가 발생했습니다.'
-                  : llmStatus === 'expired'
-                    ? '토큰이 만료되었습니다. 다시 로그인하세요.'
-                    : 'OpenAI 미연결 상태입니다. 로그인을 먼저 진행하세요.'}
-              </p>
-            )}
-
-            {agentBusy && streamingText && (
-              <pre className="guided-copilot-streaming">{streamingText}</pre>
-            )}
-
-            {agentAdvice && !agentBusy && (
-              <>
-                <div className="guided-copilot-summary">
-                  <span>신뢰도</span>
-                  <strong>{agentAdvice.confidence}%</strong>
-                  <small>{new Date().toLocaleTimeString('ko-KR')}</small>
-                </div>
-                <p className="guided-copilot-analysis">{agentAdvice.analysis}</p>
-                <div className="guided-copilot-actions">
-                  {agentAdvice.actions.length === 0 && (
-                    <div className="guided-copilot-action muted">지금은 관망 시그널이 우세합니다.</div>
-                  )}
-                  {agentAdvice.actions.map((action, index) => (
-                    <div key={`${action.type}-${index}`} className="guided-copilot-action">
-                      <div className="top">
-                        <strong>{action.title}</strong>
-                        <span className={`urgency ${action.urgency.toLowerCase()}`}>{action.urgency}</span>
-                      </div>
-                      <p>{action.reason}</p>
-                      <small>
-                        {action.targetPrice != null ? `목표가 ${formatKrw(action.targetPrice)} · ` : ''}
-                        {action.sizePercent != null ? `권장 비중 ${action.sizePercent}%` : '비중 유지'}
-                      </small>
-                      <div className="guided-copilot-controls">
-                        <button type="button" onClick={() => applyAgentActionToOrderForm(action)}>
-                          주문 폼에 반영
-                        </button>
-                        <button type="button" onClick={() => void executeAgentAction(action)}>
-                          즉시 실행
-                        </button>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              </>
-            )}
-
-            {agentError && (
-              <p className="guided-copilot-error">{agentError}</p>
-            )}
-          </div>
+          )}
 
           {statusMessage && <p className="guided-status">{statusMessage}</p>}
         </aside>

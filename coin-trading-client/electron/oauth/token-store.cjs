@@ -5,13 +5,29 @@ const path = require('node:path');
 const TOKEN_DIR = path.join(os.homedir(), '.coin-trading');
 const TOKEN_FILE = path.join(TOKEN_DIR, 'oauth-tokens.json');
 
+function extractAccountId(accessToken) {
+  try {
+    const parts = (accessToken || '').split('.');
+    if (parts.length < 2) return null;
+    const payload = JSON.parse(Buffer.from(parts[1], 'base64').toString('utf-8'));
+    return payload['https://api.openai.com/auth']?.account_id
+      ?? payload.account_id
+      ?? payload.sub
+      ?? null;
+  } catch {
+    return null;
+  }
+}
+
 function saveToken(tokenData) {
   if (!fs.existsSync(TOKEN_DIR)) {
     fs.mkdirSync(TOKEN_DIR, { recursive: true, mode: 0o700 });
   }
+  const accessToken = tokenData.access_token ?? tokenData.accessToken;
   const payload = {
-    accessToken: tokenData.access_token ?? tokenData.accessToken,
+    accessToken,
     refreshToken: tokenData.refresh_token ?? tokenData.refreshToken,
+    accountId: tokenData.accountId ?? extractAccountId(accessToken),
     expiresAt: tokenData.expiresAt ?? (tokenData.expires_in
       ? Math.floor(Date.now() / 1000) + tokenData.expires_in
       : null),

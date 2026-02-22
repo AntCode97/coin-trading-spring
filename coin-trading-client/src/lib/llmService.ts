@@ -1,7 +1,6 @@
-import OpenAI from 'openai';
-import { getApiBaseUrl, type GuidedAgentContextResponse } from '../api';
+import { type GuidedAgentContextResponse } from '../api';
 
-// ---------- Types (기존 opencodeSession.ts에서 이관) ----------
+// ---------- Types ----------
 
 export type AgentAction = {
   type: 'ADD' | 'PARTIAL_TP' | 'FULL_EXIT' | 'HOLD' | 'WAIT_RETEST' | string;
@@ -20,23 +19,31 @@ export type AgentAdvice = {
 
 export type LlmConnectionStatus = 'connected' | 'disconnected' | 'expired' | 'checking' | 'error';
 
-// ---------- OpenAI Client ----------
+export type ChatMessage = {
+  id: string;
+  role: 'user' | 'assistant' | 'system' | 'tool';
+  content: string;
+  timestamp: number;
+  toolCall?: { name: string; args: string; result?: string };
+  actions?: AgentAction[];
+};
 
-let cachedClient: OpenAI | null = null;
+// ---------- Codex Backend API ----------
 
-async function getClient(): Promise<OpenAI> {
-  if (cachedClient) return cachedClient;
+const CODEX_API_URL = 'https://chatgpt.com/backend-api/codex/responses';
+
+let cachedToken: { accessToken: string; accountId?: string | null } | null = null;
+
+async function getToken(): Promise<{ accessToken: string; accountId?: string | null }> {
+  if (cachedToken) return cachedToken;
   const result = await window.desktopAuth?.getToken();
   if (!result?.accessToken) throw new Error('OpenAI 인증이 필요합니다. 로그인을 먼저 진행하세요.');
-  cachedClient = new OpenAI({
-    apiKey: result.accessToken,
-    dangerouslyAllowBrowser: true,
-  });
-  return cachedClient;
+  cachedToken = result;
+  return cachedToken;
 }
 
 export function clearClient(): void {
-  cachedClient = null;
+  cachedToken = null;
 }
 
 // ---------- Connection ----------
@@ -63,70 +70,354 @@ export async function logout(): Promise<void> {
   clearClient();
 }
 
+// ---------- MCP 도구 → OpenAI Function Schema ----------
+
+function mcpToolsToOpenAiFunctions(tools: McpTool[]): object[] {
+  return tools.map((tool) => ({
+    type: 'function',
+    name: tool.name,
+    description: tool.description || tool.name,
+    parameters: tool.inputSchema || { type: 'object', properties: {} },
+  }));
+}
+
+// ---------- MCP 연결 ----------
+
+export async function connectMcp(mcpUrl: string): Promise<McpTool[]> {
+  if (!window.desktopMcp) return [];
+  const result = await window.desktopMcp.connect(mcpUrl);
+  if (!result.ok) {
+    console.warn('MCP 연결 실패:', result.error);
+    return [];
+  }
+  return result.tools;
+}
+
+export async function listMcpTools(): Promise<McpTool[]> {
+  if (!window.desktopMcp) return [];
+  const result = await window.desktopMcp.listTools();
+  return result.tools;
+}
+
+async function callMcpTool(name: string, args: Record<string, unknown>): Promise<string> {
+  if (!window.desktopMcp) return JSON.stringify({ error: 'MCP 미연결' });
+  const result = await window.desktopMcp.callTool(name, args);
+  if (result.isError) {
+    return JSON.stringify({ error: result.content?.[0]?.text || '도구 실행 실패' });
+  }
+  // MCP content 배열에서 텍스트 추출
+  const texts = (result.content || [])
+    .filter((c) => c.type === 'text' && c.text)
+    .map((c) => c.text);
+  return texts.join('\n') || JSON.stringify(result);
+}
+
 // ---------- System Prompt ----------
 
 function buildSystemPrompt(): string {
   return [
-    '너는 수동 코인 트레이딩 보조 에이전트다.',
-    '아래 JSON 컨텍스트를 분석해서 현재 시점 조언을 제공해라.',
-    '반드시 JSON으로만 응답하고 아래 스키마를 지켜라.',
-    '{"analysis":"2-4문장","confidence":0-100,"actions":[{"type":"ADD|PARTIAL_TP|FULL_EXIT|HOLD|WAIT_RETEST","title":"짧은제목","reason":"근거","targetPrice":number|null,"sizePercent":number|null,"urgency":"LOW|MEDIUM|HIGH"}]}',
-    '캔들/체결 이력이 부족하면 제한사항을 analysis에 먼저 밝히고, 과도한 확신을 피하라.',
-    '리스크 과대 노출을 피하고, 근거 없는 확신을 금지한다.',
+    '너는 수동 코인 트레이딩 보조 AI 에이전트다.',
+    '사용자가 제공하는 차트 컨텍스트와 MCP 도구를 활용해 실시간 트레이딩 조언을 제공한다.',
+    '',
+    '## 역할',
+    '- 사용자의 질문에 한국어로 간결하게 답변한다.',
+    '- 필요하면 도구를 호출하여 실시간 데이터를 가져온다.',
+    '- 분석 완료 시 실행 가능한 액션을 제안한다.',
+    '',
+    '## 액션 제안 형식 (선택적)',
+    '분석 결과에 따라 텍스트 끝에 JSON 블록을 포함할 수 있다:',
+    '```json',
+    '{"actions":[{"type":"ADD|PARTIAL_TP|FULL_EXIT|HOLD|WAIT_RETEST","title":"짧은제목","reason":"근거","targetPrice":number|null,"sizePercent":number|null,"urgency":"LOW|MEDIUM|HIGH"}]}',
+    '```',
+    '',
+    '## 원칙',
+    '- 과도한 확신을 피하고 리스크를 강조한다.',
+    '- 데이터 부족 시 솔직하게 한계를 밝힌다.',
+    '- 도구 호출 결과를 근거로 활용한다.',
   ].join('\n');
 }
 
-// ---------- User Message Builder ----------
+// ---------- Conversation History ----------
 
-function buildUserMessage(context: GuidedAgentContextResponse, userPrompt: string): string {
-  const slicedCandles = context.chart.candles.slice(-120);
-  const contextHealth = {
-    hasOrderbook: Boolean(context.chart.orderbook),
-    hasPosition: Boolean(context.chart.activePosition),
-    eventCount: context.chart.events.length,
-    closedTradeCount: context.recentClosedTrades.length,
-    candleCount: slicedCandles.length,
-  };
-  const payload = {
-    market: context.market,
-    generatedAt: context.generatedAt,
-    recommendation: context.chart.recommendation,
-    activePosition: context.chart.activePosition,
-    events: context.chart.events.slice(-20),
-    orderbook: context.chart.orderbook,
-    orderSnapshot: context.chart.orderSnapshot,
-    recentClosedTrades: context.recentClosedTrades,
-    performance: context.performance,
-    candles: slicedCandles,
-    contextHealth,
-  };
+type ConversationMessage =
+  | { role: 'user'; content: string }
+  | { role: 'assistant'; content: string };
 
-  const apiBaseUrl = getApiBaseUrl().replace(/\/$/, '');
+let conversationHistory: ConversationMessage[] = [];
 
-  return [
-    '추가 데이터가 필요하면 다음 Spring API를 참고해라:',
-    `- GET ${apiBaseUrl}/guided-trading/agent/context?market=${encodeURIComponent(context.market)}&interval=${encodeURIComponent(context.chart.interval)}&count=120&closedTradeLimit=20`,
-    `- GET ${apiBaseUrl}/guided-trading/chart?market=${encodeURIComponent(context.market)}&interval=${encodeURIComponent(context.chart.interval)}&count=120`,
-    `- GET ${apiBaseUrl}/dashboard`,
-    userPrompt.trim().length > 0 ? `사용자 추가지시: ${userPrompt.trim()}` : '사용자 추가지시: 없음',
-    `컨텍스트 JSON: ${JSON.stringify(payload)}`,
-  ].join('\n');
+export function clearConversation(): void {
+  conversationHistory = [];
 }
 
-// ---------- Advice Parser ----------
+// ---------- SSE Streaming Parser ----------
 
-function extractJsonBlock(raw: string): string {
-  const start = raw.indexOf('{');
-  const end = raw.lastIndexOf('}');
-  if (start >= 0 && end > start) {
-    return raw.substring(start, end + 1);
+interface CodexResponseEvent {
+  type: string;
+  item?: {
+    type?: string;
+    role?: string;
+    content?: Array<{ type?: string; text?: string }>;
+    name?: string;
+    call_id?: string;
+    arguments?: string;
+  };
+  delta?: string;
+  output_index?: number;
+  content_index?: number;
+}
+
+// ---------- Available Models ----------
+
+export const CODEX_MODELS = [
+  { id: 'gpt-5.3-codex', label: 'GPT-5.3 Codex' },
+  { id: 'o3', label: 'o3' },
+  { id: 'o4-mini', label: 'o4-mini' },
+  { id: 'gpt-4.1', label: 'GPT-4.1' },
+  { id: 'gpt-4.1-mini', label: 'GPT-4.1 mini' },
+] as const;
+
+export type CodexModelId = (typeof CODEX_MODELS)[number]['id'];
+
+// ---------- Main: Send Chat Message (Streaming + Tool Loop) ----------
+
+export async function sendChatMessage(options: {
+  userMessage: string;
+  model?: string;
+  context?: GuidedAgentContextResponse | null;
+  mcpTools?: McpTool[];
+  onStreamDelta?: (accumulated: string) => void;
+  onToolCall?: (toolName: string, args: string) => void;
+  onToolResult?: (toolName: string, result: string) => void;
+}): Promise<ChatMessage[]> {
+  const token = await getToken();
+  const newMessages: ChatMessage[] = [];
+
+  // 컨텍스트가 있으면 사용자 메시지에 첨부
+  let userContent = options.userMessage;
+  if (options.context) {
+    const slicedCandles = options.context.chart.candles.slice(-60);
+    const contextPayload = {
+      market: options.context.market,
+      generatedAt: options.context.generatedAt,
+      recommendation: options.context.chart.recommendation,
+      activePosition: options.context.chart.activePosition,
+      events: options.context.chart.events.slice(-10),
+      orderbook: options.context.chart.orderbook,
+      recentClosedTrades: options.context.recentClosedTrades.slice(0, 5),
+      performance: options.context.performance,
+      candlesSummary: {
+        count: slicedCandles.length,
+        latest: slicedCandles.slice(-3),
+        interval: options.context.chart.interval,
+      },
+    };
+    userContent = `${options.userMessage}\n\n[차트 컨텍스트]\n${JSON.stringify(contextPayload)}`;
   }
-  return raw;
+
+  conversationHistory.push({ role: 'user', content: userContent });
+
+  const userMsg: ChatMessage = {
+    id: crypto.randomUUID(),
+    role: 'user',
+    content: options.userMessage,
+    timestamp: Date.now(),
+  };
+  newMessages.push(userMsg);
+
+  // Codex API 입력 구성
+  const input: Array<{ role: string; content: string }> = [];
+  for (const msg of conversationHistory) {
+    input.push({ role: msg.role, content: msg.content });
+  }
+
+  const openAiTools = options.mcpTools ? mcpToolsToOpenAiFunctions(options.mcpTools) : [];
+
+  // 도구 호출 루프 (최대 5회)
+  let loopCount = 0;
+  const maxLoops = 5;
+
+  while (loopCount < maxLoops) {
+    loopCount++;
+
+    const requestBody: Record<string, unknown> = {
+      model: options.model || 'gpt-5.3-codex',
+      instructions: buildSystemPrompt(),
+      input,
+      stream: true,
+      store: false,
+    };
+    if (openAiTools.length > 0) {
+      requestBody.tools = openAiTools;
+    }
+
+    const headers: Record<string, string> = {
+      'Authorization': `Bearer ${token.accessToken}`,
+      'Content-Type': 'application/json',
+      'OpenAI-Beta': 'responses=v1',
+    };
+    if (token.accountId) {
+      headers['ChatGPT-Account-Id'] = token.accountId;
+    }
+
+    const response = await fetch(CODEX_API_URL, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify(requestBody),
+    });
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      throw new Error(`Codex API 오류 (${response.status}): ${errorText}`);
+    }
+
+    const reader = response.body?.getReader();
+    if (!reader) throw new Error('응답 스트림을 읽을 수 없습니다.');
+
+    const decoder = new TextDecoder();
+    let buffer = '';
+    let accumulated = '';
+    const pendingToolCalls: Array<{ callId: string; name: string; args: string }> = [];
+    let hasToolCalls = false;
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split('\n');
+      buffer = lines.pop() || '';
+
+      for (const line of lines) {
+        if (!line.startsWith('data: ')) continue;
+        const data = line.slice(6).trim();
+        if (data === '[DONE]') continue;
+
+        let event: CodexResponseEvent;
+        try {
+          event = JSON.parse(data);
+        } catch {
+          continue;
+        }
+
+        if (event.type === 'response.output_text.delta' && event.delta) {
+          accumulated += event.delta;
+          options.onStreamDelta?.(accumulated);
+        }
+
+        if (event.type === 'response.output_item.done' && event.item?.type === 'function_call') {
+          hasToolCalls = true;
+          pendingToolCalls.push({
+            callId: event.item.call_id || '',
+            name: event.item.name || '',
+            args: event.item.arguments || '{}',
+          });
+        }
+      }
+    }
+
+    // 도구 호출이 있으면 MCP로 실행 후 루프 계속
+    if (hasToolCalls && pendingToolCalls.length > 0) {
+      if (accumulated.trim()) {
+        input.push({ role: 'assistant', content: accumulated });
+      }
+
+      for (const tc of pendingToolCalls) {
+        options.onToolCall?.(tc.name, tc.args);
+
+        let parsedArgs: Record<string, unknown> = {};
+        try {
+          parsedArgs = JSON.parse(tc.args);
+        } catch { /* empty */ }
+
+        // MCP를 통해 도구 실행
+        const result = await callMcpTool(tc.name, parsedArgs);
+        options.onToolResult?.(tc.name, result);
+
+        const toolMsg: ChatMessage = {
+          id: crypto.randomUUID(),
+          role: 'tool',
+          content: '',
+          timestamp: Date.now(),
+          toolCall: { name: tc.name, args: tc.args, result },
+        };
+        newMessages.push(toolMsg);
+
+        input.push({
+          role: 'user',
+          content: `[도구 결과: ${tc.name}]\n${result}`,
+        });
+      }
+
+      accumulated = '';
+      continue;
+    }
+
+    // 텍스트만 있으면 루프 종료
+    if (accumulated.trim()) {
+      conversationHistory.push({ role: 'assistant', content: accumulated });
+
+      const parsedActions = extractActions(accumulated);
+      const assistantMsg: ChatMessage = {
+        id: crypto.randomUUID(),
+        role: 'assistant',
+        content: accumulated,
+        timestamp: Date.now(),
+        actions: parsedActions.length > 0 ? parsedActions : undefined,
+      };
+      newMessages.push(assistantMsg);
+    }
+
+    break;
+  }
+
+  return newMessages;
 }
+
+// ---------- Action Extraction ----------
+
+function extractActions(text: string): AgentAction[] {
+  try {
+    const codeBlockMatch = text.match(/```json\s*([\s\S]*?)```/);
+    const jsonStr = codeBlockMatch ? codeBlockMatch[1] : null;
+
+    if (!jsonStr) {
+      const inlineMatch = text.match(/\{"actions"\s*:\s*\[[\s\S]*?\]\s*\}/);
+      if (!inlineMatch) return [];
+      const parsed = JSON.parse(inlineMatch[0]);
+      return normalizeActions(parsed.actions);
+    }
+
+    const parsed = JSON.parse(jsonStr);
+    if (parsed.actions) return normalizeActions(parsed.actions);
+    return [];
+  } catch {
+    return [];
+  }
+}
+
+function normalizeActions(raw: unknown[]): AgentAction[] {
+  if (!Array.isArray(raw)) return [];
+  return raw.map((item: unknown) => {
+    const a = (item ?? {}) as Record<string, unknown>;
+    return {
+      type: typeof a.type === 'string' ? a.type : 'HOLD',
+      title: typeof a.title === 'string' ? a.title : '관망',
+      reason: typeof a.reason === 'string' ? a.reason : '',
+      targetPrice: typeof a.targetPrice === 'number' ? a.targetPrice : null,
+      sizePercent: typeof a.sizePercent === 'number' ? a.sizePercent : null,
+      urgency: typeof a.urgency === 'string' ? a.urgency : 'MEDIUM',
+    };
+  });
+}
+
+// ---------- Legacy: parseAdvice (하위 호환) ----------
 
 export function parseAdvice(raw: string): AgentAdvice {
   try {
-    const parsed = JSON.parse(extractJsonBlock(raw)) as Partial<AgentAdvice>;
+    const start = raw.indexOf('{');
+    const end = raw.lastIndexOf('}');
+    const jsonStr = start >= 0 && end > start ? raw.substring(start, end + 1) : raw;
+    const parsed = JSON.parse(jsonStr) as Partial<AgentAdvice>;
     return {
       analysis: typeof parsed.analysis === 'string' ? parsed.analysis : raw,
       confidence: typeof parsed.confidence === 'number' ? Math.max(0, Math.min(100, parsed.confidence)) : 50,
@@ -144,51 +435,4 @@ export function parseAdvice(raw: string): AgentAdvice {
   } catch {
     return { analysis: raw, confidence: 50, actions: [] };
   }
-}
-
-// ---------- Main: Request Advice (Streaming) ----------
-
-export async function requestAdvice(options: {
-  context: GuidedAgentContextResponse;
-  userPrompt: string;
-  onStreamDelta?: (accumulated: string) => void;
-}): Promise<AgentAdvice> {
-  const client = await getClient();
-
-  const stream = await client.chat.completions.create({
-    model: 'gpt-4o',
-    messages: [
-      { role: 'system', content: buildSystemPrompt() },
-      { role: 'user', content: buildUserMessage(options.context, options.userPrompt) },
-    ],
-    response_format: { type: 'json_object' },
-    temperature: 0.3,
-    max_tokens: 1500,
-    stream: true,
-  });
-
-  let accumulated = '';
-  let rafId: number | null = null;
-  let pendingFlush = '';
-
-  for await (const chunk of stream) {
-    const delta = chunk.choices[0]?.delta?.content;
-    if (!delta) continue;
-    accumulated += delta;
-    pendingFlush += delta;
-
-    if (options.onStreamDelta && !rafId) {
-      rafId = requestAnimationFrame(() => {
-        options.onStreamDelta!(accumulated);
-        pendingFlush = '';
-        rafId = null;
-      });
-    }
-  }
-
-  // Final flush
-  if (rafId) cancelAnimationFrame(rafId);
-  if (options.onStreamDelta) options.onStreamDelta(accumulated);
-
-  return parseAdvice(accumulated);
 }

@@ -734,6 +734,7 @@ export const guidedTradingApi = {
     closedTradeLimit = 20
   ): Promise<GuidedAgentContextResponse> =>
     api.get('/guided-trading/agent/context', { params: { market, interval, count, closedTradeLimit } }).then((res) => res.data),
+
 };
 
 export default api;
