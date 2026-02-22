@@ -153,6 +153,40 @@ class GuidedTradingService(
         return buildRecommendation(market, candles)
     }
 
+    fun getAgentContext(
+        market: String,
+        interval: String = "minute30",
+        count: Int = 120,
+        closedTradeLimit: Int = 20
+    ): GuidedAgentContextResponse {
+        val normalizedMarket = market.trim().uppercase()
+        val chart = getChartData(normalizedMarket, interval, count)
+        val recentClosedTrades = guidedTradeRepository
+            .findTop80ByMarketAndStatusOrderByCreatedAtDesc(normalizedMarket, GuidedTradeEntity.STATUS_CLOSED)
+            .take(closedTradeLimit.coerceIn(5, 80))
+            .map { it.toClosedTradeView() }
+
+        val closedPnls = recentClosedTrades.map { it.realizedPnlPercent }
+        val winCount = closedPnls.count { it > 0.0 }
+        val lossCount = closedPnls.count { it < 0.0 }
+        val avgPnlPercent = if (closedPnls.isNotEmpty()) closedPnls.average() else 0.0
+        val winRate = if (closedPnls.isNotEmpty()) winCount.toDouble() / closedPnls.size.toDouble() * 100.0 else 0.0
+
+        return GuidedAgentContextResponse(
+            market = normalizedMarket,
+            generatedAt = Instant.now(),
+            chart = chart,
+            recentClosedTrades = recentClosedTrades,
+            performance = GuidedPerformanceSnapshot(
+                sampleSize = closedPnls.size,
+                winCount = winCount,
+                lossCount = lossCount,
+                winRate = winRate,
+                avgPnlPercent = avgPnlPercent
+            )
+        )
+    }
+
     fun getRealtimeTicker(market: String): GuidedRealtimeTickerView? {
         val ticker = bithumbPublicApi.getCurrentPrice(market).orEmpty().firstOrNull() ?: return null
         return GuidedRealtimeTickerView(
@@ -1099,6 +1133,37 @@ data class GuidedChartResponse(
     val orderSnapshot: GuidedOrderSnapshotView
 )
 
+data class GuidedAgentContextResponse(
+    val market: String,
+    val generatedAt: Instant,
+    val chart: GuidedChartResponse,
+    val recentClosedTrades: List<GuidedClosedTradeView>,
+    val performance: GuidedPerformanceSnapshot
+)
+
+data class GuidedClosedTradeView(
+    val tradeId: Long,
+    val market: String,
+    val averageEntryPrice: Double,
+    val averageExitPrice: Double,
+    val entryQuantity: Double,
+    val realizedPnl: Double,
+    val realizedPnlPercent: Double,
+    val dcaCount: Int,
+    val halfTakeProfitDone: Boolean,
+    val createdAt: Instant,
+    val closedAt: Instant?,
+    val exitReason: String?
+)
+
+data class GuidedPerformanceSnapshot(
+    val sampleSize: Int,
+    val winCount: Int,
+    val lossCount: Int,
+    val winRate: Double,
+    val avgPnlPercent: Double
+)
+
 data class GuidedOrderbookView(
     val market: String,
     val timestamp: Long?,
@@ -1158,3 +1223,20 @@ data class GuidedStartRequest(
     val dcaStepPercent: Double? = null,
     val halfTakeProfitRatio: Double? = null
 )
+
+private fun GuidedTradeEntity.toClosedTradeView(): GuidedClosedTradeView {
+    return GuidedClosedTradeView(
+        tradeId = id ?: 0L,
+        market = market,
+        averageEntryPrice = averageEntryPrice.toDouble(),
+        averageExitPrice = averageExitPrice.toDouble(),
+        entryQuantity = entryQuantity.toDouble(),
+        realizedPnl = realizedPnl.toDouble(),
+        realizedPnlPercent = realizedPnlPercent.toDouble(),
+        dcaCount = dcaCount,
+        halfTakeProfitDone = halfTakeProfitDone,
+        createdAt = createdAt,
+        closedAt = closedAt,
+        exitReason = exitReason
+    )
+}

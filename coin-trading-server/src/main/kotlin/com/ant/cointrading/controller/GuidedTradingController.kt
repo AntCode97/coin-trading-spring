@@ -1,16 +1,14 @@
 package com.ant.cointrading.controller
 
 import com.ant.cointrading.guided.GuidedChartResponse
+import com.ant.cointrading.guided.GuidedAgentContextResponse
 import com.ant.cointrading.guided.GuidedMarketItem
 import com.ant.cointrading.guided.GuidedRecommendation
 import com.ant.cointrading.guided.GuidedMarketSortBy
-import com.ant.cointrading.guided.GuidedCopilotRequest
-import com.ant.cointrading.guided.GuidedCopilotResponse
 import com.ant.cointrading.guided.GuidedRealtimeTickerView
 import com.ant.cointrading.guided.GuidedSortDirection
 import com.ant.cointrading.guided.GuidedStartRequest
 import com.ant.cointrading.guided.GuidedTradeView
-import com.ant.cointrading.guided.GuidedTradingCopilotService
 import com.ant.cointrading.guided.GuidedTradingService
 import org.springframework.http.HttpStatus
 import org.springframework.web.bind.annotation.GetMapping
@@ -25,8 +23,7 @@ import org.springframework.web.server.ResponseStatusException
 @RestController
 @RequestMapping("/api/guided-trading")
 class GuidedTradingController(
-    private val guidedTradingService: GuidedTradingService,
-    private val guidedTradingCopilotService: GuidedTradingCopilotService
+    private val guidedTradingService: GuidedTradingService
 ) {
 
     @GetMapping("/markets")
@@ -79,8 +76,18 @@ class GuidedTradingController(
         return guidedTradingService.getActivePosition(market.uppercase())
     }
 
-    @PostMapping("/copilot/analyze")
-    fun analyzeWithCopilot(@RequestBody request: GuidedCopilotRequest): GuidedCopilotResponse {
-        return guidedTradingCopilotService.analyze(request)
+    @GetMapping("/agent/context")
+    fun getAgentContext(
+        @RequestParam market: String,
+        @RequestParam(defaultValue = "minute30") interval: String,
+        @RequestParam(defaultValue = "120") count: Int,
+        @RequestParam(defaultValue = "20") closedTradeLimit: Int
+    ): GuidedAgentContextResponse {
+        return guidedTradingService.getAgentContext(
+            market = market.uppercase(),
+            interval = interval,
+            count = count,
+            closedTradeLimit = closedTradeLimit
+        )
     }
 }
