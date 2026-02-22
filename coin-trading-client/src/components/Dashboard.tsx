@@ -19,7 +19,6 @@ import {
   type ConfirmActionOptions,
   useDashboardFeedback,
 } from './dashboard/useDashboardFeedback';
-import ManualTraderWorkspace from './ManualTraderWorkspace';
 
 import './Dashboard.css';
 
@@ -885,8 +884,6 @@ export default function Dashboard() {
         )}
 
         <section className="toss-asset-section">
-          <ManualTraderWorkspace />
-
           <div className={`toss-asset-card ${isPositive ? '' : 'toss-loss'}`}>
             <div className="toss-asset-main">
               <div className="toss-asset-label">총 자산</div>

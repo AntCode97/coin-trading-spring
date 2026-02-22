@@ -15,6 +15,7 @@ import {
   type UTCTimestamp,
 } from 'lightweight-charts';
 import {
+  getApiBaseUrl,
   guidedTradingApi,
   type GuidedAgentContextResponse,
   type GuidedChartResponse,
@@ -485,10 +486,11 @@ export default function ManualTraderWorkspace() {
       setStatusMessage('자동 확인 시간(2분)을 초과했습니다. 연결 상태 확인 버튼을 눌러 재확인하세요.');
     } catch (e) {
       setOpenAiConnected(false);
+      const connectHint = '예: opencode serve --hostname 127.0.0.1 --port 4096 --cors http://localhost:5173 --cors http://127.0.0.1:5173';
       setStatusMessage(
         e instanceof Error
-          ? `${e.message} (fallback: 터미널에서 opencode auth login 실행)`
-          : 'OpenAI 로그인 시작 실패 (fallback: opencode auth login)'
+          ? `${e.message} (fallback: ${connectHint} 후 opencode auth login)`
+          : `OpenAI 로그인 시작 실패 (fallback: ${connectHint} 후 opencode auth login)`
       );
     } finally {
       setProviderChecking(false);
@@ -628,13 +630,15 @@ export default function ManualTraderWorkspace() {
       candles: slicedCandles,
     };
 
+    const apiBaseUrl = getApiBaseUrl().replace(/\/$/, '');
+
     return [
       '너는 수동 코인 트레이딩 보조 에이전트다.',
       '아래 JSON 컨텍스트를 분석해서 현재 시점 조언을 제공해라.',
       '추가 데이터가 필요하면 도구 호출(webfetch)이 가능할 때 다음 Spring API를 조회해라:',
-      `- GET http://localhost:8080/api/guided-trading/agent/context?market=${encodeURIComponent(context.market)}&interval=${encodeURIComponent(context.chart.interval)}&count=120&closedTradeLimit=20`,
-      `- GET http://localhost:8080/api/guided-trading/chart?market=${encodeURIComponent(context.market)}&interval=${encodeURIComponent(context.chart.interval)}&count=120`,
-      '- GET http://localhost:8080/api/dashboard',
+      `- GET ${apiBaseUrl}/guided-trading/agent/context?market=${encodeURIComponent(context.market)}&interval=${encodeURIComponent(context.chart.interval)}&count=120&closedTradeLimit=20`,
+      `- GET ${apiBaseUrl}/guided-trading/chart?market=${encodeURIComponent(context.market)}&interval=${encodeURIComponent(context.chart.interval)}&count=120`,
+      `- GET ${apiBaseUrl}/dashboard`,
       '반드시 JSON으로만 응답하고 스키마를 지켜라.',
       '{"analysis":"2-4문장","confidence":0-100,"actions":[{"type":"ADD|PARTIAL_TP|FULL_EXIT|HOLD|WAIT_RETEST","title":"짧은제목","reason":"근거","targetPrice":number|null,"sizePercent":number|null,"urgency":"LOW|MEDIUM|HIGH"}]}',
       '리스크 과대 노출을 피하고, 근거 없는 확신을 금지한다.',

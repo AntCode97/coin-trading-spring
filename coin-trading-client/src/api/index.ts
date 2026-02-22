@@ -1,15 +1,21 @@
 import axios from 'axios';
 
+const API_BASE_URL = (import.meta.env.VITE_API_BASE_URL as string | undefined)?.trim() || '/api';
+
 const api = axios.create({
-  baseURL: '/api',
+  baseURL: API_BASE_URL,
   timeout: 10000,
 });
 
 // Long-running API 클라이언트 (LLM 최적화, 회고 등은 10분 타임아웃)
 const longRunningApi = axios.create({
-  baseURL: '/api',
+  baseURL: API_BASE_URL,
   timeout: 600000, // 10분
 });
+
+export function getApiBaseUrl(): string {
+  return API_BASE_URL;
+}
 
 export interface CoinAsset {
   symbol: string;

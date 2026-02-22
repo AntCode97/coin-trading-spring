@@ -1,6 +1,5 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import Dashboard from './components/Dashboard';
-import DesktopTradingApp from './components/DesktopTradingApp';
+import ManualTraderWorkspace from './ManualTraderWorkspace';
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -11,18 +10,10 @@ const queryClient = new QueryClient({
   },
 });
 
-function App() {
-  const isDesktopMode = import.meta.env.VITE_DESKTOP_MODE === 'true';
-
-  if (isDesktopMode) {
-    return <DesktopTradingApp />;
-  }
-
+export default function DesktopTradingApp() {
   return (
     <QueryClientProvider client={queryClient}>
-      <Dashboard />
+      <ManualTraderWorkspace />
     </QueryClientProvider>
   );
 }
-
-export default App;

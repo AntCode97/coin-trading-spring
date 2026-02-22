@@ -173,13 +173,22 @@ function buildHeaders(): Record<string, string> {
 }
 
 async function requestJson<T>(path: string, init: RequestInit): Promise<T> {
-  const response = await fetch(`${getBaseUrl()}${path}`, {
-    ...init,
-    headers: {
-      ...buildHeaders(),
-      ...(init.headers ?? {}),
-    },
-  });
+  let response: Response;
+  try {
+    response = await fetch(`${getBaseUrl()}${path}`, {
+      ...init,
+      headers: {
+        ...buildHeaders(),
+        ...(init.headers ?? {}),
+      },
+    });
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : String(error);
+    throw new Error(
+      `OpenCode 서버(${getBaseUrl()})에 연결할 수 없습니다. ` +
+      `먼저 \`opencode serve --hostname 127.0.0.1 --port 4096\` 로 서버를 실행하세요. (${reason})`
+    );
+  }
   if (!response.ok) {
     const body = await response.text().catch(() => '');
     throw new Error(`OpenCode API 오류 (${response.status}): ${body || response.statusText}`);
