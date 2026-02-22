@@ -4,10 +4,13 @@ import com.ant.cointrading.guided.GuidedChartResponse
 import com.ant.cointrading.guided.GuidedMarketItem
 import com.ant.cointrading.guided.GuidedRecommendation
 import com.ant.cointrading.guided.GuidedMarketSortBy
+import com.ant.cointrading.guided.GuidedCopilotRequest
+import com.ant.cointrading.guided.GuidedCopilotResponse
 import com.ant.cointrading.guided.GuidedRealtimeTickerView
 import com.ant.cointrading.guided.GuidedSortDirection
 import com.ant.cointrading.guided.GuidedStartRequest
 import com.ant.cointrading.guided.GuidedTradeView
+import com.ant.cointrading.guided.GuidedTradingCopilotService
 import com.ant.cointrading.guided.GuidedTradingService
 import org.springframework.http.HttpStatus
 import org.springframework.web.bind.annotation.GetMapping
@@ -22,7 +25,8 @@ import org.springframework.web.server.ResponseStatusException
 @RestController
 @RequestMapping("/api/guided-trading")
 class GuidedTradingController(
-    private val guidedTradingService: GuidedTradingService
+    private val guidedTradingService: GuidedTradingService,
+    private val guidedTradingCopilotService: GuidedTradingCopilotService
 ) {
 
     @GetMapping("/markets")
@@ -73,5 +77,10 @@ class GuidedTradingController(
     @GetMapping("/position/{market}")
     fun getPosition(@PathVariable market: String): GuidedTradeView? {
         return guidedTradingService.getActivePosition(market.uppercase())
+    }
+
+    @PostMapping("/copilot/analyze")
+    fun analyzeWithCopilot(@RequestBody request: GuidedCopilotRequest): GuidedCopilotResponse {
+        return guidedTradingCopilotService.analyze(request)
     }
 }

@@ -160,6 +160,18 @@ llm:
       max-out-of-sample-drawdown-percent: ${LLM_OPT_MAX_OOS_DRAWDOWN:25.0}
       execution-slippage-bps: ${LLM_OPT_EXECUTION_SLIPPAGE_BPS:8.0}
 
+guided:
+  copilot:
+    enabled: ${GUIDED_COPILOT_ENABLED:true}
+    default-provider: ${GUIDED_COPILOT_DEFAULT_PROVIDER:OPENAI}
+    openai-model: ${GUIDED_COPILOT_OPENAI_MODEL:gpt-5-mini}
+    max-actions: ${GUIDED_COPILOT_MAX_ACTIONS:4}
+    zai:
+      enabled: ${GUIDED_COPILOT_ZAI_ENABLED:true}
+      base-url: ${ZAI_BASE_URL:https://api.z.ai/api/paas/v4}
+      api-key: ${ZAI_API_KEY:}
+      model: ${ZAI_MODEL:glm-4.7}
+
 # Logging 설정
 logging:
   level:
