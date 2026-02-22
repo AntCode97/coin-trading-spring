@@ -797,7 +797,7 @@ class GuidedTradingService(
         val takeProfit = minOf(rawTakeProfit, recommended * 1.02) // 익절 상한 2%
         val riskRewardRatio = ((takeProfit - recommended) / max(recommended - stopLoss, 1.0)).coerceIn(0.5, 3.0)
         val diffPct = kotlin.math.abs(current - recommended) / current
-        val orderType = if (diffPct < 0.0025) "MARKET" else "LIMIT"
+        val orderType = if (diffPct < 0.0005) "MARKET" else "LIMIT" // 0.05% 미만일 때만 시장가
 
         val trendScore = when {
             current > sma20 && sma20 > sma60 -> 0.82
