@@ -759,8 +759,8 @@ class GuidedTradingService(
                 market = market,
                 currentPrice = current,
                 recommendedEntryPrice = current,
-                stopLossPrice = current * 0.985,
-                takeProfitPrice = current * 1.03,
+                stopLossPrice = current * 0.99,
+                takeProfitPrice = current * 1.015,
                 confidence = 0.45,
                 predictedWinRate = calibration.calibrated,
                 recommendedEntryWinRate = calibration.calibrated,
@@ -792,9 +792,10 @@ class GuidedTradingService(
             else -> current * 0.997
         }
         val recommended = max(candidate, support20 * 1.001)
-        val stopLoss = recommended - max(recommended * 0.01, atr14 * 1.4)
-        val takeProfit = recommended + (recommended - stopLoss) * 2.2
-        val riskRewardRatio = ((takeProfit - recommended) / max(recommended - stopLoss, 1.0)).coerceIn(0.5, 5.0)
+        val stopLoss = recommended - max(recommended * 0.007, atr14 * 1.0)
+        val rawTakeProfit = recommended + (recommended - stopLoss) * 1.5
+        val takeProfit = minOf(rawTakeProfit, recommended * 1.02) // 익절 상한 2%
+        val riskRewardRatio = ((takeProfit - recommended) / max(recommended - stopLoss, 1.0)).coerceIn(0.5, 3.0)
         val diffPct = kotlin.math.abs(current - recommended) / current
         val orderType = if (diffPct < 0.0025) "MARKET" else "LIMIT"
 
@@ -808,16 +809,17 @@ class GuidedTradingService(
         val pullbackScore = (0.9 - (pullbackDepth / 0.04) * 0.45).coerceIn(0.35, 0.9)
         val atrPercent = (atr14 / current * 100.0).coerceIn(0.1, 5.0)
         val volatilityScore = (0.92 - (atrPercent / 5.0) * 0.55).coerceIn(0.3, 0.92)
-        val rrScore = ((riskRewardRatio - 1.0) / 2.2).coerceIn(0.0, 1.0) * 0.6 + 0.35
+        val rrScore = ((riskRewardRatio - 0.8) / 1.2).coerceIn(0.0, 1.0) * 0.6 + 0.35
         val weighted = trendScore * 0.34 + pullbackScore * 0.24 + volatilityScore * 0.20 + rrScore * 0.22
 
         val recommendedBaseWinRate = (35.0 + weighted * 47.0).coerceIn(35.0, 82.0)
 
-        val marketStopLoss = current - max(current * 0.01, atr14 * 1.4)
-        val marketTakeProfit = current + (current - marketStopLoss) * 2.2
-        val marketRiskRewardRatio = ((marketTakeProfit - current) / max(current - marketStopLoss, 1.0)).coerceIn(0.5, 5.0)
+        val marketStopLoss = current - max(current * 0.007, atr14 * 1.0)
+        val rawMarketTakeProfit = current + (current - marketStopLoss) * 1.5
+        val marketTakeProfit = minOf(rawMarketTakeProfit, current * 1.02)
+        val marketRiskRewardRatio = ((marketTakeProfit - current) / max(current - marketStopLoss, 1.0)).coerceIn(0.5, 3.0)
         val marketPullbackScore = 0.46
-        val marketRrScore = ((marketRiskRewardRatio - 1.0) / 2.2).coerceIn(0.0, 1.0) * 0.6 + 0.35
+        val marketRrScore = ((marketRiskRewardRatio - 0.8) / 1.2).coerceIn(0.0, 1.0) * 0.6 + 0.35
         val marketWeighted = trendScore * 0.34 + marketPullbackScore * 0.24 + volatilityScore * 0.20 + marketRrScore * 0.22
         val marketEntryPenalty = ((current - recommended) / current * 100.0 * 1.6).coerceIn(-6.0, 10.0)
         val marketBaseWinRate = (35.0 + marketWeighted * 47.0 - marketEntryPenalty).coerceIn(30.0, 82.0)
