@@ -29,7 +29,9 @@ import {
   clearSessionId,
   ensureSessionId,
   getConnectionConfig,
+  getProviderStatus,
   saveConnectionConfig,
+  startProviderLogin,
   submitAgentPrompt,
   waitForAssistantAdvice,
   type AgentAdvice,
@@ -135,8 +137,11 @@ export default function ManualTraderWorkspace() {
   const [agentBusy, setAgentBusy] = useState<boolean>(false);
   const [agentError, setAgentError] = useState<string>('');
   const [opencodeBaseUrl, setOpencodeBaseUrl] = useState<string>(() => getConnectionConfig().baseUrl);
-  const [opencodeBasicAuth, setOpencodeBasicAuth] = useState<string>(() => getConnectionConfig().basicAuth ?? '');
   const [opencodeDirectory, setOpencodeDirectory] = useState<string>(() => getConnectionConfig().directory ?? '');
+  const [showAdvancedAuth, setShowAdvancedAuth] = useState<boolean>(false);
+  const [opencodeBasicAuth, setOpencodeBasicAuth] = useState<string>(() => getConnectionConfig().basicAuth ?? '');
+  const [openAiConnected, setOpenAiConnected] = useState<boolean>(false);
+  const [providerChecking, setProviderChecking] = useState<boolean>(false);
 
   const chartContainerRef = useRef<HTMLDivElement | null>(null);
   const chartRef = useRef<IChartApi | null>(null);
@@ -437,7 +442,58 @@ export default function ManualTraderWorkspace() {
     clearSessionId();
     setAgentSessionId('');
     setStatusMessage('OpenCode 연결 설정을 저장하고 세션을 초기화했습니다.');
+    void refreshProviderStatus();
   };
+
+  const refreshProviderStatus = useCallback(async () => {
+    setProviderChecking(true);
+    try {
+      const status = await getProviderStatus();
+      const isConnected = status.connected.includes('openai');
+      setOpenAiConnected(isConnected);
+      if (isConnected) {
+        setStatusMessage('OpenAI provider 연결 상태를 확인했습니다.');
+      }
+    } catch (e) {
+      setOpenAiConnected(false);
+      setStatusMessage(e instanceof Error ? e.message : 'Provider 상태 조회 실패');
+    } finally {
+      setProviderChecking(false);
+    }
+  }, []);
+
+  const handleOpenAiLogin = useCallback(async () => {
+    try {
+      setProviderChecking(true);
+      const result = await startProviderLogin('openai');
+      if (result.authUrl) {
+        window.open(result.authUrl, '_blank', 'noopener,noreferrer');
+      }
+      setStatusMessage('OpenAI 로그인 흐름을 시작했습니다. 브라우저 인증을 완료하세요.');
+
+      const started = Date.now();
+      while (Date.now() - started < 120000) {
+        const status = await getProviderStatus();
+        if (status.connected.includes('openai')) {
+          setOpenAiConnected(true);
+          setStatusMessage('OpenAI 로그인/연결이 완료되었습니다.');
+          return;
+        }
+        await new Promise((resolve) => window.setTimeout(resolve, 3000));
+      }
+
+      setStatusMessage('자동 확인 시간(2분)을 초과했습니다. 연결 상태 확인 버튼을 눌러 재확인하세요.');
+    } catch (e) {
+      setOpenAiConnected(false);
+      setStatusMessage(
+        e instanceof Error
+          ? `${e.message} (fallback: 터미널에서 opencode auth login 실행)`
+          : 'OpenAI 로그인 시작 실패 (fallback: opencode auth login)'
+      );
+    } finally {
+      setProviderChecking(false);
+    }
+  }, []);
 
   const applyAgentActionToOrderForm = (action: AgentAction) => {
     const normalizedType = action.type.toUpperCase();
@@ -473,8 +529,18 @@ export default function ManualTraderWorkspace() {
     setStatusMessage(`관망/대기 액션(${action.title})을 확인했습니다.`);
   };
 
-  const executeAgentAction = (action: AgentAction) => {
+  const executeAgentAction = async (action: AgentAction) => {
     const normalizedType = action.type.toUpperCase();
+    const urgency = action.urgency.toUpperCase();
+    const requiresConfirm = urgency === 'HIGH' || normalizedType === 'FULL_EXIT' || normalizedType === 'PARTIAL_TP';
+
+    if (requiresConfirm) {
+      const ok = window.confirm(`에이전트 액션을 실행합니다.\n\n[${normalizedType}] ${action.title}\n${action.reason}`);
+      if (!ok) {
+        setStatusMessage(`액션(${action.title}) 실행을 취소했습니다.`);
+        return;
+      }
+    }
 
     if (normalizedType === 'FULL_EXIT') {
       if (!activePosition) {
@@ -487,8 +553,20 @@ export default function ManualTraderWorkspace() {
     }
 
     if (normalizedType === 'PARTIAL_TP') {
-      applyAgentActionToOrderForm(action);
-      setStatusMessage('부분 익절은 현재 자동 엔진 API 특성상 즉시 실행 대신 익절가 반영으로 처리했습니다.');
+      if (!activePosition) {
+        setStatusMessage('부분 익절할 활성 포지션이 없습니다.');
+        return;
+      }
+      const ratio = typeof action.sizePercent === 'number' && Number.isFinite(action.sizePercent)
+        ? Math.max(0.1, Math.min(0.9, action.sizePercent / 100))
+        : 0.5;
+      try {
+        await guidedTradingApi.partialTakeProfit(selectedMarket, ratio);
+        void chartQuery.refetch();
+        setStatusMessage(`에이전트 액션(${action.title})에 따라 부분 익절 ${Math.round(ratio * 100)}%를 실행했습니다.`);
+      } catch (e) {
+        setStatusMessage(e instanceof Error ? e.message : '부분 익절 실행 실패');
+      }
       return;
     }
 
@@ -578,6 +656,10 @@ export default function ManualTraderWorkspace() {
 
   const runAgentAnalysis = useCallback(async () => {
     if (agentBusy) return;
+    if (!openAiConnected) {
+      setAgentError('OpenAI provider가 연결되지 않았습니다. OpenAI 로그인 후 다시 시도하세요.');
+      return;
+    }
 
     const context = agentContextQuery.data ?? await guidedTradingApi.getAgentContext(
       selectedMarket,
@@ -624,6 +706,7 @@ export default function ManualTraderWorkspace() {
     agentSessionId,
     agentPrompt,
     captureChartImageDataUrl,
+    openAiConnected,
   ]);
 
   useEffect(() => {
@@ -633,6 +716,10 @@ export default function ManualTraderWorkspace() {
     }, 15000);
     return () => window.clearInterval(timer);
   }, [agentAutoRefresh, runAgentAnalysis]);
+
+  useEffect(() => {
+    void refreshProviderStatus();
+  }, [refreshProviderStatus]);
 
   return (
     <section className="guided-workspace">
@@ -941,14 +1028,24 @@ export default function ManualTraderWorkspace() {
                   placeholder="http://127.0.0.1:4096"
                 />
               </label>
-              <label className="guided-copilot-prompt">
-                Basic Auth (base64, 선택)
-                <input
-                  value={opencodeBasicAuth}
-                  onChange={(event) => setOpencodeBasicAuth(event.target.value)}
-                  placeholder="dXNlcjpwYXNzd29yZA=="
-                />
-              </label>
+
+              <div className="guided-copilot-login-row">
+                <div className="guided-provider-status">
+                  <span>OpenAI 연결</span>
+                  <strong className={openAiConnected ? 'ok' : 'off'}>
+                    {openAiConnected ? '연결됨' : '미연결'}
+                  </strong>
+                </div>
+                <div className="guided-copilot-controls">
+                  <button type="button" onClick={() => void handleOpenAiLogin()} disabled={providerChecking}>
+                    {providerChecking ? '확인 중...' : 'OpenAI 로그인'}
+                  </button>
+                  <button type="button" onClick={() => void refreshProviderStatus()} disabled={providerChecking}>
+                    상태 확인
+                  </button>
+                </div>
+              </div>
+
               <label className="guided-copilot-prompt">
                 디렉터리 (선택)
                 <input
@@ -959,7 +1056,21 @@ export default function ManualTraderWorkspace() {
               </label>
               <div className="guided-copilot-controls">
                 <button type="button" onClick={handleSaveOpencodeConfig}>연결 설정 저장</button>
+                <button type="button" onClick={() => setShowAdvancedAuth((prev) => !prev)}>
+                  {showAdvancedAuth ? '고급 인증 숨기기' : '고급 인증'}
+                </button>
               </div>
+
+              {showAdvancedAuth && (
+                <label className="guided-copilot-prompt">
+                  Basic Auth (base64, 고급)
+                  <input
+                    value={opencodeBasicAuth}
+                    onChange={(event) => setOpencodeBasicAuth(event.target.value)}
+                    placeholder="dXNlcjpwYXNzd29yZA=="
+                  />
+                </label>
+              )}
             </div>
 
             <label className="guided-copilot-prompt">
@@ -993,6 +1104,11 @@ export default function ManualTraderWorkspace() {
               OpenCode 세션: {agentSessionId || '미연결'}
               {agentContext ? ` · 최근 승률 ${agentContext.performance.winRate.toFixed(1)}%` : ''}
             </p>
+            {!openAiConnected && (
+              <p className="guided-copilot-error">
+                OpenAI 미연결 상태입니다. 먼저 OpenAI 로그인 후 상태 확인을 눌러주세요.
+              </p>
+            )}
 
             {agentAdvice && (
               <>
@@ -1021,7 +1137,7 @@ export default function ManualTraderWorkspace() {
                         <button type="button" onClick={() => applyAgentActionToOrderForm(action)}>
                           주문 폼에 반영
                         </button>
-                        <button type="button" onClick={() => executeAgentAction(action)}>
+                        <button type="button" onClick={() => void executeAgentAction(action)}>
                           즉시 실행
                         </button>
                       </div>

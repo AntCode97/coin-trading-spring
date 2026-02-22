@@ -447,6 +447,29 @@
   gap: 6px;
 }
 
+.guided-copilot-login-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+}
+
+.guided-provider-status {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  font-size: 11px;
+  color: #a8b5cb;
+}
+
+.guided-provider-status strong.ok {
+  color: #74d9a8;
+}
+
+.guided-provider-status strong.off {
+  color: #ff8fa3;
+}
+
 .guided-copilot-prompt input {
   background: #0f1520;
   border: 1px solid #2a3445;

@@ -27,6 +27,11 @@ export type AgentAdvice = {
   actions: AgentAction[];
 };
 
+export type ProviderStatus = {
+  connected: string[];
+  all: Array<{ id: string; connected: boolean }>;
+};
+
 const SESSION_KEY = 'guided-agent.opencode.sessionId.v1';
 const BASE_URL_KEY = 'guided-agent.opencode.baseUrl.v1';
 const BASIC_AUTH_KEY = 'guided-agent.opencode.basicAuth.v1';
@@ -82,6 +87,78 @@ export function saveConnectionConfig(config: OpencodeConnectionConfig): void {
 
 export function clearSessionId(): void {
   window.localStorage.removeItem(SESSION_KEY);
+}
+
+export async function getProviderStatus(): Promise<ProviderStatus> {
+  const candidates = ['/provider', '/provider/list'];
+  let lastError: Error | null = null;
+
+  for (const path of candidates) {
+    try {
+      const payload = await requestJson<unknown>(path, { method: 'GET' });
+      if (payload && typeof payload === 'object') {
+        const root = payload as Record<string, unknown>;
+        const data = (root.data as Record<string, unknown> | undefined) ?? root;
+        const connectedRaw = data.connected;
+        const allRaw = data.all;
+        const connected = Array.isArray(connectedRaw)
+          ? connectedRaw.filter((x): x is string => typeof x === 'string')
+          : [];
+        const all = Array.isArray(allRaw)
+          ? allRaw
+            .map((x) => {
+              if (!x || typeof x !== 'object') return null;
+              const row = x as Record<string, unknown>;
+              const id = typeof row.id === 'string' ? row.id : null;
+              if (!id) return null;
+              return {
+                id,
+                connected: connected.includes(id),
+              };
+            })
+            .filter((x): x is { id: string; connected: boolean } => x !== null)
+          : connected.map((id) => ({ id, connected: true }));
+        return { connected, all };
+      }
+    } catch (e) {
+      lastError = e instanceof Error ? e : new Error(String(e));
+    }
+  }
+
+  if (lastError) throw lastError;
+  return { connected: [], all: [] };
+}
+
+export async function startProviderLogin(provider: string): Promise<{ authUrl?: string }> {
+  const providerKey = provider.trim().toLowerCase();
+  const attempts: Array<{ path: string; body?: Record<string, unknown> }> = [
+    { path: '/auth/login', body: { provider: providerKey } },
+    { path: '/provider/login', body: { provider: providerKey } },
+    { path: `/provider/${encodeURIComponent(providerKey)}/login` },
+  ];
+
+  let lastError: Error | null = null;
+  for (const attempt of attempts) {
+    try {
+      const payload = await requestJson<unknown>(attempt.path, {
+        method: 'POST',
+        body: attempt.body ? JSON.stringify(attempt.body) : undefined,
+      });
+      if (payload && typeof payload === 'object') {
+        const root = payload as Record<string, unknown>;
+        const data = (root.data as Record<string, unknown> | undefined) ?? root;
+        const authUrl = [data.authUrl, data.url, data.verificationUri]
+          .find((x): x is string => typeof x === 'string' && x.length > 0);
+        return { authUrl };
+      }
+      return {};
+    } catch (e) {
+      lastError = e instanceof Error ? e : new Error(String(e));
+    }
+  }
+
+  if (lastError) throw lastError;
+  throw new Error('Provider 로그인 시작에 실패했습니다.');
 }
 
 function buildHeaders(): Record<string, string> {
