@@ -45,6 +45,14 @@ import './ManualTraderWorkspace.css';
 const KRW_FORMATTER = new Intl.NumberFormat('ko-KR');
 const STORAGE_KEY = 'guided-trader.preferences.v1';
 
+function formatVolume(value: number): string {
+  if (value >= 1_0000_0000_0000) return `${(value / 1_0000_0000_0000).toFixed(1)}조`;
+  if (value >= 1_0000_0000) return `${(value / 1_0000_0000).toFixed(0)}억`;
+  if (value >= 1_0000_0000 * 0.1) return `${(value / 1_0000_0000).toFixed(1)}억`;
+  if (value >= 1_0000) return `${(value / 1_0000).toFixed(0)}만`;
+  return KRW_FORMATTER.format(Math.round(value));
+}
+
 type WorkspacePrefs = {
   selectedMarket?: string;
   interval?: string;
@@ -863,7 +871,7 @@ export default function ManualTraderWorkspace() {
                 <div className="price-wrap">
                   <strong>{formatKrw(item.tradePrice)}</strong>
                   <span className={item.changeRate >= 0 ? 'up' : 'down'}>{formatPct(item.changeRate)}</span>
-                  <small>거래대금 {KRW_FORMATTER.format(item.accTradePrice)}</small>
+                  <small>거래대금 {formatVolume(item.accTradePrice)}</small>
                 </div>
               </button>
             ))}
