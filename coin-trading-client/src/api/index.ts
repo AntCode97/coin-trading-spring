@@ -529,6 +529,12 @@ export interface GuidedCandle {
   volume: number;
 }
 
+export interface GuidedKeyLevel {
+  price: number;
+  label: string;
+  type: string;
+}
+
 export interface GuidedRecommendation {
   market: string;
   currentPrice: number;
@@ -548,6 +554,7 @@ export interface GuidedRecommendation {
   };
   suggestedOrderType: string;
   rationale: string[];
+  keyLevels?: GuidedKeyLevel[];
 }
 
 export interface GuidedTradeEvent {

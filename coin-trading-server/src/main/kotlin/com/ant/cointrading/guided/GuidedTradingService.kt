@@ -311,6 +311,12 @@ class GuidedTradingService(
             .max(BigDecimal.ZERO)
         require(qty > BigDecimal.ZERO) { "부분 청산 수량이 0입니다." }
 
+        val currentPrice = bithumbPublicApi.getCurrentPrice(trade.market)?.firstOrNull()?.tradePrice ?: trade.averageEntryPrice
+        val estimatedValue = qty.multiply(currentPrice)
+        require(estimatedValue >= BigDecimal("5000")) {
+            "부분 익절 금액 ${estimatedValue.toPlainString()}원이 빗썸 최소 주문금액(5,000원) 미달입니다. 전체 청산을 이용하세요."
+        }
+
         val sell = bithumbPrivateApi.sellMarketOrder(trade.market, qty)
         val sellInfo = bithumbPrivateApi.getOrder(sell.uuid) ?: sell
         val executedQty = (sellInfo.executedVolume ?: qty).min(trade.remainingQuantity)
@@ -582,6 +588,20 @@ class GuidedTradingService(
             return
         }
 
+        // 빗썸 최소 주문금액(5,000원) 미달 시 매도 불가 → DB 강제 종료
+        val currentPrice = bithumbPublicApi.getCurrentPrice(trade.market)?.firstOrNull()?.tradePrice ?: trade.averageEntryPrice
+        val estimatedValue = trade.remainingQuantity.multiply(currentPrice)
+        if (estimatedValue < BigDecimal("5000")) {
+            log.warn("[${trade.market}] 잔여 수량 ${trade.remainingQuantity} 매도 불가 (추정금액 ${estimatedValue.toPlainString()}원 < 5,000원). DB 강제 종료.")
+            trade.status = GuidedTradeEntity.STATUS_CLOSED
+            trade.closedAt = Instant.now()
+            trade.exitReason = "${reason}_BELOW_MIN_ORDER"
+            trade.lastAction = "CLOSE_BELOW_MIN_ORDER"
+            guidedTradeRepository.save(trade)
+            appendEvent(trade.id!!, "CLOSE_BELOW_MIN_ORDER", currentPrice, trade.remainingQuantity, "최소 주문금액 미달로 DB 종료 (${estimatedValue.toPlainString()}원)")
+            return
+        }
+
         val requestedQty = trade.remainingQuantity
         val sell = bithumbPrivateApi.sellMarketOrder(trade.market, requestedQty)
         val sellInfo = bithumbPrivateApi.getOrder(sell.uuid) ?: sell
@@ -753,6 +773,12 @@ class GuidedTradingService(
             calibration.note?.let { add(it) }
         }
 
+        val keyLevels = buildList {
+            add(KeyLevel(sma20, "SMA20", "INDICATOR"))
+            if (closes.size >= 60) add(KeyLevel(sma60, "SMA60", "INDICATOR"))
+            add(KeyLevel(support20, "지지선(20봉)", "SUPPORT"))
+        }
+
         return GuidedRecommendation(
             market = market,
             currentPrice = current,
@@ -771,7 +797,8 @@ class GuidedTradingService(
                 riskReward = rrScore
             ),
             suggestedOrderType = orderType,
-            rationale = reasons
+            rationale = reasons,
+            keyLevels = keyLevels
         )
     }
 
@@ -1105,6 +1132,12 @@ data class GuidedCandle(
     val volume: Double
 )
 
+data class KeyLevel(
+    val price: Double,
+    val label: String,
+    val type: String
+)
+
 data class GuidedRecommendation(
     val market: String,
     val currentPrice: Double,
@@ -1118,7 +1151,8 @@ data class GuidedRecommendation(
     val riskRewardRatio: Double,
     val winRateBreakdown: GuidedWinRateBreakdown,
     val suggestedOrderType: String,
-    val rationale: List<String>
+    val rationale: List<String>,
+    val keyLevels: List<KeyLevel> = emptyList()
 )
 
 data class GuidedWinRateBreakdown(

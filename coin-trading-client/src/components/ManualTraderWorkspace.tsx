@@ -92,6 +92,29 @@ function formatPct(value: number): string {
   return `${value >= 0 ? '+' : ''}${value.toFixed(2)}%`;
 }
 
+function keyLevelColor(label: string): string {
+  if (label.startsWith('SMA20')) return '#7dd3fc';
+  if (label.startsWith('SMA60')) return '#c4b5fd';
+  if (label.includes('지지')) return '#86efac';
+  return '#a0a0a0';
+}
+
+type PositionState = 'NONE' | 'PENDING' | 'OPEN' | 'DANGER';
+
+function derivePositionState(
+  activePosition: { status: string; stopLossPrice: number; averageEntryPrice: number } | null | undefined,
+  currentPrice: number
+): PositionState {
+  if (!activePosition) return 'NONE';
+  if (activePosition.status === 'PENDING_ENTRY') return 'PENDING';
+  if (activePosition.status === 'OPEN') {
+    const slDistance = Math.abs(currentPrice - activePosition.stopLossPrice) / currentPrice * 100;
+    if (slDistance <= 1.0) return 'DANGER';
+    return 'OPEN';
+  }
+  return 'NONE';
+}
+
 function intervalSeconds(interval: string): number {
   if (interval === 'tick') return 1;
   if (interval === 'day') return 86400;
@@ -141,6 +164,36 @@ function deriveMcpUrl(): string {
   return apiBase.replace(/\/api$/, '/mcp');
 }
 
+const GLOSSARY: Record<string, string> = {
+  'SL': '손절가(Stop Loss). 손실을 제한하기 위해 자동으로 매도하는 가격.',
+  '손절': '손실을 제한하기 위해 미리 정한 가격에서 자동 매도하는 것.',
+  '익절': '이익 실현(Take Profit). 목표 수익에 도달하면 자동 매도하는 것.',
+  'R/R': '위험 대비 보상 비율(Risk/Reward). 예: 2.2R은 손절 1만큼 감수하면 2.2만큼 수익 가능.',
+  'Risk/Reward': '위험 대비 보상 비율. 높을수록 수익 잠재력이 큼. 2R 이상이 양호.',
+  '신뢰도': 'AI가 현재 시장 상황을 분석한 매수 추천 확신도. 높을수록 유리한 진입 타이밍.',
+  '승률': '과거 거래에서 수익을 낸 비율. AI가 현재 조건 기반으로 예측한 값.',
+  '추세': '가격이 이동평균선 위에 있는지 판단하는 지표. 높을수록 상승 추세.',
+  '눌림': '상승 추세에서 일시적으로 하락한 정도. 적당히 눌린 곳이 좋은 매수 시점.',
+  '변동성': '가격 변동 폭. 낮을수록 안정적이고 예측이 쉬움.',
+  'RR': '위험 대비 보상 비율(Risk/Reward). 높을수록 유리한 거래.',
+  '물타기': '가격이 떨어졌을 때 추가 매수하여 평균 매수가를 낮추는 전략.',
+  '절반익절': '보유 수량의 절반을 먼저 매도하여 이익을 확보하는 전략.',
+  '트레일링': '가격이 오를 때 손절가도 함께 올려서 수익을 보호하는 방식.',
+  '미실현 손익': '아직 매도하지 않은 상태에서의 현재 수익/손실률.',
+  '추천가 승률': 'AI 추천 매수가로 진입했을 때의 예상 승률.',
+  '현재가 승률': '지금 시장가로 바로 매수했을 때의 예상 승률.',
+};
+
+function Tip({ label, children }: { label: string; children?: React.ReactNode }) {
+  const tip = GLOSSARY[label];
+  if (!tip) return <>{children ?? label}</>;
+  return (
+    <span className="term-tip" data-tooltip={tip}>
+      {children ?? label}
+    </span>
+  );
+}
+
 export default function ManualTraderWorkspace() {
   const prefs = useMemo(() => loadPrefs(), []);
   const [selectedMarket, setSelectedMarket] = useState<string>(prefs.selectedMarket ?? 'KRW-BTC');
@@ -148,6 +201,8 @@ export default function ManualTraderWorkspace() {
   const [search, setSearch] = useState<string>('');
   const [sortBy, setSortBy] = useState<GuidedMarketSortBy>(prefs.sortBy ?? 'TURNOVER');
   const [sortDirection, setSortDirection] = useState<GuidedSortDirection>(prefs.sortDirection ?? 'DESC');
+  const [aiEnabled, setAiEnabled] = useState(true);
+  const [aiRefreshSec, setAiRefreshSec] = useState(7);
   const [amountKrw, setAmountKrw] = useState<number>(20000);
   const [orderType, setOrderType] = useState<'MARKET' | 'LIMIT'>('LIMIT');
   const [limitPrice, setLimitPrice] = useState<number | ''>('');
@@ -157,7 +212,8 @@ export default function ManualTraderWorkspace() {
   const [llmStatus, setLlmStatus] = useState<LlmConnectionStatus>('checking');
 
   // 탭 상태
-  const [activeTab, setActiveTab] = useState<'order' | 'chat'>('chat');
+  const [activeTab, setActiveTab] = useState<'order' | 'chat'>('order');
+  const [showAdvanced, setShowAdvanced] = useState(false);
 
   // 채팅 상태
   const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
@@ -191,7 +247,7 @@ export default function ManualTraderWorkspace() {
   const chartQuery = useQuery<GuidedChartResponse>({
     queryKey: ['guided-chart', selectedMarket, interval],
     queryFn: () => guidedTradingApi.getChart(selectedMarket, interval, interval === 'tick' ? 500 : 180),
-    refetchInterval: 5000,
+    refetchInterval: aiEnabled ? aiRefreshSec * 1000 : 30000,
   });
 
   const tickerQuery = useQuery<GuidedRealtimeTicker | null>({
@@ -203,8 +259,8 @@ export default function ManualTraderWorkspace() {
   const agentContextQuery = useQuery<GuidedAgentContextResponse>({
     queryKey: ['guided-agent-context', selectedMarket, interval],
     queryFn: () => guidedTradingApi.getAgentContext(selectedMarket, interval, interval === 'tick' ? 300 : 120, 20),
-    enabled: true,
-    refetchInterval: 7000,
+    enabled: aiEnabled,
+    refetchInterval: aiEnabled ? aiRefreshSec * 1000 : false,
   });
 
   const startMutation = useMutation({
@@ -233,7 +289,7 @@ export default function ManualTraderWorkspace() {
   const activePosition = chartQuery.data?.activePosition;
   const events = chartQuery.data?.events ?? [];
   const orderbook = chartQuery.data?.orderbook;
-  const orderSnapshot = chartQuery.data?.orderSnapshot;
+
 
   const filteredMarkets = useMemo(() => {
     const keyword = search.trim().toLowerCase();
@@ -361,8 +417,25 @@ export default function ManualTraderWorkspace() {
       color: '#f5c542', lineStyle: 2, lineWidth: 1, title: '추천 매수가',
     }));
 
+    // AI key levels (SMA20, SMA60, 지지선)
+    if (payload.recommendation.keyLevels) {
+      for (const kl of payload.recommendation.keyLevels) {
+        priceLinesRef.current.push(series.createPriceLine({
+          price: kl.price,
+          color: keyLevelColor(kl.label),
+          lineStyle: 1,
+          lineWidth: 1,
+          title: kl.label,
+        }));
+      }
+    }
+
     if (payload.activePosition) {
-      priceLinesRef.current.push(series.createPriceLine({ price: payload.activePosition.averageEntryPrice, color: '#41dba6', lineStyle: 1, lineWidth: 2, title: '내 매수가' }));
+      const isFilled = payload.activePosition.status === 'OPEN';
+      const entryLabel = isFilled ? '내 매수가' : '주문가 (미체결)';
+      const entryColor = isFilled ? '#41dba6' : '#a0a0a0';
+      const entryStyle = isFilled ? 1 : 3; // 1=Dashed, 3=LargeDashed
+      priceLinesRef.current.push(series.createPriceLine({ price: payload.activePosition.averageEntryPrice, color: entryColor, lineStyle: entryStyle, lineWidth: 2, title: entryLabel }));
       priceLinesRef.current.push(series.createPriceLine({ price: payload.activePosition.takeProfitPrice, color: '#ff4d67', lineStyle: 2, lineWidth: 1, title: '익절' }));
       priceLinesRef.current.push(series.createPriceLine({ price: payload.activePosition.stopLossPrice, color: '#4c88ff', lineStyle: 2, lineWidth: 1, title: '손절' }));
       if (payload.activePosition.trailingStopPrice) {
@@ -552,6 +625,36 @@ export default function ManualTraderWorkspace() {
     };
     startMutation.mutate(payload);
   };
+
+  const handleOneClickEntry = () => {
+    if (!recommendation) return;
+    const ot = recommendation.suggestedOrderType === 'MARKET' ? 'MARKET' : 'LIMIT';
+    const payload: GuidedStartRequest = {
+      market: selectedMarket,
+      amountKrw,
+      orderType: ot,
+      limitPrice: ot === 'LIMIT' ? recommendation.recommendedEntryPrice : undefined,
+      stopLossPrice: recommendation.stopLossPrice,
+      takeProfitPrice: recommendation.takeProfitPrice,
+    };
+    startMutation.mutate(payload);
+  };
+
+  const handlePartialTakeProfit = async (ratio = 0.5) => {
+    try {
+      await guidedTradingApi.partialTakeProfit(selectedMarket, ratio);
+      void chartQuery.refetch();
+      setStatusMessage(`부분 익절 ${Math.round(ratio * 100)}% 실행.`);
+    } catch (e) {
+      setStatusMessage(e instanceof Error ? e.message : '부분 익절 실패');
+    }
+  };
+
+  const positionState: PositionState = derivePositionState(
+    activePosition,
+    tickerQuery.data?.tradePrice ?? recommendation?.currentPrice ?? 0
+  );
+  const currentTickerPrice = tickerQuery.data?.tradePrice ?? recommendation?.currentPrice ?? 0;
 
   // 채팅 메시지 전송
   const handleSendChat = useCallback(async () => {
@@ -750,10 +853,10 @@ export default function ManualTraderWorkspace() {
                   />
                 </div>
                 <div className="winrate-factors">
-                  <span>추세 {(recommendation.winRateBreakdown.trend * 100).toFixed(0)}</span>
-                  <span>눌림 {(recommendation.winRateBreakdown.pullback * 100).toFixed(0)}</span>
-                  <span>변동성 {(recommendation.winRateBreakdown.volatility * 100).toFixed(0)}</span>
-                  <span>RR {(recommendation.winRateBreakdown.riskReward * 100).toFixed(0)}</span>
+                  <span><Tip label="추세">추세</Tip> {(recommendation.winRateBreakdown.trend * 100).toFixed(0)}</span>
+                  <span><Tip label="눌림">눌림</Tip> {(recommendation.winRateBreakdown.pullback * 100).toFixed(0)}</span>
+                  <span><Tip label="변동성">변동성</Tip> {(recommendation.winRateBreakdown.volatility * 100).toFixed(0)}</span>
+                  <span><Tip label="RR">RR</Tip> {(recommendation.winRateBreakdown.riskReward * 100).toFixed(0)}</span>
                 </div>
               </div>
             )}
@@ -766,12 +869,12 @@ export default function ManualTraderWorkspace() {
                 <span>추천 매수가</span><strong>{formatKrw(recommendation.recommendedEntryPrice)}</strong>
                 <button type="button" className="guided-link-button" onClick={handleApplyRecommendedLimit}>지정가에 적용</button>
               </div>
-              <div><span>손절가</span><strong>{formatKrw(recommendation.stopLossPrice)}</strong></div>
-              <div><span>익절가</span><strong>{formatKrw(recommendation.takeProfitPrice)}</strong></div>
-              <div><span>신뢰도</span><strong>{(recommendation.confidence * 100).toFixed(1)}%</strong></div>
-              <div><span>추천가 승률</span><strong>{(recommendation.recommendedEntryWinRate ?? recommendation.predictedWinRate).toFixed(1)}%</strong></div>
-              <div><span>현재가 승률</span><strong>{(recommendation.marketEntryWinRate ?? recommendation.predictedWinRate).toFixed(1)}%</strong></div>
-              <div><span>Risk/Reward</span><strong>{recommendation.riskRewardRatio.toFixed(2)}R</strong></div>
+              <div><span><Tip label="손절">손절가</Tip></span><strong>{formatKrw(recommendation.stopLossPrice)}</strong></div>
+              <div><span><Tip label="익절">익절가</Tip></span><strong>{formatKrw(recommendation.takeProfitPrice)}</strong></div>
+              <div><span><Tip label="신뢰도">신뢰도</Tip></span><strong>{(recommendation.confidence * 100).toFixed(1)}%</strong></div>
+              <div><span><Tip label="추천가 승률">추천가 승률</Tip></span><strong>{(recommendation.recommendedEntryWinRate ?? recommendation.predictedWinRate).toFixed(1)}%</strong></div>
+              <div><span><Tip label="현재가 승률">현재가 승률</Tip></span><strong>{(recommendation.marketEntryWinRate ?? recommendation.predictedWinRate).toFixed(1)}%</strong></div>
+              <div><span><Tip label="Risk/Reward">Risk/Reward</Tip></span><strong>{recommendation.riskRewardRatio.toFixed(2)}R</strong></div>
             </div>
           )}
 
@@ -820,71 +923,207 @@ export default function ManualTraderWorkspace() {
               className={activeTab === 'chat' ? 'active' : ''}
               onClick={() => setActiveTab('chat')}
             >
-              AI 채팅
+              AI 채팅 (고급)
             </button>
           </div>
 
-          {/* 주문/포지션 탭 */}
+          {/* 주문/포지션 탭 — 상태 기반 */}
           {activeTab === 'order' && (
             <div className="guided-tab-content">
-              <h3>포지션 시작</h3>
-              <label>
-                주문금액(KRW)
-                <input type="number" min={5100} step={1000} value={amountKrw} onChange={(e) => setAmountKrw(Number(e.target.value || 0))} />
-              </label>
-              <label>
-                주문 방식
-                <select value={orderType} onChange={(e) => setOrderType(e.target.value as 'MARKET' | 'LIMIT')}>
-                  <option value="LIMIT">지정가</option>
-                  <option value="MARKET">시장가</option>
+              {/* AI 컨트롤 */}
+              <div className="guided-ai-controls-bar">
+                <button
+                  type="button"
+                  className={`guided-ai-toggle ${aiEnabled ? 'on' : 'off'}`}
+                  onClick={() => setAiEnabled(!aiEnabled)}
+                >
+                  AI {aiEnabled ? 'ON' : 'OFF'}
+                </button>
+                <select
+                  value={aiRefreshSec}
+                  onChange={(e) => setAiRefreshSec(Number(e.target.value))}
+                  disabled={!aiEnabled}
+                >
+                  <option value={5}>5초</option>
+                  <option value={7}>7초</option>
+                  <option value={10}>10초</option>
+                  <option value={15}>15초</option>
+                  <option value={30}>30초</option>
+                  <option value={60}>60초</option>
                 </select>
-              </label>
-              {orderType === 'LIMIT' && (
-                <label>지정가<input type="number" value={limitPrice} step="any" onChange={(e) => setLimitPrice(e.target.value ? Number(e.target.value) : '')} /></label>
-              )}
-              <label>손절가(커스텀)<input type="number" value={customStopLoss} step="any" placeholder={recommendation ? recommendation.stopLossPrice.toString() : ''} onChange={(e) => setCustomStopLoss(e.target.value ? Number(e.target.value) : '')} /></label>
-              <label>익절가(커스텀)<input type="number" value={customTakeProfit} step="any" placeholder={recommendation ? recommendation.takeProfitPrice.toString() : ''} onChange={(e) => setCustomTakeProfit(e.target.value ? Number(e.target.value) : '')} /></label>
-              <div className="guided-actions">
-                <button type="button" onClick={handleStart} disabled={startMutation.isPending || !recommendation}>
-                  {startMutation.isPending ? '주문 중...' : '자동매매 시작'}
-                </button>
-                <button type="button" className="danger" onClick={() => stopMutation.mutate()} disabled={stopMutation.isPending || !activePosition}>
-                  {stopMutation.isPending ? '정지 중...' : '포지션 정지'}
-                </button>
               </div>
 
-              {activePosition && (
-                <div className="guided-position-card">
-                  <h4>진행 포지션</h4>
-                  <p>상태: {activePosition.status}</p>
-                  <p>평균가: {formatKrw(activePosition.averageEntryPrice)}</p>
-                  <p>보유수량: {activePosition.remainingQuantity.toFixed(6)}</p>
-                  <p>미실현: {formatPct(activePosition.unrealizedPnlPercent)}</p>
-                  <p>절반익절: {activePosition.halfTakeProfitDone ? '완료' : '대기'}</p>
-                  <p>물타기: {activePosition.dcaCount}/{activePosition.maxDcaCount}</p>
+              {/* State A: NONE — 포지션 없음 */}
+              {positionState === 'NONE' && recommendation && (
+                <div className="state-panel state-none">
+                  <div className="state-header">
+                    <span>{recommendation.confidence >= 0.5 ? '매수 유리' : '관망'}</span>
+                    <strong><Tip label="신뢰도">신뢰도</Tip> {(recommendation.confidence * 100).toFixed(0)}%</strong>
+                  </div>
+                  <div className="guided-ai-winrate-bar">
+                    <div className="guided-ai-winrate-label">
+                      <span><Tip label="승률">승률</Tip></span>
+                      <span>{(recommendation.recommendedEntryWinRate ?? recommendation.predictedWinRate).toFixed(1)}%</span>
+                    </div>
+                    <div className="guided-ai-bar-track">
+                      <div
+                        className="guided-ai-bar-fill"
+                        style={{ width: `${Math.min(100, Math.max(0, recommendation.recommendedEntryWinRate ?? recommendation.predictedWinRate))}%` }}
+                      />
+                    </div>
+                  </div>
+                  <div className="guided-ai-prices">
+                    <div><span>추천진입</span><strong>{formatPlain(recommendation.recommendedEntryPrice)}</strong></div>
+                    <div>
+                      <span><Tip label="손절">손절</Tip></span>
+                      <strong className="loss">
+                        {formatPlain(recommendation.stopLossPrice)}
+                        <small> ({((recommendation.stopLossPrice - recommendation.recommendedEntryPrice) / recommendation.recommendedEntryPrice * 100).toFixed(1)}%)</small>
+                      </strong>
+                    </div>
+                    <div>
+                      <span><Tip label="익절">익절</Tip></span>
+                      <strong className="profit">
+                        {formatPlain(recommendation.takeProfitPrice)}
+                        <small> (+{((recommendation.takeProfitPrice - recommendation.recommendedEntryPrice) / recommendation.recommendedEntryPrice * 100).toFixed(1)}%)</small>
+                      </strong>
+                    </div>
+                    <div><span><Tip label="R/R">R/R</Tip></span><strong>{recommendation.riskRewardRatio.toFixed(2)}R</strong></div>
+                  </div>
+
+                  <button
+                    type="button"
+                    className="one-click-entry"
+                    onClick={handleOneClickEntry}
+                    disabled={startMutation.isPending}
+                  >
+                    {startMutation.isPending ? '주문 중...' : 'AI 추천대로 진입'}
+                  </button>
+
+                  <details className="advanced-settings" open={showAdvanced} onToggle={(e) => setShowAdvanced((e.target as HTMLDetailsElement).open)}>
+                    <summary>고급 설정 (금액/가격 커스텀)</summary>
+                    <div className="advanced-body">
+                      <label>
+                        금액(KRW)
+                        <input type="number" min={5100} step={1000} value={amountKrw} onChange={(e) => setAmountKrw(Number(e.target.value || 0))} />
+                      </label>
+                      <label>
+                        주문 방식
+                        <select value={orderType} onChange={(e) => setOrderType(e.target.value as 'MARKET' | 'LIMIT')}>
+                          <option value="LIMIT">지정가</option>
+                          <option value="MARKET">시장가</option>
+                        </select>
+                      </label>
+                      {orderType === 'LIMIT' && (
+                        <label>지정가<input type="number" value={limitPrice} step="any" onChange={(e) => setLimitPrice(e.target.value ? Number(e.target.value) : '')} /></label>
+                      )}
+                      <label>손절가<input type="number" value={customStopLoss} step="any" placeholder={recommendation.stopLossPrice.toString()} onChange={(e) => setCustomStopLoss(e.target.value ? Number(e.target.value) : '')} /></label>
+                      <label>익절가<input type="number" value={customTakeProfit} step="any" placeholder={recommendation.takeProfitPrice.toString()} onChange={(e) => setCustomTakeProfit(e.target.value ? Number(e.target.value) : '')} /></label>
+                      <button type="button" className="custom-entry-btn" onClick={handleStart} disabled={startMutation.isPending}>
+                        {startMutation.isPending ? '주문 중...' : '커스텀 설정으로 진입'}
+                      </button>
+                    </div>
+                  </details>
                 </div>
               )}
 
-              {orderSnapshot && (
-                <div className="guided-orders-card">
-                  <h4>내 주문 현황</h4>
-                  <div className="orders-section">
-                    <span>현재 주문</span>
-                    {orderSnapshot.currentOrder ? (
-                      <p>
-                        {orderSnapshot.currentOrder.side.toUpperCase()} / {orderSnapshot.currentOrder.ordType.toUpperCase()} / {orderSnapshot.currentOrder.state ?? '-'}
-                        {' · '}가격 {orderSnapshot.currentOrder.price != null ? formatPlain(orderSnapshot.currentOrder.price) : '-'}
-                        {' · '}체결 {orderSnapshot.currentOrder.executedVolume != null ? formatPlain(orderSnapshot.currentOrder.executedVolume) : '-'}
-                      </p>
-                    ) : (<p>없음</p>)}
+              {positionState === 'NONE' && !recommendation && aiEnabled && (
+                <div className="state-panel state-none">
+                  <div className="guided-ai-loading">데이터 로딩 중...</div>
+                </div>
+              )}
+              {positionState === 'NONE' && !aiEnabled && (
+                <div className="state-panel state-none">
+                  <div className="guided-ai-loading">AI 분석 비활성화</div>
+                </div>
+              )}
+
+              {/* State B: PENDING — 미체결 */}
+              {positionState === 'PENDING' && activePosition && (
+                <div className="state-panel state-pending">
+                  <div className="state-header pending-header">
+                    <span className="pending-dot" />
+                    <strong>체결 대기 중</strong>
                   </div>
-                  <div className="orders-section">
-                    <span>대기중 주문 ({orderSnapshot.pendingOrders.length})</span>
-                    {orderSnapshot.pendingOrders.slice(0, 5).map((o) => (
-                      <p key={o.uuid}>{o.side.toUpperCase()} {formatPlain(o.price ?? 0)} · 잔량 {formatPlain(o.remainingVolume ?? 0)}</p>
-                    ))}
-                    {orderSnapshot.pendingOrders.length === 0 && <p>없음</p>}
+                  <div className="pending-info">
+                    <div><span>주문가</span><strong>{formatKrw(activePosition.averageEntryPrice)}</strong></div>
+                    <div><span>현재가</span><strong>{formatKrw(currentTickerPrice)}</strong></div>
                   </div>
+                  <PendingTimer createdAt={activePosition.createdAt} />
+                  <button
+                    type="button"
+                    className="cancel-order-btn"
+                    onClick={() => stopMutation.mutate()}
+                    disabled={stopMutation.isPending}
+                  >
+                    {stopMutation.isPending ? '취소 중...' : '주문 취소'}
+                  </button>
+                </div>
+              )}
+
+              {/* State C/D: OPEN / DANGER */}
+              {(positionState === 'OPEN' || positionState === 'DANGER') && activePosition && (
+                <div className={`state-panel state-open ${positionState === 'DANGER' ? 'danger' : ''}`}>
+                  <div className="state-header">
+                    <span><Tip label="미실현 손익">미실현 손익</Tip></span>
+                    <strong className={activePosition.unrealizedPnlPercent >= 0 ? 'profit' : 'loss'}>
+                      {formatPct(activePosition.unrealizedPnlPercent)}
+                    </strong>
+                  </div>
+                  <div className="guided-ai-prices">
+                    <div><span>진입가</span><strong>{formatPlain(activePosition.averageEntryPrice)}</strong></div>
+                    <div><span>현재가</span><strong>{formatPlain(currentTickerPrice)}</strong></div>
+                    <div><span><Tip label="손절">손절</Tip></span><strong className="loss">{formatPlain(activePosition.stopLossPrice)}</strong></div>
+                    <div><span><Tip label="익절">익절</Tip></span><strong className="profit">{formatPlain(activePosition.takeProfitPrice)}</strong></div>
+                  </div>
+
+                  {/* 손절 거리 미터 */}
+                  <div className="sl-meter">
+                    <div className="sl-meter-label">
+                      <span><Tip label="SL">SL까지</Tip></span>
+                      <span>{Math.abs((currentTickerPrice - activePosition.stopLossPrice) / currentTickerPrice * 100).toFixed(2)}%</span>
+                    </div>
+                    <div className="sl-meter-track">
+                      <div
+                        className={`sl-meter-fill ${positionState === 'DANGER' ? 'danger' : ''}`}
+                        style={{
+                          width: `${Math.min(100, Math.max(0, Math.abs((currentTickerPrice - activePosition.stopLossPrice) / (activePosition.averageEntryPrice - activePosition.stopLossPrice)) * 100))}%`,
+                        }}
+                      />
+                    </div>
+                  </div>
+
+                  <div className="position-meta">
+                    <span><Tip label="물타기">물타기</Tip> {activePosition.dcaCount}/{activePosition.maxDcaCount}</span>
+                    <span><Tip label="절반익절">{activePosition.halfTakeProfitDone ? '절반익절 완료' : '절반익절 대기'}</Tip></span>
+                    <span><Tip label="트레일링">트레일링</Tip>: {activePosition.trailingActive ? '활성' : '비활성'}</span>
+                  </div>
+
+                  <div className="position-actions">
+                    {!activePosition.halfTakeProfitDone && (
+                      <button type="button" className="partial-tp-btn" onClick={() => void handlePartialTakeProfit(0.5)}>
+                        부분 익절 50%
+                      </button>
+                    )}
+                    <button
+                      type="button"
+                      className={`full-exit-btn ${positionState === 'DANGER' ? 'urgent' : ''}`}
+                      onClick={() => stopMutation.mutate()}
+                      disabled={stopMutation.isPending}
+                    >
+                      {positionState === 'DANGER' ? '즉시 청산' : '전체 청산'}
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {/* 성과 푸터 */}
+              {agentContextQuery.data?.performance && (
+                <div className="perf-footer">
+                  <div><span>거래</span><strong>{agentContextQuery.data.performance.sampleSize}건</strong></div>
+                  <div><span>승/패</span><strong>{agentContextQuery.data.performance.winCount}/{agentContextQuery.data.performance.lossCount}</strong></div>
+                  <div><span><Tip label="승률">승률</Tip></span><strong>{agentContextQuery.data.performance.winRate.toFixed(0)}%</strong></div>
+                  <div><span>평균</span><strong>{formatPct(agentContextQuery.data.performance.avgPnlPercent)}</strong></div>
                 </div>
               )}
             </div>
@@ -1053,4 +1292,23 @@ export default function ManualTraderWorkspace() {
       </div>
     </section>
   );
+}
+
+function PendingTimer({ createdAt }: { createdAt: string }) {
+  const [elapsed, setElapsed] = useState('');
+
+  useEffect(() => {
+    const start = new Date(createdAt).getTime();
+    const tick = () => {
+      const diff = Math.max(0, Math.floor((Date.now() - start) / 1000));
+      const m = Math.floor(diff / 60);
+      const s = diff % 60;
+      setElapsed(`${m}분 ${s.toString().padStart(2, '0')}초`);
+    };
+    tick();
+    const id = window.setInterval(tick, 1000);
+    return () => window.clearInterval(id);
+  }, [createdAt]);
+
+  return <div className="pending-timer">경과: {elapsed}</div>;
 }
