@@ -358,36 +358,6 @@ export default function Dashboard() {
     setRequestDate(movingToToday ? null : formatDate(nextDate));
   };
 
-  const handleManualSell = async (market: string, strategy: string) => {
-    const accepted = await confirmAction({
-      title: `${market} (${strategy}) 포지션 매도`,
-      description: '실거래 주문이 즉시 실행될 수 있습니다. 현재 시장 가격과 슬리피지를 확인한 뒤 진행하세요.',
-      confirmLabel: '매도 실행',
-      danger: true,
-    });
-
-    if (!accepted) {
-      return;
-    }
-
-    const actionName = `manual-sell:${market}:${strategy}`;
-    setExecutingAction(actionName);
-
-    try {
-      const result = await dashboardApi.manualClose(market, strategy);
-      if (result.success) {
-        notify('매도 주문이 접수되었습니다.', 'success');
-        await refetch();
-      } else {
-        notify(`매도 실패: ${result.error ?? '알 수 없는 오류'}`, 'error');
-      }
-    } catch (manualSellError) {
-      notify(`매도 오류: ${toErrorMessage(manualSellError)}`, 'error');
-    } finally {
-      setExecutingAction(null);
-    }
-  };
-
   const handleSync = async () => {
     const accepted = await confirmAction({
       title: '실제 잔고와 포지션 동기화',
@@ -1029,8 +999,6 @@ export default function Dashboard() {
                       const positive = position.pnl >= 0;
                       const highRisk = isHighRiskPosition(position);
                       const stopLossBreached = isStopLossBreached(position);
-                      const actionName = `manual-sell:${position.market}:${position.strategy}`;
-
                       return (
                         <div
                           key={`${position.market}-${position.strategy}-${position.entryTime}`}
@@ -1166,14 +1134,7 @@ export default function Dashboard() {
                                   ({positive ? '+' : ''}{position.pnlPercent.toFixed(2)}%)
                                 </span>
                               </div>
-                              <button
-                                type="button"
-                                onClick={() => void handleManualSell(position.market, position.strategy)}
-                                className="toss-sell-btn"
-                                disabled={hasExecutingAction && !isActionExecuting(actionName)}
-                              >
-                                {isActionExecuting(actionName) ? '매도 중...' : '매도하기'}
-                              </button>
+                              <span className="toss-risk-chip warning">웹에서는 수동 매도 비활성화</span>
                             </div>
                           </div>
                         </div>

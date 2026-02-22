@@ -1,6 +1,11 @@
 server:
   port: 8080
 
+desktop-access:
+  enabled: ${DESKTOP_ACCESS_ENABLED:true}
+  header-name: ${DESKTOP_ACCESS_HEADER:X-Desktop-Token}
+  token: ${DESKTOP_TRADING_TOKEN:}
+
 spring:
   application:
     name: coin-trading-server

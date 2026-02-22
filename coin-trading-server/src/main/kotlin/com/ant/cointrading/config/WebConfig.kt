@@ -4,9 +4,12 @@ import org.springframework.context.annotation.Configuration
 import org.springframework.web.servlet.config.annotation.ResourceHandlerRegistry
 import org.springframework.web.servlet.config.annotation.ViewControllerRegistry
 import org.springframework.web.servlet.config.annotation.WebMvcConfigurer
+import org.springframework.web.servlet.config.annotation.InterceptorRegistry
 
 @Configuration
-class WebConfig : WebMvcConfigurer {
+class WebConfig(
+    private val desktopAccessInterceptor: DesktopAccessInterceptor
+) : WebMvcConfigurer {
 
     override fun addResourceHandlers(registry: ResourceHandlerRegistry) {
         // 정적 리소스 서빙 (CSS, JS, 이미지 등)
@@ -26,5 +29,19 @@ class WebConfig : WebMvcConfigurer {
         // 추후 추가될 SPA 경로
         registry.addViewController("/settings")
             .setViewName("forward:/index.html")
+    }
+
+    override fun addInterceptors(registry: InterceptorRegistry) {
+        registry.addInterceptor(desktopAccessInterceptor)
+            .addPathPatterns(
+                "/api/manual-trading/**",
+                "/api/guided-trading/**",
+                "/api/dashboard/manual-close",
+                "/api/funding/manual-entry",
+                "/api/funding/manual-close",
+                "/api/volume-surge/manual-close/**",
+                "/api/meme-scalper/manual-close/**",
+                "/api/dca/manual-close/**"
+            )
     }
 }

@@ -13,13 +13,15 @@
     "desktop:dev": "concurrently -k \"cross-env VITE_DESKTOP_MODE=true VITE_API_BASE_URL=http://183.101.185.112:1104/api vite\" \"wait-on http://localhost:5173 && cross-env ELECTRON_START_URL=http://localhost:5173 electron .\"",
     "desktop:build:web": "cross-env VITE_DESKTOP_MODE=true VITE_API_BASE_URL=http://183.101.185.112:1104/api npm run build",
     "desktop:start": "cross-env ELECTRON_START_URL=file://$PWD/dist/index.html electron .",
-    "desktop:dmg": "npm run desktop:build:web && electron-builder --mac dmg --publish never"
+    "desktop:dmg": "npm run desktop:build:web && electron-builder --mac dmg --publish never",
+    "guard:public-surface": "node scripts/check-public-surface.mjs"
   },
   "dependencies": {
     "@tanstack/react-query": "^5.90.20",
     "axios": "^1.13.4",
     "html2canvas": "^1.4.1",
     "lightweight-charts": "^5.0.9",
+    "openai": "^6.22.0",
     "react": "^19.2.0",
     "react-dom": "^19.2.0"
   },

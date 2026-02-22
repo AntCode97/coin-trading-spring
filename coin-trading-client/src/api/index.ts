@@ -1,16 +1,27 @@
 import axios from 'axios';
 
 const API_BASE_URL = (import.meta.env.VITE_API_BASE_URL as string | undefined)?.trim() || '/api';
+const DESKTOP_TOKEN = (import.meta.env.VITE_DESKTOP_TRADING_TOKEN as string | undefined)?.trim();
+const DESKTOP_MODE = import.meta.env.VITE_DESKTOP_MODE === 'true';
+
+function buildDefaultHeaders(): Record<string, string> {
+  if (DESKTOP_MODE && DESKTOP_TOKEN) {
+    return { 'X-Desktop-Token': DESKTOP_TOKEN };
+  }
+  return {};
+}
 
 const api = axios.create({
   baseURL: API_BASE_URL,
   timeout: 10000,
+  headers: buildDefaultHeaders(),
 });
 
 // Long-running API 클라이언트 (LLM 최적화, 회고 등은 10분 타임아웃)
 const longRunningApi = axios.create({
   baseURL: API_BASE_URL,
   timeout: 600000, // 10분
+  headers: buildDefaultHeaders(),
 });
 
 export function getApiBaseUrl(): string {

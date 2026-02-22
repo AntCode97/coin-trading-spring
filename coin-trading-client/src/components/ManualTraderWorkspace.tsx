@@ -1,6 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useMutation, useQuery } from '@tanstack/react-query';
-import html2canvas from 'html2canvas';
 import {
   CandlestickSeries,
   ColorType,
@@ -15,7 +14,6 @@ import {
   type UTCTimestamp,
 } from 'lightweight-charts';
 import {
-  getApiBaseUrl,
   guidedTradingApi,
   type GuidedAgentContextResponse,
   type GuidedChartResponse,
@@ -27,17 +25,14 @@ import {
   type GuidedStartRequest,
 } from '../api';
 import {
-  clearSessionId,
-  ensureSessionId,
-  getConnectionConfig,
-  getProviderStatus,
-  saveConnectionConfig,
-  startProviderLogin,
-  submitAgentPrompt,
-  waitForAssistantAdvice,
+  checkConnection,
+  startLogin,
+  logout,
+  requestAdvice,
   type AgentAdvice,
   type AgentAction,
-} from '../lib/opencodeSession';
+  type LlmConnectionStatus,
+} from '../lib/llmService';
 import './ManualTraderWorkspace.css';
 
 const KRW_FORMATTER = new Intl.NumberFormat('ko-KR');
@@ -133,16 +128,14 @@ export default function ManualTraderWorkspace() {
   const [agentPrompt, setAgentPrompt] = useState<string>('');
   const [agentAutoRefresh, setAgentAutoRefresh] = useState<boolean>(true);
   const [includeChartScreenshot, setIncludeChartScreenshot] = useState<boolean>(false);
-  const [agentSessionId, setAgentSessionId] = useState<string>('');
   const [agentAdvice, setAgentAdvice] = useState<AgentAdvice | null>(null);
   const [agentBusy, setAgentBusy] = useState<boolean>(false);
   const [agentError, setAgentError] = useState<string>('');
-  const [opencodeBaseUrl, setOpencodeBaseUrl] = useState<string>(() => getConnectionConfig().baseUrl);
-  const [opencodeDirectory, setOpencodeDirectory] = useState<string>(() => getConnectionConfig().directory ?? '');
-  const [showAdvancedAuth, setShowAdvancedAuth] = useState<boolean>(false);
-  const [opencodeBasicAuth, setOpencodeBasicAuth] = useState<string>(() => getConnectionConfig().basicAuth ?? '');
-  const [openAiConnected, setOpenAiConnected] = useState<boolean>(false);
-  const [providerChecking, setProviderChecking] = useState<boolean>(false);
+  const [streamingText, setStreamingText] = useState<string>('');
+  const [llmStatus, setLlmStatus] = useState<LlmConnectionStatus>('checking');
+
+  const openAiConnected = llmStatus === 'connected';
+  const providerChecking = llmStatus === 'checking';
 
   const chartContainerRef = useRef<HTMLDivElement | null>(null);
   const chartRef = useRef<IChartApi | null>(null);
@@ -434,67 +427,41 @@ export default function ManualTraderWorkspace() {
     setStatusMessage('추천 매수가를 지정가에 적용했습니다.');
   };
 
-  const handleSaveOpencodeConfig = () => {
-    saveConnectionConfig({
-      baseUrl: opencodeBaseUrl,
-      basicAuth: opencodeBasicAuth,
-      directory: opencodeDirectory,
-    });
-    clearSessionId();
-    setAgentSessionId('');
-    setStatusMessage('OpenCode 연결 설정을 저장하고 세션을 초기화했습니다.');
-    void refreshProviderStatus();
-  };
-
-  const refreshProviderStatus = useCallback(async () => {
-    setProviderChecking(true);
+  const handleCheckStatus = useCallback(async () => {
+    setLlmStatus('checking');
     try {
-      const status = await getProviderStatus();
-      const isConnected = status.connected.includes('openai');
-      setOpenAiConnected(isConnected);
-      if (isConnected) {
-        setStatusMessage('OpenAI provider 연결 상태를 확인했습니다.');
+      const status = await checkConnection();
+      setLlmStatus(status);
+      if (status === 'connected') {
+        setStatusMessage('OpenAI 연결 확인 완료.');
+      } else if (status === 'expired') {
+        setStatusMessage('토큰이 만료되었습니다. 다시 로그인하세요.');
+      } else {
+        setStatusMessage('OpenAI 미연결 상태입니다.');
       }
-    } catch (e) {
-      setOpenAiConnected(false);
-      setStatusMessage(e instanceof Error ? e.message : 'Provider 상태 조회 실패');
-    } finally {
-      setProviderChecking(false);
+    } catch {
+      setLlmStatus('error');
+      setStatusMessage('OpenAI 상태 확인 실패');
     }
   }, []);
 
-  const handleOpenAiLogin = useCallback(async () => {
+  const handleLogin = useCallback(async () => {
+    setLlmStatus('checking');
     try {
-      setProviderChecking(true);
-      const result = await startProviderLogin('openai');
-      if (result.authUrl) {
-        window.open(result.authUrl, '_blank', 'noopener,noreferrer');
-      }
-      setStatusMessage('OpenAI 로그인 흐름을 시작했습니다. 브라우저 인증을 완료하세요.');
-
-      const started = Date.now();
-      while (Date.now() - started < 120000) {
-        const status = await getProviderStatus();
-        if (status.connected.includes('openai')) {
-          setOpenAiConnected(true);
-          setStatusMessage('OpenAI 로그인/연결이 완료되었습니다.');
-          return;
-        }
-        await new Promise((resolve) => window.setTimeout(resolve, 3000));
-      }
-
-      setStatusMessage('자동 확인 시간(2분)을 초과했습니다. 연결 상태 확인 버튼을 눌러 재확인하세요.');
-    } catch (e) {
-      setOpenAiConnected(false);
-      const connectHint = '예: opencode serve --hostname 127.0.0.1 --port 4096 --cors http://localhost:5173 --cors http://127.0.0.1:5173';
-      setStatusMessage(
-        e instanceof Error
-          ? `${e.message} (fallback: ${connectHint} 후 opencode auth login)`
-          : `OpenAI 로그인 시작 실패 (fallback: ${connectHint} 후 opencode auth login)`
-      );
-    } finally {
-      setProviderChecking(false);
+      await startLogin();
+      setLlmStatus('connected');
+      setStatusMessage('OpenAI 로그인이 완료되었습니다.');
+    } catch (error) {
+      setLlmStatus('error');
+      const message = error instanceof Error ? error.message : 'OpenAI 로그인 실패';
+      setStatusMessage(message);
     }
+  }, []);
+
+  const handleLogout = useCallback(async () => {
+    await logout();
+    setLlmStatus('disconnected');
+    setStatusMessage('OpenAI 로그아웃 완료.');
   }, []);
 
   const applyAgentActionToOrderForm = (action: AgentAction) => {
@@ -615,86 +582,68 @@ export default function ManualTraderWorkspace() {
     startMutation.mutate(payload);
   };
 
-  const buildAgentPrompt = (context: GuidedAgentContextResponse, userPrompt: string): string => {
-    const slicedCandles = context.chart.candles.slice(-120);
-    const payload = {
-      market: context.market,
-      generatedAt: context.generatedAt,
-      recommendation: context.chart.recommendation,
-      activePosition: context.chart.activePosition,
-      events: context.chart.events.slice(-20),
-      orderbook: context.chart.orderbook,
-      orderSnapshot: context.chart.orderSnapshot,
-      recentClosedTrades: context.recentClosedTrades,
-      performance: context.performance,
-      candles: slicedCandles,
+  const buildFallbackAgentContext = (): GuidedAgentContextResponse | null => {
+    const chart = chartQuery.data;
+    if (!chart) return null;
+
+    return {
+      market: selectedMarket,
+      generatedAt: new Date().toISOString(),
+      chart,
+      recentClosedTrades: [],
+      performance: {
+        sampleSize: 0,
+        winCount: 0,
+        lossCount: 0,
+        winRate: 0,
+        avgPnlPercent: 0,
+      },
     };
-
-    const apiBaseUrl = getApiBaseUrl().replace(/\/$/, '');
-
-    return [
-      '너는 수동 코인 트레이딩 보조 에이전트다.',
-      '아래 JSON 컨텍스트를 분석해서 현재 시점 조언을 제공해라.',
-      '추가 데이터가 필요하면 도구 호출(webfetch)이 가능할 때 다음 Spring API를 조회해라:',
-      `- GET ${apiBaseUrl}/guided-trading/agent/context?market=${encodeURIComponent(context.market)}&interval=${encodeURIComponent(context.chart.interval)}&count=120&closedTradeLimit=20`,
-      `- GET ${apiBaseUrl}/guided-trading/chart?market=${encodeURIComponent(context.market)}&interval=${encodeURIComponent(context.chart.interval)}&count=120`,
-      `- GET ${apiBaseUrl}/dashboard`,
-      '반드시 JSON으로만 응답하고 스키마를 지켜라.',
-      '{"analysis":"2-4문장","confidence":0-100,"actions":[{"type":"ADD|PARTIAL_TP|FULL_EXIT|HOLD|WAIT_RETEST","title":"짧은제목","reason":"근거","targetPrice":number|null,"sizePercent":number|null,"urgency":"LOW|MEDIUM|HIGH"}]}',
-      '리스크 과대 노출을 피하고, 근거 없는 확신을 금지한다.',
-      userPrompt.trim().length > 0 ? `사용자 추가지시: ${userPrompt.trim()}` : '사용자 추가지시: 없음',
-      `컨텍스트 JSON: ${JSON.stringify(payload)}`,
-    ].join('\n');
   };
-
-  const captureChartImageDataUrl = useCallback(async (): Promise<string | undefined> => {
-    if (!includeChartScreenshot || !chartContainerRef.current) return undefined;
-    const canvas = await html2canvas(chartContainerRef.current, {
-      backgroundColor: '#0f1117',
-      scale: 1,
-      logging: false,
-      useCORS: true,
-    });
-    return canvas.toDataURL('image/png', 0.9);
-  }, [includeChartScreenshot]);
 
   const runAgentAnalysis = useCallback(async () => {
     if (agentBusy) return;
-    if (!openAiConnected) {
-      setAgentError('OpenAI provider가 연결되지 않았습니다. OpenAI 로그인 후 다시 시도하세요.');
+    if (llmStatus !== 'connected') {
+      setAgentError('OpenAI가 연결되지 않았습니다. 로그인 후 다시 시도하세요.');
       return;
     }
 
-    const context = agentContextQuery.data ?? await guidedTradingApi.getAgentContext(
-      selectedMarket,
-      interval,
-      interval === 'tick' ? 300 : 120,
-      20
-    );
+    let context = agentContextQuery.data ?? null;
+    if (!context) {
+      try {
+        context = await guidedTradingApi.getAgentContext(
+          selectedMarket,
+          interval,
+          interval === 'tick' ? 300 : 120,
+          20
+        );
+      } catch {
+        context = buildFallbackAgentContext();
+      }
+    }
+
+    if (!context) {
+      setAgentError('에이전트 컨텍스트를 생성할 수 없습니다. 차트 데이터를 먼저 로드한 뒤 다시 시도하세요.');
+      return;
+    }
 
     setAgentBusy(true);
     setAgentError('');
+    setStreamingText('');
     try {
-      const sessionId = agentSessionId || await ensureSessionId();
-      if (!agentSessionId) setAgentSessionId(sessionId);
-
-      const textPrompt = buildAgentPrompt(context, agentPrompt);
-      const imageDataUrl = await captureChartImageDataUrl();
-      const sinceEpochMs = Date.now();
-
-      await submitAgentPrompt({
-        sessionId,
-        textPrompt,
-        imageDataUrl,
-      });
-
-      const advice = await waitForAssistantAdvice({
-        sessionId,
-        sinceEpochMs,
+      const advice = await requestAdvice({
+        context,
+        userPrompt: agentPrompt,
+        onStreamDelta: (accumulated) => setStreamingText(accumulated),
       });
 
       setAgentAdvice(advice);
-      setStatusMessage('프론트 에이전트 분석을 완료했습니다.');
+      setStreamingText('');
+      if (context.performance.sampleSize === 0) {
+        setStatusMessage('에이전트 분석 완료 (일부 히스토리 컨텍스트 부족)');
+      } else {
+        setStatusMessage('에이전트 분석 완료');
+      }
     } catch (e) {
       const message = e instanceof Error ? e.message : '에이전트 분석 실패';
       setAgentError(message);
@@ -707,10 +656,8 @@ export default function ManualTraderWorkspace() {
     agentContextQuery.data,
     selectedMarket,
     interval,
-    agentSessionId,
     agentPrompt,
-    captureChartImageDataUrl,
-    openAiConnected,
+    llmStatus,
   ]);
 
   useEffect(() => {
@@ -722,8 +669,8 @@ export default function ManualTraderWorkspace() {
   }, [agentAutoRefresh, runAgentAnalysis]);
 
   useEffect(() => {
-    void refreshProviderStatus();
-  }, [refreshProviderStatus]);
+    void handleCheckStatus();
+  }, [handleCheckStatus]);
 
   return (
     <section className="guided-workspace">
@@ -1011,7 +958,7 @@ export default function ManualTraderWorkspace() {
 
           <div className="guided-copilot-card">
             <div className="guided-copilot-head">
-              <h4>프론트 세션 AI 에이전트</h4>
+              <h4>AI 코파일럿</h4>
               <div className="guided-copilot-controls">
                 <button
                   type="button"
@@ -1024,57 +971,36 @@ export default function ManualTraderWorkspace() {
             </div>
 
             <div className="guided-copilot-connection-grid">
-              <label className="guided-copilot-prompt">
-                OpenCode Base URL
-                <input
-                  value={opencodeBaseUrl}
-                  onChange={(event) => setOpencodeBaseUrl(event.target.value)}
-                  placeholder="http://127.0.0.1:4096"
-                />
-              </label>
-
               <div className="guided-copilot-login-row">
                 <div className="guided-provider-status">
                   <span>OpenAI 연결</span>
                   <strong className={openAiConnected ? 'ok' : 'off'}>
-                    {openAiConnected ? '연결됨' : '미연결'}
+                    {llmStatus === 'checking'
+                      ? '확인 중'
+                      : llmStatus === 'error'
+                        ? '오류'
+                        : llmStatus === 'expired'
+                          ? '만료'
+                          : openAiConnected
+                            ? '연결됨'
+                            : '미연결'}
                   </strong>
                 </div>
                 <div className="guided-copilot-controls">
-                  <button type="button" onClick={() => void handleOpenAiLogin()} disabled={providerChecking}>
-                    {providerChecking ? '확인 중...' : 'OpenAI 로그인'}
-                  </button>
-                  <button type="button" onClick={() => void refreshProviderStatus()} disabled={providerChecking}>
+                  {openAiConnected ? (
+                    <button type="button" onClick={() => void handleLogout()}>
+                      로그아웃
+                    </button>
+                  ) : (
+                    <button type="button" onClick={() => void handleLogin()} disabled={providerChecking}>
+                      {providerChecking ? '확인 중...' : 'OpenAI 로그인'}
+                    </button>
+                  )}
+                  <button type="button" onClick={() => void handleCheckStatus()} disabled={providerChecking}>
                     상태 확인
                   </button>
                 </div>
               </div>
-
-              <label className="guided-copilot-prompt">
-                디렉터리 (선택)
-                <input
-                  value={opencodeDirectory}
-                  onChange={(event) => setOpencodeDirectory(event.target.value)}
-                  placeholder="/Users/.../coin-trading-spring"
-                />
-              </label>
-              <div className="guided-copilot-controls">
-                <button type="button" onClick={handleSaveOpencodeConfig}>연결 설정 저장</button>
-                <button type="button" onClick={() => setShowAdvancedAuth((prev) => !prev)}>
-                  {showAdvancedAuth ? '고급 인증 숨기기' : '고급 인증'}
-                </button>
-              </div>
-
-              {showAdvancedAuth && (
-                <label className="guided-copilot-prompt">
-                  Basic Auth (base64, 고급)
-                  <input
-                    value={opencodeBasicAuth}
-                    onChange={(event) => setOpencodeBasicAuth(event.target.value)}
-                    placeholder="dXNlcjpwYXNzd29yZA=="
-                  />
-                </label>
-              )}
             </div>
 
             <label className="guided-copilot-prompt">
@@ -1104,17 +1030,26 @@ export default function ManualTraderWorkspace() {
               차트 스크린샷 포함
             </label>
 
-            <p className="guided-copilot-analysis">
-              OpenCode 세션: {agentSessionId || '미연결'}
-              {agentContext ? ` · 최근 승률 ${agentContext.performance.winRate.toFixed(1)}%` : ''}
-            </p>
+            {agentContext && (
+              <p className="guided-copilot-analysis">
+                최근 승률 {agentContext.performance.winRate.toFixed(1)}%
+              </p>
+            )}
             {!openAiConnected && (
               <p className="guided-copilot-error">
-                OpenAI 미연결 상태입니다. 먼저 OpenAI 로그인 후 상태 확인을 눌러주세요.
+                {llmStatus === 'error'
+                  ? 'OpenAI 연결 오류가 발생했습니다.'
+                  : llmStatus === 'expired'
+                    ? '토큰이 만료되었습니다. 다시 로그인하세요.'
+                    : 'OpenAI 미연결 상태입니다. 로그인을 먼저 진행하세요.'}
               </p>
             )}
 
-            {agentAdvice && (
+            {agentBusy && streamingText && (
+              <pre className="guided-copilot-streaming">{streamingText}</pre>
+            )}
+
+            {agentAdvice && !agentBusy && (
               <>
                 <div className="guided-copilot-summary">
                   <span>신뢰도</span>
