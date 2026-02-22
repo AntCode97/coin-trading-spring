@@ -11,10 +11,58 @@
   font-size: 20px;
 }
 
+.guided-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+}
+
 .guided-header p {
   margin: 6px 0 0;
   color: #8f9aad;
   font-size: 13px;
+}
+
+.today-stats-bar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 14px;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  font-size: 13px;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.today-stats-label {
+  color: #8f9aad;
+  font-weight: 500;
+}
+
+.today-stats-pnl {
+  font-weight: 700;
+  font-size: 15px;
+}
+
+.today-stats-pnl.positive {
+  color: #22c55e;
+}
+
+.today-stats-pnl.negative {
+  color: #ef4444;
+}
+
+.today-stats-detail {
+  color: #8f9aad;
+}
+
+.today-stats-invested {
+  color: #60a5fa;
+  padding-left: 8px;
+  border-left: 1px solid rgba(255, 255, 255, 0.1);
 }
 
 .guided-grid {

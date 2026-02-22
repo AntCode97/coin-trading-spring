@@ -25,6 +25,7 @@ import {
   type GuidedRealtimeTicker,
   type GuidedStartRequest,
   type GuidedTradePosition,
+  type GuidedDailyStats,
 } from '../api';
 import {
   checkConnection,
@@ -69,22 +70,16 @@ function asUtc(secondsOrMillis: number): UTCTimestamp {
 
 function formatKrw(value: number): string {
   if (!Number.isFinite(value)) return '-';
-  if (Math.abs(value) >= 1000) {
+  if (Math.abs(value) >= 1_000_000) {
     return `${value.toLocaleString('ko-KR', { maximumFractionDigits: 2 })}원`;
-  }
-  if (Math.abs(value) >= 1) {
-    return `${value.toLocaleString('ko-KR', { maximumFractionDigits: 6 })}원`;
   }
   return `${value.toLocaleString('ko-KR', { maximumFractionDigits: 10 })}원`;
 }
 
 function formatPlain(value: number): string {
   if (!Number.isFinite(value)) return '-';
-  if (Math.abs(value) >= 1000) {
+  if (Math.abs(value) >= 1_000_000) {
     return value.toLocaleString('ko-KR', { maximumFractionDigits: 2 });
-  }
-  if (Math.abs(value) >= 1) {
-    return value.toLocaleString('ko-KR', { maximumFractionDigits: 6 });
   }
   return value.toLocaleString('ko-KR', { maximumFractionDigits: 10 });
 }
@@ -268,6 +263,12 @@ export default function ManualTraderWorkspace() {
     queryKey: ['guided-open-positions'],
     queryFn: () => guidedTradingApi.getOpenPositions(),
     refetchInterval: 5000,
+  });
+
+  const todayStatsQuery = useQuery<GuidedDailyStats>({
+    queryKey: ['guided-today-stats'],
+    queryFn: () => guidedTradingApi.getTodayStats(),
+    refetchInterval: 30000,
   });
 
   const startMutation = useMutation({
@@ -781,6 +782,23 @@ export default function ManualTraderWorkspace() {
           <h2>수동 코인 트레이딩 워크스페이스</h2>
           <p>코인 선택 → 차트 확인 → 추천 매수가/직접 가격으로 진입 → 자동 익절/손절/물타기 관리</p>
         </div>
+        {todayStatsQuery.data && (
+          <div className="today-stats-bar">
+            <span className="today-stats-label">오늘 수익</span>
+            <span className={`today-stats-pnl ${todayStatsQuery.data.totalPnlKrw >= 0 ? 'positive' : 'negative'}`}>
+              {todayStatsQuery.data.totalPnlKrw >= 0 ? '+' : ''}{todayStatsQuery.data.totalPnlKrw.toLocaleString('ko-KR', { maximumFractionDigits: 0 })}원
+            </span>
+            <span className="today-stats-detail">
+              {todayStatsQuery.data.totalTrades}건 ({todayStatsQuery.data.wins}승 {todayStatsQuery.data.losses}패)
+              {todayStatsQuery.data.totalTrades > 0 && ` · 승률 ${todayStatsQuery.data.winRate.toFixed(0)}%`}
+            </span>
+            {todayStatsQuery.data.openPositionCount > 0 && (
+              <span className="today-stats-invested">
+                투자중 {todayStatsQuery.data.totalInvestedKrw.toLocaleString('ko-KR', { maximumFractionDigits: 0 })}원
+              </span>
+            )}
+          </div>
+        )}
       </header>
 
       <div className="guided-grid">

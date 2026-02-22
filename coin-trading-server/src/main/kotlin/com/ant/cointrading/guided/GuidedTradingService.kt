@@ -32,7 +32,7 @@ class GuidedTradingService(
     private companion object {
         val OPEN_STATUSES = listOf(GuidedTradeEntity.STATUS_PENDING_ENTRY, GuidedTradeEntity.STATUS_OPEN)
         val D = BigDecimal.ZERO
-        const val DCA_MIN_INTERVAL_SECONDS = 90L
+        const val DCA_MIN_INTERVAL_SECONDS = 600L
     }
 
     fun getMarketBoard(
@@ -813,6 +813,40 @@ class GuidedTradingService(
         )
     }
 
+    fun getTodayStats(): GuidedDailyStats {
+        val todayStart = java.time.LocalDate.now(java.time.ZoneId.of("Asia/Seoul"))
+            .atStartOfDay(java.time.ZoneId.of("Asia/Seoul")).toInstant()
+        val closedToday = guidedTradeRepository.findByStatusAndClosedAtAfter(
+            GuidedTradeEntity.STATUS_CLOSED, todayStart
+        )
+        val wins = closedToday.count { it.realizedPnl > BigDecimal.ZERO }
+        val losses = closedToday.size - wins
+        val totalPnl = closedToday.sumOf { it.realizedPnl.toDouble() }
+        val avgPnlPercent = if (closedToday.isNotEmpty())
+            closedToday.map { it.realizedPnlPercent.toDouble() }.average() else 0.0
+        val openPositions = guidedTradeRepository.findByStatusIn(OPEN_STATUSES)
+        val totalInvested = openPositions.sumOf {
+            it.averageEntryPrice.multiply(it.remainingQuantity).toDouble()
+        }
+        return GuidedDailyStats(
+            totalTrades = closedToday.size,
+            wins = wins,
+            losses = losses,
+            totalPnlKrw = totalPnl,
+            avgPnlPercent = avgPnlPercent,
+            winRate = if (closedToday.isNotEmpty()) wins.toDouble() / closedToday.size * 100.0 else 0.0,
+            openPositionCount = openPositions.size,
+            totalInvestedKrw = totalInvested,
+            trades = closedToday.map { it.toClosedTradeView() }
+        )
+    }
+
+    fun getClosedTrades(limit: Int): List<GuidedClosedTradeView> {
+        return guidedTradeRepository.findByStatusOrderByClosedAtDesc(GuidedTradeEntity.STATUS_CLOSED)
+            .take(limit)
+            .map { it.toClosedTradeView() }
+    }
+
     private fun calibratePredictedWinRate(market: String, baseWinRate: Double): WinRateCalibration {
         val marketSamples = guidedTradeRepository
             .findTop80ByMarketAndStatusOrderByCreatedAtDesc(market, GuidedTradeEntity.STATUS_CLOSED)
@@ -1303,6 +1337,18 @@ data class GuidedRealtimeTickerView(
     val changeRate: Double?,
     val tradeVolume: Double?,
     val timestamp: Long?
+)
+
+data class GuidedDailyStats(
+    val totalTrades: Int,
+    val wins: Int,
+    val losses: Int,
+    val totalPnlKrw: Double,
+    val avgPnlPercent: Double,
+    val winRate: Double,
+    val openPositionCount: Int,
+    val totalInvestedKrw: Double,
+    val trades: List<GuidedClosedTradeView>
 )
 
 data class GuidedStartRequest(

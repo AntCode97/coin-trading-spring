@@ -37,5 +37,10 @@ class WebConfig(
                 "/api/manual-trading/**",
                 "/api/guided-trading/**"
             )
+            .excludePathPatterns(
+                "/api/guided-trading/stats/**",
+                "/api/guided-trading/trades/**",
+                "/api/guided-trading/positions/open"
+            )
     }
 }

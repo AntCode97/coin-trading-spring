@@ -2,6 +2,8 @@ package com.ant.cointrading.controller
 
 import com.ant.cointrading.guided.GuidedChartResponse
 import com.ant.cointrading.guided.GuidedAgentContextResponse
+import com.ant.cointrading.guided.GuidedClosedTradeView
+import com.ant.cointrading.guided.GuidedDailyStats
 import com.ant.cointrading.guided.GuidedMarketItem
 import com.ant.cointrading.guided.GuidedRecommendation
 import com.ant.cointrading.guided.GuidedMarketSortBy
@@ -91,6 +93,18 @@ class GuidedTradingController(
     @GetMapping("/positions/open")
     fun getOpenPositions(): List<GuidedTradeView> {
         return guidedTradingService.getAllOpenPositions()
+    }
+
+    @GetMapping("/stats/today")
+    fun getTodayStats(): GuidedDailyStats {
+        return guidedTradingService.getTodayStats()
+    }
+
+    @GetMapping("/trades/closed")
+    fun getClosedTrades(
+        @RequestParam(defaultValue = "50") limit: Int
+    ): List<GuidedClosedTradeView> {
+        return guidedTradingService.getClosedTrades(limit.coerceIn(1, 200))
     }
 
     @GetMapping("/agent/context")

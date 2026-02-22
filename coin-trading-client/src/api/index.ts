@@ -653,6 +653,18 @@ export interface GuidedChartResponse {
   orderSnapshot: GuidedOrderSnapshot;
 }
 
+export interface GuidedDailyStats {
+  totalTrades: number;
+  wins: number;
+  losses: number;
+  totalPnlKrw: number;
+  avgPnlPercent: number;
+  winRate: number;
+  openPositionCount: number;
+  totalInvestedKrw: number;
+  trades: GuidedClosedTradeView[];
+}
+
 export interface GuidedClosedTradeView {
   tradeId: number;
   market: string;
@@ -744,6 +756,12 @@ export const guidedTradingApi = {
 
   getOpenPositions: (): Promise<GuidedTradePosition[]> =>
     api.get('/guided-trading/positions/open').then((res) => res.data),
+
+  getTodayStats: (): Promise<GuidedDailyStats> =>
+    api.get('/guided-trading/stats/today').then((res) => res.data),
+
+  getClosedTrades: (limit = 50): Promise<GuidedClosedTradeView[]> =>
+    api.get('/guided-trading/trades/closed', { params: { limit } }).then((res) => res.data),
 
 };
 
