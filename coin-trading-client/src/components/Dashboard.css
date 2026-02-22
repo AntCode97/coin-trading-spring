@@ -1038,6 +1038,25 @@ body {
   color: #FCA5A5;
 }
 
+.toss-manual-close-btn {
+  margin-left: auto;
+  padding: 5px 12px;
+  border: 1px solid rgba(239, 68, 68, 0.4);
+  border-radius: var(--radius-sm);
+  background: rgba(239, 68, 68, 0.12);
+  color: #FCA5A5;
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.toss-manual-close-btn:hover {
+  background: rgba(239, 68, 68, 0.25);
+  border-color: rgba(239, 68, 68, 0.6);
+  color: #fff;
+}
+
 /* ====== APM (Active Position Manager) ====== */
 
 /* 레짐 배지 */

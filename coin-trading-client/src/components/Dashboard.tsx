@@ -1134,7 +1134,21 @@ export default function Dashboard() {
                                   ({positive ? '+' : ''}{position.pnlPercent.toFixed(2)}%)
                                 </span>
                               </div>
-                              <span className="toss-risk-chip warning">웹에서는 수동 매도 비활성화</span>
+                              <button
+                                type="button"
+                                className="toss-manual-close-btn"
+                                onClick={async () => {
+                                  if (!confirm(`${position.market} 포지션을 수동 청산하시겠습니까?`)) return;
+                                  try {
+                                    await dashboardApi.manualClose(position.market, position.strategy);
+                                    void refetch();
+                                  } catch (e) {
+                                    alert(e instanceof Error ? e.message : '청산 실패');
+                                  }
+                                }}
+                              >
+                                수동 청산
+                              </button>
                             </div>
                           </div>
                         </div>
