@@ -2511,6 +2511,99 @@ body {
   color: var(--text-primary);
 }
 
+/* 데스크톱 단타 기록 */
+.guided-dashboard-section {
+  margin-bottom: var(--space-lg);
+}
+
+.guided-stats-summary {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.guided-stats-pnl {
+  font-weight: 700;
+  font-size: 15px;
+}
+
+.guided-stats-pnl.positive { color: var(--color-profit); }
+.guided-stats-pnl.negative { color: var(--color-loss); }
+
+.guided-stats-detail {
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.guided-sub-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  margin: 12px 0 6px;
+  padding: 0 var(--space-lg);
+}
+
+.guided-open-positions,
+.guided-closed-trades {
+  padding-bottom: 8px;
+}
+
+.guided-position-row,
+.guided-trade-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px var(--space-lg);
+  font-size: 13px;
+  border-left: 3px solid transparent;
+}
+
+.guided-position-row.profit { border-left-color: var(--color-profit); }
+.guided-position-row.loss { border-left-color: var(--color-loss); }
+.guided-trade-row.profit { border-left-color: var(--color-profit); }
+.guided-trade-row.loss { border-left-color: var(--color-loss); }
+
+.guided-pos-market,
+.guided-trade-market {
+  font-weight: 600;
+  min-width: 50px;
+  color: var(--text-primary);
+}
+
+.guided-pos-price {
+  color: var(--text-secondary);
+  flex: 1;
+}
+
+.guided-pos-pnl,
+.guided-trade-pnl {
+  font-weight: 600;
+  min-width: 70px;
+  text-align: right;
+}
+
+.guided-pos-pnl.positive,
+.guided-trade-pnl.positive { color: var(--color-profit); }
+.guided-pos-pnl.negative,
+.guided-trade-pnl.negative { color: var(--color-loss); }
+
+.guided-pos-dca {
+  font-size: 11px;
+  color: var(--text-muted);
+  min-width: 55px;
+}
+
+.guided-trade-reason {
+  font-size: 11px;
+  color: var(--text-muted);
+  flex: 1;
+}
+
+.guided-trade-pnl small {
+  font-size: 11px;
+  opacity: 0.8;
+}
+
 .funding-arbitrage-panel {
   background: var(--bg-tertiary);
   border: 1px solid var(--border-default);

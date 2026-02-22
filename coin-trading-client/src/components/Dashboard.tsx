@@ -2,10 +2,14 @@ import { useMemo, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import {
   dashboardApi,
+  guidedTradingApi,
   systemControlApi,
   type ClosedTradeInfo,
   type FundingScanResult,
   type FundingStatus,
+  type GuidedClosedTradeView,
+  type GuidedDailyStats,
+  type GuidedTradePosition,
   type PositionInfo,
   type RiskThrottleStatus,
   type SuspendedStrategyInfo,
@@ -195,6 +199,25 @@ export default function Dashboard() {
     queryFn: () => systemControlApi.getRiskThrottleStatus(throttleMarket),
     enabled: systemControlExpanded,
     refetchInterval: systemControlExpanded ? 60000 : false,
+  });
+
+  // 데스크톱 단타 기록
+  const { data: guidedStats } = useQuery<GuidedDailyStats>({
+    queryKey: ['guided-today-stats'],
+    queryFn: () => guidedTradingApi.getTodayStats(),
+    refetchInterval: 30000,
+  });
+
+  const { data: guidedOpenPositions } = useQuery<GuidedTradePosition[]>({
+    queryKey: ['guided-open-positions'],
+    queryFn: () => guidedTradingApi.getOpenPositions(),
+    refetchInterval: 10000,
+  });
+
+  const { data: guidedClosedTrades } = useQuery<GuidedClosedTradeView[]>({
+    queryKey: ['guided-closed-trades'],
+    queryFn: () => guidedTradingApi.getClosedTrades(20),
+    refetchInterval: 30000,
   });
 
   // 거래 금액 설정
@@ -1263,6 +1286,67 @@ export default function Dashboard() {
             </div>
           </div>
         </div>
+
+        {/* 데스크톱 단타 기록 */}
+        {guidedStats && (guidedStats.totalTrades > 0 || (guidedOpenPositions && guidedOpenPositions.length > 0)) && (
+          <div className="guided-dashboard-section">
+            <div className="toss-card">
+              <div className="toss-card-header">
+                <div className="toss-card-title-section">
+                  <div className="toss-card-icon">🎯</div>
+                  <h2 className="toss-card-title">데스크톱 단타</h2>
+                </div>
+                <div className="guided-stats-summary">
+                  <span className={`guided-stats-pnl ${guidedStats.totalPnlKrw >= 0 ? 'positive' : 'negative'}`}>
+                    {guidedStats.totalPnlKrw >= 0 ? '+' : ''}{guidedStats.totalPnlKrw.toLocaleString('ko-KR', { maximumFractionDigits: 0 })}원
+                  </span>
+                  <span className="guided-stats-detail">
+                    {guidedStats.totalTrades}건 ({guidedStats.wins}승 {guidedStats.losses}패)
+                    {guidedStats.totalTrades > 0 && ` · ${guidedStats.winRate.toFixed(0)}%`}
+                  </span>
+                </div>
+              </div>
+
+              {guidedOpenPositions && guidedOpenPositions.length > 0 && (
+                <div className="guided-open-positions">
+                  <h3 className="guided-sub-title">열린 포지션</h3>
+                  {guidedOpenPositions.map((pos) => {
+                    const pnl = pos.unrealizedPnlPercent ?? 0;
+                    return (
+                      <div key={pos.tradeId} className={`guided-position-row ${pnl >= 0 ? 'profit' : 'loss'}`}>
+                        <span className="guided-pos-market">{pos.market.replace('KRW-', '')}</span>
+                        <span className="guided-pos-price">{pos.averageEntryPrice.toLocaleString()}</span>
+                        <span className={`guided-pos-pnl ${pnl >= 0 ? 'positive' : 'negative'}`}>
+                          {pnl >= 0 ? '+' : ''}{pnl.toFixed(2)}%
+                        </span>
+                        <span className="guided-pos-dca">DCA {pos.dcaCount}/{pos.maxDcaCount}</span>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+
+              {guidedClosedTrades && guidedClosedTrades.length > 0 && (
+                <div className="guided-closed-trades">
+                  <h3 className="guided-sub-title">최근 청산</h3>
+                  {guidedClosedTrades.slice(0, 10).map((trade) => {
+                    const isProfit = trade.realizedPnl > 0;
+                    return (
+                      <div key={trade.tradeId} className={`guided-trade-row ${isProfit ? 'profit' : 'loss'}`}>
+                        <span className="guided-trade-market">{trade.market.replace('KRW-', '')}</span>
+                        <span className="guided-trade-reason">{trade.exitReason ?? '-'}</span>
+                        <span className={`guided-trade-pnl ${isProfit ? 'positive' : 'negative'}`}>
+                          {isProfit ? '+' : ''}{trade.realizedPnl.toLocaleString('ko-KR', { maximumFractionDigits: 0 })}원
+                          <small> ({isProfit ? '+' : ''}{trade.realizedPnlPercent.toFixed(2)}%)</small>
+                        </span>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          </div>
+        )}
 
         {fundingExpanded && fundingStatus && (
           <div className="funding-arbitrage-panel">

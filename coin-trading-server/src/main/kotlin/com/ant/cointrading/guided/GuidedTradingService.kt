@@ -304,10 +304,53 @@ class GuidedTradingService(
 
     @Transactional
     fun stopAutoTrading(market: String): GuidedTradeView {
-        val trade = getActiveTrade(market) ?: error("진행 중인 포지션이 없습니다.")
-        closeAllByMarket(trade, "MANUAL_STOP")
-        val current = bithumbPublicApi.getCurrentPrice(trade.market)?.firstOrNull()?.tradePrice?.toDouble()
-        return trade.toView(current)
+        val allTrades = guidedTradeRepository.findByMarketAndStatusIn(market, OPEN_STATUSES)
+        require(allTrades.isNotEmpty()) { "진행 중인 포지션이 없습니다." }
+
+        val actualQty = getActualHoldingQuantity(market)
+        val currentPrice = bithumbPublicApi.getCurrentPrice(market)?.firstOrNull()?.tradePrice ?: allTrades.first().averageEntryPrice
+
+        if (actualQty > BigDecimal.ZERO) {
+            val estimatedValue = actualQty.multiply(currentPrice)
+            if (estimatedValue >= BigDecimal("5000")) {
+                try {
+                    val sell = bithumbPrivateApi.sellMarketOrder(market, actualQty)
+                    Thread.sleep(300)
+                    val sellInfo = bithumbPrivateApi.getOrder(sell.uuid) ?: sell
+                    val execPrice = sellInfo.price ?: currentPrice
+                    val executedQty = sellInfo.executedVolume ?: actualQty
+
+                    for (trade in allTrades) {
+                        val tradeShare = if (executedQty > BigDecimal.ZERO && trade.remainingQuantity > BigDecimal.ZERO) {
+                            trade.remainingQuantity.min(executedQty)
+                        } else {
+                            trade.remainingQuantity
+                        }
+                        if (tradeShare > BigDecimal.ZERO) {
+                            applyExitFill(trade, tradeShare, execPrice, "MANUAL_STOP")
+                        }
+                    }
+                } catch (e: Exception) {
+                    log.error("[$market] 전량 매도 실패: ${e.message}", e)
+                    throw IllegalStateException("[$market] 매도 주문 실패 — 빗썸에서 직접 매도하세요. 원인: ${e.message}")
+                }
+            } else {
+                log.warn("[$market] 잔여 수량 매도 불가 (추정금액 ${estimatedValue.toPlainString()}원 < 5,000원). DB 강제 종료.")
+            }
+        }
+
+        for (trade in allTrades) {
+            trade.remainingQuantity = BigDecimal.ZERO
+            trade.status = GuidedTradeEntity.STATUS_CLOSED
+            trade.closedAt = Instant.now()
+            trade.exitReason = "MANUAL_STOP"
+            trade.lastAction = "CLOSED_MANUAL_STOP"
+            guidedTradeRepository.save(trade)
+            appendEvent(trade.id!!, "CLOSE_ALL", currentPrice, null, "수동 전체 청산")
+        }
+
+        val primary = allTrades.first()
+        return primary.toView(currentPrice.toDouble())
     }
 
     @Transactional
@@ -599,33 +642,37 @@ class GuidedTradingService(
             return
         }
 
-        // 빗썸 최소 주문금액(5,000원) 미달 시 매도 불가 → DB 강제 종료
         val currentPrice = bithumbPublicApi.getCurrentPrice(trade.market)?.firstOrNull()?.tradePrice ?: trade.averageEntryPrice
-        val estimatedValue = trade.remainingQuantity.multiply(currentPrice)
+        val actualQty = getActualHoldingQuantity(trade.market)
+        val sellQty = if (actualQty > BigDecimal.ZERO) actualQty else trade.remainingQuantity
+
+        val estimatedValue = sellQty.multiply(currentPrice)
         if (estimatedValue < BigDecimal("5000")) {
-            log.warn("[${trade.market}] 잔여 수량 ${trade.remainingQuantity} 매도 불가 (추정금액 ${estimatedValue.toPlainString()}원 < 5,000원). DB 강제 종료.")
+            log.warn("[${trade.market}] 잔여 수량 ${sellQty} 매도 불가 (추정금액 ${estimatedValue.toPlainString()}원 < 5,000원). DB 강제 종료.")
             trade.status = GuidedTradeEntity.STATUS_CLOSED
             trade.closedAt = Instant.now()
             trade.exitReason = "${reason}_BELOW_MIN_ORDER"
             trade.lastAction = "CLOSE_BELOW_MIN_ORDER"
+            trade.remainingQuantity = BigDecimal.ZERO
             guidedTradeRepository.save(trade)
-            appendEvent(trade.id!!, "CLOSE_BELOW_MIN_ORDER", currentPrice, trade.remainingQuantity, "최소 주문금액 미달로 DB 종료 (${estimatedValue.toPlainString()}원)")
+            appendEvent(trade.id!!, "CLOSE_BELOW_MIN_ORDER", currentPrice, sellQty, "최소 주문금액 미달로 DB 종료 (${estimatedValue.toPlainString()}원)")
             return
         }
 
-        val requestedQty = trade.remainingQuantity
         val sell = try {
-            bithumbPrivateApi.sellMarketOrder(trade.market, requestedQty)
+            bithumbPrivateApi.sellMarketOrder(trade.market, sellQty)
         } catch (e: Exception) {
             log.error("[${trade.market}] 매도 주문 실패: ${e.message}", e)
             trade.lastAction = "SELL_FAILED: ${e.message?.take(80)}"
             guidedTradeRepository.save(trade)
-            appendEvent(trade.id!!, "SELL_FAILED", currentPrice, requestedQty, "매도 실패: ${e.message?.take(120)}")
+            appendEvent(trade.id!!, "SELL_FAILED", currentPrice, sellQty, "매도 실패: ${e.message?.take(120)}")
             throw IllegalStateException("[${trade.market}] 매도 주문 실패 — 빗썸에서 직접 매도하세요. 원인: ${e.message}")
         }
+
+        Thread.sleep(300)
         val sellInfo = bithumbPrivateApi.getOrder(sell.uuid) ?: sell
-        val executedQty = (sellInfo.executedVolume ?: requestedQty).min(requestedQty)
-        val execPrice = sellInfo.price ?: bithumbPublicApi.getCurrentPrice(trade.market)?.firstOrNull()?.tradePrice ?: trade.averageEntryPrice
+        val executedQty = (sellInfo.executedVolume ?: sellQty).min(sellQty)
+        val execPrice = sellInfo.price ?: currentPrice
 
         if (executedQty <= BigDecimal.ZERO) {
             trade.lastExitOrderId = sell.uuid
@@ -635,29 +682,26 @@ class GuidedTradingService(
             return
         }
 
-        applyExitFill(trade, executedQty, execPrice, reason)
-
+        applyExitFill(trade, executedQty.min(trade.remainingQuantity), execPrice, reason)
         trade.lastExitOrderId = sell.uuid
-        if (trade.remainingQuantity > BigDecimal.ZERO) {
+
+        // 매도 후 실제 잔고 재확인하여 DB 동기화
+        val remainingActual = getActualHoldingQuantity(trade.market)
+        if (remainingActual <= BigDecimal.ZERO || trade.remainingQuantity <= BigDecimal.ZERO) {
+            trade.remainingQuantity = BigDecimal.ZERO
+            trade.status = GuidedTradeEntity.STATUS_CLOSED
+            trade.closedAt = Instant.now()
+            trade.exitReason = reason
+            trade.lastAction = "CLOSED_$reason"
+            guidedTradeRepository.save(trade)
+            appendEvent(trade.id!!, "CLOSE_ALL", execPrice, executedQty, "자동 청산: $reason")
+        } else {
+            trade.remainingQuantity = remainingActual
             trade.status = GuidedTradeEntity.STATUS_OPEN
             trade.lastAction = "PARTIAL_CLOSE_$reason"
             guidedTradeRepository.save(trade)
-            appendEvent(
-                trade.id!!,
-                "PARTIAL_CLOSE",
-                execPrice,
-                executedQty,
-                "부분 청산 (${executedQty.stripTrailingZeros().toPlainString()}/${requestedQty.stripTrailingZeros().toPlainString()}): $reason"
-            )
-            return
+            appendEvent(trade.id!!, "PARTIAL_CLOSE", execPrice, executedQty, "부분 청산: $reason (잔여 잔고 동기화)")
         }
-
-        trade.status = GuidedTradeEntity.STATUS_CLOSED
-        trade.closedAt = Instant.now()
-        trade.exitReason = reason
-        trade.lastAction = "CLOSED_$reason"
-        guidedTradeRepository.save(trade)
-        appendEvent(trade.id!!, "CLOSE_ALL", execPrice, executedQty, "자동 청산: $reason")
     }
 
     private fun applyExitFill(trade: GuidedTradeEntity, quantity: BigDecimal, price: BigDecimal, reason: String) {
@@ -847,6 +891,46 @@ class GuidedTradingService(
             totalInvestedKrw = totalInvested,
             trades = closedToday.map { it.toClosedTradeView() }
         )
+    }
+
+    @Transactional
+    fun syncPositions(): GuidedSyncResult {
+        val actions = mutableListOf<GuidedSyncAction>()
+        val openTrades = guidedTradeRepository.findByStatusIn(OPEN_STATUSES)
+        var fixedCount = 0
+
+        for (trade in openTrades) {
+            val actualQty = getActualHoldingQuantity(trade.market)
+
+            when {
+                actualQty < BigDecimal("0.0000001") -> {
+                    trade.remainingQuantity = BigDecimal.ZERO
+                    trade.status = GuidedTradeEntity.STATUS_CLOSED
+                    trade.closedAt = Instant.now()
+                    trade.exitReason = "SYNC_MANUAL_SELL"
+                    trade.lastAction = "SYNC_CLOSED"
+                    guidedTradeRepository.save(trade)
+                    appendEvent(trade.id!!, "SYNC_CLOSE", null, null, "잔고 없음 - 외부 매도 감지")
+                    actions.add(GuidedSyncAction("CLOSED", trade.market, "잔고 없음 - 외부 매도 감지 (trade #${trade.id})"))
+                    fixedCount++
+                }
+                (actualQty.subtract(trade.remainingQuantity)).abs() > BigDecimal("0.0001") -> {
+                    val oldQty = trade.remainingQuantity
+                    trade.remainingQuantity = actualQty
+                    trade.lastAction = "SYNC_ADJUSTED"
+                    guidedTradeRepository.save(trade)
+                    appendEvent(trade.id!!, "SYNC_ADJUST", null, actualQty, "수량 보정: $oldQty -> $actualQty")
+                    actions.add(GuidedSyncAction("ADJUSTED", trade.market, "수량 보정: $oldQty -> $actualQty (trade #${trade.id})"))
+                    fixedCount++
+                }
+                else -> {
+                    actions.add(GuidedSyncAction("OK", trade.market, "정상 (trade #${trade.id})"))
+                }
+            }
+        }
+
+        val message = if (fixedCount > 0) "${fixedCount}건 동기화 완료" else "모든 포지션이 정상입니다"
+        return GuidedSyncResult(success = true, message = message, actions = actions, fixedCount = fixedCount)
     }
 
     fun getClosedTrades(limit: Int): List<GuidedClosedTradeView> {
@@ -1371,6 +1455,19 @@ data class GuidedStartRequest(
     val maxDcaCount: Int? = null,
     val dcaStepPercent: Double? = null,
     val halfTakeProfitRatio: Double? = null
+)
+
+data class GuidedSyncResult(
+    val success: Boolean,
+    val message: String,
+    val actions: List<GuidedSyncAction>,
+    val fixedCount: Int
+)
+
+data class GuidedSyncAction(
+    val type: String,
+    val market: String,
+    val detail: String
 )
 
 private fun GuidedTradeEntity.toClosedTradeView(): GuidedClosedTradeView {

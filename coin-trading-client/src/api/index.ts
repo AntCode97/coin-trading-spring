@@ -710,6 +710,19 @@ export interface GuidedStartRequest {
   halfTakeProfitRatio?: number;
 }
 
+export interface GuidedSyncResult {
+  success: boolean;
+  message: string;
+  actions: GuidedSyncAction[];
+  fixedCount: number;
+}
+
+export interface GuidedSyncAction {
+  type: string;
+  market: string;
+  detail: string;
+}
+
 export const guidedTradingApi = {
   getMarkets: (
     sortBy: GuidedMarketSortBy = 'TURNOVER',
@@ -762,6 +775,9 @@ export const guidedTradingApi = {
 
   getClosedTrades: (limit = 50): Promise<GuidedClosedTradeView[]> =>
     api.get('/guided-trading/trades/closed', { params: { limit } }).then((res) => res.data),
+
+  syncPositions: (): Promise<GuidedSyncResult> =>
+    api.post('/guided-trading/sync').then((res) => res.data),
 
 };
 

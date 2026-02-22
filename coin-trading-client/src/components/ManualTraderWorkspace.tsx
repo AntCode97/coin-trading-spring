@@ -296,6 +296,19 @@ export default function ManualTraderWorkspace() {
     },
   });
 
+  const syncMutation = useMutation({
+    mutationFn: () => guidedTradingApi.syncPositions(),
+    onSuccess: (result) => {
+      setStatusMessage(result.message);
+      void todayStatsQuery.refetch();
+      void openPositionsQuery.refetch();
+      void chartQuery.refetch();
+    },
+    onError: (e: unknown) => {
+      setStatusMessage(e instanceof Error ? e.message : '동기화 실패');
+    },
+  });
+
   const recommendation = chartQuery.data?.recommendation;
   const activePosition = chartQuery.data?.activePosition;
   const events = chartQuery.data?.events ?? [];
@@ -800,6 +813,14 @@ export default function ManualTraderWorkspace() {
                 투자중 {todayStatsQuery.data.totalInvestedKrw.toLocaleString('ko-KR', { maximumFractionDigits: 0 })}원
               </span>
             )}
+            <button
+              className="today-stats-sync-btn"
+              onClick={() => syncMutation.mutate()}
+              disabled={syncMutation.isPending}
+              title="DB와 실제 빗썸 잔고를 동기화합니다"
+            >
+              {syncMutation.isPending ? '...' : 'Sync'}
+            </button>
           </div>
         )}
       </header>

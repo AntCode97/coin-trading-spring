@@ -10,6 +10,7 @@ import com.ant.cointrading.guided.GuidedMarketSortBy
 import com.ant.cointrading.guided.GuidedRealtimeTickerView
 import com.ant.cointrading.guided.GuidedSortDirection
 import com.ant.cointrading.guided.GuidedStartRequest
+import com.ant.cointrading.guided.GuidedSyncResult
 import com.ant.cointrading.guided.GuidedTradeView
 import com.ant.cointrading.guided.GuidedTradingService
 import org.springframework.http.HttpStatus
@@ -111,6 +112,11 @@ class GuidedTradingController(
         @RequestParam(defaultValue = "50") limit: Int
     ): List<GuidedClosedTradeView> {
         return guidedTradingService.getClosedTrades(limit.coerceIn(1, 200))
+    }
+
+    @PostMapping("/sync")
+    fun syncPositions(): GuidedSyncResult {
+        return guidedTradingService.syncPositions()
     }
 
     @GetMapping("/agent/context")
