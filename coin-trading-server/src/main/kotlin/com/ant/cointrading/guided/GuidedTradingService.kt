@@ -354,6 +354,28 @@ class GuidedTradingService(
     }
 
     @Transactional
+    fun cancelPendingEntry(market: String): GuidedTradeView? {
+        val trade = guidedTradeRepository.findTopByMarketAndStatusInOrderByCreatedAtDesc(
+            market, listOf(GuidedTradeEntity.STATUS_PENDING_ENTRY)
+        ) ?: return null
+
+        trade.entryOrderId?.let { orderId ->
+            runCatching { bithumbPrivateApi.cancelOrder(orderId) }
+                .onFailure { log.warn("[$market] 미체결 주문 취소 실패 (orderId=$orderId): ${it.message}") }
+        }
+
+        trade.status = GuidedTradeEntity.STATUS_CANCELLED
+        trade.closedAt = Instant.now()
+        trade.exitReason = "PLAN_CANCEL_PENDING"
+        trade.lastAction = "CANCELLED_PENDING"
+        guidedTradeRepository.save(trade)
+        appendEvent(trade.id!!, "ENTRY_CANCELLED", null, null, "플랜 실행: 미체결 진입 주문 취소")
+
+        val currentPrice = bithumbPublicApi.getCurrentPrice(market)?.firstOrNull()?.tradePrice?.toDouble() ?: 0.0
+        return trade.toView(currentPrice)
+    }
+
+    @Transactional
     fun partialTakeProfit(market: String, ratio: Double = 0.5): GuidedTradeView {
         val trade = getActiveTrade(market) ?: error("진행 중인 포지션이 없습니다.")
         require(trade.remainingQuantity > BigDecimal.ZERO) { "청산 가능한 수량이 없습니다." }

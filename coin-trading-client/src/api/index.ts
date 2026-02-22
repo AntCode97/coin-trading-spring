@@ -759,6 +759,9 @@ export const guidedTradingApi = {
   partialTakeProfit: (market: string, ratio = 0.5): Promise<GuidedTradePosition> =>
     api.post('/guided-trading/partial-take-profit', null, { params: { market, ratio } }).then((res) => res.data),
 
+  cancelPending: (market: string): Promise<GuidedTradePosition | null> =>
+    api.post('/guided-trading/cancel-pending', null, { params: { market } }).then((res) => res.data),
+
   getAgentContext: (
     market: string,
     interval = 'minute30',

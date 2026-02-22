@@ -80,6 +80,11 @@ class GuidedTradingController(
         }
     }
 
+    @PostMapping("/cancel-pending")
+    fun cancelPendingEntry(@RequestParam market: String): GuidedTradeView? {
+        return guidedTradingService.cancelPendingEntry(market.uppercase())
+    }
+
     @PostMapping("/partial-take-profit")
     fun partialTakeProfit(
         @RequestParam market: String,

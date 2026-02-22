@@ -40,6 +40,8 @@ import {
   type CodexModelId,
   type LlmConnectionStatus,
 } from '../lib/llmService';
+import { usePlanExecution } from '../lib/usePlanExecution';
+import { PlanPanel } from './PlanPanel';
 import './ManualTraderWorkspace.css';
 
 const KRW_FORMATTER = new Intl.NumberFormat('ko-KR');
@@ -322,6 +324,16 @@ export default function ManualTraderWorkspace() {
   const events = chartQuery.data?.events ?? [];
   const orderbook = chartQuery.data?.orderbook;
 
+  const { plan, currentPrice: planCurrentPrice, startPlan, cancelPlan, dismissPlan, isRunning: isPlanRunning } =
+    usePlanExecution({
+      market: selectedMarket,
+      activePosition,
+      recommendation,
+      amountKrw,
+      customStopLoss: typeof customStopLoss === 'number' ? customStopLoss : null,
+      customTakeProfit: typeof customTakeProfit === 'number' ? customTakeProfit : null,
+      onComplete: () => void chartQuery.refetch(),
+    });
 
   const filteredMarkets = useMemo(() => {
     const keyword = search.trim().toLowerCase();
@@ -606,7 +618,7 @@ export default function ManualTraderWorkspace() {
     setStatusMessage(`관망/대기 액션(${action.title}) 확인.`);
   };
 
-  const executeAgentAction = async (action: AgentAction) => {
+  const executeAgentAction = (action: AgentAction) => {
     const normalizedType = action.type.toUpperCase();
     const urgency = action.urgency.toUpperCase();
     const requiresConfirm = urgency === 'HIGH' || normalizedType === 'FULL_EXIT' || normalizedType === 'PARTIAL_TP';
@@ -616,35 +628,8 @@ export default function ManualTraderWorkspace() {
       if (!ok) return;
     }
 
-    if (normalizedType === 'FULL_EXIT') {
-      if (!activePosition) { setStatusMessage('청산할 포지션 없음.'); return; }
-      stopMutation.mutate();
-      return;
-    }
-    if (normalizedType === 'PARTIAL_TP') {
-      if (!activePosition) { setStatusMessage('익절할 포지션 없음.'); return; }
-      const ratio = typeof action.sizePercent === 'number' ? Math.max(0.1, Math.min(0.9, action.sizePercent / 100)) : 0.5;
-      try {
-        await guidedTradingApi.partialTakeProfit(selectedMarket, ratio);
-        void chartQuery.refetch();
-        setStatusMessage(`부분 익절 ${Math.round(ratio * 100)}% 실행.`);
-      } catch (e) {
-        setStatusMessage(e instanceof Error ? e.message : '부분 익절 실패');
-      }
-      return;
-    }
-    if (normalizedType === 'ADD' || normalizedType === 'WAIT_RETEST') {
-      applyAgentActionToOrderForm(action);
-      if (!activePosition && recommendation) {
-        const payload: GuidedStartRequest = {
-          market: selectedMarket, amountKrw, orderType,
-          limitPrice: orderType === 'LIMIT' && typeof limitPrice === 'number' ? limitPrice : undefined,
-          stopLossPrice: typeof customStopLoss === 'number' ? customStopLoss : recommendation.stopLossPrice,
-          takeProfitPrice: typeof customTakeProfit === 'number' ? customTakeProfit : recommendation.takeProfitPrice,
-        };
-        startMutation.mutate(payload);
-      }
-    }
+    startPlan(action);
+    setActiveTab('order');
   };
 
   const handleStart = () => {
@@ -1001,7 +986,7 @@ export default function ManualTraderWorkspace() {
               className={activeTab === 'order' ? 'active' : ''}
               onClick={() => setActiveTab('order')}
             >
-              주문/포지션
+              주문/포지션{isPlanRunning && <span className="plan-running-dot" />}
             </button>
             <button
               type="button"
@@ -1038,8 +1023,18 @@ export default function ManualTraderWorkspace() {
                 </select>
               </div>
 
+              {/* PlanPanel — 플랜 실행 중이면 주문 패널 대신 표시 */}
+              {plan && (
+                <PlanPanel
+                  plan={plan}
+                  currentPrice={planCurrentPrice}
+                  onCancel={cancelPlan}
+                  onDismiss={dismissPlan}
+                />
+              )}
+
               {/* State A: NONE — 포지션 없음 */}
-              {positionState === 'NONE' && recommendation && (
+              {!plan && positionState === 'NONE' && recommendation && (
                 <div className="state-panel state-none">
                   <div className="state-header">
                     <span>{recommendation.confidence >= 0.5 ? '매수 유리' : '관망'}</span>
@@ -1149,7 +1144,7 @@ export default function ManualTraderWorkspace() {
               )}
 
               {/* State B: PENDING — 미체결 */}
-              {positionState === 'PENDING' && activePosition && (
+              {!plan && positionState === 'PENDING' && activePosition && (
                 <div className="state-panel state-pending">
                   <div className="state-header pending-header">
                     <span className="pending-dot" />
@@ -1172,7 +1167,7 @@ export default function ManualTraderWorkspace() {
               )}
 
               {/* State C/D: OPEN / DANGER */}
-              {(positionState === 'OPEN' || positionState === 'DANGER') && activePosition && (
+              {!plan && (positionState === 'OPEN' || positionState === 'DANGER') && activePosition && (
                 <div className={`state-panel state-open ${positionState === 'DANGER' ? 'danger' : ''}`}>
                   <div className="state-header">
                     <span><Tip label="미실현 손익">미실현 손익</Tip></span>
@@ -1335,7 +1330,7 @@ export default function ManualTraderWorkspace() {
                               </small>
                               <div className="guided-chat-action-buttons">
                                 <button type="button" onClick={() => applyAgentActionToOrderForm(action)}>주문 반영</button>
-                                <button type="button" onClick={() => void executeAgentAction(action)}>즉시 실행</button>
+                                <button type="button" onClick={() => executeAgentAction(action)} disabled={isPlanRunning}>플랜 실행</button>
                               </div>
                             </div>
                           ))}

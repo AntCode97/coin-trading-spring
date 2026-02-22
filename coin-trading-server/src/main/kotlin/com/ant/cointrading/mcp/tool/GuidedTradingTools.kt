@@ -86,6 +86,14 @@ class GuidedTradingTools(
         return guidedTradingService.getActivePosition(market.uppercase())
     }
 
+    @McpTool(description = "수동 트레이딩에서 미체결 대기 중인 진입 주문을 취소합니다.")
+    fun cancelGuidedPendingEntry(
+        @McpToolParam(description = "마켓 코드 (예: KRW-BTC)")
+        market: String
+    ): GuidedTradeView? {
+        return guidedTradingService.cancelPendingEntry(market.uppercase())
+    }
+
     @McpTool(description = "수동 트레이딩 워크스페이스용 차트/호가/주문 스냅샷을 조회합니다.")
     @Tool(description = "수동 트레이딩 워크스페이스용 차트/호가/주문 스냅샷을 조회합니다.")
     fun getGuidedChartSnapshot(
