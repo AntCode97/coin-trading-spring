@@ -441,6 +441,12 @@
   color: #9fadbf;
 }
 
+.guided-copilot-connection-grid {
+  margin-top: 8px;
+  display: grid;
+  gap: 6px;
+}
+
 .guided-copilot-prompt input {
   background: #0f1520;
   border: 1px solid #2a3445;

@@ -1,5 +1,6 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useMutation, useQuery } from '@tanstack/react-query';
+import html2canvas from 'html2canvas';
 import {
   CandlestickSeries,
   ColorType,
@@ -15,7 +16,7 @@ import {
 } from 'lightweight-charts';
 import {
   guidedTradingApi,
-  type GuidedCopilotResponse,
+  type GuidedAgentContextResponse,
   type GuidedChartResponse,
   type GuidedCandle,
   type GuidedMarketItem,
@@ -24,6 +25,16 @@ import {
   type GuidedRealtimeTicker,
   type GuidedStartRequest,
 } from '../api';
+import {
+  clearSessionId,
+  ensureSessionId,
+  getConnectionConfig,
+  saveConnectionConfig,
+  submitAgentPrompt,
+  waitForAssistantAdvice,
+  type AgentAdvice,
+  type AgentAction,
+} from '../lib/opencodeSession';
 import './ManualTraderWorkspace.css';
 
 const KRW_FORMATTER = new Intl.NumberFormat('ko-KR');
@@ -116,9 +127,16 @@ export default function ManualTraderWorkspace() {
   const [customStopLoss, setCustomStopLoss] = useState<number | ''>('');
   const [customTakeProfit, setCustomTakeProfit] = useState<number | ''>('');
   const [statusMessage, setStatusMessage] = useState<string>('');
-  const [copilotProvider, setCopilotProvider] = useState<'OPENAI' | 'ZAI'>('OPENAI');
-  const [copilotPrompt, setCopilotPrompt] = useState<string>('');
-  const [copilotAutoRefresh, setCopilotAutoRefresh] = useState<boolean>(true);
+  const [agentPrompt, setAgentPrompt] = useState<string>('');
+  const [agentAutoRefresh, setAgentAutoRefresh] = useState<boolean>(true);
+  const [includeChartScreenshot, setIncludeChartScreenshot] = useState<boolean>(false);
+  const [agentSessionId, setAgentSessionId] = useState<string>('');
+  const [agentAdvice, setAgentAdvice] = useState<AgentAdvice | null>(null);
+  const [agentBusy, setAgentBusy] = useState<boolean>(false);
+  const [agentError, setAgentError] = useState<string>('');
+  const [opencodeBaseUrl, setOpencodeBaseUrl] = useState<string>(() => getConnectionConfig().baseUrl);
+  const [opencodeBasicAuth, setOpencodeBasicAuth] = useState<string>(() => getConnectionConfig().basicAuth ?? '');
+  const [opencodeDirectory, setOpencodeDirectory] = useState<string>(() => getConnectionConfig().directory ?? '');
 
   const chartContainerRef = useRef<HTMLDivElement | null>(null);
   const chartRef = useRef<IChartApi | null>(null);
@@ -145,17 +163,11 @@ export default function ManualTraderWorkspace() {
     refetchInterval: 1000,
   });
 
-  const copilotQuery = useQuery<GuidedCopilotResponse>({
-    queryKey: ['guided-copilot', selectedMarket, interval, copilotProvider, copilotPrompt],
-    queryFn: () => guidedTradingApi.getCopilotAnalysis({
-      market: selectedMarket,
-      interval,
-      count: interval === 'tick' ? 300 : 120,
-      provider: copilotProvider,
-      userPrompt: copilotPrompt.trim().length > 0 ? copilotPrompt.trim() : undefined,
-    }),
-    enabled: Boolean(chartQuery.data),
-    refetchInterval: copilotAutoRefresh ? 7000 : false,
+  const agentContextQuery = useQuery<GuidedAgentContextResponse>({
+    queryKey: ['guided-agent-context', selectedMarket, interval],
+    queryFn: () => guidedTradingApi.getAgentContext(selectedMarket, interval, interval === 'tick' ? 300 : 120, 20),
+    enabled: true,
+    refetchInterval: agentAutoRefresh ? 7000 : false,
   });
 
   const startMutation = useMutation({
@@ -185,7 +197,7 @@ export default function ManualTraderWorkspace() {
   const events = chartQuery.data?.events ?? [];
   const orderbook = chartQuery.data?.orderbook;
   const orderSnapshot = chartQuery.data?.orderSnapshot;
-  const copilot = copilotQuery.data;
+  const agentContext = agentContextQuery.data;
 
   const filteredMarkets = useMemo(() => {
     const keyword = search.trim().toLowerCase();
@@ -416,6 +428,100 @@ export default function ManualTraderWorkspace() {
     setStatusMessage('추천 매수가를 지정가에 적용했습니다.');
   };
 
+  const handleSaveOpencodeConfig = () => {
+    saveConnectionConfig({
+      baseUrl: opencodeBaseUrl,
+      basicAuth: opencodeBasicAuth,
+      directory: opencodeDirectory,
+    });
+    clearSessionId();
+    setAgentSessionId('');
+    setStatusMessage('OpenCode 연결 설정을 저장하고 세션을 초기화했습니다.');
+  };
+
+  const applyAgentActionToOrderForm = (action: AgentAction) => {
+    const normalizedType = action.type.toUpperCase();
+    if (normalizedType === 'ADD' || normalizedType === 'WAIT_RETEST') {
+      setOrderType('LIMIT');
+      if (typeof action.targetPrice === 'number' && Number.isFinite(action.targetPrice)) {
+        setLimitPrice(action.targetPrice);
+      }
+      if (typeof action.sizePercent === 'number' && Number.isFinite(action.sizePercent)) {
+        const adjusted = Math.max(5100, Math.round((amountKrw * action.sizePercent) / 100));
+        setAmountKrw(adjusted);
+      }
+      setStatusMessage(`에이전트 액션(${action.title})을 주문 폼에 반영했습니다.`);
+      return;
+    }
+
+    if (normalizedType === 'PARTIAL_TP') {
+      if (typeof action.targetPrice === 'number' && Number.isFinite(action.targetPrice)) {
+        setCustomTakeProfit(action.targetPrice);
+      }
+      setStatusMessage(`부분 익절 가이드(${action.title})를 익절가에 반영했습니다.`);
+      return;
+    }
+
+    if (normalizedType === 'FULL_EXIT') {
+      if (typeof action.targetPrice === 'number' && Number.isFinite(action.targetPrice)) {
+        setCustomTakeProfit(action.targetPrice);
+      }
+      setStatusMessage(`전량 청산 가이드(${action.title})를 확인하세요. 즉시 청산은 포지션 정지 버튼을 사용하세요.`);
+      return;
+    }
+
+    setStatusMessage(`관망/대기 액션(${action.title})을 확인했습니다.`);
+  };
+
+  const executeAgentAction = (action: AgentAction) => {
+    const normalizedType = action.type.toUpperCase();
+
+    if (normalizedType === 'FULL_EXIT') {
+      if (!activePosition) {
+        setStatusMessage('청산할 활성 포지션이 없습니다.');
+        return;
+      }
+      stopMutation.mutate();
+      setStatusMessage(`에이전트 액션(${action.title})에 따라 포지션 정지/청산을 실행합니다.`);
+      return;
+    }
+
+    if (normalizedType === 'PARTIAL_TP') {
+      applyAgentActionToOrderForm(action);
+      setStatusMessage('부분 익절은 현재 자동 엔진 API 특성상 즉시 실행 대신 익절가 반영으로 처리했습니다.');
+      return;
+    }
+
+    if (normalizedType === 'ADD' || normalizedType === 'WAIT_RETEST') {
+      if (activePosition) {
+        applyAgentActionToOrderForm(action);
+        setStatusMessage('현재 API는 추가 매수를 직접 지원하지 않아 주문 폼 반영으로 처리했습니다.');
+        return;
+      }
+
+      applyAgentActionToOrderForm(action);
+      const recommendationRef = recommendation;
+      if (!recommendationRef) {
+        setStatusMessage('추천 정보가 없어 즉시 실행할 수 없습니다.');
+        return;
+      }
+
+      const payload: GuidedStartRequest = {
+        market: selectedMarket,
+        amountKrw,
+        orderType,
+        limitPrice: orderType === 'LIMIT' && typeof limitPrice === 'number' ? limitPrice : undefined,
+        stopLossPrice: typeof customStopLoss === 'number' ? customStopLoss : recommendationRef.stopLossPrice,
+        takeProfitPrice: typeof customTakeProfit === 'number' ? customTakeProfit : recommendationRef.takeProfitPrice,
+      };
+      startMutation.mutate(payload);
+      setStatusMessage(`에이전트 액션(${action.title})을 즉시 실행했습니다.`);
+      return;
+    }
+
+    setStatusMessage(`액션(${action.title})은 실행 가능한 자동화 타입이 아니어서 반영만 수행합니다.`);
+  };
+
   const handleStart = () => {
     if (!recommendation) return;
     const payload: GuidedStartRequest = {
@@ -428,6 +534,105 @@ export default function ManualTraderWorkspace() {
     };
     startMutation.mutate(payload);
   };
+
+  const buildAgentPrompt = (context: GuidedAgentContextResponse, userPrompt: string): string => {
+    const slicedCandles = context.chart.candles.slice(-120);
+    const payload = {
+      market: context.market,
+      generatedAt: context.generatedAt,
+      recommendation: context.chart.recommendation,
+      activePosition: context.chart.activePosition,
+      events: context.chart.events.slice(-20),
+      orderbook: context.chart.orderbook,
+      orderSnapshot: context.chart.orderSnapshot,
+      recentClosedTrades: context.recentClosedTrades,
+      performance: context.performance,
+      candles: slicedCandles,
+    };
+
+    return [
+      '너는 수동 코인 트레이딩 보조 에이전트다.',
+      '아래 JSON 컨텍스트를 분석해서 현재 시점 조언을 제공해라.',
+      '추가 데이터가 필요하면 도구 호출(webfetch)이 가능할 때 다음 Spring API를 조회해라:',
+      `- GET http://localhost:8080/api/guided-trading/agent/context?market=${encodeURIComponent(context.market)}&interval=${encodeURIComponent(context.chart.interval)}&count=120&closedTradeLimit=20`,
+      `- GET http://localhost:8080/api/guided-trading/chart?market=${encodeURIComponent(context.market)}&interval=${encodeURIComponent(context.chart.interval)}&count=120`,
+      '- GET http://localhost:8080/api/dashboard',
+      '반드시 JSON으로만 응답하고 스키마를 지켜라.',
+      '{"analysis":"2-4문장","confidence":0-100,"actions":[{"type":"ADD|PARTIAL_TP|FULL_EXIT|HOLD|WAIT_RETEST","title":"짧은제목","reason":"근거","targetPrice":number|null,"sizePercent":number|null,"urgency":"LOW|MEDIUM|HIGH"}]}',
+      '리스크 과대 노출을 피하고, 근거 없는 확신을 금지한다.',
+      userPrompt.trim().length > 0 ? `사용자 추가지시: ${userPrompt.trim()}` : '사용자 추가지시: 없음',
+      `컨텍스트 JSON: ${JSON.stringify(payload)}`,
+    ].join('\n');
+  };
+
+  const captureChartImageDataUrl = useCallback(async (): Promise<string | undefined> => {
+    if (!includeChartScreenshot || !chartContainerRef.current) return undefined;
+    const canvas = await html2canvas(chartContainerRef.current, {
+      backgroundColor: '#0f1117',
+      scale: 1,
+      logging: false,
+      useCORS: true,
+    });
+    return canvas.toDataURL('image/png', 0.9);
+  }, [includeChartScreenshot]);
+
+  const runAgentAnalysis = useCallback(async () => {
+    if (agentBusy) return;
+
+    const context = agentContextQuery.data ?? await guidedTradingApi.getAgentContext(
+      selectedMarket,
+      interval,
+      interval === 'tick' ? 300 : 120,
+      20
+    );
+
+    setAgentBusy(true);
+    setAgentError('');
+    try {
+      const sessionId = agentSessionId || await ensureSessionId();
+      if (!agentSessionId) setAgentSessionId(sessionId);
+
+      const textPrompt = buildAgentPrompt(context, agentPrompt);
+      const imageDataUrl = await captureChartImageDataUrl();
+      const sinceEpochMs = Date.now();
+
+      await submitAgentPrompt({
+        sessionId,
+        textPrompt,
+        imageDataUrl,
+      });
+
+      const advice = await waitForAssistantAdvice({
+        sessionId,
+        sinceEpochMs,
+      });
+
+      setAgentAdvice(advice);
+      setStatusMessage('프론트 에이전트 분석을 완료했습니다.');
+    } catch (e) {
+      const message = e instanceof Error ? e.message : '에이전트 분석 실패';
+      setAgentError(message);
+      setStatusMessage(message);
+    } finally {
+      setAgentBusy(false);
+    }
+  }, [
+    agentBusy,
+    agentContextQuery.data,
+    selectedMarket,
+    interval,
+    agentSessionId,
+    agentPrompt,
+    captureChartImageDataUrl,
+  ]);
+
+  useEffect(() => {
+    if (!agentAutoRefresh) return;
+    const timer = window.setInterval(() => {
+      void runAgentAnalysis();
+    }, 15000);
+    return () => window.clearInterval(timer);
+  }, [agentAutoRefresh, runAgentAnalysis]);
 
   return (
     <section className="guided-workspace">
@@ -715,56 +920,93 @@ export default function ManualTraderWorkspace() {
 
           <div className="guided-copilot-card">
             <div className="guided-copilot-head">
-              <h4>AI 트레이딩 코파일럿</h4>
+              <h4>프론트 세션 AI 에이전트</h4>
               <div className="guided-copilot-controls">
-                <select
-                  value={copilotProvider}
-                  onChange={(event) => setCopilotProvider(event.target.value as 'OPENAI' | 'ZAI')}
-                >
-                  <option value="OPENAI">OpenAI</option>
-                  <option value="ZAI">Z.AI</option>
-                </select>
                 <button
                   type="button"
-                  onClick={() => void copilotQuery.refetch()}
-                  disabled={copilotQuery.isFetching}
+                  onClick={() => void runAgentAnalysis()}
+                  disabled={agentBusy}
                 >
-                  {copilotQuery.isFetching ? '분석 중...' : '지금 분석'}
+                  {agentBusy ? '분석 중...' : '지금 분석'}
                 </button>
+              </div>
+            </div>
+
+            <div className="guided-copilot-connection-grid">
+              <label className="guided-copilot-prompt">
+                OpenCode Base URL
+                <input
+                  value={opencodeBaseUrl}
+                  onChange={(event) => setOpencodeBaseUrl(event.target.value)}
+                  placeholder="http://127.0.0.1:4096"
+                />
+              </label>
+              <label className="guided-copilot-prompt">
+                Basic Auth (base64, 선택)
+                <input
+                  value={opencodeBasicAuth}
+                  onChange={(event) => setOpencodeBasicAuth(event.target.value)}
+                  placeholder="dXNlcjpwYXNzd29yZA=="
+                />
+              </label>
+              <label className="guided-copilot-prompt">
+                디렉터리 (선택)
+                <input
+                  value={opencodeDirectory}
+                  onChange={(event) => setOpencodeDirectory(event.target.value)}
+                  placeholder="/Users/.../coin-trading-spring"
+                />
+              </label>
+              <div className="guided-copilot-controls">
+                <button type="button" onClick={handleSaveOpencodeConfig}>연결 설정 저장</button>
               </div>
             </div>
 
             <label className="guided-copilot-prompt">
               추가 지시(선택)
               <input
-                value={copilotPrompt}
-                onChange={(event) => setCopilotPrompt(event.target.value)}
-                placeholder="예: 분할 익절 기준을 보수적으로"
+                value={agentPrompt}
+                onChange={(event) => setAgentPrompt(event.target.value)}
+                placeholder="예: 공격적 물타기 금지, 손절 우선"
               />
             </label>
 
             <label className="guided-copilot-auto">
               <input
                 type="checkbox"
-                checked={copilotAutoRefresh}
-                onChange={(event) => setCopilotAutoRefresh(event.target.checked)}
+                checked={agentAutoRefresh}
+                onChange={(event) => setAgentAutoRefresh(event.target.checked)}
               />
-              7초 자동 업데이트
+              15초 자동 분석
             </label>
 
-            {copilot && (
+            <label className="guided-copilot-auto">
+              <input
+                type="checkbox"
+                checked={includeChartScreenshot}
+                onChange={(event) => setIncludeChartScreenshot(event.target.checked)}
+              />
+              차트 스크린샷 포함
+            </label>
+
+            <p className="guided-copilot-analysis">
+              OpenCode 세션: {agentSessionId || '미연결'}
+              {agentContext ? ` · 최근 승률 ${agentContext.performance.winRate.toFixed(1)}%` : ''}
+            </p>
+
+            {agentAdvice && (
               <>
                 <div className="guided-copilot-summary">
                   <span>신뢰도</span>
-                  <strong>{copilot.confidence}%</strong>
-                  <small>{new Date(copilot.generatedAt).toLocaleTimeString('ko-KR')}</small>
+                  <strong>{agentAdvice.confidence}%</strong>
+                  <small>{new Date().toLocaleTimeString('ko-KR')}</small>
                 </div>
-                <p className="guided-copilot-analysis">{copilot.analysis}</p>
+                <p className="guided-copilot-analysis">{agentAdvice.analysis}</p>
                 <div className="guided-copilot-actions">
-                  {copilot.actions.length === 0 && (
+                  {agentAdvice.actions.length === 0 && (
                     <div className="guided-copilot-action muted">지금은 관망 시그널이 우세합니다.</div>
                   )}
-                  {copilot.actions.map((action, index) => (
+                  {agentAdvice.actions.map((action, index) => (
                     <div key={`${action.type}-${index}`} className="guided-copilot-action">
                       <div className="top">
                         <strong>{action.title}</strong>
@@ -775,14 +1017,22 @@ export default function ManualTraderWorkspace() {
                         {action.targetPrice != null ? `목표가 ${formatKrw(action.targetPrice)} · ` : ''}
                         {action.sizePercent != null ? `권장 비중 ${action.sizePercent}%` : '비중 유지'}
                       </small>
+                      <div className="guided-copilot-controls">
+                        <button type="button" onClick={() => applyAgentActionToOrderForm(action)}>
+                          주문 폼에 반영
+                        </button>
+                        <button type="button" onClick={() => executeAgentAction(action)}>
+                          즉시 실행
+                        </button>
+                      </div>
                     </div>
                   ))}
                 </div>
               </>
             )}
 
-            {copilotQuery.error && (
-              <p className="guided-copilot-error">{copilotQuery.error instanceof Error ? copilotQuery.error.message : '코파일럿 분석 오류'}</p>
+            {agentError && (
+              <p className="guided-copilot-error">{agentError}</p>
             )}
           </div>
 
