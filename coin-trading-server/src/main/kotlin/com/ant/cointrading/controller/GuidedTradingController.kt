@@ -88,6 +88,11 @@ class GuidedTradingController(
         return guidedTradingService.getActivePosition(market.uppercase())
     }
 
+    @GetMapping("/positions/open")
+    fun getOpenPositions(): List<GuidedTradeView> {
+        return guidedTradingService.getAllOpenPositions()
+    }
+
     @GetMapping("/agent/context")
     fun getAgentContext(
         @RequestParam market: String,

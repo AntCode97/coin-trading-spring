@@ -204,6 +204,17 @@ class GuidedTradingService(
         return trade.toView(current)
     }
 
+    fun getAllOpenPositions(): List<GuidedTradeView> {
+        val trades = guidedTradeRepository.findByStatusIn(OPEN_STATUSES)
+        if (trades.isEmpty()) return emptyList()
+        val markets = trades.map { it.market }.distinct()
+        val tickerMap = fetchTickerMap(markets)
+        return trades.map { trade ->
+            val price = tickerMap[trade.market]?.tradePrice?.toDouble()
+            trade.toView(price)
+        }
+    }
+
     @Transactional
     fun startAutoTrading(request: GuidedStartRequest): GuidedTradeView {
         val market = request.market.trim().uppercase()

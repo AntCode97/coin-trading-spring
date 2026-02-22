@@ -24,6 +24,7 @@ import {
   type GuidedSortDirection,
   type GuidedRealtimeTicker,
   type GuidedStartRequest,
+  type GuidedTradePosition,
 } from '../api';
 import {
   checkConnection,
@@ -261,6 +262,12 @@ export default function ManualTraderWorkspace() {
     queryFn: () => guidedTradingApi.getAgentContext(selectedMarket, interval, interval === 'tick' ? 300 : 120, 20),
     enabled: aiEnabled,
     refetchInterval: aiEnabled ? aiRefreshSec * 1000 : false,
+  });
+
+  const openPositionsQuery = useQuery<GuidedTradePosition[]>({
+    queryKey: ['guided-open-positions'],
+    queryFn: () => guidedTradingApi.getOpenPositions(),
+    refetchInterval: 5000,
   });
 
   const startMutation = useMutation({
@@ -819,6 +826,34 @@ export default function ManualTraderWorkspace() {
               </button>
             ))}
           </div>
+
+          {/* 내 포지션 */}
+          {openPositionsQuery.data && openPositionsQuery.data.length > 0 && (
+            <div className="my-positions-section">
+              <div className="my-positions-header">내 포지션 ({openPositionsQuery.data.length})</div>
+              {openPositionsQuery.data.map((pos) => (
+                <button
+                  key={pos.tradeId}
+                  type="button"
+                  className={`my-position-row ${selectedMarket === pos.market ? 'active' : ''}`}
+                  onClick={() => setSelectedMarket(pos.market)}
+                >
+                  <div className="my-pos-left">
+                    <strong>{pos.market.replace('KRW-', '')}</strong>
+                    <span className={`my-pos-status ${pos.status === 'OPEN' ? 'open' : 'pending'}`}>
+                      {pos.status === 'OPEN' ? '보유' : '대기'}
+                    </span>
+                  </div>
+                  <div className="my-pos-right">
+                    <span className={pos.unrealizedPnlPercent >= 0 ? 'profit' : 'loss'}>
+                      {formatPct(pos.unrealizedPnlPercent)}
+                    </span>
+                    <small>{formatKrw(pos.currentPrice)}</small>
+                  </div>
+                </button>
+              ))}
+            </div>
+          )}
         </aside>
 
         {/* 중앙: 차트 */}

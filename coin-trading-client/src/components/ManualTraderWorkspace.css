@@ -1391,6 +1391,96 @@
   color: #a0b4d8;
 }
 
+/* ---------- 내 포지션 섹션 ---------- */
+
+.my-positions-section {
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+  padding: 8px 10px;
+}
+
+.my-positions-header {
+  font-size: 11px;
+  font-weight: 600;
+  color: #f5c542;
+  margin-bottom: 6px;
+}
+
+.my-position-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  width: 100%;
+  padding: 7px 8px;
+  margin-bottom: 3px;
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  border-radius: 8px;
+  background: rgba(14, 19, 28, 0.6);
+  cursor: pointer;
+  transition: background 0.12s, border-color 0.12s;
+}
+
+.my-position-row:hover {
+  background: rgba(43, 92, 255, 0.08);
+  border-color: rgba(43, 92, 255, 0.2);
+}
+
+.my-position-row.active {
+  background: rgba(43, 92, 255, 0.15);
+  border-color: rgba(43, 92, 255, 0.35);
+}
+
+.my-pos-left {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.my-pos-left strong {
+  font-size: 12px;
+  color: #e5ecf7;
+}
+
+.my-pos-status {
+  font-size: 9px;
+  font-weight: 600;
+  padding: 1px 5px;
+  border-radius: 4px;
+}
+
+.my-pos-status.open {
+  background: rgba(73, 210, 143, 0.15);
+  color: #49d28f;
+}
+
+.my-pos-status.pending {
+  background: rgba(245, 197, 66, 0.15);
+  color: #f5c542;
+}
+
+.my-pos-right {
+  text-align: right;
+}
+
+.my-pos-right span {
+  display: block;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.my-pos-right span.profit {
+  color: #49d28f;
+}
+
+.my-pos-right span.loss {
+  color: #ff5a6a;
+}
+
+.my-pos-right small {
+  display: block;
+  font-size: 10px;
+  color: #8f9aad;
+}
+
 /* ---------- 용어 툴팁 ---------- */
 
 .term-tip {
