@@ -57,8 +57,8 @@ class GuidedTradingService(
                 tradePrice = ticker.tradePrice.toDouble(),
                 changeRate = ticker.changeRate?.toDouble()?.times(100.0) ?: 0.0,
                 changePrice = ticker.changePrice?.toDouble() ?: 0.0,
-                accTradePrice = ticker.accTradePrice?.toDouble() ?: 0.0,
-                accTradeVolume = ticker.accTradeVolume?.toDouble() ?: 0.0,
+                accTradePrice = (ticker.accTradePrice24h ?: ticker.accTradePrice)?.toDouble() ?: 0.0,
+                accTradeVolume = (ticker.accTradeVolume24h ?: ticker.accTradeVolume)?.toDouble() ?: 0.0,
                 surgeRate = calculateSurgeRate(
                     openingPrice = ticker.openingPrice?.toDouble(),
                     highPrice = ticker.highPrice?.toDouble(),
