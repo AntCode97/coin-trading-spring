@@ -71,6 +71,18 @@ class GuidedTradingController(
         return guidedTradingService.stopAutoTrading(market.uppercase())
     }
 
+    @PostMapping("/partial-take-profit")
+    fun partialTakeProfit(
+        @RequestParam market: String,
+        @RequestParam(defaultValue = "0.5") ratio: Double
+    ): GuidedTradeView {
+        return try {
+            guidedTradingService.partialTakeProfit(market.uppercase(), ratio)
+        } catch (e: IllegalArgumentException) {
+            throw ResponseStatusException(HttpStatus.BAD_REQUEST, e.message ?: "요청값 오류")
+        }
+    }
+
     @GetMapping("/position/{market}")
     fun getPosition(@PathVariable market: String): GuidedTradeView? {
         return guidedTradingService.getActivePosition(market.uppercase())

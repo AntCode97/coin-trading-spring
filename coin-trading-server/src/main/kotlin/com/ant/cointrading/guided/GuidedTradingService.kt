@@ -299,6 +299,56 @@ class GuidedTradingService(
         return trade.toView(current)
     }
 
+    @Transactional
+    fun partialTakeProfit(market: String, ratio: Double = 0.5): GuidedTradeView {
+        val trade = getActiveTrade(market) ?: error("진행 중인 포지션이 없습니다.")
+        require(trade.remainingQuantity > BigDecimal.ZERO) { "청산 가능한 수량이 없습니다." }
+
+        val boundedRatio = ratio.coerceIn(0.1, 0.9)
+        val qty = trade.remainingQuantity
+            .multiply(BigDecimal.valueOf(boundedRatio))
+            .setScale(8, RoundingMode.DOWN)
+            .max(BigDecimal.ZERO)
+        require(qty > BigDecimal.ZERO) { "부분 청산 수량이 0입니다." }
+
+        val sell = bithumbPrivateApi.sellMarketOrder(trade.market, qty)
+        val sellInfo = bithumbPrivateApi.getOrder(sell.uuid) ?: sell
+        val executedQty = (sellInfo.executedVolume ?: qty).min(trade.remainingQuantity)
+        require(executedQty > BigDecimal.ZERO) { "부분 익절 주문이 체결되지 않았습니다." }
+
+        val execPrice = sellInfo.price ?: bithumbPublicApi.getCurrentPrice(trade.market)?.firstOrNull()?.tradePrice ?: trade.averageEntryPrice
+        applyExitFill(trade, executedQty, execPrice, "MANUAL_PARTIAL_TP")
+
+        trade.lastExitOrderId = sell.uuid
+        if (!trade.halfTakeProfitDone) {
+            trade.halfTakeProfitDone = true
+            trade.stopLossPrice = trade.averageEntryPrice
+        }
+
+        if (trade.remainingQuantity > BigDecimal.ZERO) {
+            trade.status = GuidedTradeEntity.STATUS_OPEN
+            trade.lastAction = "MANUAL_PARTIAL_TP"
+            guidedTradeRepository.save(trade)
+            appendEvent(
+                trade.id!!,
+                "MANUAL_PARTIAL_TP",
+                execPrice,
+                executedQty,
+                "수동 부분익절 ${String.format("%.0f", boundedRatio * 100)}%"
+            )
+        } else {
+            trade.status = GuidedTradeEntity.STATUS_CLOSED
+            trade.closedAt = Instant.now()
+            trade.exitReason = "MANUAL_PARTIAL_TP"
+            trade.lastAction = "MANUAL_CLOSE_BY_PARTIAL_TP"
+            guidedTradeRepository.save(trade)
+            appendEvent(trade.id!!, "CLOSE_ALL", execPrice, executedQty, "수동 부분익절로 전량 청산")
+        }
+
+        val current = bithumbPublicApi.getCurrentPrice(trade.market)?.firstOrNull()?.tradePrice?.toDouble()
+        return trade.toView(current)
+    }
+
     @Scheduled(fixedDelay = 5000)
     @Transactional
     fun monitorGuidedTrades() {
