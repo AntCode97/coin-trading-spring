@@ -393,6 +393,167 @@
   padding: 10px;
 }
 
+.guided-copilot-card {
+  margin-top: 10px;
+  border: 1px solid rgba(255, 255, 255, 0.09);
+  background: rgba(14, 19, 28, 0.85);
+  border-radius: 10px;
+  padding: 10px;
+}
+
+.guided-copilot-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+}
+
+.guided-copilot-head h4 {
+  margin: 0;
+  font-size: 14px;
+}
+
+.guided-copilot-controls {
+  display: flex;
+  gap: 6px;
+}
+
+.guided-copilot-controls select,
+.guided-copilot-controls button {
+  background: #111722;
+  border: 1px solid #2a3445;
+  color: #dbe5f7;
+  border-radius: 7px;
+  padding: 5px 8px;
+  font-size: 11px;
+}
+
+.guided-copilot-controls button {
+  cursor: pointer;
+}
+
+.guided-copilot-prompt {
+  margin-top: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  font-size: 11px;
+  color: #9fadbf;
+}
+
+.guided-copilot-prompt input {
+  background: #0f1520;
+  border: 1px solid #2a3445;
+  color: #dde7fb;
+  border-radius: 7px;
+  padding: 7px 8px;
+}
+
+.guided-copilot-auto {
+  margin-top: 8px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  color: #9fadbf;
+}
+
+.guided-copilot-summary {
+  margin-top: 10px;
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+
+.guided-copilot-summary span {
+  color: #9badc8;
+  font-size: 11px;
+}
+
+.guided-copilot-summary strong {
+  font-size: 18px;
+  color: #f7c74c;
+}
+
+.guided-copilot-summary small {
+  color: #7f8ca4;
+  font-size: 10px;
+}
+
+.guided-copilot-analysis {
+  margin: 8px 0;
+  font-size: 12px;
+  color: #c7d2e8;
+  line-height: 1.45;
+}
+
+.guided-copilot-actions {
+  display: grid;
+  gap: 6px;
+}
+
+.guided-copilot-action {
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 8px;
+  background: rgba(17, 23, 34, 0.74);
+  padding: 8px;
+}
+
+.guided-copilot-action .top {
+  display: flex;
+  justify-content: space-between;
+  gap: 6px;
+  align-items: center;
+}
+
+.guided-copilot-action .top strong {
+  font-size: 12px;
+}
+
+.guided-copilot-action p {
+  margin: 5px 0;
+  color: #b4c0d6;
+  font-size: 11px;
+}
+
+.guided-copilot-action small {
+  color: #8e9cb6;
+  font-size: 10px;
+}
+
+.guided-copilot-action .urgency {
+  font-size: 10px;
+  border-radius: 999px;
+  padding: 2px 6px;
+  border: 1px solid transparent;
+}
+
+.guided-copilot-action .urgency.high {
+  color: #ff8f9e;
+  border-color: rgba(255, 98, 120, 0.45);
+}
+
+.guided-copilot-action .urgency.medium {
+  color: #f7c74c;
+  border-color: rgba(247, 199, 76, 0.45);
+}
+
+.guided-copilot-action .urgency.low {
+  color: #68d1a0;
+  border-color: rgba(104, 209, 160, 0.45);
+}
+
+.guided-copilot-action.muted {
+  color: #93a1b9;
+  font-size: 11px;
+}
+
+.guided-copilot-error {
+  margin-top: 8px;
+  color: #ff7e95;
+  font-size: 11px;
+}
+
 .guided-orders-card h4 {
   margin: 0 0 8px;
   font-size: 14px;

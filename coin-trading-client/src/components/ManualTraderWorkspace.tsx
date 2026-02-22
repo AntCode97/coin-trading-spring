@@ -15,6 +15,7 @@ import {
 } from 'lightweight-charts';
 import {
   guidedTradingApi,
+  type GuidedCopilotResponse,
   type GuidedChartResponse,
   type GuidedCandle,
   type GuidedMarketItem,
@@ -115,6 +116,9 @@ export default function ManualTraderWorkspace() {
   const [customStopLoss, setCustomStopLoss] = useState<number | ''>('');
   const [customTakeProfit, setCustomTakeProfit] = useState<number | ''>('');
   const [statusMessage, setStatusMessage] = useState<string>('');
+  const [copilotProvider, setCopilotProvider] = useState<'OPENAI' | 'ZAI'>('OPENAI');
+  const [copilotPrompt, setCopilotPrompt] = useState<string>('');
+  const [copilotAutoRefresh, setCopilotAutoRefresh] = useState<boolean>(true);
 
   const chartContainerRef = useRef<HTMLDivElement | null>(null);
   const chartRef = useRef<IChartApi | null>(null);
@@ -139,6 +143,19 @@ export default function ManualTraderWorkspace() {
     queryKey: ['guided-realtime-ticker', selectedMarket],
     queryFn: () => guidedTradingApi.getRealtimeTicker(selectedMarket),
     refetchInterval: 1000,
+  });
+
+  const copilotQuery = useQuery<GuidedCopilotResponse>({
+    queryKey: ['guided-copilot', selectedMarket, interval, copilotProvider, copilotPrompt],
+    queryFn: () => guidedTradingApi.getCopilotAnalysis({
+      market: selectedMarket,
+      interval,
+      count: interval === 'tick' ? 300 : 120,
+      provider: copilotProvider,
+      userPrompt: copilotPrompt.trim().length > 0 ? copilotPrompt.trim() : undefined,
+    }),
+    enabled: Boolean(chartQuery.data),
+    refetchInterval: copilotAutoRefresh ? 7000 : false,
   });
 
   const startMutation = useMutation({
@@ -168,6 +185,7 @@ export default function ManualTraderWorkspace() {
   const events = chartQuery.data?.events ?? [];
   const orderbook = chartQuery.data?.orderbook;
   const orderSnapshot = chartQuery.data?.orderSnapshot;
+  const copilot = copilotQuery.data;
 
   const filteredMarkets = useMemo(() => {
     const keyword = search.trim().toLowerCase();
@@ -694,6 +712,79 @@ export default function ManualTraderWorkspace() {
               </div>
             </div>
           )}
+
+          <div className="guided-copilot-card">
+            <div className="guided-copilot-head">
+              <h4>AI 트레이딩 코파일럿</h4>
+              <div className="guided-copilot-controls">
+                <select
+                  value={copilotProvider}
+                  onChange={(event) => setCopilotProvider(event.target.value as 'OPENAI' | 'ZAI')}
+                >
+                  <option value="OPENAI">OpenAI</option>
+                  <option value="ZAI">Z.AI</option>
+                </select>
+                <button
+                  type="button"
+                  onClick={() => void copilotQuery.refetch()}
+                  disabled={copilotQuery.isFetching}
+                >
+                  {copilotQuery.isFetching ? '분석 중...' : '지금 분석'}
+                </button>
+              </div>
+            </div>
+
+            <label className="guided-copilot-prompt">
+              추가 지시(선택)
+              <input
+                value={copilotPrompt}
+                onChange={(event) => setCopilotPrompt(event.target.value)}
+                placeholder="예: 분할 익절 기준을 보수적으로"
+              />
+            </label>
+
+            <label className="guided-copilot-auto">
+              <input
+                type="checkbox"
+                checked={copilotAutoRefresh}
+                onChange={(event) => setCopilotAutoRefresh(event.target.checked)}
+              />
+              7초 자동 업데이트
+            </label>
+
+            {copilot && (
+              <>
+                <div className="guided-copilot-summary">
+                  <span>신뢰도</span>
+                  <strong>{copilot.confidence}%</strong>
+                  <small>{new Date(copilot.generatedAt).toLocaleTimeString('ko-KR')}</small>
+                </div>
+                <p className="guided-copilot-analysis">{copilot.analysis}</p>
+                <div className="guided-copilot-actions">
+                  {copilot.actions.length === 0 && (
+                    <div className="guided-copilot-action muted">지금은 관망 시그널이 우세합니다.</div>
+                  )}
+                  {copilot.actions.map((action, index) => (
+                    <div key={`${action.type}-${index}`} className="guided-copilot-action">
+                      <div className="top">
+                        <strong>{action.title}</strong>
+                        <span className={`urgency ${action.urgency.toLowerCase()}`}>{action.urgency}</span>
+                      </div>
+                      <p>{action.reason}</p>
+                      <small>
+                        {action.targetPrice != null ? `목표가 ${formatKrw(action.targetPrice)} · ` : ''}
+                        {action.sizePercent != null ? `권장 비중 ${action.sizePercent}%` : '비중 유지'}
+                      </small>
+                    </div>
+                  ))}
+                </div>
+              </>
+            )}
+
+            {copilotQuery.error && (
+              <p className="guided-copilot-error">{copilotQuery.error instanceof Error ? copilotQuery.error.message : '코파일럿 분석 오류'}</p>
+            )}
+          </div>
 
           {statusMessage && <p className="guided-status">{statusMessage}</p>}
         </aside>

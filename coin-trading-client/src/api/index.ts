@@ -629,6 +629,49 @@ export interface GuidedChartResponse {
   orderSnapshot: GuidedOrderSnapshot;
 }
 
+export interface GuidedCopilotAction {
+  type: string;
+  title: string;
+  reason: string;
+  targetPrice?: number | null;
+  sizePercent?: number | null;
+  urgency: 'LOW' | 'MEDIUM' | 'HIGH' | string;
+}
+
+export interface GuidedCopilotSnapshot {
+  market: string;
+  currentPrice: number;
+  recommendedEntryPrice: number;
+  stopLossPrice: number;
+  takeProfitPrice: number;
+  recommendedEntryWinRate: number;
+  marketEntryWinRate: number;
+  riskRewardRatio: number;
+  positionStatus?: string | null;
+  positionPnlPercent?: number | null;
+  dcaCount?: number | null;
+  maxDcaCount?: number | null;
+  halfTakeProfitDone?: boolean | null;
+  recentEvents: string[];
+}
+
+export interface GuidedCopilotResponse {
+  provider: string;
+  analysis: string;
+  confidence: number;
+  actions: GuidedCopilotAction[];
+  generatedAt: string;
+  snapshot: GuidedCopilotSnapshot;
+}
+
+export interface GuidedCopilotRequest {
+  market: string;
+  interval?: string;
+  count?: number;
+  provider?: 'OPENAI' | 'ZAI';
+  userPrompt?: string;
+}
+
 export interface GuidedStartRequest {
   market: string;
   amountKrw: number;
@@ -675,6 +718,9 @@ export const guidedTradingApi = {
 
   stop: (market: string): Promise<GuidedTradePosition> =>
     api.post('/guided-trading/stop', null, { params: { market } }).then((res) => res.data),
+
+  getCopilotAnalysis: (payload: GuidedCopilotRequest): Promise<GuidedCopilotResponse> =>
+    api.post('/guided-trading/copilot/analyze', payload).then((res) => res.data),
 };
 
 export default api;
