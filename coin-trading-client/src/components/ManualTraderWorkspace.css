@@ -1124,10 +1124,75 @@
 
 /* ---------- State A: NONE — 원클릭 진입 ---------- */
 
+.entry-amount-row {
+  margin-top: 12px;
+  padding: 10px;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.entry-amount-label {
+  display: block;
+  font-size: 11px;
+  color: #8f9aad;
+  margin-bottom: 6px;
+}
+
+.entry-amount-controls {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.amount-chip {
+  padding: 4px 8px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 6px;
+  background: transparent;
+  color: #c5cdd8;
+  font-size: 11px;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.amount-chip:hover {
+  border-color: #4f7aff;
+  color: #fff;
+}
+
+.amount-chip.active {
+  background: #2b5cff;
+  border-color: #2b5cff;
+  color: #fff;
+}
+
+.entry-amount-input {
+  width: 80px;
+  padding: 4px 6px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 6px;
+  background: rgba(0, 0, 0, 0.3);
+  color: #fff;
+  font-size: 12px;
+  text-align: right;
+  margin-left: auto;
+}
+
+.entry-amount-input:focus {
+  outline: none;
+  border-color: #4f7aff;
+}
+
+.entry-amount-unit {
+  font-size: 11px;
+  color: #8f9aad;
+}
+
 .one-click-entry {
   display: block;
   width: 100%;
-  margin-top: 12px;
+  margin-top: 8px;
   padding: 12px;
   border: none;
   border-radius: 8px;

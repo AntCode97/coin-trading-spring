@@ -1044,13 +1044,38 @@ export default function ManualTraderWorkspace() {
                     <div><span><Tip label="R/R">R/R</Tip></span><strong>{recommendation.riskRewardRatio.toFixed(2)}R</strong></div>
                   </div>
 
+                  <div className="entry-amount-row">
+                    <label className="entry-amount-label">매수 금액</label>
+                    <div className="entry-amount-controls">
+                      {[10000, 20000, 50000, 100000].map((v) => (
+                        <button
+                          key={v}
+                          type="button"
+                          className={`amount-chip ${amountKrw === v ? 'active' : ''}`}
+                          onClick={() => setAmountKrw(v)}
+                        >
+                          {v >= 10000 ? `${v / 10000}만` : `${v.toLocaleString()}`}
+                        </button>
+                      ))}
+                      <input
+                        type="number"
+                        className="entry-amount-input"
+                        min={5100}
+                        step={1000}
+                        value={amountKrw}
+                        onChange={(e) => setAmountKrw(Number(e.target.value || 0))}
+                      />
+                      <span className="entry-amount-unit">원</span>
+                    </div>
+                  </div>
+
                   <button
                     type="button"
                     className="one-click-entry"
                     onClick={handleOneClickEntry}
                     disabled={startMutation.isPending}
                   >
-                    {startMutation.isPending ? '주문 중...' : 'AI 추천대로 진입'}
+                    {startMutation.isPending ? '주문 중...' : `AI 추천대로 ${amountKrw.toLocaleString()}원 진입`}
                   </button>
 
                   <details className="advanced-settings" open={showAdvanced} onToggle={(e) => setShowAdvanced((e.target as HTMLDetailsElement).open)}>
