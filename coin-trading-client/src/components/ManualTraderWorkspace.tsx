@@ -39,6 +39,7 @@ import {
   type ChatMessage,
   type CodexModelId,
   type LlmConnectionStatus,
+  type TradingMode,
 } from '../lib/llmService';
 import { usePlanExecution } from '../lib/usePlanExecution';
 import { PlanPanel } from './PlanPanel';
@@ -209,6 +210,7 @@ export default function ManualTraderWorkspace() {
   const [sortDirection, setSortDirection] = useState<GuidedSortDirection>(prefs.sortDirection ?? 'DESC');
   const [aiEnabled, setAiEnabled] = useState(true);
   const [aiRefreshSec, setAiRefreshSec] = useState(7);
+  const [tradingMode, setTradingMode] = useState<TradingMode>('SWING');
   const [amountKrw, setAmountKrw] = useState<number>(20000);
   const [orderType, setOrderType] = useState<'MARKET' | 'LIMIT'>('LIMIT');
   const [limitPrice, setLimitPrice] = useState<number | ''>('');
@@ -251,8 +253,8 @@ export default function ManualTraderWorkspace() {
   });
 
   const chartQuery = useQuery<GuidedChartResponse>({
-    queryKey: ['guided-chart', selectedMarket, interval],
-    queryFn: () => guidedTradingApi.getChart(selectedMarket, interval, interval === 'tick' ? 500 : 180),
+    queryKey: ['guided-chart', selectedMarket, interval, tradingMode],
+    queryFn: () => guidedTradingApi.getChart(selectedMarket, interval, interval === 'tick' ? 500 : 180, tradingMode),
     refetchInterval: aiEnabled ? aiRefreshSec * 1000 : 30000,
   });
 
@@ -263,8 +265,8 @@ export default function ManualTraderWorkspace() {
   });
 
   const agentContextQuery = useQuery<GuidedAgentContextResponse>({
-    queryKey: ['guided-agent-context', selectedMarket, interval],
-    queryFn: () => guidedTradingApi.getAgentContext(selectedMarket, interval, interval === 'tick' ? 300 : 120, 20),
+    queryKey: ['guided-agent-context', selectedMarket, interval, tradingMode],
+    queryFn: () => guidedTradingApi.getAgentContext(selectedMarket, interval, interval === 'tick' ? 300 : 120, 20, tradingMode),
     enabled: aiEnabled,
     refetchInterval: aiEnabled ? aiRefreshSec * 1000 : false,
   });
@@ -695,6 +697,7 @@ export default function ManualTraderWorkspace() {
         model: chatModel,
         context,
         mcpTools: llmTools.length > 0 ? llmTools : undefined,
+        tradingMode,
         onStreamDelta: (text) => setChatStreamText(text),
         onToolCall: (name, args) => {
           setChatMessages((prev) => [
@@ -741,7 +744,7 @@ export default function ManualTraderWorkspace() {
     } finally {
       setChatBusy(false);
     }
-  }, [chatBusy, chatInput, chatModel, llmStatus, autoContext, agentContextQuery.data, mcpTools]);
+  }, [chatBusy, chatInput, chatModel, llmStatus, autoContext, agentContextQuery.data, mcpTools, tradingMode]);
 
   // 자동 분석
   useEffect(() => {
@@ -758,6 +761,7 @@ export default function ManualTraderWorkspace() {
         model: chatModel,
         context,
         mcpTools: llmTools.length > 0 ? llmTools : undefined,
+        tradingMode,
         onStreamDelta: (text) => setChatStreamText(text),
       })
         .then((msgs) => {
@@ -1009,18 +1013,29 @@ export default function ManualTraderWorkspace() {
                 >
                   AI {aiEnabled ? 'ON' : 'OFF'}
                 </button>
-                <select
-                  value={aiRefreshSec}
-                  onChange={(e) => setAiRefreshSec(Number(e.target.value))}
-                  disabled={!aiEnabled}
-                >
-                  <option value={5}>5초</option>
-                  <option value={7}>7초</option>
-                  <option value={10}>10초</option>
-                  <option value={15}>15초</option>
-                  <option value={30}>30초</option>
-                  <option value={60}>60초</option>
-                </select>
+                <div className="guided-mode-selector">
+                  {(['SCALP', 'SWING', 'POSITION'] as const).map((m) => (
+                    <button
+                      key={m}
+                      type="button"
+                      className={`guided-mode-btn ${tradingMode === m ? 'active' : ''}`}
+                      onClick={() => setTradingMode(m)}
+                    >
+                      {m === 'SCALP' ? '초단타' : m === 'SWING' ? '단타' : '장타'}
+                    </button>
+                  ))}
+                </div>
+                <div className="guided-interval-input">
+                  <input
+                    type="number"
+                    min={1}
+                    max={120}
+                    value={aiRefreshSec}
+                    onChange={(e) => setAiRefreshSec(Math.max(1, Math.min(120, Number(e.target.value) || 1)))}
+                    disabled={!aiEnabled}
+                  />
+                  <span>초</span>
+                </div>
               </div>
 
               {/* PlanPanel — 플랜 실행 중이면 주문 패널 대신 표시 */}

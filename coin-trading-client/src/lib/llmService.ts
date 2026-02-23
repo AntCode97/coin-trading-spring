@@ -114,10 +114,39 @@ async function callMcpTool(name: string, args: Record<string, unknown>): Promise
 
 // ---------- System Prompt ----------
 
-function buildSystemPrompt(): string {
+export type TradingMode = 'SCALP' | 'SWING' | 'POSITION';
+
+const TRADING_MODE_GUIDES: Record<TradingMode, string> = {
+  SCALP: [
+    '## 현재 모드: 초단타 (스캘핑)',
+    '- 1분~5분 관점으로 분석한다.',
+    '- SL 0.3%, TP 0.8% 수준의 민감한 손절/익절 기준을 적용한다.',
+    '- 호가창 변화, 모멘텀 급변, 거래량 스파이크에 집중한다.',
+    '- 초 단위 타이밍이 중요하며, 빠른 진입/청산을 권장한다.',
+    '- 추세보다 단기 변동성과 주문 흐름에 우선순위를 둔다.',
+  ].join('\n'),
+  SWING: [
+    '## 현재 모드: 단타 (스윙)',
+    '- 30분~수시간 관점으로 분석한다.',
+    '- SL 0.7%, TP 2.0% 수준의 손절/익절 기준을 적용한다.',
+    '- SMA, 볼린저밴드, RSI 등 기술적 지표 기반으로 판단한다.',
+    '- 추세 방향과 지지/저항 레벨을 중점적으로 분석한다.',
+  ].join('\n'),
+  POSITION: [
+    '## 현재 모드: 장타 (포지션)',
+    '- 일봉 이상의 장기 관점으로 분석한다.',
+    '- SL 2.0%, TP 5.0% 수준의 넓은 손절/익절 기준을 적용한다.',
+    '- 대형 추세, 주요 지지/저항, 매크로 이벤트를 중점적으로 분석한다.',
+    '- 단기 노이즈에 흔들리지 않는 관점을 유지한다.',
+  ].join('\n'),
+};
+
+function buildSystemPrompt(tradingMode: TradingMode = 'SWING'): string {
   return [
     '너는 수동 코인 트레이딩 보조 AI 에이전트다.',
     '사용자가 제공하는 차트 컨텍스트와 MCP 도구를 활용해 실시간 트레이딩 조언을 제공한다.',
+    '',
+    TRADING_MODE_GUIDES[tradingMode],
     '',
     '## 역할',
     '- 사용자의 질문에 한국어로 간결하게 답변한다.',
@@ -185,6 +214,7 @@ export async function sendChatMessage(options: {
   model?: string;
   context?: GuidedAgentContextResponse | null;
   mcpTools?: McpTool[];
+  tradingMode?: TradingMode;
   onStreamDelta?: (accumulated: string) => void;
   onToolCall?: (toolName: string, args: string) => void;
   onToolResult?: (toolName: string, result: string) => void;
@@ -241,7 +271,7 @@ export async function sendChatMessage(options: {
 
     const requestBody: Record<string, unknown> = {
       model: options.model || 'gpt-5.3-codex',
-      instructions: buildSystemPrompt(),
+      instructions: buildSystemPrompt(options.tradingMode || 'SWING'),
       input,
       stream: true,
       store: false,

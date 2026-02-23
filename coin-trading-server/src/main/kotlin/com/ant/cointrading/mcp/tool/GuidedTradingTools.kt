@@ -8,6 +8,7 @@ import com.ant.cointrading.guided.GuidedRecommendation
 import com.ant.cointrading.guided.GuidedSortDirection
 import com.ant.cointrading.guided.GuidedTradeView
 import com.ant.cointrading.guided.GuidedTradingService
+import com.ant.cointrading.guided.TradingMode
 import org.springaicommunity.mcp.annotation.McpTool
 import org.springaicommunity.mcp.annotation.McpToolParam
 import org.springframework.ai.tool.annotation.Tool
@@ -50,13 +51,17 @@ class GuidedTradingTools(
         count: Int,
         @McpToolParam(description = "최근 청산 트레이드 조회 개수")
         @ToolParam(description = "최근 청산 트레이드 조회 개수")
-        closedTradeLimit: Int
+        closedTradeLimit: Int,
+        @McpToolParam(description = "트레이딩 모드: SCALP, SWING, POSITION")
+        @ToolParam(description = "트레이딩 모드: SCALP, SWING, POSITION")
+        mode: String = "SWING"
     ): GuidedAgentContextResponse {
         return guidedTradingService.getAgentContext(
             market = market.uppercase(),
             interval = interval,
             count = count,
-            closedTradeLimit = closedTradeLimit
+            closedTradeLimit = closedTradeLimit,
+            mode = TradingMode.fromString(mode)
         )
     }
 
@@ -71,9 +76,12 @@ class GuidedTradingTools(
         interval: String,
         @McpToolParam(description = "캔들 조회 개수")
         @ToolParam(description = "캔들 조회 개수")
-        count: Int
+        count: Int,
+        @McpToolParam(description = "트레이딩 모드: SCALP, SWING, POSITION")
+        @ToolParam(description = "트레이딩 모드: SCALP, SWING, POSITION")
+        mode: String = "SWING"
     ): GuidedRecommendation {
-        return guidedTradingService.getRecommendation(market.uppercase(), interval, count)
+        return guidedTradingService.getRecommendation(market.uppercase(), interval, count, TradingMode.fromString(mode))
     }
 
     @McpTool(description = "현재 수동 트레이딩 포지션을 조회합니다. 없으면 null을 반환합니다.")
@@ -105,8 +113,11 @@ class GuidedTradingTools(
         interval: String,
         @McpToolParam(description = "캔들 조회 개수")
         @ToolParam(description = "캔들 조회 개수")
-        count: Int
+        count: Int,
+        @McpToolParam(description = "트레이딩 모드: SCALP, SWING, POSITION")
+        @ToolParam(description = "트레이딩 모드: SCALP, SWING, POSITION")
+        mode: String = "SWING"
     ): GuidedChartResponse {
-        return guidedTradingService.getChartData(market.uppercase(), interval, count)
+        return guidedTradingService.getChartData(market.uppercase(), interval, count, TradingMode.fromString(mode))
     }
 }

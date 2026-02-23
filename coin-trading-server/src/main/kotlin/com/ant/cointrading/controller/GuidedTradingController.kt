@@ -13,6 +13,7 @@ import com.ant.cointrading.guided.GuidedStartRequest
 import com.ant.cointrading.guided.GuidedSyncResult
 import com.ant.cointrading.guided.GuidedTradeView
 import com.ant.cointrading.guided.GuidedTradingService
+import com.ant.cointrading.guided.TradingMode
 import org.springframework.http.HttpStatus
 import org.springframework.web.bind.annotation.GetMapping
 import org.springframework.web.bind.annotation.PathVariable
@@ -41,18 +42,20 @@ class GuidedTradingController(
     fun getChart(
         @RequestParam market: String,
         @RequestParam(defaultValue = "minute30") interval: String,
-        @RequestParam(defaultValue = "120") count: Int
+        @RequestParam(defaultValue = "120") count: Int,
+        @RequestParam(defaultValue = "SWING") mode: String
     ): GuidedChartResponse {
-        return guidedTradingService.getChartData(market.uppercase(), interval, count)
+        return guidedTradingService.getChartData(market.uppercase(), interval, count, TradingMode.fromString(mode))
     }
 
     @GetMapping("/recommendation")
     fun getRecommendation(
         @RequestParam market: String,
         @RequestParam(defaultValue = "minute30") interval: String,
-        @RequestParam(defaultValue = "120") count: Int
+        @RequestParam(defaultValue = "120") count: Int,
+        @RequestParam(defaultValue = "SWING") mode: String
     ): GuidedRecommendation {
-        return guidedTradingService.getRecommendation(market.uppercase(), interval, count)
+        return guidedTradingService.getRecommendation(market.uppercase(), interval, count, TradingMode.fromString(mode))
     }
 
     @GetMapping("/ticker")
@@ -129,13 +132,15 @@ class GuidedTradingController(
         @RequestParam market: String,
         @RequestParam(defaultValue = "minute30") interval: String,
         @RequestParam(defaultValue = "120") count: Int,
-        @RequestParam(defaultValue = "20") closedTradeLimit: Int
+        @RequestParam(defaultValue = "20") closedTradeLimit: Int,
+        @RequestParam(defaultValue = "SWING") mode: String
     ): GuidedAgentContextResponse {
         return guidedTradingService.getAgentContext(
             market = market.uppercase(),
             interval = interval,
             count = count,
-            closedTradeLimit = closedTradeLimit
+            closedTradeLimit = closedTradeLimit,
+            mode = TradingMode.fromString(mode)
         )
     }
 }

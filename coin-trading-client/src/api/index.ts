@@ -733,16 +733,18 @@ export const guidedTradingApi = {
   getChart: (
     market: string,
     interval = 'minute30',
-    count = 120
+    count = 120,
+    mode?: string
   ): Promise<GuidedChartResponse> =>
-    api.get('/guided-trading/chart', { params: { market, interval, count } }).then((res) => res.data),
+    api.get('/guided-trading/chart', { params: { market, interval, count, mode } }).then((res) => res.data),
 
   getRecommendation: (
     market: string,
     interval = 'minute30',
-    count = 120
+    count = 120,
+    mode?: string
   ): Promise<GuidedRecommendation> =>
-    api.get('/guided-trading/recommendation', { params: { market, interval, count } }).then((res) => res.data),
+    api.get('/guided-trading/recommendation', { params: { market, interval, count, mode } }).then((res) => res.data),
 
   getPosition: (market: string): Promise<GuidedTradePosition | null> =>
     api.get(`/guided-trading/position/${encodeURIComponent(market)}`).then((res) => res.data),
@@ -766,9 +768,10 @@ export const guidedTradingApi = {
     market: string,
     interval = 'minute30',
     count = 120,
-    closedTradeLimit = 20
+    closedTradeLimit = 20,
+    mode?: string
   ): Promise<GuidedAgentContextResponse> =>
-    api.get('/guided-trading/agent/context', { params: { market, interval, count, closedTradeLimit } }).then((res) => res.data),
+    api.get('/guided-trading/agent/context', { params: { market, interval, count, closedTradeLimit, mode } }).then((res) => res.data),
 
   getOpenPositions: (): Promise<GuidedTradePosition[]> =>
     api.get('/guided-trading/positions/open').then((res) => res.data),

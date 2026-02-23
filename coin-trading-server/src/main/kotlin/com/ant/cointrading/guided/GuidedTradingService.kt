@@ -68,7 +68,7 @@ class GuidedTradingService(
         }.sortedWith(buildMarketComparator(sortBy, sortDirection))
     }
 
-    fun getChartData(market: String, interval: String, count: Int): GuidedChartResponse {
+    fun getChartData(market: String, interval: String, count: Int, mode: TradingMode = TradingMode.SWING): GuidedChartResponse {
         val normalizedInterval = interval.lowercase()
         val candles = if (normalizedInterval == "tick") {
             buildTickCandles(market, count.coerceIn(100, 500))
@@ -88,7 +88,7 @@ class GuidedTradingService(
                 ?: emptyList()
         }
 
-        val recommendation = buildRecommendation(market, candles)
+        val recommendation = buildRecommendation(market, candles, mode)
         val position = getActiveTrade(market)
         val events = position?.id?.let { id ->
             guidedTradeEventRepository.findByTradeIdOrderByCreatedAtAsc(id).map {
@@ -132,7 +132,7 @@ class GuidedTradingService(
         )
     }
 
-    fun getRecommendation(market: String, interval: String = "minute30", count: Int = 120): GuidedRecommendation {
+    fun getRecommendation(market: String, interval: String = "minute30", count: Int = 120, mode: TradingMode = TradingMode.SWING): GuidedRecommendation {
         val candles = if (interval.lowercase() == "tick") {
             buildTickCandles(market, count.coerceIn(100, 500))
         } else {
@@ -150,17 +150,18 @@ class GuidedTradingService(
                 }
                 ?: emptyList()
         }
-        return buildRecommendation(market, candles)
+        return buildRecommendation(market, candles, mode)
     }
 
     fun getAgentContext(
         market: String,
         interval: String = "minute30",
         count: Int = 120,
-        closedTradeLimit: Int = 20
+        closedTradeLimit: Int = 20,
+        mode: TradingMode = TradingMode.SWING
     ): GuidedAgentContextResponse {
         val normalizedMarket = market.trim().uppercase()
-        val chart = getChartData(normalizedMarket, interval, count)
+        val chart = getChartData(normalizedMarket, interval, count, mode)
         val recentClosedTrades = guidedTradeRepository
             .findTop80ByMarketAndStatusOrderByCreatedAtDesc(normalizedMarket, GuidedTradeEntity.STATUS_CLOSED)
             .take(closedTradeLimit.coerceIn(5, 80))
@@ -772,7 +773,7 @@ class GuidedTradingService(
         )
     }
 
-    private fun buildRecommendation(market: String, candles: List<GuidedCandle>): GuidedRecommendation {
+    private fun buildRecommendation(market: String, candles: List<GuidedCandle>, mode: TradingMode = TradingMode.SWING): GuidedRecommendation {
         if (candles.size < 30) {
             val current = bithumbPublicApi.getCurrentPrice(market)?.firstOrNull()?.tradePrice?.toDouble() ?: 0.0
             val fallbackWinRate = 38.0
@@ -814,9 +815,9 @@ class GuidedTradingService(
             else -> current * 0.997
         }
         val recommended = max(candidate, support20 * 1.001)
-        val stopLoss = recommended - max(recommended * 0.007, atr14 * 1.0)
-        val rawTakeProfit = recommended + (recommended - stopLoss) * 1.5
-        val takeProfit = minOf(rawTakeProfit, recommended * 1.02) // 익절 상한 2%
+        val stopLoss = recommended - max(recommended * mode.slPercent, atr14 * mode.atrMultiplier)
+        val rawTakeProfit = recommended + (recommended - stopLoss) * mode.rrRatio
+        val takeProfit = minOf(rawTakeProfit, recommended * (1.0 + mode.tpCapPercent))
         val riskRewardRatio = ((takeProfit - recommended) / max(recommended - stopLoss, 1.0)).coerceIn(0.5, 3.0)
         val diffPct = kotlin.math.abs(current - recommended) / current
         val orderType = if (diffPct < 0.0005) "MARKET" else "LIMIT" // 0.05% 미만일 때만 시장가
@@ -836,9 +837,9 @@ class GuidedTradingService(
 
         val recommendedBaseWinRate = (35.0 + weighted * 47.0).coerceIn(35.0, 82.0)
 
-        val marketStopLoss = current - max(current * 0.007, atr14 * 1.0)
-        val rawMarketTakeProfit = current + (current - marketStopLoss) * 1.5
-        val marketTakeProfit = minOf(rawMarketTakeProfit, current * 1.02)
+        val marketStopLoss = current - max(current * mode.slPercent, atr14 * mode.atrMultiplier)
+        val rawMarketTakeProfit = current + (current - marketStopLoss) * mode.rrRatio
+        val marketTakeProfit = minOf(rawMarketTakeProfit, current * (1.0 + mode.tpCapPercent))
         val marketRiskRewardRatio = ((marketTakeProfit - current) / max(current - marketStopLoss, 1.0)).coerceIn(0.5, 3.0)
         val marketPullbackScore = 0.46
         val marketRrScore = ((marketRiskRewardRatio - 0.8) / 1.2).coerceIn(0.0, 1.0) * 0.6 + 0.35
@@ -1269,6 +1270,22 @@ data class GuidedMarketItem(
             val liquidityFactor = ln(max(accTradePrice, 1.0))
             return abs(changeRate) * liquidityFactor
         }
+}
+
+enum class TradingMode(
+    val slPercent: Double,
+    val tpCapPercent: Double,
+    val rrRatio: Double,
+    val atrMultiplier: Double
+) {
+    SCALP(0.003, 0.008, 1.5, 0.5),
+    SWING(0.007, 0.02, 1.5, 1.0),
+    POSITION(0.02, 0.05, 2.0, 2.0);
+
+    companion object {
+        fun fromString(value: String): TradingMode =
+            entries.firstOrNull { it.name.equals(value, ignoreCase = true) } ?: SWING
+    }
 }
 
 enum class GuidedMarketSortBy {
