@@ -61,6 +61,8 @@ type WorkspacePrefs = {
   interval?: string;
   sortBy?: GuidedMarketSortBy;
   sortDirection?: GuidedSortDirection;
+  aiRefreshSec?: number;
+  tradingMode?: TradingMode;
 };
 
 function loadPrefs(): WorkspacePrefs {
@@ -209,8 +211,8 @@ export default function ManualTraderWorkspace() {
   const [sortBy, setSortBy] = useState<GuidedMarketSortBy>(prefs.sortBy ?? 'TURNOVER');
   const [sortDirection, setSortDirection] = useState<GuidedSortDirection>(prefs.sortDirection ?? 'DESC');
   const [aiEnabled, setAiEnabled] = useState(true);
-  const [aiRefreshSec, setAiRefreshSec] = useState(7);
-  const [tradingMode, setTradingMode] = useState<TradingMode>('SWING');
+  const [aiRefreshSec, setAiRefreshSec] = useState(prefs.aiRefreshSec ?? 7);
+  const [tradingMode, setTradingMode] = useState<TradingMode>(prefs.tradingMode ?? 'SWING');
   const [amountKrw, setAmountKrw] = useState<number>(20000);
   const [orderType, setOrderType] = useState<'MARKET' | 'LIMIT'>('LIMIT');
   const [limitPrice, setLimitPrice] = useState<number | ''>('');
@@ -367,9 +369,9 @@ export default function ManualTraderWorkspace() {
   // 저장
   useEffect(() => {
     if (typeof window === 'undefined') return;
-    const next: WorkspacePrefs = { selectedMarket, interval, sortBy, sortDirection };
+    const next: WorkspacePrefs = { selectedMarket, interval, sortBy, sortDirection, aiRefreshSec, tradingMode };
     window.localStorage.setItem(STORAGE_KEY, JSON.stringify(next));
-  }, [selectedMarket, interval, sortBy, sortDirection]);
+  }, [selectedMarket, interval, sortBy, sortDirection, aiRefreshSec, tradingMode]);
 
   // 차트 초기화
   useEffect(() => {
@@ -1025,16 +1027,28 @@ export default function ManualTraderWorkspace() {
                     </button>
                   ))}
                 </div>
-                <div className="guided-interval-input">
+                <div className="guided-interval-slider">
                   <input
-                    type="number"
+                    type="range"
                     min={1}
-                    max={120}
+                    max={60}
+                    step={1}
                     value={aiRefreshSec}
-                    onChange={(e) => setAiRefreshSec(Math.max(1, Math.min(120, Number(e.target.value) || 1)))}
+                    onChange={(e) => setAiRefreshSec(Number(e.target.value))}
                     disabled={!aiEnabled}
+                    list="ai-interval-ticks"
                   />
-                  <span>초</span>
+                  <datalist id="ai-interval-ticks">
+                    <option value="1" />
+                    <option value="3" />
+                    <option value="5" />
+                    <option value="7" />
+                    <option value="10" />
+                    <option value="15" />
+                    <option value="30" />
+                    <option value="60" />
+                  </datalist>
+                  <span className="guided-interval-value">{aiRefreshSec}s</span>
                 </div>
               </div>
 
