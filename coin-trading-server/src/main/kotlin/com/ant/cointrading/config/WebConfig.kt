@@ -26,6 +26,9 @@ class WebConfig(
         registry.addViewController("/dashboard")
             .setViewName("forward:/index.html")
 
+        registry.addViewController("/trading")
+            .setViewName("forward:/index.html")
+
         // 추후 추가될 SPA 경로
         registry.addViewController("/settings")
             .setViewName("forward:/index.html")

@@ -127,6 +127,13 @@ class GuidedTradingController(
         return guidedTradingService.syncPositions()
     }
 
+    @GetMapping("/verify-token")
+    fun verifyToken(): Map<String, Boolean> {
+        // DesktopAccessInterceptor가 이미 토큰을 검증한다.
+        // 여기 도달 = 유효 토큰.
+        return mapOf("valid" to true)
+    }
+
     @GetMapping("/agent/context")
     fun getAgentContext(
         @RequestParam market: String,

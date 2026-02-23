@@ -1,4 +1,5 @@
 import axios from 'axios';
+import { getWebToken, clearWebToken } from '../lib/authToken';
 
 const API_BASE_URL = (import.meta.env.VITE_API_BASE_URL as string | undefined)?.trim() || '/api';
 const DESKTOP_TOKEN = (import.meta.env.VITE_DESKTOP_TRADING_TOKEN as string | undefined)?.trim();
@@ -23,6 +24,31 @@ const longRunningApi = axios.create({
   timeout: 600000, // 10분
   headers: buildDefaultHeaders(),
 });
+
+// 웹 모드: sessionStorage 토큰을 매 요청에 주입
+if (!DESKTOP_MODE) {
+  const injectWebToken = (config: import('axios').InternalAxiosRequestConfig) => {
+    const token = getWebToken();
+    if (token) {
+      config.headers.set('X-Desktop-Token', token);
+    }
+    return config;
+  };
+
+  api.interceptors.request.use(injectWebToken);
+  longRunningApi.interceptors.request.use(injectWebToken);
+
+  const handleAuthError = (error: unknown) => {
+    if (axios.isAxiosError(error) && error.response?.status === 401) {
+      clearWebToken();
+      window.dispatchEvent(new CustomEvent('web-auth-expired'));
+    }
+    return Promise.reject(error);
+  };
+
+  api.interceptors.response.use(undefined, handleAuthError);
+  longRunningApi.interceptors.response.use(undefined, handleAuthError);
+}
 
 export function getApiBaseUrl(): string {
   return API_BASE_URL;
