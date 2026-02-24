@@ -194,6 +194,11 @@
   letter-spacing: -0.1px;
 }
 
+.guided-market-row .price-wrap .turnover-line {
+  color: #8f9aad;
+  white-space: nowrap;
+}
+
 .guided-chart-panel {
   padding: 10px;
 }

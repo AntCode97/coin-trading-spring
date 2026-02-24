@@ -1185,11 +1185,16 @@ export default function ManualTraderWorkspace() {
                 <div className="price-wrap">
                   <strong>{formatKrw(item.tradePrice)}</strong>
                   <span className={item.changeRate >= 0 ? 'up' : 'down'}>{formatPct(item.changeRate)}</span>
-                  <small className={winRateSort ? 'winrate-line' : undefined}>
-                    {winRateSort
-                      ? `추천 ${formatWinRate(item.recommendedEntryWinRate)} · 현재 ${formatWinRate(item.marketEntryWinRate)}`
-                      : `거래대금 ${formatVolume(item.accTradePrice)}`}
-                  </small>
+                  {winRateSort ? (
+                    <>
+                      <small className="winrate-line">
+                        {`추천 ${formatWinRate(item.recommendedEntryWinRate)} · 현재 ${formatWinRate(item.marketEntryWinRate)}`}
+                      </small>
+                      <small className="turnover-line">{`거래대금 ${formatVolume(item.accTradePrice)}`}</small>
+                    </>
+                  ) : (
+                    <small>{`거래대금 ${formatVolume(item.accTradePrice)}`}</small>
+                  )}
                 </div>
               </button>
             ))}
