@@ -20,6 +20,38 @@ export interface WorkerStateSnapshot {
   cooldownUntil: number | null;
 }
 
+export type WorkerEventType =
+  | 'STATE'
+  | 'LLM_REJECT'
+  | 'PLAYWRIGHT_WARN'
+  | 'ENTRY_SUCCESS'
+  | 'ENTRY_FAILED'
+  | 'POSITION_EXIT'
+  | 'PARTIAL_TP'
+  | 'SUPERVISION';
+
+export interface WorkerEvent {
+  market: string;
+  type: WorkerEventType;
+  level: 'INFO' | 'WARN' | 'ERROR';
+  message: string;
+  at: number;
+}
+
+export type WorkerOrderFlowType =
+  | 'BUY_REQUESTED'
+  | 'BUY_FILLED'
+  | 'SELL_REQUESTED'
+  | 'SELL_FILLED'
+  | 'CANCELLED';
+
+export interface WorkerOrderFlowEvent {
+  market: string;
+  type: WorkerOrderFlowType;
+  message: string;
+  at: number;
+}
+
 export interface WorkerConfig {
   market: string;
   tickMs: number;
@@ -47,6 +79,8 @@ export interface WorkerDependencies {
   ) => Promise<{ action: 'HOLD' | 'PARTIAL_TP' | 'FULL_EXIT'; reason: string }>;
   onState: (snapshot: WorkerStateSnapshot) => void;
   onLog: (message: string) => void;
+  onEvent?: (event: WorkerEvent) => void;
+  onOrderFlow?: (event: WorkerOrderFlowEvent) => void;
 }
 
 export class MarketWorker {
@@ -105,6 +139,26 @@ export class MarketWorker {
     this.status = status;
     this.note = note;
     this.deps.onState(this.getSnapshot());
+    this.emitEvent('STATE', status === 'ERROR' ? 'ERROR' : 'INFO', `${status}: ${note}`);
+  }
+
+  private emitEvent(type: WorkerEventType, level: 'INFO' | 'WARN' | 'ERROR', message: string): void {
+    this.deps.onEvent?.({
+      market: this.config.market,
+      type,
+      level,
+      message,
+      at: Date.now(),
+    });
+  }
+
+  private emitOrderFlow(type: WorkerOrderFlowType, message: string): void {
+    this.deps.onOrderFlow?.({
+      market: this.config.market,
+      type,
+      message,
+      at: Date.now(),
+    });
   }
 
   private async tick(): Promise<void> {
@@ -159,6 +213,11 @@ export class MarketWorker {
     const context = await this.deps.fetchContext(this.config.market);
     const entryDecision = await this.deps.evaluateEntry(this.config.market, context);
     if (!entryDecision.approve || entryDecision.confidence < this.config.minLlmConfidence) {
+      this.emitEvent(
+        'LLM_REJECT',
+        'WARN',
+        `진입 거절 (${entryDecision.confidence.toFixed(0)}): ${entryDecision.reason}`
+      );
       this.cooldownUntil = Date.now() + this.config.cooldownMs;
       this.setState('COOLDOWN', `진입 보류: ${entryDecision.reason}`);
       return;
@@ -168,13 +227,17 @@ export class MarketWorker {
       this.setState('PLAYWRIGHT_CHECK', 'UI 검증 중');
       const check = await this.deps.verifyWithPlaywright(this.config.market);
       if (!check.ok) {
+        this.emitEvent('PLAYWRIGHT_WARN', 'WARN', check.note);
         this.deps.onLog(`[${this.config.market}] playwright 검증 실패, 계속 진행: ${check.note}`);
       }
     }
 
     this.setState('ENTERING', '진입 실행');
+    this.emitOrderFlow('BUY_REQUESTED', '진입 주문 요청');
     try {
       await this.deps.startGuidedEntry(this.config.market);
+      this.emitOrderFlow('BUY_FILLED', 'Guided 진입 성공');
+      this.emitEvent('ENTRY_SUCCESS', 'INFO', 'Guided API 진입 성공');
       this.setState('MANAGING', 'Guided 진입 성공');
       this.deps.onLog(`[${this.config.market}] Guided API 진입 성공`);
     } catch (primaryError) {
@@ -183,9 +246,27 @@ export class MarketWorker {
           primaryError instanceof Error ? primaryError.message : '알 수 없는 오류'
         }`
       );
-      await this.deps.fallbackEntryByMcp(this.config.market);
-      this.setState('MANAGING', 'MCP 폴백 진입 성공');
-      this.deps.onLog(`[${this.config.market}] MCP 폴백 진입 성공`);
+      this.emitEvent(
+        'ENTRY_FAILED',
+        'WARN',
+        `Guided 실패: ${primaryError instanceof Error ? primaryError.message : '알 수 없는 오류'}`
+      );
+
+      this.emitOrderFlow('BUY_REQUESTED', 'MCP 폴백 진입 요청');
+      try {
+        await this.deps.fallbackEntryByMcp(this.config.market);
+        this.emitOrderFlow('BUY_FILLED', 'MCP 폴백 진입 성공');
+        this.emitEvent('ENTRY_SUCCESS', 'INFO', 'MCP 폴백 진입 성공');
+        this.setState('MANAGING', 'MCP 폴백 진입 성공');
+        this.deps.onLog(`[${this.config.market}] MCP 폴백 진입 성공`);
+      } catch (fallbackError) {
+        this.emitEvent(
+          'ENTRY_FAILED',
+          'ERROR',
+          `MCP 폴백 실패: ${fallbackError instanceof Error ? fallbackError.message : '알 수 없는 오류'}`
+        );
+        throw fallbackError;
+      }
     }
   }
 
@@ -206,19 +287,28 @@ export class MarketWorker {
     this.setState('MANAGING', `모니터링 (${pnl >= 0 ? '+' : ''}${pnl.toFixed(2)}%)`);
 
     if (pnl <= -0.8) {
+      this.emitOrderFlow('SELL_REQUESTED', '빠른 손절 요청');
       await this.deps.stopPosition(this.config.market, '빠른 손절');
+      this.emitOrderFlow('SELL_FILLED', '빠른 손절 체결');
+      this.emitEvent('POSITION_EXIT', 'WARN', '빠른 손절 실행');
       this.cooldownUntil = Date.now() + this.config.cooldownMs;
       this.setState('COOLDOWN', '손절 후 쿨다운');
       return;
     }
 
     if (!position.halfTakeProfitDone && pnl >= 1.2) {
+      this.emitOrderFlow('SELL_REQUESTED', '부분익절 50% 요청');
       await this.deps.partialTakeProfit(this.config.market, 0.5, '1차 부분익절');
+      this.emitOrderFlow('SELL_FILLED', '부분익절 50% 실행');
+      this.emitEvent('PARTIAL_TP', 'INFO', '부분익절 50% 실행');
       this.deps.onLog(`[${this.config.market}] 부분익절 50% 실행`);
     }
 
     if (pnl >= 2.2) {
+      this.emitOrderFlow('SELL_REQUESTED', '목표 수익 청산 요청');
       await this.deps.stopPosition(this.config.market, '목표 수익 청산');
+      this.emitOrderFlow('SELL_FILLED', '목표 수익 청산 체결');
+      this.emitEvent('POSITION_EXIT', 'INFO', '목표 수익 청산');
       this.cooldownUntil = Date.now() + this.config.cooldownMs;
       this.setState('COOLDOWN', '익절 후 쿨다운');
       return;
@@ -228,13 +318,19 @@ export class MarketWorker {
       this.lastLlmReviewAt = Date.now();
       const review = await this.deps.reviewOpenPosition(this.config.market, position);
       if (review.action === 'FULL_EXIT') {
+        this.emitOrderFlow('SELL_REQUESTED', `LLM 조기청산 요청: ${review.reason}`);
         await this.deps.stopPosition(this.config.market, `LLM 조기청산: ${review.reason}`);
+        this.emitOrderFlow('SELL_FILLED', `LLM 조기청산 체결: ${review.reason}`);
+        this.emitEvent('POSITION_EXIT', 'WARN', `LLM 조기청산: ${review.reason}`);
         this.cooldownUntil = Date.now() + this.config.cooldownMs;
         this.setState('COOLDOWN', 'LLM 조기청산');
         return;
       }
       if (review.action === 'PARTIAL_TP' && !position.halfTakeProfitDone) {
+        this.emitOrderFlow('SELL_REQUESTED', `LLM 부분익절 요청: ${review.reason}`);
         await this.deps.partialTakeProfit(this.config.market, 0.5, `LLM 부분익절: ${review.reason}`);
+        this.emitOrderFlow('SELL_FILLED', `LLM 부분익절 실행: ${review.reason}`);
+        this.emitEvent('PARTIAL_TP', 'INFO', `LLM 부분익절: ${review.reason}`);
         this.deps.onLog(`[${this.config.market}] LLM 권고 부분익절 실행`);
       }
     }

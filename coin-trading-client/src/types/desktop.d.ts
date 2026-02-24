@@ -40,7 +40,13 @@ declare global {
   }
 
   interface McpToolResult {
-    content: Array<{ type: string; text?: string }>;
+    content: Array<{
+      type: string;
+      text?: string;
+      data?: string;
+      mimeType?: string;
+      url?: string;
+    }>;
     isError?: boolean;
   }
 

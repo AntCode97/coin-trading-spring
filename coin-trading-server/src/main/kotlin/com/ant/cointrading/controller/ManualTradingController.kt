@@ -2,6 +2,8 @@ package com.ant.cointrading.controller
 
 import com.ant.cointrading.api.bithumb.BithumbPrivateApi
 import com.ant.cointrading.api.bithumb.OrderResponse
+import com.ant.cointrading.repository.OrderLifecycleStrategyGroup
+import com.ant.cointrading.service.OrderLifecycleTelemetryService
 import com.ant.cointrading.util.apiFailure
 import com.ant.cointrading.util.apiSuccess
 import org.springframework.web.bind.annotation.*
@@ -16,6 +18,7 @@ import java.math.BigDecimal
 @RequestMapping("/api/manual-trading")
 class ManualTradingController(
     private val bithumbPrivateApi: BithumbPrivateApi,
+    private val orderLifecycleTelemetryService: OrderLifecycleTelemetryService,
 ) {
 
     /**
@@ -35,10 +38,18 @@ class ManualTradingController(
         @RequestParam(defaultValue = "market") orderType: String,
         @RequestParam(required = false) price: BigDecimal?
     ): Map<String, Any?> {
-        return withMarketError(market) {
-            val result = placeBuyOrder(market, orderType, amountKrw, quantity, price)
+        val normalizedMarket = market.uppercase()
+        return withMarketError(normalizedMarket) {
+            val result = placeBuyOrder(normalizedMarket, orderType, amountKrw, quantity, price)
+            recordManualOrder(
+                market = normalizedMarket,
+                side = "BUY",
+                order = result,
+                requestedPrice = price,
+                requestedQuantity = quantity
+            )
             apiSuccess(
-                "market" to market,
+                "market" to normalizedMarket,
                 "orderType" to orderType,
                 "orderId" to result.uuid,
                 "amountKrw" to amountKrw,
@@ -64,10 +75,18 @@ class ManualTradingController(
         @RequestParam(defaultValue = "market") orderType: String,
         @RequestParam(required = false) price: BigDecimal?
     ): Map<String, Any?> {
-        return withMarketError(market) {
-            val result = placeSellOrder(market, orderType, quantity, price)
+        val normalizedMarket = market.uppercase()
+        return withMarketError(normalizedMarket) {
+            val result = placeSellOrder(normalizedMarket, orderType, quantity, price)
+            recordManualOrder(
+                market = normalizedMarket,
+                side = "SELL",
+                order = result,
+                requestedPrice = price,
+                requestedQuantity = quantity
+            )
             apiSuccess(
-                "market" to market,
+                "market" to normalizedMarket,
                 "orderType" to orderType,
                 "orderId" to result.uuid,
                 "quantity" to quantity,
@@ -137,5 +156,32 @@ class ManualTradingController(
 
         requireNotNull(price) { "지정가 주문 시 price는 필수입니다" }
         return bithumbPrivateApi.sellLimitOrder(market, price, quantity)
+    }
+
+    private fun recordManualOrder(
+        market: String,
+        side: String,
+        order: OrderResponse,
+        requestedPrice: BigDecimal?,
+        requestedQuantity: BigDecimal?
+    ) {
+        orderLifecycleTelemetryService.recordRequested(
+            strategyGroup = OrderLifecycleStrategyGroup.MANUAL,
+            market = market,
+            side = side,
+            orderId = order.uuid,
+            strategyCode = "MANUAL_TRADER",
+            price = requestedPrice,
+            quantity = requestedQuantity,
+            message = "manual_${side.lowercase()}_requested"
+        )
+
+        val latest = bithumbPrivateApi.getOrder(order.uuid) ?: order
+        orderLifecycleTelemetryService.reconcileOrderState(
+            strategyGroup = OrderLifecycleStrategyGroup.MANUAL,
+            order = latest,
+            fallbackMarket = market,
+            strategyCode = "MANUAL_TRADER"
+        )
     }
 }

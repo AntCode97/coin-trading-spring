@@ -1341,6 +1341,18 @@
   padding: 2px 0;
 }
 
+.autopilot-open-dock-btn {
+  width: 100%;
+  margin-top: 8px;
+  border: 1px solid #3357a8;
+  background: #182f64;
+  color: #dbe8ff;
+  border-radius: 7px;
+  padding: 6px 8px;
+  font-size: 11px;
+  cursor: pointer;
+}
+
 /* ---------- 상태 패널 공통 ---------- */
 
 .state-panel {

@@ -726,6 +726,58 @@ export interface GuidedAgentContextResponse {
   performance: GuidedPerformanceSnapshot;
 }
 
+export interface OrderLifecycleGroupSummary {
+  buyRequested: number;
+  buyFilled: number;
+  sellRequested: number;
+  sellFilled: number;
+  pending: number;
+  cancelled: number;
+}
+
+export interface OrderLifecycleSummary {
+  total: OrderLifecycleGroupSummary;
+  groups: Record<string, OrderLifecycleGroupSummary>;
+}
+
+export interface OrderLifecycleEvent {
+  id: number;
+  orderId?: string | null;
+  market: string;
+  side?: string | null;
+  eventType: string;
+  strategyGroup: string;
+  strategyCode?: string | null;
+  price?: number | null;
+  quantity?: number | null;
+  message?: string | null;
+  createdAt: string;
+}
+
+export interface AutopilotCandidateView {
+  market: string;
+  koreanName: string;
+  recommendedEntryWinRate?: number | null;
+  marketEntryWinRate?: number | null;
+  stage: string;
+  reason: string;
+}
+
+export interface AutopilotEventView {
+  market: string;
+  eventType: string;
+  level: string;
+  message: string;
+  createdAt: string;
+}
+
+export interface AutopilotLiveResponse {
+  orderSummary: OrderLifecycleSummary;
+  orderEvents: OrderLifecycleEvent[];
+  autopilotEvents: AutopilotEventView[];
+  candidates: AutopilotCandidateView[];
+}
+
 export interface GuidedStartRequest {
   market: string;
   amountKrw: number;
@@ -845,6 +897,9 @@ export const guidedTradingApi = {
 
   getTodayStats: (): Promise<GuidedDailyStats> =>
     api.get('/guided-trading/stats/today').then((res) => res.data),
+
+  getAutopilotLive: (interval = 'minute30', mode?: string): Promise<AutopilotLiveResponse> =>
+    api.get('/guided-trading/autopilot/live', { params: { interval, mode } }).then((res) => res.data),
 
   getClosedTrades: (limit = 50): Promise<GuidedClosedTradeView[]> =>
     api.get('/guided-trading/trades/closed', { params: { limit } }).then((res) => res.data),

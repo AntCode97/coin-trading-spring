@@ -4,6 +4,8 @@ import com.ant.cointrading.api.bithumb.Balance
 import com.ant.cointrading.api.bithumb.BithumbPrivateApi
 import com.ant.cointrading.api.bithumb.BithumbPublicApi
 import com.ant.cointrading.api.bithumb.OrderResponse
+import com.ant.cointrading.repository.OrderLifecycleStrategyGroup
+import com.ant.cointrading.service.OrderLifecycleTelemetryService
 import org.slf4j.LoggerFactory
 import org.springaicommunity.mcp.annotation.McpTool
 import org.springaicommunity.mcp.annotation.McpToolParam
@@ -41,7 +43,8 @@ data class PriceValidation(
 @Component
 class TradingTools(
     private val privateApi: BithumbPrivateApi,
-    private val publicApi: BithumbPublicApi
+    private val publicApi: BithumbPublicApi,
+    private val orderLifecycleTelemetryService: OrderLifecycleTelemetryService,
 ) {
     private val log = LoggerFactory.getLogger(javaClass)
 
@@ -81,9 +84,24 @@ class TradingTools(
 
         return try {
             val order = privateApi.buyLimitOrder(market, price, volume)
+            recordMcpOrder(
+                market = market,
+                side = "BUY",
+                order = order,
+                requestedPrice = price,
+                requestedQuantity = volume
+            )
             OrderResult(success = true, order = order)
         } catch (e: Exception) {
             log.error("Buy limit order failed: {}", e.message)
+            orderLifecycleTelemetryService.recordFailed(
+                strategyGroup = OrderLifecycleStrategyGroup.AUTOPILOT_MCP,
+                market = market,
+                side = "BUY",
+                orderId = null,
+                strategyCode = "MCP_TRADING_TOOLS",
+                message = e.message
+            )
             OrderResult(success = false, error = e.message ?: "Unknown error")
         }
     }
@@ -111,9 +129,24 @@ class TradingTools(
 
         return try {
             val order = privateApi.sellLimitOrder(market, price, volume)
+            recordMcpOrder(
+                market = market,
+                side = "SELL",
+                order = order,
+                requestedPrice = price,
+                requestedQuantity = volume
+            )
             OrderResult(success = true, order = order)
         } catch (e: Exception) {
             log.error("Sell limit order failed: {}", e.message)
+            orderLifecycleTelemetryService.recordFailed(
+                strategyGroup = OrderLifecycleStrategyGroup.AUTOPILOT_MCP,
+                market = market,
+                side = "SELL",
+                orderId = null,
+                strategyCode = "MCP_TRADING_TOOLS",
+                message = e.message
+            )
             OrderResult(success = false, error = e.message ?: "Unknown error")
         }
     }
@@ -134,9 +167,24 @@ class TradingTools(
 
         return try {
             val order = privateApi.buyMarketOrder(market, krwAmount)
+            recordMcpOrder(
+                market = market,
+                side = "BUY",
+                order = order,
+                requestedPrice = krwAmount,
+                requestedQuantity = null
+            )
             OrderResult(success = true, order = order)
         } catch (e: Exception) {
             log.error("Buy market order failed: {}", e.message)
+            orderLifecycleTelemetryService.recordFailed(
+                strategyGroup = OrderLifecycleStrategyGroup.AUTOPILOT_MCP,
+                market = market,
+                side = "BUY",
+                orderId = null,
+                strategyCode = "MCP_TRADING_TOOLS",
+                message = e.message
+            )
             OrderResult(success = false, error = e.message ?: "Unknown error")
         }
     }
@@ -158,9 +206,24 @@ class TradingTools(
 
         return try {
             val order = privateApi.sellMarketOrder(market, volume)
+            recordMcpOrder(
+                market = market,
+                side = "SELL",
+                order = order,
+                requestedPrice = null,
+                requestedQuantity = volume
+            )
             OrderResult(success = true, order = order)
         } catch (e: Exception) {
             log.error("Sell market order failed: {}", e.message)
+            orderLifecycleTelemetryService.recordFailed(
+                strategyGroup = OrderLifecycleStrategyGroup.AUTOPILOT_MCP,
+                market = market,
+                side = "SELL",
+                orderId = null,
+                strategyCode = "MCP_TRADING_TOOLS",
+                message = e.message
+            )
             OrderResult(success = false, error = e.message ?: "Unknown error")
         }
     }
@@ -169,7 +232,13 @@ class TradingTools(
     fun getOrder(
         @McpToolParam(description = "주문 UUID") uuid: String
     ): OrderResponse? {
-        return privateApi.getOrder(uuid)
+        val order = privateApi.getOrder(uuid)
+        orderLifecycleTelemetryService.reconcileOrderState(
+            strategyGroup = OrderLifecycleStrategyGroup.AUTOPILOT_MCP,
+            order = order,
+            strategyCode = "MCP_TRADING_TOOLS"
+        )
+        return order
     }
 
     @McpTool(description = "주문 목록을 조회합니다.")
@@ -186,13 +255,67 @@ class TradingTools(
     fun cancelOrder(
         @McpToolParam(description = "취소할 주문의 UUID") uuid: String
     ): OrderResult {
+        val existingOrder = privateApi.getOrder(uuid)
+        val market = existingOrder?.market ?: "KRW-UNKNOWN"
+        val side = existingOrder?.side
+        orderLifecycleTelemetryService.recordCancelRequested(
+            strategyGroup = OrderLifecycleStrategyGroup.AUTOPILOT_MCP,
+            market = market,
+            side = side,
+            orderId = uuid,
+            strategyCode = "MCP_TRADING_TOOLS",
+            message = "mcp_cancel_requested"
+        )
+
         return try {
             val order = privateApi.cancelOrder(uuid)
+            orderLifecycleTelemetryService.recordCancelledIfFirst(
+                strategyGroup = OrderLifecycleStrategyGroup.AUTOPILOT_MCP,
+                market = order.market.ifBlank { market },
+                side = order.side,
+                orderId = uuid,
+                strategyCode = "MCP_TRADING_TOOLS",
+                message = "mcp_cancelled"
+            )
             OrderResult(success = true, order = order)
         } catch (e: Exception) {
             log.error("Cancel order failed: {}", e.message)
+            orderLifecycleTelemetryService.recordFailed(
+                strategyGroup = OrderLifecycleStrategyGroup.AUTOPILOT_MCP,
+                market = market,
+                side = side,
+                orderId = uuid,
+                strategyCode = "MCP_TRADING_TOOLS",
+                message = e.message
+            )
             OrderResult(success = false, error = e.message ?: "Unknown error")
         }
+    }
+
+    private fun recordMcpOrder(
+        market: String,
+        side: String,
+        order: OrderResponse,
+        requestedPrice: BigDecimal?,
+        requestedQuantity: BigDecimal?
+    ) {
+        orderLifecycleTelemetryService.recordRequested(
+            strategyGroup = OrderLifecycleStrategyGroup.AUTOPILOT_MCP,
+            market = market,
+            side = side,
+            orderId = order.uuid,
+            strategyCode = "MCP_TRADING_TOOLS",
+            price = requestedPrice,
+            quantity = requestedQuantity,
+            message = "mcp_${side.lowercase()}_requested"
+        )
+        val latest = privateApi.getOrder(order.uuid) ?: order
+        orderLifecycleTelemetryService.reconcileOrderState(
+            strategyGroup = OrderLifecycleStrategyGroup.AUTOPILOT_MCP,
+            order = latest,
+            fallbackMarket = market,
+            strategyCode = "MCP_TRADING_TOOLS"
+        )
     }
 
     /**

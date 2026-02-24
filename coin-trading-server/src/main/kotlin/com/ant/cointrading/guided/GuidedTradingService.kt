@@ -5,10 +5,14 @@ import com.ant.cointrading.api.bithumb.BithumbPublicApi
 import com.ant.cointrading.api.bithumb.BithumbApiException
 import com.ant.cointrading.api.bithumb.OrderResponse
 import com.ant.cointrading.api.bithumb.TradeResponse
+import com.ant.cointrading.repository.OrderLifecycleStrategyGroup
 import com.ant.cointrading.repository.GuidedTradeEntity
 import com.ant.cointrading.repository.GuidedTradeEventEntity
 import com.ant.cointrading.repository.GuidedTradeEventRepository
 import com.ant.cointrading.repository.GuidedTradeRepository
+import com.ant.cointrading.service.OrderLifecycleEvent
+import com.ant.cointrading.service.OrderLifecycleSummary
+import com.ant.cointrading.service.OrderLifecycleTelemetryService
 import jakarta.annotation.PreDestroy
 import org.slf4j.LoggerFactory
 import org.springframework.scheduling.annotation.Scheduled
@@ -31,7 +35,8 @@ class GuidedTradingService(
     private val bithumbPublicApi: BithumbPublicApi,
     private val bithumbPrivateApi: BithumbPrivateApi,
     private val guidedTradeRepository: GuidedTradeRepository,
-    private val guidedTradeEventRepository: GuidedTradeEventRepository
+    private val guidedTradeEventRepository: GuidedTradeEventRepository,
+    private val orderLifecycleTelemetryService: OrderLifecycleTelemetryService
 ) {
     private val log = LoggerFactory.getLogger(javaClass)
     private val marketWinRateExecutor: ExecutorService = Executors.newFixedThreadPool(WIN_RATE_CALC_CONCURRENCY)
@@ -44,6 +49,7 @@ class GuidedTradingService(
         const val WIN_RATE_CANDLE_COUNT = 120
         const val WIN_RATE_CALC_CONCURRENCY = 8
         const val WIN_RATE_CALC_TIMEOUT_MILLIS = 2500L
+        const val GUIDED_STRATEGY_CODE = "GUIDED_TRADING"
     }
 
     @PreDestroy
@@ -367,10 +373,35 @@ class GuidedTradingService(
                 }
             }
         } catch (e: BithumbApiException) {
+            orderLifecycleTelemetryService.recordFailed(
+                strategyGroup = OrderLifecycleStrategyGroup.GUIDED,
+                market = market,
+                side = "BUY",
+                orderId = null,
+                strategyCode = GUIDED_STRATEGY_CODE,
+                message = e.message
+            )
             throw IllegalArgumentException(buildOrderErrorMessage(e))
         }
 
+        orderLifecycleTelemetryService.recordRequested(
+            strategyGroup = OrderLifecycleStrategyGroup.GUIDED,
+            market = market,
+            side = "BUY",
+            orderId = submitted.uuid,
+            strategyCode = GUIDED_STRATEGY_CODE,
+            price = if (orderType == GuidedTradeEntity.ORDER_TYPE_LIMIT) selectedLimitPrice else amountKrw,
+            quantity = submitted.volume,
+            message = "guided_entry_requested"
+        )
+
         val order = bithumbPrivateApi.getOrder(submitted.uuid) ?: submitted
+        orderLifecycleTelemetryService.reconcileOrderState(
+            strategyGroup = OrderLifecycleStrategyGroup.GUIDED,
+            order = order,
+            fallbackMarket = market,
+            strategyCode = GUIDED_STRATEGY_CODE
+        )
         val executedQuantity = order.executedVolume ?: BigDecimal.ZERO
         val tickerPrice = bithumbPublicApi.getCurrentPrice(market)?.firstOrNull()?.tradePrice
         val referencePrice = resolveEntryPrice(
@@ -425,8 +456,23 @@ class GuidedTradingService(
             if (estimatedValue >= BigDecimal("5000")) {
                 try {
                     val sell = bithumbPrivateApi.sellMarketOrder(market, actualQty)
+                    orderLifecycleTelemetryService.recordRequested(
+                        strategyGroup = OrderLifecycleStrategyGroup.GUIDED,
+                        market = market,
+                        side = "SELL",
+                        orderId = sell.uuid,
+                        strategyCode = GUIDED_STRATEGY_CODE,
+                        quantity = actualQty,
+                        message = "guided_stop_requested"
+                    )
                     Thread.sleep(300)
                     val sellInfo = bithumbPrivateApi.getOrder(sell.uuid) ?: sell
+                    orderLifecycleTelemetryService.reconcileOrderState(
+                        strategyGroup = OrderLifecycleStrategyGroup.GUIDED,
+                        order = sellInfo,
+                        fallbackMarket = market,
+                        strategyCode = GUIDED_STRATEGY_CODE
+                    )
                     val execPrice = sellInfo.price ?: currentPrice
                     val executedQty = sellInfo.executedVolume ?: actualQty
 
@@ -442,6 +488,14 @@ class GuidedTradingService(
                     }
                 } catch (e: Exception) {
                     log.error("[$market] 전량 매도 실패: ${e.message}", e)
+                    orderLifecycleTelemetryService.recordFailed(
+                        strategyGroup = OrderLifecycleStrategyGroup.GUIDED,
+                        market = market,
+                        side = "SELL",
+                        orderId = null,
+                        strategyCode = GUIDED_STRATEGY_CODE,
+                        message = e.message
+                    )
                     throw IllegalStateException("[$market] 매도 주문 실패 — 빗썸에서 직접 매도하세요. 원인: ${e.message}")
                 }
             } else {
@@ -470,8 +524,36 @@ class GuidedTradingService(
         ) ?: return null
 
         trade.entryOrderId?.let { orderId ->
+            orderLifecycleTelemetryService.recordCancelRequested(
+                strategyGroup = OrderLifecycleStrategyGroup.GUIDED,
+                market = market,
+                side = "BUY",
+                orderId = orderId,
+                strategyCode = GUIDED_STRATEGY_CODE,
+                message = "guided_pending_cancel_requested"
+            )
             runCatching { bithumbPrivateApi.cancelOrder(orderId) }
-                .onFailure { log.warn("[$market] 미체결 주문 취소 실패 (orderId=$orderId): ${it.message}") }
+                .onSuccess {
+                    orderLifecycleTelemetryService.recordCancelledIfFirst(
+                        strategyGroup = OrderLifecycleStrategyGroup.GUIDED,
+                        market = market,
+                        side = it.side,
+                        orderId = orderId,
+                        strategyCode = GUIDED_STRATEGY_CODE,
+                        message = "guided_pending_cancelled"
+                    )
+                }
+                .onFailure {
+                    log.warn("[$market] 미체결 주문 취소 실패 (orderId=$orderId): ${it.message}")
+                    orderLifecycleTelemetryService.recordFailed(
+                        strategyGroup = OrderLifecycleStrategyGroup.GUIDED,
+                        market = market,
+                        side = "BUY",
+                        orderId = orderId,
+                        strategyCode = GUIDED_STRATEGY_CODE,
+                        message = it.message
+                    )
+                }
         }
 
         trade.status = GuidedTradeEntity.STATUS_CANCELLED
@@ -504,7 +586,22 @@ class GuidedTradingService(
         }
 
         val sell = bithumbPrivateApi.sellMarketOrder(trade.market, qty)
+        orderLifecycleTelemetryService.recordRequested(
+            strategyGroup = OrderLifecycleStrategyGroup.GUIDED,
+            market = trade.market,
+            side = "SELL",
+            orderId = sell.uuid,
+            strategyCode = GUIDED_STRATEGY_CODE,
+            quantity = qty,
+            message = "guided_manual_partial_tp_requested"
+        )
         val sellInfo = bithumbPrivateApi.getOrder(sell.uuid) ?: sell
+        orderLifecycleTelemetryService.reconcileOrderState(
+            strategyGroup = OrderLifecycleStrategyGroup.GUIDED,
+            order = sellInfo,
+            fallbackMarket = trade.market,
+            strategyCode = GUIDED_STRATEGY_CODE
+        )
         val executedQty = (sellInfo.executedVolume ?: qty).min(trade.remainingQuantity)
         require(executedQty > BigDecimal.ZERO) { "부분 익절 주문이 체결되지 않았습니다." }
 
@@ -562,6 +659,12 @@ class GuidedTradingService(
     private fun reconcilePendingEntry(trade: GuidedTradeEntity) {
         val orderId = trade.entryOrderId ?: return
         val order = bithumbPrivateApi.getOrder(orderId) ?: return
+        orderLifecycleTelemetryService.reconcileOrderState(
+            strategyGroup = OrderLifecycleStrategyGroup.GUIDED,
+            order = order,
+            fallbackMarket = trade.market,
+            strategyCode = GUIDED_STRATEGY_CODE
+        )
         val executed = order.executedVolume ?: BigDecimal.ZERO
 
         if (executed > BigDecimal.ZERO) {
@@ -584,7 +687,23 @@ class GuidedTradingService(
 
         val ageSec = Instant.now().epochSecond - trade.createdAt.epochSecond
         if (ageSec > 900) {
-            bithumbPrivateApi.cancelOrder(orderId)
+            orderLifecycleTelemetryService.recordCancelRequested(
+                strategyGroup = OrderLifecycleStrategyGroup.GUIDED,
+                market = trade.market,
+                side = "BUY",
+                orderId = orderId,
+                strategyCode = GUIDED_STRATEGY_CODE,
+                message = "guided_pending_timeout_cancel_requested"
+            )
+            val cancelled = bithumbPrivateApi.cancelOrder(orderId)
+            orderLifecycleTelemetryService.recordCancelledIfFirst(
+                strategyGroup = OrderLifecycleStrategyGroup.GUIDED,
+                market = trade.market,
+                side = cancelled.side,
+                orderId = orderId,
+                strategyCode = GUIDED_STRATEGY_CODE,
+                message = "guided_pending_timeout_cancelled"
+            )
             trade.status = GuidedTradeEntity.STATUS_CANCELLED
             trade.closedAt = Instant.now()
             trade.exitReason = "ENTRY_TIMEOUT"
@@ -684,12 +803,35 @@ class GuidedTradingService(
         if (qty <= BigDecimal.ZERO) return
 
         val order = bithumbPrivateApi.sellMarketOrder(trade.market, qty)
+        orderLifecycleTelemetryService.recordRequested(
+            strategyGroup = OrderLifecycleStrategyGroup.GUIDED,
+            market = trade.market,
+            side = "SELL",
+            orderId = order.uuid,
+            strategyCode = GUIDED_STRATEGY_CODE,
+            quantity = qty,
+            message = "guided_half_tp_requested"
+        )
         val orderInfo = bithumbPrivateApi.getOrder(order.uuid) ?: order
+        orderLifecycleTelemetryService.reconcileOrderState(
+            strategyGroup = OrderLifecycleStrategyGroup.GUIDED,
+            order = orderInfo,
+            fallbackMarket = trade.market,
+            strategyCode = GUIDED_STRATEGY_CODE
+        )
         val executedQty = (orderInfo.executedVolume ?: qty).min(trade.remainingQuantity)
         if (executedQty <= BigDecimal.ZERO) {
             trade.lastAction = "HALF_TAKE_PROFIT_NO_FILL"
             guidedTradeRepository.save(trade)
             appendEvent(trade.id!!, "HALF_TP_NO_FILL", currentPrice, BigDecimal.ZERO, "절반 익절 주문 미체결")
+            orderLifecycleTelemetryService.recordFailed(
+                strategyGroup = OrderLifecycleStrategyGroup.GUIDED,
+                market = trade.market,
+                side = "SELL",
+                orderId = order.uuid,
+                strategyCode = GUIDED_STRATEGY_CODE,
+                message = "guided_half_tp_no_fill"
+            )
             return
         }
         val execPrice = orderInfo.price ?: currentPrice
@@ -719,7 +861,22 @@ class GuidedTradingService(
         if (addAmount < BigDecimal(5100)) return
 
         val order = bithumbPrivateApi.buyMarketOrder(trade.market, addAmount)
+        orderLifecycleTelemetryService.recordRequested(
+            strategyGroup = OrderLifecycleStrategyGroup.GUIDED,
+            market = trade.market,
+            side = "BUY",
+            orderId = order.uuid,
+            strategyCode = GUIDED_STRATEGY_CODE,
+            price = addAmount,
+            message = "guided_dca_requested"
+        )
         val orderInfo = bithumbPrivateApi.getOrder(order.uuid) ?: order
+        orderLifecycleTelemetryService.reconcileOrderState(
+            strategyGroup = OrderLifecycleStrategyGroup.GUIDED,
+            order = orderInfo,
+            fallbackMarket = trade.market,
+            strategyCode = GUIDED_STRATEGY_CODE
+        )
         val executedQty = orderInfo.executedVolume ?: BigDecimal.ZERO
         if (executedQty <= BigDecimal.ZERO) return
 
@@ -798,11 +955,35 @@ class GuidedTradingService(
             trade.lastAction = "SELL_FAILED: ${e.message?.take(80)}"
             guidedTradeRepository.save(trade)
             appendEvent(trade.id!!, "SELL_FAILED", currentPrice, sellQty, "매도 실패: ${e.message?.take(120)}")
+            orderLifecycleTelemetryService.recordFailed(
+                strategyGroup = OrderLifecycleStrategyGroup.GUIDED,
+                market = trade.market,
+                side = "SELL",
+                orderId = null,
+                strategyCode = GUIDED_STRATEGY_CODE,
+                message = e.message
+            )
             throw IllegalStateException("[${trade.market}] 매도 주문 실패 — 빗썸에서 직접 매도하세요. 원인: ${e.message}")
         }
 
+        orderLifecycleTelemetryService.recordRequested(
+            strategyGroup = OrderLifecycleStrategyGroup.GUIDED,
+            market = trade.market,
+            side = "SELL",
+            orderId = sell.uuid,
+            strategyCode = GUIDED_STRATEGY_CODE,
+            quantity = sellQty,
+            message = "guided_close_requested:$reason"
+        )
+
         Thread.sleep(300)
         val sellInfo = bithumbPrivateApi.getOrder(sell.uuid) ?: sell
+        orderLifecycleTelemetryService.reconcileOrderState(
+            strategyGroup = OrderLifecycleStrategyGroup.GUIDED,
+            order = sellInfo,
+            fallbackMarket = trade.market,
+            strategyCode = GUIDED_STRATEGY_CODE
+        )
         val executedQty = (sellInfo.executedVolume ?: sellQty).min(sellQty)
         val execPrice = sellInfo.price ?: currentPrice
 
@@ -811,6 +992,14 @@ class GuidedTradingService(
             trade.lastAction = "CLOSE_NO_FILL_$reason"
             guidedTradeRepository.save(trade)
             appendEvent(trade.id!!, "CLOSE_NO_FILL", execPrice, BigDecimal.ZERO, "청산 주문 미체결: $reason")
+            orderLifecycleTelemetryService.recordFailed(
+                strategyGroup = OrderLifecycleStrategyGroup.GUIDED,
+                market = trade.market,
+                side = "SELL",
+                orderId = sell.uuid,
+                strategyCode = GUIDED_STRATEGY_CODE,
+                message = "guided_close_no_fill:$reason"
+            )
             return
         }
 
@@ -1071,6 +1260,57 @@ class GuidedTradingService(
         return guidedTradeRepository.findByStatusOrderByClosedAtDesc(GuidedTradeEntity.STATUS_CLOSED)
             .take(limit)
             .map { it.toClosedTradeView() }
+    }
+
+    fun getAutopilotLive(
+        interval: String = "minute30",
+        mode: TradingMode = TradingMode.SWING
+    ): GuidedAutopilotLiveResponse {
+        val telemetry = orderLifecycleTelemetryService.getLiveSnapshot()
+        val candidates = getMarketBoard(
+            sortBy = GuidedMarketSortBy.MARKET_ENTRY_WIN_RATE,
+            sortDirection = GuidedSortDirection.DESC,
+            interval = interval,
+            mode = mode
+        )
+            .take(10)
+            .map { market ->
+                val recommendedWinRate = market.recommendedEntryWinRate
+                val marketWinRate = market.marketEntryWinRate
+                val pass = (recommendedWinRate ?: 0.0) >= 65.0
+                GuidedAutopilotCandidateView(
+                    market = market.market,
+                    koreanName = market.koreanName,
+                    recommendedEntryWinRate = recommendedWinRate,
+                    marketEntryWinRate = marketWinRate,
+                    stage = if (pass) "RULE_PASS" else "RULE_FAIL",
+                    reason = if (pass) {
+                        "추천가 승률 ${String.format("%.1f", recommendedWinRate ?: 0.0)}%가 65% 이상"
+                    } else {
+                        "추천가 승률 ${String.format("%.1f", recommendedWinRate ?: 0.0)}%가 65% 미만"
+                    }
+                )
+            }
+
+        val autopilotEvents = telemetry.orderEvents
+            .filter { it.strategyGroup == OrderLifecycleStrategyGroup.AUTOPILOT_MCP.name }
+            .take(80)
+            .map { event ->
+                GuidedAutopilotEvent(
+                    market = event.market,
+                    eventType = event.eventType,
+                    level = if (event.eventType == "FAILED") "WARN" else "INFO",
+                    message = event.message ?: "${event.eventType}(${event.market})",
+                    createdAt = event.createdAt
+                )
+            }
+
+        return GuidedAutopilotLiveResponse(
+            orderSummary = telemetry.orderSummary,
+            orderEvents = telemetry.orderEvents,
+            autopilotEvents = autopilotEvents,
+            candidates = candidates
+        )
     }
 
     private fun calibratePredictedWinRate(market: String, baseWinRate: Double): WinRateCalibration {
@@ -1651,6 +1891,30 @@ data class GuidedAgentContextResponse(
     val chart: GuidedChartResponse,
     val recentClosedTrades: List<GuidedClosedTradeView>,
     val performance: GuidedPerformanceSnapshot
+)
+
+data class GuidedAutopilotLiveResponse(
+    val orderSummary: OrderLifecycleSummary,
+    val orderEvents: List<OrderLifecycleEvent>,
+    val autopilotEvents: List<GuidedAutopilotEvent>,
+    val candidates: List<GuidedAutopilotCandidateView>
+)
+
+data class GuidedAutopilotEvent(
+    val market: String,
+    val eventType: String,
+    val level: String,
+    val message: String,
+    val createdAt: Instant
+)
+
+data class GuidedAutopilotCandidateView(
+    val market: String,
+    val koreanName: String,
+    val recommendedEntryWinRate: Double?,
+    val marketEntryWinRate: Double?,
+    val stage: String,
+    val reason: String
 )
 
 data class GuidedClosedTradeView(

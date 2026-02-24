@@ -57,4 +57,6 @@ interface PendingOrderRepository : JpaRepository<PendingOrderEntity, Long> {
      * 전략별 미체결 주문 조회
      */
     fun findByStrategyAndStatusIn(strategy: String, statuses: List<PendingOrderStatus>): List<PendingOrderEntity>
+
+    fun findByCreatedAtBetween(start: Instant, end: Instant): List<PendingOrderEntity>
 }

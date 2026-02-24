@@ -26,6 +26,7 @@ import {
   type GuidedStartRequest,
   type GuidedTradePosition,
   type GuidedDailyStats,
+  type AutopilotLiveResponse,
 } from '../api';
 import {
   checkConnection,
@@ -50,6 +51,7 @@ import {
   AutopilotOrchestrator,
   type AutopilotState,
 } from '../lib/autopilot/AutopilotOrchestrator';
+import { AutopilotLiveDock } from './autopilot/AutopilotLiveDock';
 import './ManualTraderWorkspace.css';
 
 const KRW_FORMATTER = new Intl.NumberFormat('ko-KR');
@@ -76,6 +78,8 @@ type WorkspacePrefs = {
   playwrightAutoStart?: boolean;
   playwrightMcpPort?: number;
   playwrightMcpUrl?: string;
+  autopilotDockOpen?: boolean;
+  autopilotDockCollapsed?: boolean;
 };
 
 function loadPrefs(): WorkspacePrefs {
@@ -271,6 +275,12 @@ export default function ManualTraderWorkspace() {
   const [playwrightStatus, setPlaywrightStatus] = useState<PlaywrightMcpStatus | null>(null);
   const [autopilotEnabled, setAutopilotEnabled] = useState<boolean>(prefs.autopilotEnabled ?? false);
   const [dailyLossLimitKrw, setDailyLossLimitKrw] = useState<number>(prefs.dailyLossLimitKrw ?? -20000);
+  const [autopilotDockOpen, setAutopilotDockOpen] = useState<boolean>(
+    prefs.autopilotDockOpen ?? (prefs.autopilotEnabled ?? false)
+  );
+  const [autopilotDockCollapsed, setAutopilotDockCollapsed] = useState<boolean>(
+    prefs.autopilotDockCollapsed ?? false
+  );
   const [autopilotState, setAutopilotState] = useState<AutopilotState>({
     enabled: false,
     blockedByDailyLoss: false,
@@ -278,6 +288,17 @@ export default function ManualTraderWorkspace() {
     startedAt: null,
     workers: [],
     logs: [],
+    events: [],
+    candidates: [],
+    orderFlowLocal: {
+      buyRequested: 0,
+      buyFilled: 0,
+      sellRequested: 0,
+      sellFilled: 0,
+      pending: 0,
+      cancelled: 0,
+    },
+    screenshots: [],
   });
   const autopilotRef = useRef<AutopilotOrchestrator | null>(null);
   const chatEndRef = useRef<HTMLDivElement | null>(null);
@@ -336,6 +357,13 @@ export default function ManualTraderWorkspace() {
     queryKey: ['guided-today-stats'],
     queryFn: () => guidedTradingApi.getTodayStats(),
     refetchInterval: 30000,
+  });
+
+  const autopilotLiveQuery = useQuery<AutopilotLiveResponse>({
+    queryKey: ['guided-autopilot-live', interval, tradingMode],
+    queryFn: () => guidedTradingApi.getAutopilotLive(interval, tradingMode),
+    enabled: autopilotEnabled || autopilotDockOpen,
+    refetchInterval: autopilotEnabled || autopilotDockOpen ? 5000 : false,
   });
 
   const startMutation = useMutation({
@@ -479,6 +507,8 @@ export default function ManualTraderWorkspace() {
       playwrightAutoStart,
       playwrightMcpPort,
       playwrightMcpUrl,
+      autopilotDockOpen,
+      autopilotDockCollapsed,
     };
     window.localStorage.setItem(STORAGE_KEY, JSON.stringify(next));
   }, [
@@ -494,6 +524,8 @@ export default function ManualTraderWorkspace() {
     playwrightAutoStart,
     playwrightMcpPort,
     playwrightMcpUrl,
+    autopilotDockOpen,
+    autopilotDockCollapsed,
   ]);
 
   // 차트 초기화
@@ -846,6 +878,12 @@ export default function ManualTraderWorkspace() {
       }
     };
   }, [autopilotEnabled, llmStatus, interval, tradingMode, dailyLossLimitKrw, chatModel, playwrightEnabled]);
+
+  useEffect(() => {
+    if (autopilotEnabled) {
+      setAutopilotDockOpen(true);
+    }
+  }, [autopilotEnabled]);
 
   const positionState: PositionState = derivePositionState(
     activePosition,
@@ -1316,17 +1354,31 @@ export default function ManualTraderWorkspace() {
                   {playwrightStatus?.url ? ` · ${playwrightStatus.url}` : ''}
                 </p>
 
-                {autopilotState.workers.length > 0 && (
-                  <div className="autopilot-workers">
-                    <strong>워커 상태 ({autopilotState.workers.length})</strong>
-                    {autopilotState.workers.map((worker) => (
-                      <div key={worker.market} className="autopilot-worker-row">
-                        <span>{worker.market}</span>
-                        <span>{worker.status}</span>
-                      </div>
-                    ))}
+                <div className="autopilot-workers">
+                  <strong>요약</strong>
+                  <div className="autopilot-worker-row">
+                    <span>실행 워커</span>
+                    <span>{autopilotState.workers.length}개</span>
                   </div>
-                )}
+                  <div className="autopilot-worker-row">
+                    <span>로컬 이벤트</span>
+                    <span>{autopilotState.events.length}건</span>
+                  </div>
+                  <div className="autopilot-worker-row">
+                    <span>후보</span>
+                    <span>{autopilotState.candidates.length}개</span>
+                  </div>
+                  <button
+                    type="button"
+                    className="autopilot-open-dock-btn"
+                    onClick={() => {
+                      setAutopilotDockOpen(true);
+                      setAutopilotDockCollapsed(false);
+                    }}
+                  >
+                    라이브 도크 열기
+                  </button>
+                </div>
               </div>
 
               {/* PlanPanel — 플랜 실행 중이면 주문 패널 대신 표시 */}
@@ -1707,6 +1759,23 @@ export default function ManualTraderWorkspace() {
           {statusMessage && <p className="guided-status">{statusMessage}</p>}
         </aside>
       </div>
+
+      <AutopilotLiveDock
+        open={autopilotDockOpen}
+        collapsed={autopilotDockCollapsed}
+        onToggleCollapse={() => {
+          if (!autopilotDockOpen) {
+            setAutopilotDockOpen(true);
+            setAutopilotDockCollapsed(false);
+            return;
+          }
+          setAutopilotDockCollapsed((prev) => !prev);
+        }}
+        autopilotEnabled={autopilotEnabled}
+        autopilotState={autopilotState}
+        liveData={autopilotLiveQuery.data}
+        loading={autopilotLiveQuery.isLoading}
+      />
     </section>
   );
 }

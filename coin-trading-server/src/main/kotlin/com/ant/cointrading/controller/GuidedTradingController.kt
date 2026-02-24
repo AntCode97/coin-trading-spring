@@ -7,6 +7,7 @@ import com.ant.cointrading.guided.GuidedDailyStats
 import com.ant.cointrading.guided.GuidedMarketItem
 import com.ant.cointrading.guided.GuidedRecommendation
 import com.ant.cointrading.guided.GuidedMarketSortBy
+import com.ant.cointrading.guided.GuidedAutopilotLiveResponse
 import com.ant.cointrading.guided.GuidedRealtimeTickerView
 import com.ant.cointrading.guided.GuidedSortDirection
 import com.ant.cointrading.guided.GuidedStartRequest
@@ -160,6 +161,17 @@ class GuidedTradingController(
             interval = interval,
             count = count,
             closedTradeLimit = closedTradeLimit,
+            mode = TradingMode.fromString(mode)
+        )
+    }
+
+    @GetMapping("/autopilot/live")
+    fun getAutopilotLive(
+        @RequestParam(defaultValue = "minute30") interval: String,
+        @RequestParam(defaultValue = "SWING") mode: String
+    ): GuidedAutopilotLiveResponse {
+        return guidedTradingService.getAutopilotLive(
+            interval = interval,
             mode = TradingMode.fromString(mode)
         )
     }
