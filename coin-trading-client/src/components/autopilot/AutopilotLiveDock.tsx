@@ -23,6 +23,7 @@ type TimelineItem = {
 };
 
 type OrderFeedFilter = 'ALL' | 'REQUESTED' | 'FILLED' | 'FAILED';
+const PAGE_SIZE_OPTIONS = [30, 50, 100] as const;
 
 const EMPTY_SUMMARY: OrderLifecycleGroupSummary = {
   buyRequested: 0,
@@ -161,6 +162,10 @@ export function AutopilotLiveDock({
 }: AutopilotLiveDockProps) {
   const [selectedGroup, setSelectedGroup] = useState('TOTAL');
   const [orderFeedFilter, setOrderFeedFilter] = useState<OrderFeedFilter>('ALL');
+  const [timelinePageSize, setTimelinePageSize] = useState<number>(30);
+  const [orderFeedPageSize, setOrderFeedPageSize] = useState<number>(30);
+  const [timelinePage, setTimelinePage] = useState(1);
+  const [orderFeedPage, setOrderFeedPage] = useState(1);
   const screenshotById = useMemo(
     () => new Map(autopilotState.screenshots.map((shot) => [shot.id, shot])),
     [autopilotState.screenshots]
@@ -170,28 +175,64 @@ export function AutopilotLiveDock({
     const local = autopilotState.events.map(toTimelineEvent);
     return [...local]
       .sort((a, b) => b.at - a.at)
-      .slice(0, 220);
+      .slice(0, 400);
   }, [autopilotState.events]);
 
   const orderFeed = useMemo(() => {
     const rows = liveData?.orderEvents ?? [];
     return rows
       .filter((event) => orderFeedMatchesFilter(event.eventType, orderFeedFilter))
-      .slice(0, 220);
+      .slice(0, 400);
   }, [liveData?.orderEvents, orderFeedFilter]);
+
+  const timelinePageCount = useMemo(
+    () => Math.max(1, Math.ceil(timeline.length / timelinePageSize)),
+    [timeline.length, timelinePageSize]
+  );
+  const orderFeedPageCount = useMemo(
+    () => Math.max(1, Math.ceil(orderFeed.length / orderFeedPageSize)),
+    [orderFeed.length, orderFeedPageSize]
+  );
+  const pagedTimeline = useMemo(() => {
+    const start = (timelinePage - 1) * timelinePageSize;
+    return timeline.slice(start, start + timelinePageSize);
+  }, [timeline, timelinePage, timelinePageSize]);
+  const pagedOrderFeed = useMemo(() => {
+    const start = (orderFeedPage - 1) * orderFeedPageSize;
+    return orderFeed.slice(start, start + orderFeedPageSize);
+  }, [orderFeed, orderFeedPage, orderFeedPageSize]);
+  useEffect(() => {
+    setOrderFeedPage(1);
+  }, [orderFeedFilter]);
+  useEffect(() => {
+    setTimelinePage(1);
+  }, [timelinePageSize]);
+  useEffect(() => {
+    setOrderFeedPage(1);
+  }, [orderFeedPageSize]);
+  useEffect(() => {
+    if (timelinePage > timelinePageCount) {
+      setTimelinePage(timelinePageCount);
+    }
+  }, [timelinePage, timelinePageCount]);
+  useEffect(() => {
+    if (orderFeedPage > orderFeedPageCount) {
+      setOrderFeedPage(orderFeedPageCount);
+    }
+  }, [orderFeedPage, orderFeedPageCount]);
 
   const [selectedTimelineId, setSelectedTimelineId] = useState<string | null>(null);
   useEffect(() => {
-    if (timeline.length === 0) {
+    if (pagedTimeline.length === 0) {
       setSelectedTimelineId(null);
       return;
     }
-    if (!selectedTimelineId || !timeline.some((item) => item.id === selectedTimelineId)) {
-      setSelectedTimelineId(timeline[0].id);
+    if (!selectedTimelineId || !pagedTimeline.some((item) => item.id === selectedTimelineId)) {
+      setSelectedTimelineId(pagedTimeline[0].id);
     }
-  }, [timeline, selectedTimelineId]);
+  }, [pagedTimeline, selectedTimelineId]);
 
-  const selectedTimeline = timeline.find((item) => item.id === selectedTimelineId) ?? null;
+  const selectedTimeline = pagedTimeline.find((item) => item.id === selectedTimelineId) ?? null;
   const selectedShot = selectedTimeline?.screenshotId
     ? screenshotById.get(selectedTimeline.screenshotId)
     : undefined;
@@ -294,10 +335,40 @@ export function AutopilotLiveDock({
             </div>
 
             <div className="dock-column timeline">
-              <div className="column-title">실시간 액션 타임라인</div>
+              <div className="column-title with-pagination">
+                <span>실시간 액션 타임라인</span>
+                <div className="timeline-pagination">
+                  <label className="page-size-select">
+                    <span>개수</span>
+                    <select
+                      value={timelinePageSize}
+                      onChange={(event) => setTimelinePageSize(Number(event.target.value))}
+                    >
+                      {PAGE_SIZE_OPTIONS.map((size) => (
+                        <option key={size} value={size}>{size}</option>
+                      ))}
+                    </select>
+                  </label>
+                  <button
+                    type="button"
+                    onClick={() => setTimelinePage((prev) => Math.max(1, prev - 1))}
+                    disabled={timelinePage <= 1}
+                  >
+                    이전
+                  </button>
+                  <span>{timelinePage} / {timelinePageCount}</span>
+                  <button
+                    type="button"
+                    onClick={() => setTimelinePage((prev) => Math.min(timelinePageCount, prev + 1))}
+                    disabled={timelinePage >= timelinePageCount}
+                  >
+                    다음
+                  </button>
+                </div>
+              </div>
               <div className="timeline-layout">
                 <div className="timeline-list">
-                  {timeline.map((item) => (
+                  {pagedTimeline.map((item) => (
                     <button
                       key={item.id}
                       type="button"
@@ -312,7 +383,7 @@ export function AutopilotLiveDock({
                       <p>{item.detail}</p>
                     </button>
                   ))}
-                  {timeline.length === 0 && (
+                  {pagedTimeline.length === 0 && (
                     <div className="empty">{loading ? '로딩 중...' : '이벤트 없음'}</div>
                   )}
                 </div>
@@ -359,6 +430,17 @@ export function AutopilotLiveDock({
             <div className="autopilot-order-feed-head">
               <strong>빗썸 주문/체결 타임라인</strong>
               <div className="autopilot-order-feed-filters">
+                <label className="page-size-select">
+                  <span>개수</span>
+                  <select
+                    value={orderFeedPageSize}
+                    onChange={(event) => setOrderFeedPageSize(Number(event.target.value))}
+                  >
+                    {PAGE_SIZE_OPTIONS.map((size) => (
+                      <option key={size} value={size}>{size}</option>
+                    ))}
+                  </select>
+                </label>
                 {(['ALL', 'REQUESTED', 'FILLED', 'FAILED'] as const).map((filter) => (
                   <button
                     key={filter}
@@ -373,7 +455,7 @@ export function AutopilotLiveDock({
             </div>
 
             <div className="autopilot-order-feed-list">
-              {orderFeed.map((event) => (
+              {pagedOrderFeed.map((event) => (
                 <div key={event.id} className={`order-feed-item event-${event.eventType.toLowerCase()}`}>
                   <div className="order-feed-top">
                     <div className="order-feed-left">
@@ -397,10 +479,29 @@ export function AutopilotLiveDock({
                   {event.message && <p>{event.message}</p>}
                 </div>
               ))}
-              {orderFeed.length === 0 && (
+              {pagedOrderFeed.length === 0 && (
                 <div className="empty">{loading ? '주문 이력 로딩 중...' : '주문/체결 이력이 없습니다.'}</div>
               )}
             </div>
+            {orderFeedPageCount > 1 && (
+              <div className="order-feed-pagination">
+                <button
+                  type="button"
+                  onClick={() => setOrderFeedPage((prev) => Math.max(1, prev - 1))}
+                  disabled={orderFeedPage <= 1}
+                >
+                  이전
+                </button>
+                <span>{orderFeedPage} / {orderFeedPageCount}</span>
+                <button
+                  type="button"
+                  onClick={() => setOrderFeedPage((prev) => Math.min(orderFeedPageCount, prev + 1))}
+                  disabled={orderFeedPage >= orderFeedPageCount}
+                >
+                  다음
+                </button>
+              </div>
+            )}
           </div>
         </>
       )}

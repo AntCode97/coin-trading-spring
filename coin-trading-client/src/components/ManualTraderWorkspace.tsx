@@ -81,6 +81,10 @@ type WorkspacePrefs = {
   autopilotDockCollapsed?: boolean;
 };
 
+type ConnectPlaywrightOptions = {
+  allowAutoStart?: boolean;
+};
+
 function loadPrefs(): WorkspacePrefs {
   if (typeof window === 'undefined') return {};
   try {
@@ -272,6 +276,7 @@ export default function ManualTraderWorkspace() {
     prefs.playwrightMcpUrl ?? derivePlaywrightMcpUrl(prefs.playwrightMcpPort ?? 8931)
   );
   const [playwrightStatus, setPlaywrightStatus] = useState<PlaywrightMcpStatus | null>(null);
+  const [playwrightAction, setPlaywrightAction] = useState<'idle' | 'starting' | 'stopping'>('idle');
   const [autopilotEnabled, setAutopilotEnabled] = useState<boolean>(prefs.autopilotEnabled ?? false);
   const [dailyLossLimitKrw, setDailyLossLimitKrw] = useState<number>(prefs.dailyLossLimitKrw ?? -20000);
   const [autopilotDockCollapsed, setAutopilotDockCollapsed] = useState<boolean>(
@@ -426,23 +431,23 @@ export default function ManualTraderWorkspace() {
     );
   }, [marketsQuery.data, search]);
 
-  const connectMcpAndPlaywright = useCallback(async () => {
+  const connectMcpAndPlaywright = useCallback(async (options?: ConnectPlaywrightOptions) => {
     const tradingMcpUrl = deriveMcpUrl();
     let resolvedPlaywrightUrl = playwrightMcpUrl.trim();
+    let status = await getPlaywrightStatus();
+    const shouldAutoStart = (options?.allowAutoStart ?? true) && playwrightEnabled && playwrightAutoStart;
 
-    if (playwrightEnabled && playwrightAutoStart) {
-      const startStatus = await startPlaywrightMcp({ port: playwrightMcpPort, host: '127.0.0.1' });
-      if (startStatus?.url) {
-        resolvedPlaywrightUrl = startStatus.url;
-      }
-      setPlaywrightStatus(startStatus);
-    } else {
-      const status = await getPlaywrightStatus();
-      setPlaywrightStatus(status);
+    if (shouldAutoStart && !status?.running) {
+      status = await startPlaywrightMcp({ port: playwrightMcpPort, host: '127.0.0.1' });
     }
 
+    if (status?.url) {
+      resolvedPlaywrightUrl = status.url;
+    }
+    setPlaywrightStatus(status);
+
     const servers: DesktopMcpServerConfig[] = [{ serverId: 'trading', url: tradingMcpUrl }];
-    if (playwrightEnabled && resolvedPlaywrightUrl) {
+    if (playwrightEnabled && status?.running && resolvedPlaywrightUrl) {
       servers.push({ serverId: 'playwright', url: resolvedPlaywrightUrl });
     }
 
@@ -452,27 +457,33 @@ export default function ManualTraderWorkspace() {
   }, [playwrightAutoStart, playwrightEnabled, playwrightMcpPort, playwrightMcpUrl]);
 
   const handlePlaywrightStart = useCallback(async () => {
+    setPlaywrightAction('starting');
     try {
       const next = await startPlaywrightMcp({ port: playwrightMcpPort, host: '127.0.0.1' });
       setPlaywrightStatus(next);
       if (next?.url) {
         setPlaywrightMcpUrl(next.url);
       }
-      await connectMcpAndPlaywright();
+      await connectMcpAndPlaywright({ allowAutoStart: false });
       setStatusMessage('Playwright MCP 시작 및 연결 완료');
     } catch (error) {
       setStatusMessage(error instanceof Error ? error.message : 'Playwright MCP 시작 실패');
+    } finally {
+      setPlaywrightAction('idle');
     }
   }, [connectMcpAndPlaywright, playwrightMcpPort]);
 
   const handlePlaywrightStop = useCallback(async () => {
+    setPlaywrightAction('stopping');
     try {
       const next = await stopPlaywrightMcp();
       setPlaywrightStatus(next);
-      await connectMcpAndPlaywright();
+      await connectMcpAndPlaywright({ allowAutoStart: false });
       setStatusMessage('Playwright MCP 중지');
     } catch (error) {
       setStatusMessage(error instanceof Error ? error.message : 'Playwright MCP 중지 실패');
+    } finally {
+      setPlaywrightAction('idle');
     }
   }, [connectMcpAndPlaywright]);
 
@@ -480,6 +491,22 @@ export default function ManualTraderWorkspace() {
   useEffect(() => {
     connectMcpAndPlaywright().catch(() => { /* MCP 실패해도 채팅은 가능 */ });
   }, [connectMcpAndPlaywright]);
+
+  useEffect(() => {
+    let active = true;
+    const syncStatus = async () => {
+      const status = await getPlaywrightStatus();
+      if (active) setPlaywrightStatus(status);
+    };
+    syncStatus().catch(() => undefined);
+    const timer = window.setInterval(() => {
+      void syncStatus();
+    }, 2000);
+    return () => {
+      active = false;
+      window.clearInterval(timer);
+    };
+  }, []);
 
   // 채팅 스크롤
   useEffect(() => {
@@ -990,6 +1017,9 @@ export default function ManualTraderWorkspace() {
   // ---------- 렌더링 ----------
 
   const totalToolCount = mcpTools.length;
+  const playwrightRunning = playwrightStatus?.running ?? false;
+  const playwrightStarting = playwrightAction === 'starting' || playwrightStatus?.status === 'starting';
+  const playwrightStopping = playwrightAction === 'stopping';
 
   return (
     <section className="guided-workspace">
@@ -1333,12 +1363,26 @@ export default function ManualTraderWorkspace() {
                   앱 시작 시 Playwright MCP 자동 실행
                 </label>
                 <div className="autopilot-actions">
-                  <button type="button" onClick={() => void handlePlaywrightStart()}>Playwright 시작</button>
-                  <button type="button" onClick={() => void handlePlaywrightStop()} className="danger">Playwright 중지</button>
+                  <button
+                    type="button"
+                    onClick={() => void handlePlaywrightStart()}
+                    disabled={playwrightStarting || playwrightRunning}
+                  >
+                    {playwrightStarting ? '시작 중...' : playwrightRunning ? '실행 중' : 'Playwright 시작'}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => void handlePlaywrightStop()}
+                    className="danger"
+                    disabled={playwrightStopping || !playwrightRunning}
+                  >
+                    {playwrightStopping ? '중지 중...' : playwrightRunning ? 'Playwright 중지' : '중지됨'}
+                  </button>
                 </div>
-                <p className="autopilot-meta">
+                <p className={`autopilot-meta ${playwrightRunning ? 'running' : 'stopped'}`}>
                   상태: {playwrightStatus?.status ?? 'unknown'}
                   {playwrightStatus?.url ? ` · ${playwrightStatus.url}` : ''}
+                  {playwrightStatus?.lastError ? ` · 오류: ${playwrightStatus.lastError}` : ''}
                 </p>
 
                 <div className="autopilot-workers">

@@ -1312,11 +1312,24 @@
   background: #3d1e29;
 }
 
+.autopilot-actions button:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
 .autopilot-meta {
   margin: 8px 0 0;
   font-size: 10px;
   color: #8f9aad;
   word-break: break-all;
+}
+
+.autopilot-meta.running {
+  color: #74d9a8;
+}
+
+.autopilot-meta.stopped {
+  color: #ff8fa3;
 }
 
 .autopilot-workers {
