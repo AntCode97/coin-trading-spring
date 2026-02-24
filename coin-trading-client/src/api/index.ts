@@ -535,6 +535,8 @@ export interface GuidedMarketItem {
   accTradeVolume: number;
   surgeRate: number;
   marketCapFlowScore: number;
+  recommendedEntryWinRate: number | null;
+  marketEntryWinRate: number | null;
 }
 
 export type GuidedMarketSortBy =
@@ -542,7 +544,9 @@ export type GuidedMarketSortBy =
   | 'CHANGE_RATE'
   | 'VOLUME'
   | 'SURGE_RATE'
-  | 'MARKET_CAP_FLOW';
+  | 'MARKET_CAP_FLOW'
+  | 'RECOMMENDED_ENTRY_WIN_RATE'
+  | 'MARKET_ENTRY_WIN_RATE';
 
 export type GuidedSortDirection = 'ASC' | 'DESC';
 
@@ -752,9 +756,15 @@ export interface GuidedSyncAction {
 export const guidedTradingApi = {
   getMarkets: (
     sortBy: GuidedMarketSortBy = 'TURNOVER',
-    sortDirection: GuidedSortDirection = 'DESC'
-  ): Promise<GuidedMarketItem[]> =>
-    api.get('/guided-trading/markets', { params: { sortBy, sortDirection } }).then((res) => res.data),
+    sortDirection: GuidedSortDirection = 'DESC',
+    interval?: string,
+    mode?: string
+  ): Promise<GuidedMarketItem[]> => {
+    const params: Record<string, string> = { sortBy, sortDirection };
+    if (interval) params.interval = interval;
+    if (mode) params.mode = mode;
+    return api.get('/guided-trading/markets', { params }).then((res) => res.data);
+  },
 
   getChart: (
     market: string,

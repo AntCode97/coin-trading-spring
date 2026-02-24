@@ -101,6 +101,15 @@ function formatPct(value: number): string {
   return `${value >= 0 ? '+' : ''}${value.toFixed(2)}%`;
 }
 
+function formatWinRate(value: number | null | undefined): string {
+  if (value == null || !Number.isFinite(value)) return '-';
+  return `${value.toFixed(1)}%`;
+}
+
+function isWinRateSort(sortBy: GuidedMarketSortBy): boolean {
+  return sortBy === 'RECOMMENDED_ENTRY_WIN_RATE' || sortBy === 'MARKET_ENTRY_WIN_RATE';
+}
+
 function keyLevelColor(label: string): string {
   if (label.startsWith('SMA20')) return '#7dd3fc';
   if (label.startsWith('SMA60')) return '#c4b5fd';
@@ -237,6 +246,7 @@ export default function ManualTraderWorkspace() {
   const [mcpTools, setMcpTools] = useState<McpTool[]>([]);
   const [mcpConnected, setMcpConnected] = useState(false);
   const chatEndRef = useRef<HTMLDivElement | null>(null);
+  const winRateSort = isWinRateSort(sortBy);
 
   const openAiConnected = llmStatus === 'connected';
   const providerChecking = llmStatus === 'checking';
@@ -249,8 +259,16 @@ export default function ManualTraderWorkspace() {
   const liveCandlesRef = useRef<CandlestickData<Time>[]>([]);
 
   const marketsQuery = useQuery<GuidedMarketItem[]>({
-    queryKey: ['guided-markets', sortBy, sortDirection],
-    queryFn: () => guidedTradingApi.getMarkets(sortBy, sortDirection),
+    queryKey: winRateSort
+      ? ['guided-markets', sortBy, sortDirection, interval, tradingMode]
+      : ['guided-markets', sortBy, sortDirection],
+    queryFn: () =>
+      guidedTradingApi.getMarkets(
+        sortBy,
+        sortDirection,
+        winRateSort ? interval : undefined,
+        winRateSort ? tradingMode : undefined
+      ),
     refetchInterval: 15000,
   });
 
@@ -840,6 +858,8 @@ export default function ManualTraderWorkspace() {
                 <option value="VOLUME">거래량</option>
                 <option value="SURGE_RATE">급등률</option>
                 <option value="MARKET_CAP_FLOW">시총변동(대체)</option>
+                <option value="RECOMMENDED_ENTRY_WIN_RATE">추천가 승률</option>
+                <option value="MARKET_ENTRY_WIN_RATE">현재가 승률</option>
               </select>
               <select value={sortDirection} onChange={(event) => setSortDirection(event.target.value as GuidedSortDirection)}>
                 <option value="DESC">높은순</option>
@@ -862,7 +882,11 @@ export default function ManualTraderWorkspace() {
                 <div className="price-wrap">
                   <strong>{formatKrw(item.tradePrice)}</strong>
                   <span className={item.changeRate >= 0 ? 'up' : 'down'}>{formatPct(item.changeRate)}</span>
-                  <small>거래대금 {formatVolume(item.accTradePrice)}</small>
+                  <small className={winRateSort ? 'winrate-line' : undefined}>
+                    {winRateSort
+                      ? `추천 ${formatWinRate(item.recommendedEntryWinRate)} · 현재 ${formatWinRate(item.marketEntryWinRate)}`
+                      : `거래대금 ${formatVolume(item.accTradePrice)}`}
+                  </small>
                 </div>
               </button>
             ))}

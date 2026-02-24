@@ -9,6 +9,7 @@ import com.ant.cointrading.repository.GuidedTradeEntity
 import com.ant.cointrading.repository.GuidedTradeEventEntity
 import com.ant.cointrading.repository.GuidedTradeEventRepository
 import com.ant.cointrading.repository.GuidedTradeRepository
+import jakarta.annotation.PreDestroy
 import org.slf4j.LoggerFactory
 import org.springframework.scheduling.annotation.Scheduled
 import org.springframework.stereotype.Service
@@ -16,6 +17,11 @@ import org.springframework.transaction.annotation.Transactional
 import java.math.BigDecimal
 import java.math.RoundingMode
 import java.time.Instant
+import java.util.concurrent.CompletableFuture
+import java.util.concurrent.ExecutorService
+import java.util.concurrent.Executors
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.TimeoutException
 import kotlin.math.abs
 import kotlin.math.ln
 import kotlin.math.max
@@ -28,16 +34,28 @@ class GuidedTradingService(
     private val guidedTradeEventRepository: GuidedTradeEventRepository
 ) {
     private val log = LoggerFactory.getLogger(javaClass)
+    private val marketWinRateExecutor: ExecutorService = Executors.newFixedThreadPool(WIN_RATE_CALC_CONCURRENCY)
 
     private companion object {
         val OPEN_STATUSES = listOf(GuidedTradeEntity.STATUS_PENDING_ENTRY, GuidedTradeEntity.STATUS_OPEN)
         val D = BigDecimal.ZERO
         const val DCA_MIN_INTERVAL_SECONDS = 600L
+        const val WIN_RATE_SAMPLE_MARKET_LIMIT = 60
+        const val WIN_RATE_CANDLE_COUNT = 120
+        const val WIN_RATE_CALC_CONCURRENCY = 8
+        const val WIN_RATE_CALC_TIMEOUT_MILLIS = 2500L
+    }
+
+    @PreDestroy
+    fun shutdown() {
+        marketWinRateExecutor.shutdownNow()
     }
 
     fun getMarketBoard(
         sortBy: GuidedMarketSortBy = GuidedMarketSortBy.TURNOVER,
-        sortDirection: GuidedSortDirection = GuidedSortDirection.DESC
+        sortDirection: GuidedSortDirection = GuidedSortDirection.DESC,
+        interval: String = "minute30",
+        mode: TradingMode = TradingMode.SWING
     ): List<GuidedMarketItem> {
         val markets = bithumbPublicApi.getMarketAll()
             ?.filter { it.market.startsWith("KRW-") }
@@ -47,7 +65,7 @@ class GuidedTradingService(
 
         val tickerMap = fetchTickerMap(markets.map { it.market })
 
-        return markets.mapNotNull { market ->
+        val marketBoard = markets.mapNotNull { market ->
             val ticker = tickerMap[market.market] ?: return@mapNotNull null
             GuidedMarketItem(
                 market = market.market,
@@ -65,7 +83,15 @@ class GuidedTradingService(
                     tradePrice = ticker.tradePrice.toDouble()
                 )
             )
-        }.sortedWith(buildMarketComparator(sortBy, sortDirection))
+        }
+
+        val withWinRates = if (sortBy.isWinRateSort()) {
+            enrichMarketBoardWithWinRates(marketBoard, interval, mode)
+        } else {
+            marketBoard
+        }
+
+        return withWinRates.sortedWith(buildMarketComparator(sortBy, sortDirection))
     }
 
     fun getChartData(market: String, interval: String, count: Int, mode: TradingMode = TradingMode.SWING): GuidedChartResponse {
@@ -995,22 +1021,159 @@ class GuidedTradingService(
         return WinRateCalibration(calibrated, note)
     }
 
+    private fun GuidedMarketSortBy.isWinRateSort(): Boolean {
+        return this == GuidedMarketSortBy.RECOMMENDED_ENTRY_WIN_RATE ||
+            this == GuidedMarketSortBy.MARKET_ENTRY_WIN_RATE
+    }
+
+    private data class MarketWinRate(
+        val recommendedEntryWinRate: Double,
+        val marketEntryWinRate: Double
+    )
+
+    private fun fetchMarketWinRate(market: String, interval: String, mode: TradingMode): MarketWinRate? {
+        return runCatching {
+            val recommendation = getRecommendation(market, interval, WIN_RATE_CANDLE_COUNT, mode)
+            val recommendedEntryWinRate = recommendation.recommendedEntryWinRate.takeIf { it.isFinite() } ?: return@runCatching null
+            val marketEntryWinRate = recommendation.marketEntryWinRate.takeIf { it.isFinite() } ?: return@runCatching null
+            MarketWinRate(
+                recommendedEntryWinRate = recommendedEntryWinRate,
+                marketEntryWinRate = marketEntryWinRate
+            )
+        }.onFailure { ex ->
+            log.warn(
+                "마켓 승률 계산 실패: market={}, interval={}, mode={}, error={}",
+                market,
+                interval,
+                mode.name,
+                ex.message
+            )
+        }.getOrNull()
+    }
+
+    private fun enrichMarketBoardWithWinRates(
+        marketBoard: List<GuidedMarketItem>,
+        interval: String,
+        mode: TradingMode
+    ): List<GuidedMarketItem> {
+        val targets = marketBoard
+            .sortedByDescending { it.accTradePrice }
+            .take(WIN_RATE_SAMPLE_MARKET_LIMIT)
+            .map { it.market }
+
+        if (targets.isEmpty()) return marketBoard
+
+        val futures = targets.associateWith { market ->
+            CompletableFuture.supplyAsync(
+                { fetchMarketWinRate(market, interval, mode) },
+                marketWinRateExecutor
+            )
+        }
+
+        val winRateMap = futures.mapValues { (market, future) ->
+            try {
+                future.get(WIN_RATE_CALC_TIMEOUT_MILLIS, TimeUnit.MILLISECONDS)
+            } catch (e: TimeoutException) {
+                future.cancel(true)
+                log.warn(
+                    "마켓 승률 계산 타임아웃: market={}, interval={}, mode={}",
+                    market,
+                    interval,
+                    mode.name
+                )
+                null
+            } catch (e: InterruptedException) {
+                Thread.currentThread().interrupt()
+                log.warn(
+                    "마켓 승률 계산 인터럽트: market={}, interval={}, mode={}",
+                    market,
+                    interval,
+                    mode.name
+                )
+                null
+            } catch (e: Exception) {
+                log.warn(
+                    "마켓 승률 계산 실패: market={}, interval={}, mode={}, error={}",
+                    market,
+                    interval,
+                    mode.name,
+                    e.message
+                )
+                null
+            }
+        }
+
+        return marketBoard.map { market ->
+            val winRate = winRateMap[market.market]
+            market.copy(
+                recommendedEntryWinRate = winRate?.recommendedEntryWinRate,
+                marketEntryWinRate = winRate?.marketEntryWinRate
+            )
+        }
+    }
+
     private fun buildMarketComparator(
         sortBy: GuidedMarketSortBy,
         sortDirection: GuidedSortDirection
     ): Comparator<GuidedMarketItem> {
+        if (sortBy.isWinRateSort()) {
+            return buildWinRateComparator(sortBy, sortDirection)
+        }
+
         val metricComparator = when (sortBy) {
             GuidedMarketSortBy.TURNOVER -> compareBy<GuidedMarketItem> { it.accTradePrice }
             GuidedMarketSortBy.CHANGE_RATE -> compareBy { it.changeRate }
             GuidedMarketSortBy.VOLUME -> compareBy { it.accTradeVolume }
             GuidedMarketSortBy.SURGE_RATE -> compareBy { it.surgeRate }
             GuidedMarketSortBy.MARKET_CAP_FLOW -> compareBy { it.marketCapFlowScore }
+            GuidedMarketSortBy.RECOMMENDED_ENTRY_WIN_RATE -> compareBy { it.recommendedEntryWinRate ?: Double.NEGATIVE_INFINITY }
+            GuidedMarketSortBy.MARKET_ENTRY_WIN_RATE -> compareBy { it.marketEntryWinRate ?: Double.NEGATIVE_INFINITY }
         }
         return if (sortDirection == GuidedSortDirection.DESC) {
             metricComparator.reversed().thenBy { it.market }
         } else {
             metricComparator.thenBy { it.market }
         }
+    }
+
+    private fun buildWinRateComparator(
+        sortBy: GuidedMarketSortBy,
+        sortDirection: GuidedSortDirection
+    ): Comparator<GuidedMarketItem> {
+        val metricSelector: (GuidedMarketItem) -> Double? = when (sortBy) {
+            GuidedMarketSortBy.RECOMMENDED_ENTRY_WIN_RATE -> { item -> item.recommendedEntryWinRate }
+            GuidedMarketSortBy.MARKET_ENTRY_WIN_RATE -> { item -> item.marketEntryWinRate }
+            else -> { _ -> null }
+        }
+
+        return Comparator { left, right ->
+            val leftValue = metricSelector(left)
+            val rightValue = metricSelector(right)
+
+            when {
+                leftValue == null && rightValue == null -> compareByTurnoverThenMarket(left, right)
+                leftValue == null -> 1
+                rightValue == null -> -1
+                else -> {
+                    val metricCompare = if (sortDirection == GuidedSortDirection.DESC) {
+                        rightValue.compareTo(leftValue)
+                    } else {
+                        leftValue.compareTo(rightValue)
+                    }
+                    if (metricCompare != 0) {
+                        metricCompare
+                    } else {
+                        compareByTurnoverThenMarket(left, right)
+                    }
+                }
+            }
+        }
+    }
+
+    private fun compareByTurnoverThenMarket(left: GuidedMarketItem, right: GuidedMarketItem): Int {
+        val turnoverCompare = right.accTradePrice.compareTo(left.accTradePrice)
+        if (turnoverCompare != 0) return turnoverCompare
+        return left.market.compareTo(right.market)
     }
 
     private fun calculateSurgeRate(
@@ -1263,7 +1426,9 @@ data class GuidedMarketItem(
     val changePrice: Double,
     val accTradePrice: Double,
     val accTradeVolume: Double,
-    val surgeRate: Double
+    val surgeRate: Double,
+    val recommendedEntryWinRate: Double? = null,
+    val marketEntryWinRate: Double? = null
 ) {
     val marketCapFlowScore: Double
         get() {
@@ -1293,7 +1458,9 @@ enum class GuidedMarketSortBy {
     CHANGE_RATE,
     VOLUME,
     SURGE_RATE,
-    MARKET_CAP_FLOW
+    MARKET_CAP_FLOW,
+    RECOMMENDED_ENTRY_WIN_RATE,
+    MARKET_ENTRY_WIN_RATE
 }
 
 enum class GuidedSortDirection {

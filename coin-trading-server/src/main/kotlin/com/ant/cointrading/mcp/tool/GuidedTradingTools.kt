@@ -23,8 +23,8 @@ class GuidedTradingTools(
     @McpTool(description = "수동 트레이딩 워크스페이스용 마켓 목록을 조회합니다.")
     @Tool(description = "수동 트레이딩 워크스페이스용 마켓 목록을 조회합니다.")
     fun getGuidedMarkets(
-        @McpToolParam(description = "정렬 기준: VOLUME, CHANGE_RATE, PRICE")
-        @ToolParam(description = "정렬 기준: VOLUME, CHANGE_RATE, PRICE")
+        @McpToolParam(description = "정렬 기준: TURNOVER, CHANGE_RATE, VOLUME, SURGE_RATE, MARKET_CAP_FLOW, RECOMMENDED_ENTRY_WIN_RATE, MARKET_ENTRY_WIN_RATE")
+        @ToolParam(description = "정렬 기준: TURNOVER, CHANGE_RATE, VOLUME, SURGE_RATE, MARKET_CAP_FLOW, RECOMMENDED_ENTRY_WIN_RATE, MARKET_ENTRY_WIN_RATE")
         sortBy: String,
         @McpToolParam(description = "정렬 방향: ASC, DESC")
         @ToolParam(description = "정렬 방향: ASC, DESC")

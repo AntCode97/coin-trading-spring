@@ -33,9 +33,11 @@ class GuidedTradingController(
     @GetMapping("/markets")
     fun getMarketBoard(
         @RequestParam(defaultValue = "TURNOVER") sortBy: GuidedMarketSortBy,
-        @RequestParam(defaultValue = "DESC") sortDirection: GuidedSortDirection
+        @RequestParam(defaultValue = "DESC") sortDirection: GuidedSortDirection,
+        @RequestParam(defaultValue = "minute30") interval: String,
+        @RequestParam(defaultValue = "SWING") mode: String
     ): List<GuidedMarketItem> {
-        return guidedTradingService.getMarketBoard(sortBy, sortDirection)
+        return guidedTradingService.getMarketBoard(sortBy, sortDirection, interval, TradingMode.fromString(mode))
     }
 
     @GetMapping("/chart")

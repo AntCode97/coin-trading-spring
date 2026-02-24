@@ -188,6 +188,12 @@
   color: #8f9aad;
 }
 
+.guided-market-row .price-wrap .winrate-line {
+  color: #9fb2d8;
+  white-space: nowrap;
+  letter-spacing: -0.1px;
+}
+
 .guided-chart-panel {
   padding: 10px;
 }
