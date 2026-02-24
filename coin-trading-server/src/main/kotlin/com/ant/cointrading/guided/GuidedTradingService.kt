@@ -243,6 +243,89 @@ class GuidedTradingService(
     }
 
     @Transactional
+    fun adoptExternalPosition(request: GuidedAdoptPositionRequest): GuidedAdoptPositionResponse {
+        val market = request.market.trim().uppercase()
+        require(market.startsWith("KRW-")) { "market 형식 오류: KRW-BTC 형태를 사용하세요." }
+
+        val existing = getActiveTrade(market)
+        if (existing != null) {
+            return GuidedAdoptPositionResponse(
+                positionId = existing.id ?: 0L,
+                adopted = false,
+                avgEntryPrice = existing.averageEntryPrice.toDouble(),
+                quantity = existing.remainingQuantity.toDouble()
+            )
+        }
+
+        val actualQty = getActualHoldingQuantity(market)
+        require(actualQty > BigDecimal.ZERO) { "외부 포지션 편입 실패: 보유 수량이 없습니다." }
+
+        val tickerPrice = bithumbPublicApi.getCurrentPrice(market)?.firstOrNull()?.tradePrice
+        require(tickerPrice != null && tickerPrice > BigDecimal.ZERO) { "외부 포지션 편입 실패: 현재가를 조회할 수 없습니다." }
+
+        val mode = TradingMode.fromString(request.mode ?: TradingMode.SWING.name)
+        val interval = request.interval?.ifBlank { null } ?: "minute30"
+        val recommendation = runCatching { getRecommendation(market, interval, WIN_RATE_CANDLE_COUNT, mode) }.getOrNull()
+
+        val defaultStopLoss = tickerPrice
+            .multiply(BigDecimal.ONE.subtract(BigDecimal.valueOf(mode.slPercent)))
+            .max(BigDecimal.ZERO)
+        val defaultTakeProfit = tickerPrice
+            .multiply(BigDecimal.ONE.add(BigDecimal.valueOf(mode.tpCapPercent)))
+            .max(tickerPrice)
+
+        val stopLoss = recommendation?.stopLossPrice
+            ?.let { BigDecimal.valueOf(it) }
+            ?.max(BigDecimal.ZERO)
+            ?: defaultStopLoss
+        val takeProfit = recommendation?.takeProfitPrice
+            ?.let { BigDecimal.valueOf(it) }
+            ?.max(tickerPrice)
+            ?: defaultTakeProfit
+
+        val estimatedAmount = tickerPrice.multiply(actualQty).setScale(0, RoundingMode.HALF_UP)
+        val entrySource = request.entrySource?.takeIf { it.isNotBlank() } ?: "EXTERNAL"
+        val note = request.notes?.takeIf { it.isNotBlank() }
+        val reasonParts = buildList {
+            add("entrySource=$entrySource")
+            add("mode=${mode.name}")
+            add("interval=$interval")
+            if (!note.isNullOrBlank()) add("notes=$note")
+        }
+
+        val trade = GuidedTradeEntity(
+            market = market,
+            status = GuidedTradeEntity.STATUS_OPEN,
+            entryOrderType = GuidedTradeEntity.ORDER_TYPE_MARKET,
+            entryOrderId = null,
+            targetAmountKrw = estimatedAmount.max(BigDecimal(5100)),
+            averageEntryPrice = tickerPrice,
+            entryQuantity = actualQty,
+            remainingQuantity = actualQty,
+            stopLossPrice = stopLoss,
+            takeProfitPrice = takeProfit,
+            trailingTriggerPercent = BigDecimal.valueOf(2.0),
+            trailingOffsetPercent = BigDecimal.valueOf(1.0),
+            trailingActive = false,
+            dcaStepPercent = BigDecimal.valueOf(2.0),
+            maxDcaCount = 2,
+            halfTakeProfitRatio = BigDecimal.valueOf(0.5),
+            recommendationReason = reasonParts.joinToString(" | "),
+            lastAction = "ADOPTED_EXTERNAL_ENTRY"
+        )
+
+        val saved = guidedTradeRepository.save(trade)
+        appendEvent(saved.id!!, "ADOPTED_EXTERNAL_ENTRY", tickerPrice, actualQty, "외부 포지션 편입: $entrySource")
+
+        return GuidedAdoptPositionResponse(
+            positionId = saved.id!!,
+            adopted = true,
+            avgEntryPrice = saved.averageEntryPrice.toDouble(),
+            quantity = saved.remainingQuantity.toDouble()
+        )
+    }
+
+    @Transactional
     fun startAutoTrading(request: GuidedStartRequest): GuidedTradeView {
         val market = request.market.trim().uppercase()
         require(market.startsWith("KRW-")) { "market 형식 오류: KRW-BTC 형태를 사용하세요." }
@@ -1663,6 +1746,21 @@ data class GuidedStartRequest(
     val maxDcaCount: Int? = null,
     val dcaStepPercent: Double? = null,
     val halfTakeProfitRatio: Double? = null
+)
+
+data class GuidedAdoptPositionRequest(
+    val market: String,
+    val mode: String? = null,
+    val interval: String? = null,
+    val entrySource: String? = null,
+    val notes: String? = null
+)
+
+data class GuidedAdoptPositionResponse(
+    val positionId: Long,
+    val adopted: Boolean,
+    val avgEntryPrice: Double,
+    val quantity: Double
 )
 
 data class GuidedSyncResult(

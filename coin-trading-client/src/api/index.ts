@@ -740,6 +740,34 @@ export interface GuidedStartRequest {
   halfTakeProfitRatio?: number;
 }
 
+export interface GuidedAdoptRequest {
+  market: string;
+  mode?: string;
+  interval?: string;
+  entrySource?: string;
+  notes?: string;
+}
+
+export interface GuidedAdoptResponse {
+  positionId: number;
+  adopted: boolean;
+  avgEntryPrice: number;
+  quantity: number;
+}
+
+export interface DesktopMcpTool {
+  name: string;
+  description?: string;
+  serverId?: string;
+  qualifiedName?: string;
+  originName?: string;
+  inputSchema?: {
+    type: string;
+    properties?: Record<string, { type: string; description?: string }>;
+    required?: string[];
+  };
+}
+
 export interface GuidedSyncResult {
   success: boolean;
   message: string;
@@ -790,6 +818,9 @@ export const guidedTradingApi = {
 
   start: (payload: GuidedStartRequest): Promise<GuidedTradePosition> =>
     api.post('/guided-trading/start', payload).then((res) => res.data),
+
+  adoptPosition: (payload: GuidedAdoptRequest): Promise<GuidedAdoptResponse> =>
+    api.post('/guided-trading/positions/adopt', payload).then((res) => res.data),
 
   stop: (market: string): Promise<GuidedTradePosition> =>
     api.post('/guided-trading/stop', null, { params: { market } }).then((res) => res.data),

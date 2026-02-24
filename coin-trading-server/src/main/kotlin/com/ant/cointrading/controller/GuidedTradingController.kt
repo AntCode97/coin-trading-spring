@@ -14,6 +14,8 @@ import com.ant.cointrading.guided.GuidedSyncResult
 import com.ant.cointrading.guided.GuidedTradeView
 import com.ant.cointrading.guided.GuidedTradingService
 import com.ant.cointrading.guided.TradingMode
+import com.ant.cointrading.guided.GuidedAdoptPositionRequest
+import com.ant.cointrading.guided.GuidedAdoptPositionResponse
 import org.springframework.http.HttpStatus
 import org.springframework.web.bind.annotation.GetMapping
 import org.springframework.web.bind.annotation.PathVariable
@@ -110,6 +112,15 @@ class GuidedTradingController(
     @GetMapping("/positions/open")
     fun getOpenPositions(): List<GuidedTradeView> {
         return guidedTradingService.getAllOpenPositions()
+    }
+
+    @PostMapping("/positions/adopt")
+    fun adoptPosition(@RequestBody request: GuidedAdoptPositionRequest): GuidedAdoptPositionResponse {
+        return try {
+            guidedTradingService.adoptExternalPosition(request)
+        } catch (e: IllegalArgumentException) {
+            throw ResponseStatusException(HttpStatus.BAD_REQUEST, e.message ?: "요청값 오류")
+        }
     }
 
     @GetMapping("/stats/today")

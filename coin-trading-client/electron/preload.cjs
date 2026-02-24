@@ -14,7 +14,11 @@ contextBridge.exposeInMainWorld('desktopAuth', {
 
 contextBridge.exposeInMainWorld('desktopMcp', {
   connect: (mcpUrl) => ipcRenderer.invoke('mcp:connect', mcpUrl),
+  connectMany: (servers) => ipcRenderer.invoke('mcp:connect-many', servers),
   listTools: () => ipcRenderer.invoke('mcp:list-tools'),
-  callTool: (name, args) => ipcRenderer.invoke('mcp:call-tool', name, args),
+  callTool: (name, args, serverId) => ipcRenderer.invoke('mcp:call-tool', name, args, serverId),
   status: () => ipcRenderer.invoke('mcp:status'),
+  playwrightStart: (config) => ipcRenderer.invoke('playwright:start', config),
+  playwrightStop: () => ipcRenderer.invoke('playwright:stop'),
+  playwrightStatus: () => ipcRenderer.invoke('playwright:status'),
 });

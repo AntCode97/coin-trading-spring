@@ -75,7 +75,7 @@ export async function logout(): Promise<void> {
 function mcpToolsToOpenAiFunctions(tools: McpTool[]): object[] {
   return tools.map((tool) => ({
     type: 'function',
-    name: tool.name,
+    name: tool.qualifiedName || tool.name,
     description: tool.description || tool.name,
     parameters: tool.inputSchema || { type: 'object', properties: {} },
   }));
@@ -84,8 +84,12 @@ function mcpToolsToOpenAiFunctions(tools: McpTool[]): object[] {
 // ---------- MCP 연결 ----------
 
 export async function connectMcp(mcpUrl: string): Promise<McpTool[]> {
+  return connectMcpServers([{ serverId: 'trading', url: mcpUrl }]);
+}
+
+export async function connectMcpServers(servers: DesktopMcpServerConfig[]): Promise<McpTool[]> {
   if (!window.desktopMcp) return [];
-  const result = await window.desktopMcp.connect(mcpUrl);
+  const result = await window.desktopMcp.connectMany(servers);
   if (!result.ok) {
     console.warn('MCP 연결 실패:', result.error);
     return [];
@@ -99,17 +103,73 @@ export async function listMcpTools(): Promise<McpTool[]> {
   return result.tools;
 }
 
-async function callMcpTool(name: string, args: Record<string, unknown>): Promise<string> {
-  if (!window.desktopMcp) return JSON.stringify({ error: 'MCP 미연결' });
-  const result = await window.desktopMcp.callTool(name, args);
-  if (result.isError) {
-    return JSON.stringify({ error: result.content?.[0]?.text || '도구 실행 실패' });
+async function callMcpTool(name: string, args: Record<string, unknown>, tools?: McpTool[]): Promise<string> {
+  const raw = await callMcpToolRaw(name, args, tools);
+  if (raw.isError) {
+    return JSON.stringify({ error: raw.content?.[0]?.text || '도구 실행 실패' });
   }
-  // MCP content 배열에서 텍스트 추출
-  const texts = (result.content || [])
+  const texts = (raw.content || [])
     .filter((c) => c.type === 'text' && c.text)
     .map((c) => c.text);
-  return texts.join('\n') || JSON.stringify(result);
+  return texts.join('\n') || JSON.stringify(raw);
+}
+
+function resolveToolRoute(
+  name: string,
+  tools?: McpTool[]
+): { serverId?: string; toolName: string } {
+  const matched = tools?.find((tool) => tool.qualifiedName === name || tool.name === name);
+  if (matched) {
+    return {
+      serverId: matched.serverId,
+      toolName: matched.originName || matched.name,
+    };
+  }
+  return { toolName: name };
+}
+
+async function callMcpToolRaw(
+  name: string,
+  args: Record<string, unknown>,
+  tools?: McpTool[]
+): Promise<McpToolResult> {
+  if (!window.desktopMcp) {
+    return {
+      content: [{ type: 'text', text: 'MCP 미연결' }],
+      isError: true,
+    };
+  }
+  const route = resolveToolRoute(name, tools);
+  return window.desktopMcp.callTool(route.toolName, args, route.serverId || null);
+}
+
+export async function executeMcpTool(
+  name: string,
+  args: Record<string, unknown>,
+  serverId?: string
+): Promise<McpToolResult> {
+  if (!window.desktopMcp) {
+    return {
+      content: [{ type: 'text', text: 'MCP 미연결' }],
+      isError: true,
+    };
+  }
+  return window.desktopMcp.callTool(name, args, serverId ?? null);
+}
+
+export async function getPlaywrightStatus(): Promise<PlaywrightMcpStatus | null> {
+  if (!window.desktopMcp) return null;
+  return window.desktopMcp.playwrightStatus();
+}
+
+export async function startPlaywrightMcp(config?: { port?: number; host?: string; cdpEndpoint?: string }): Promise<PlaywrightMcpStatus | null> {
+  if (!window.desktopMcp) return null;
+  return window.desktopMcp.playwrightStart(config);
+}
+
+export async function stopPlaywrightMcp(): Promise<PlaywrightMcpStatus | null> {
+  if (!window.desktopMcp) return null;
+  return window.desktopMcp.playwrightStop();
 }
 
 // ---------- System Prompt ----------
@@ -360,7 +420,7 @@ export async function sendChatMessage(options: {
         } catch { /* empty */ }
 
         // MCP를 통해 도구 실행
-        const result = await callMcpTool(tc.name, parsedArgs);
+        const result = await callMcpTool(tc.name, parsedArgs, options.mcpTools);
         options.onToolResult?.(tc.name, result);
 
         const toolMsg: ChatMessage = {
@@ -401,6 +461,101 @@ export async function sendChatMessage(options: {
   }
 
   return newMessages;
+}
+
+export async function requestOneShotText(options: {
+  prompt: string;
+  model?: string;
+  context?: GuidedAgentContextResponse | null;
+  tradingMode?: TradingMode;
+  mcpTools?: McpTool[];
+}): Promise<string> {
+  const token = await getToken();
+
+  let userContent = options.prompt;
+  if (options.context) {
+    const slicedCandles = options.context.chart.candles.slice(-60);
+    const contextPayload = {
+      market: options.context.market,
+      generatedAt: options.context.generatedAt,
+      recommendation: options.context.chart.recommendation,
+      activePosition: options.context.chart.activePosition,
+      events: options.context.chart.events.slice(-10),
+      orderbook: options.context.chart.orderbook,
+      recentClosedTrades: options.context.recentClosedTrades.slice(0, 5),
+      performance: options.context.performance,
+      candlesSummary: {
+        count: slicedCandles.length,
+        latest: slicedCandles.slice(-3),
+        interval: options.context.chart.interval,
+      },
+    };
+    userContent = `${options.prompt}\n\n[차트 컨텍스트]\n${JSON.stringify(contextPayload)}`;
+  }
+
+  const requestBody: Record<string, unknown> = {
+    model: options.model || 'gpt-5.3-codex',
+    instructions: buildSystemPrompt(options.tradingMode || 'SWING'),
+    input: [{ role: 'user', content: userContent }],
+    stream: true,
+    store: false,
+  };
+
+  const openAiTools = options.mcpTools ? mcpToolsToOpenAiFunctions(options.mcpTools) : [];
+  if (openAiTools.length > 0) {
+    requestBody.tools = openAiTools;
+  }
+
+  const headers: Record<string, string> = {
+    Authorization: `Bearer ${token.accessToken}`,
+    'Content-Type': 'application/json',
+    'OpenAI-Beta': 'responses=v1',
+  };
+  if (token.accountId) {
+    headers['ChatGPT-Account-Id'] = token.accountId;
+  }
+
+  const response = await fetch(CODEX_API_URL, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify(requestBody),
+  });
+  if (!response.ok) {
+    const errorText = await response.text();
+    throw new Error(`Codex API 오류 (${response.status}): ${errorText}`);
+  }
+
+  const reader = response.body?.getReader();
+  if (!reader) throw new Error('응답 스트림을 읽을 수 없습니다.');
+
+  const decoder = new TextDecoder();
+  let buffer = '';
+  let accumulated = '';
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+
+    buffer += decoder.decode(value, { stream: true });
+    const lines = buffer.split('\n');
+    buffer = lines.pop() || '';
+    for (const line of lines) {
+      if (!line.startsWith('data: ')) continue;
+      const data = line.slice(6).trim();
+      if (data === '[DONE]') continue;
+
+      let event: CodexResponseEvent;
+      try {
+        event = JSON.parse(data);
+      } catch {
+        continue;
+      }
+      if (event.type === 'response.output_text.delta' && event.delta) {
+        accumulated += event.delta;
+      }
+    }
+  }
+
+  return accumulated.trim();
 }
 
 // ---------- Action Extraction ----------

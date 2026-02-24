@@ -2,6 +2,7 @@ package com.ant.cointrading.guided
 
 import com.ant.cointrading.api.bithumb.BithumbPrivateApi
 import com.ant.cointrading.api.bithumb.BithumbPublicApi
+import com.ant.cointrading.api.bithumb.Balance
 import com.ant.cointrading.api.bithumb.CandleResponse
 import com.ant.cointrading.api.bithumb.MarketInfo
 import com.ant.cointrading.api.bithumb.TickerInfo
@@ -98,6 +99,14 @@ class GuidedTradingServiceTest {
                 eq(GuidedTradeEntity.STATUS_CLOSED)
             )
         ).thenReturn(emptyList())
+        whenever(guidedTradeRepository.save(any())).thenAnswer { invocation ->
+            val entity = invocation.getArgument<GuidedTradeEntity>(0)
+            if (entity.id == null) entity.id = 1L
+            entity
+        }
+        whenever(guidedTradeEventRepository.save(any())).thenAnswer { invocation ->
+            invocation.getArgument(0)
+        }
     }
 
     @AfterEach
@@ -205,6 +214,86 @@ class GuidedTradingServiceTest {
 
         verify(bithumbPublicApi, never()).getOhlcv(any(), any(), any(), anyOrNull())
         assertTrue(sorted.all { it.recommendedEntryWinRate == null && it.marketEntryWinRate == null })
+    }
+
+    @Test
+    @DisplayName("외부 포지션 편입은 신규 Guided 포지션을 생성한다")
+    fun adoptExternalPositionCreatesGuidedTrade() {
+        whenever(guidedTradeRepository.findTopByMarketAndStatusInOrderByCreatedAtDesc(eq("KRW-BTC"), any()))
+            .thenReturn(null)
+        whenever(bithumbPrivateApi.getBalances()).thenReturn(
+            listOf(
+                Balance(
+                    currency = "BTC",
+                    balance = BigDecimal("0.01000000"),
+                    locked = BigDecimal.ZERO,
+                    avgBuyPrice = null,
+                    avgBuyPriceModified = null,
+                    unitCurrency = "KRW"
+                )
+            )
+        )
+        whenever(bithumbPublicApi.getCurrentPrice(eq("KRW-BTC"))).thenReturn(
+            listOf(
+                TickerInfo(
+                    market = "KRW-BTC",
+                    tradePrice = BigDecimal("93000000"),
+                    openingPrice = BigDecimal("92000000"),
+                    highPrice = BigDecimal("94000000"),
+                    lowPrice = BigDecimal("91500000"),
+                    prevClosingPrice = BigDecimal("92500000"),
+                    change = "RISE",
+                    changePrice = BigDecimal("500000"),
+                    changeRate = BigDecimal("0.01"),
+                    tradeVolume = BigDecimal("1.0"),
+                    accTradeVolume = BigDecimal("1000"),
+                    accTradePrice = BigDecimal("1000000000"),
+                    accTradePrice24h = BigDecimal("1000000000"),
+                    accTradeVolume24h = BigDecimal("1000"),
+                    timestamp = 1_700_000_000_000L,
+                    tradeDate = "2026-02-24"
+                )
+            )
+        )
+
+        val adopted = service.adoptExternalPosition(
+            GuidedAdoptPositionRequest(
+                market = "KRW-BTC",
+                mode = "SWING",
+                interval = "minute30",
+                entrySource = "MCP_DIRECT",
+                notes = "test"
+            )
+        )
+
+        assertTrue(adopted.adopted)
+        assertEquals(1L, adopted.positionId)
+        assertEquals(0.01, adopted.quantity, 0.0000001)
+        verify(guidedTradeRepository, times(1)).save(any())
+    }
+
+    @Test
+    @DisplayName("외부 포지션 편입은 기존 활성 포지션이 있으면 idempotent 응답을 반환한다")
+    fun adoptExternalPositionReturnsExistingWhenAlreadyOpen() {
+        whenever(guidedTradeRepository.findTopByMarketAndStatusInOrderByCreatedAtDesc(eq("KRW-BTC"), any()))
+            .thenReturn(
+                GuidedTradeEntity(
+                    id = 99L,
+                    market = "KRW-BTC",
+                    status = GuidedTradeEntity.STATUS_OPEN,
+                    averageEntryPrice = BigDecimal("91000000"),
+                    entryQuantity = BigDecimal("0.02"),
+                    remainingQuantity = BigDecimal("0.02"),
+                    stopLossPrice = BigDecimal("90000000"),
+                    takeProfitPrice = BigDecimal("93000000"),
+                )
+            )
+
+        val adopted = service.adoptExternalPosition(GuidedAdoptPositionRequest(market = "KRW-BTC"))
+
+        assertEquals(false, adopted.adopted)
+        assertEquals(99L, adopted.positionId)
+        verify(guidedTradeRepository, never()).save(any())
     }
 
     private fun buildCandles(market: String): List<CandleResponse> {

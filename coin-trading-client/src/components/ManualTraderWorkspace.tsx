@@ -33,7 +33,10 @@ import {
   logout,
   sendChatMessage,
   clearConversation,
-  connectMcp,
+  connectMcpServers,
+  getPlaywrightStatus,
+  startPlaywrightMcp,
+  stopPlaywrightMcp,
   CODEX_MODELS,
   type AgentAction,
   type ChatMessage,
@@ -43,6 +46,10 @@ import {
 } from '../lib/llmService';
 import { usePlanExecution } from '../lib/usePlanExecution';
 import { PlanPanel } from './PlanPanel';
+import {
+  AutopilotOrchestrator,
+  type AutopilotState,
+} from '../lib/autopilot/AutopilotOrchestrator';
 import './ManualTraderWorkspace.css';
 
 const KRW_FORMATTER = new Intl.NumberFormat('ko-KR');
@@ -63,6 +70,12 @@ type WorkspacePrefs = {
   sortDirection?: GuidedSortDirection;
   aiRefreshSec?: number;
   tradingMode?: TradingMode;
+  autopilotEnabled?: boolean;
+  dailyLossLimitKrw?: number;
+  playwrightEnabled?: boolean;
+  playwrightAutoStart?: boolean;
+  playwrightMcpPort?: number;
+  playwrightMcpUrl?: string;
 };
 
 function loadPrefs(): WorkspacePrefs {
@@ -182,6 +195,10 @@ function deriveMcpUrl(): string {
   return apiBase.replace(/\/api$/, '/mcp');
 }
 
+function derivePlaywrightMcpUrl(port: number): string {
+  return `http://127.0.0.1:${port}/mcp`;
+}
+
 const GLOSSARY: Record<string, string> = {
   'SL': '손절가(Stop Loss). 손실을 제한하기 위해 자동으로 매도하는 가격.',
   '손절': '손실을 제한하기 위해 미리 정한 가격에서 자동 매도하는 것.',
@@ -245,6 +262,24 @@ export default function ManualTraderWorkspace() {
   const [chatModel, setChatModel] = useState<CodexModelId>('gpt-5.3-codex');
   const [mcpTools, setMcpTools] = useState<McpTool[]>([]);
   const [mcpConnected, setMcpConnected] = useState(false);
+  const [playwrightEnabled, setPlaywrightEnabled] = useState<boolean>(prefs.playwrightEnabled ?? true);
+  const [playwrightAutoStart, setPlaywrightAutoStart] = useState<boolean>(prefs.playwrightAutoStart ?? true);
+  const [playwrightMcpPort, setPlaywrightMcpPort] = useState<number>(prefs.playwrightMcpPort ?? 8931);
+  const [playwrightMcpUrl, setPlaywrightMcpUrl] = useState<string>(
+    prefs.playwrightMcpUrl ?? derivePlaywrightMcpUrl(prefs.playwrightMcpPort ?? 8931)
+  );
+  const [playwrightStatus, setPlaywrightStatus] = useState<PlaywrightMcpStatus | null>(null);
+  const [autopilotEnabled, setAutopilotEnabled] = useState<boolean>(prefs.autopilotEnabled ?? false);
+  const [dailyLossLimitKrw, setDailyLossLimitKrw] = useState<number>(prefs.dailyLossLimitKrw ?? -20000);
+  const [autopilotState, setAutopilotState] = useState<AutopilotState>({
+    enabled: false,
+    blockedByDailyLoss: false,
+    blockedReason: null,
+    startedAt: null,
+    workers: [],
+    logs: [],
+  });
+  const autopilotRef = useRef<AutopilotOrchestrator | null>(null);
   const chatEndRef = useRef<HTMLDivElement | null>(null);
   const winRateSort = isWinRateSort(sortBy);
 
@@ -368,16 +403,60 @@ export default function ManualTraderWorkspace() {
     );
   }, [marketsQuery.data, search]);
 
+  const connectMcpAndPlaywright = useCallback(async () => {
+    const tradingMcpUrl = deriveMcpUrl();
+    let resolvedPlaywrightUrl = playwrightMcpUrl.trim();
+
+    if (playwrightEnabled && playwrightAutoStart) {
+      const startStatus = await startPlaywrightMcp({ port: playwrightMcpPort, host: '127.0.0.1' });
+      if (startStatus?.url) {
+        resolvedPlaywrightUrl = startStatus.url;
+      }
+      setPlaywrightStatus(startStatus);
+    } else {
+      const status = await getPlaywrightStatus();
+      setPlaywrightStatus(status);
+    }
+
+    const servers: DesktopMcpServerConfig[] = [{ serverId: 'trading', url: tradingMcpUrl }];
+    if (playwrightEnabled && resolvedPlaywrightUrl) {
+      servers.push({ serverId: 'playwright', url: resolvedPlaywrightUrl });
+    }
+
+    const tools = await connectMcpServers(servers);
+    setMcpTools(tools);
+    setMcpConnected(tools.length > 0);
+  }, [playwrightAutoStart, playwrightEnabled, playwrightMcpPort, playwrightMcpUrl]);
+
+  const handlePlaywrightStart = useCallback(async () => {
+    try {
+      const next = await startPlaywrightMcp({ port: playwrightMcpPort, host: '127.0.0.1' });
+      setPlaywrightStatus(next);
+      if (next?.url) {
+        setPlaywrightMcpUrl(next.url);
+      }
+      await connectMcpAndPlaywright();
+      setStatusMessage('Playwright MCP 시작 및 연결 완료');
+    } catch (error) {
+      setStatusMessage(error instanceof Error ? error.message : 'Playwright MCP 시작 실패');
+    }
+  }, [connectMcpAndPlaywright, playwrightMcpPort]);
+
+  const handlePlaywrightStop = useCallback(async () => {
+    try {
+      const next = await stopPlaywrightMcp();
+      setPlaywrightStatus(next);
+      await connectMcpAndPlaywright();
+      setStatusMessage('Playwright MCP 중지');
+    } catch (error) {
+      setStatusMessage(error instanceof Error ? error.message : 'Playwright MCP 중지 실패');
+    }
+  }, [connectMcpAndPlaywright]);
+
   // MCP 연결 및 도구 목록 로드
   useEffect(() => {
-    const mcpUrl = deriveMcpUrl();
-    connectMcp(mcpUrl)
-      .then((tools) => {
-        setMcpTools(tools);
-        setMcpConnected(tools.length > 0);
-      })
-      .catch(() => { /* MCP 실패해도 채팅은 가능 */ });
-  }, []);
+    connectMcpAndPlaywright().catch(() => { /* MCP 실패해도 채팅은 가능 */ });
+  }, [connectMcpAndPlaywright]);
 
   // 채팅 스크롤
   useEffect(() => {
@@ -387,9 +466,35 @@ export default function ManualTraderWorkspace() {
   // 저장
   useEffect(() => {
     if (typeof window === 'undefined') return;
-    const next: WorkspacePrefs = { selectedMarket, interval, sortBy, sortDirection, aiRefreshSec, tradingMode };
+    const next: WorkspacePrefs = {
+      selectedMarket,
+      interval,
+      sortBy,
+      sortDirection,
+      aiRefreshSec,
+      tradingMode,
+      autopilotEnabled,
+      dailyLossLimitKrw,
+      playwrightEnabled,
+      playwrightAutoStart,
+      playwrightMcpPort,
+      playwrightMcpUrl,
+    };
     window.localStorage.setItem(STORAGE_KEY, JSON.stringify(next));
-  }, [selectedMarket, interval, sortBy, sortDirection, aiRefreshSec, tradingMode]);
+  }, [
+    selectedMarket,
+    interval,
+    sortBy,
+    sortDirection,
+    aiRefreshSec,
+    tradingMode,
+    autopilotEnabled,
+    dailyLossLimitKrw,
+    playwrightEnabled,
+    playwrightAutoStart,
+    playwrightMcpPort,
+    playwrightMcpUrl,
+  ]);
 
   // 차트 초기화
   useEffect(() => {
@@ -654,8 +759,14 @@ export default function ManualTraderWorkspace() {
     setActiveTab('order');
   };
 
+  const pauseAutopilotForManualMarket = useCallback((reason: string) => {
+    if (!autopilotEnabled) return;
+    autopilotRef.current?.pauseMarket(selectedMarket, 30 * 60 * 1000, reason);
+  }, [autopilotEnabled, selectedMarket]);
+
   const handleStart = () => {
     if (!recommendation) return;
+    pauseAutopilotForManualMarket('수동 진입으로 워커 30분 일시정지');
     const payload: GuidedStartRequest = {
       market: selectedMarket, amountKrw, orderType,
       limitPrice: orderType === 'LIMIT' && typeof limitPrice === 'number' ? limitPrice : undefined,
@@ -667,6 +778,7 @@ export default function ManualTraderWorkspace() {
 
   const handleOneClickEntry = () => {
     if (!recommendation) return;
+    pauseAutopilotForManualMarket('수동 원클릭 진입으로 워커 30분 일시정지');
     const ot = recommendation.suggestedOrderType === 'MARKET' ? 'MARKET' : 'LIMIT';
     const payload: GuidedStartRequest = {
       market: selectedMarket,
@@ -681,6 +793,7 @@ export default function ManualTraderWorkspace() {
 
   const handlePartialTakeProfit = async (ratio = 0.5) => {
     try {
+      pauseAutopilotForManualMarket('수동 부분익절로 워커 30분 일시정지');
       await guidedTradingApi.partialTakeProfit(selectedMarket, ratio);
       void chartQuery.refetch();
       setStatusMessage(`부분 익절 ${Math.round(ratio * 100)}% 실행.`);
@@ -688,6 +801,51 @@ export default function ManualTraderWorkspace() {
       setStatusMessage(e instanceof Error ? e.message : '부분 익절 실패');
     }
   };
+
+  useEffect(() => {
+    if (!autopilotEnabled) {
+      autopilotRef.current?.stop();
+      autopilotRef.current = null;
+      setAutopilotState((prev) => ({ ...prev, enabled: false }));
+      return;
+    }
+
+    if (llmStatus !== 'connected') {
+      setStatusMessage('오토파일럿은 OpenAI 로그인 상태에서만 시작할 수 있습니다.');
+      return;
+    }
+
+    const orchestrator = new AutopilotOrchestrator(
+      {
+        enabled: autopilotEnabled,
+        interval,
+        tradingMode,
+        amountKrw: 20000,
+        dailyLossLimitKrw,
+        maxConcurrentPositions: 3,
+        minRecommendedWinRate: 65,
+        candidateLimit: 10,
+        cooldownMs: 30 * 60 * 1000,
+        workerTickMs: 15000,
+        llmReviewIntervalMs: 15000,
+        llmModel: chatModel,
+        playwrightEnabled,
+      },
+      {
+        onState: (next) => setAutopilotState(next),
+        onLog: () => undefined,
+      }
+    );
+
+    autopilotRef.current = orchestrator;
+    orchestrator.start();
+    return () => {
+      orchestrator.stop();
+      if (autopilotRef.current === orchestrator) {
+        autopilotRef.current = null;
+      }
+    };
+  }, [autopilotEnabled, llmStatus, interval, tradingMode, dailyLossLimitKrw, chatModel, playwrightEnabled]);
 
   const positionState: PositionState = derivePositionState(
     activePosition,
@@ -1076,6 +1234,101 @@ export default function ManualTraderWorkspace() {
                 </div>
               </div>
 
+              <div className="autopilot-panel">
+                <div className="autopilot-header">
+                  <strong>완전 오토파일럿</strong>
+                  <label className="autopilot-switch">
+                    <input
+                      type="checkbox"
+                      checked={autopilotEnabled}
+                      onChange={(event) => setAutopilotEnabled(event.target.checked)}
+                    />
+                    <span>{autopilotEnabled ? 'ON' : 'OFF'}</span>
+                  </label>
+                </div>
+                <div className="autopilot-row">
+                  <label>
+                    일일 손실 제한
+                    <input
+                      type="number"
+                      value={dailyLossLimitKrw}
+                      step={1000}
+                      onChange={(event) => setDailyLossLimitKrw(Number(event.target.value || -20000))}
+                    />
+                  </label>
+                  <small>기본 -20,000원</small>
+                </div>
+                {autopilotState.blockedByDailyLoss && autopilotState.blockedReason && (
+                  <p className="autopilot-warning">{autopilotState.blockedReason}</p>
+                )}
+
+                <div className="autopilot-divider" />
+
+                <div className="autopilot-header">
+                  <strong>Playwright MCP</strong>
+                  <label className="autopilot-switch">
+                    <input
+                      type="checkbox"
+                      checked={playwrightEnabled}
+                      onChange={(event) => setPlaywrightEnabled(event.target.checked)}
+                    />
+                    <span>{playwrightEnabled ? '사용' : '미사용'}</span>
+                  </label>
+                </div>
+                <div className="autopilot-grid">
+                  <label>
+                    포트
+                    <input
+                      type="number"
+                      min={1024}
+                      max={65535}
+                      value={playwrightMcpPort}
+                      onChange={(event) => {
+                        const nextPort = Number(event.target.value || 8931);
+                        setPlaywrightMcpPort(nextPort);
+                        setPlaywrightMcpUrl(derivePlaywrightMcpUrl(nextPort));
+                      }}
+                    />
+                  </label>
+                  <label>
+                    URL
+                    <input
+                      type="text"
+                      value={playwrightMcpUrl}
+                      onChange={(event) => setPlaywrightMcpUrl(event.target.value)}
+                    />
+                  </label>
+                </div>
+                <label className="autopilot-checkbox">
+                  <input
+                    type="checkbox"
+                    checked={playwrightAutoStart}
+                    onChange={(event) => setPlaywrightAutoStart(event.target.checked)}
+                  />
+                  앱 시작 시 Playwright MCP 자동 실행
+                </label>
+                <div className="autopilot-actions">
+                  <button type="button" onClick={() => void handlePlaywrightStart()}>Playwright 시작</button>
+                  <button type="button" onClick={() => void handlePlaywrightStop()} className="danger">Playwright 중지</button>
+                </div>
+                <p className="autopilot-meta">
+                  상태: {playwrightStatus?.status ?? 'unknown'}
+                  {playwrightStatus?.url ? ` · ${playwrightStatus.url}` : ''}
+                </p>
+
+                {autopilotState.workers.length > 0 && (
+                  <div className="autopilot-workers">
+                    <strong>워커 상태 ({autopilotState.workers.length})</strong>
+                    {autopilotState.workers.map((worker) => (
+                      <div key={worker.market} className="autopilot-worker-row">
+                        <span>{worker.market}</span>
+                        <span>{worker.status}</span>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+
               {/* PlanPanel — 플랜 실행 중이면 주문 패널 대신 표시 */}
               {plan && (
                 <PlanPanel
@@ -1211,7 +1464,10 @@ export default function ManualTraderWorkspace() {
                   <button
                     type="button"
                     className="cancel-order-btn"
-                    onClick={() => stopMutation.mutate()}
+                    onClick={() => {
+                      pauseAutopilotForManualMarket('수동 주문취소로 워커 30분 일시정지');
+                      stopMutation.mutate();
+                    }}
                     disabled={stopMutation.isPending}
                   >
                     {stopMutation.isPending ? '취소 중...' : '주문 취소'}
@@ -1266,7 +1522,10 @@ export default function ManualTraderWorkspace() {
                     <button
                       type="button"
                       className={`full-exit-btn ${positionState === 'DANGER' ? 'urgent' : ''}`}
-                      onClick={() => stopMutation.mutate()}
+                      onClick={() => {
+                        pauseAutopilotForManualMarket('수동 청산으로 워커 30분 일시정지');
+                        stopMutation.mutate();
+                      }}
                       disabled={stopMutation.isPending}
                     >
                       {positionState === 'DANGER' ? '즉시 청산' : '전체 청산'}
@@ -1328,8 +1587,8 @@ export default function ManualTraderWorkspace() {
               {showTools && (
                 <div className="guided-tools-list">
                   {mcpTools.map((tool) => (
-                    <div key={tool.name} className="guided-tool-item">
-                      <code>{tool.name}</code>
+                    <div key={tool.qualifiedName || `${tool.serverId || 'default'}:${tool.name}`} className="guided-tool-item">
+                      <code>{tool.qualifiedName || tool.name}</code>
                       <span>{tool.description || ''}</span>
                     </div>
                   ))}

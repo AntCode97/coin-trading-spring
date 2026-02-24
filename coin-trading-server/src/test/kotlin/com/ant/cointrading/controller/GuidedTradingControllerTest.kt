@@ -1,6 +1,7 @@
 package com.ant.cointrading.controller
 
 import com.ant.cointrading.guided.GuidedStartRequest
+import com.ant.cointrading.guided.GuidedAdoptPositionRequest
 import com.ant.cointrading.guided.GuidedTradingService
 import org.junit.jupiter.api.DisplayName
 import org.junit.jupiter.api.Test
@@ -43,6 +44,19 @@ class GuidedTradingControllerTest {
 
         val exception = assertThrows<ResponseStatusException> {
             controller.partialTakeProfit("KRW-BTC", -1.0)
+        }
+
+        kotlin.test.assertEquals(HttpStatus.BAD_REQUEST, exception.statusCode)
+    }
+
+    @Test
+    @DisplayName("adoptPosition은 서비스 입력 오류를 400으로 변환한다")
+    fun adoptPositionMapsIllegalArgumentToBadRequest() {
+        whenever(guidedTradingService.adoptExternalPosition(any()))
+            .thenThrow(IllegalArgumentException("adopt 오류"))
+
+        val exception = assertThrows<ResponseStatusException> {
+            controller.adoptPosition(GuidedAdoptPositionRequest(market = "KRW-BTC"))
         }
 
         kotlin.test.assertEquals(HttpStatus.BAD_REQUEST, exception.statusCode)

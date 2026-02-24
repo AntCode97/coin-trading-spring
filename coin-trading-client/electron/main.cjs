@@ -5,10 +5,18 @@ const path = require('node:path');
 
 const { runOAuthFlow, refreshAccessToken } = require('./oauth/auth-flow.cjs');
 const { saveToken, loadToken, deleteToken, isTokenExpired } = require('./oauth/token-store.cjs');
-const { McpClient } = require('./mcp/mcp-client.cjs');
+const { McpHub } = require('./mcp/mcp-hub.cjs');
+const { PlaywrightMcpManager } = require('./mcp/playwright-manager.cjs');
 
 let staticServer = null;
-let mcpClient = null;
+const mcpHub = new McpHub();
+const playwrightManager = new PlaywrightMcpManager();
+const ELECTRON_CDP_PORT = Number(process.env.ELECTRON_CDP_PORT || 9333);
+const ELECTRON_CDP_HOST = '127.0.0.1';
+
+// Playwright MCP가 Electron 화면을 직접 자동화할 수 있도록 CDP 포트를 연다.
+app.commandLine.appendSwitch('remote-debugging-port', String(ELECTRON_CDP_PORT));
+app.commandLine.appendSwitch('remote-debugging-address', ELECTRON_CDP_HOST);
 
 function registerOAuthIpc() {
   ipcMain.handle('oauth:start-login', async () => {
@@ -48,29 +56,33 @@ function registerOAuthIpc() {
 function registerMcpIpc() {
   ipcMain.handle('mcp:connect', async (_event, mcpUrl) => {
     try {
-      mcpClient = new McpClient(mcpUrl);
-      const result = await mcpClient.connect();
+      const result = await mcpHub.connectMany([{ serverId: 'trading', url: mcpUrl }]);
       return { ok: true, tools: result.tools || [] };
     } catch (e) {
-      mcpClient = null;
       return { ok: false, error: e.message, tools: [] };
     }
   });
 
-  ipcMain.handle('mcp:list-tools', async () => {
-    if (!mcpClient) return { tools: [] };
+  ipcMain.handle('mcp:connect-many', async (_event, servers) => {
     try {
-      const result = await mcpClient.listTools();
-      return { tools: result.tools || [] };
+      const result = await mcpHub.connectMany(Array.isArray(servers) ? servers : []);
+      return result;
+    } catch (e) {
+      return { ok: false, tools: [], connectedServers: [], error: e.message };
+    }
+  });
+
+  ipcMain.handle('mcp:list-tools', async () => {
+    try {
+      return mcpHub.listTools();
     } catch (e) {
       return { tools: [], error: e.message };
     }
   });
 
-  ipcMain.handle('mcp:call-tool', async (_event, name, args) => {
-    if (!mcpClient) return { content: [], isError: true, error: 'MCP 미연결' };
+  ipcMain.handle('mcp:call-tool', async (_event, name, args, serverId) => {
     try {
-      const result = await mcpClient.callTool(name, args);
+      const result = await mcpHub.callTool(name, args, serverId ?? null);
       return result;
     } catch (e) {
       return { content: [{ type: 'text', text: e.message }], isError: true };
@@ -78,7 +90,23 @@ function registerMcpIpc() {
   });
 
   ipcMain.handle('mcp:status', async () => {
-    return { connected: mcpClient?.connected ?? false };
+    return mcpHub.status();
+  });
+
+  ipcMain.handle('playwright:start', async (_event, config) => {
+    const cdpEndpoint = `http://${ELECTRON_CDP_HOST}:${ELECTRON_CDP_PORT}`;
+    return playwrightManager.start({
+      ...(config || {}),
+      cdpEndpoint,
+    });
+  });
+
+  ipcMain.handle('playwright:stop', async () => {
+    return playwrightManager.stop();
+  });
+
+  ipcMain.handle('playwright:status', async () => {
+    return playwrightManager.getStatus();
   });
 }
 
@@ -177,6 +205,7 @@ app.on('window-all-closed', () => {
     staticServer.close();
     staticServer = null;
   }
+  void playwrightManager.stop();
   if (process.platform !== 'darwin') {
     app.quit();
   }

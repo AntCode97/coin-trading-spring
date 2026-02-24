@@ -1195,6 +1195,152 @@
   font-size: 10px;
 }
 
+.autopilot-panel {
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 10px;
+  background: rgba(10, 15, 24, 0.72);
+  padding: 10px;
+  margin-bottom: 10px;
+}
+
+.autopilot-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 8px;
+}
+
+.autopilot-header strong {
+  font-size: 12px;
+  color: #dce6f8;
+}
+
+.autopilot-switch {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  color: #9fb2d8;
+}
+
+.autopilot-row {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.autopilot-row label {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 11px;
+  color: #9fb2d8;
+  flex: 1;
+}
+
+.autopilot-row input,
+.autopilot-grid input {
+  background: #111722;
+  border: 1px solid #2a3445;
+  color: #e8eefb;
+  border-radius: 6px;
+  padding: 6px 8px;
+  font-size: 12px;
+}
+
+.autopilot-row small {
+  color: #8f9aad;
+  font-size: 10px;
+  white-space: nowrap;
+}
+
+.autopilot-warning {
+  margin: 8px 0 0;
+  font-size: 11px;
+  color: #ff8fa3;
+}
+
+.autopilot-divider {
+  height: 1px;
+  background: rgba(255, 255, 255, 0.08);
+  margin: 10px 0;
+}
+
+.autopilot-grid {
+  display: grid;
+  grid-template-columns: 90px 1fr;
+  gap: 8px;
+}
+
+.autopilot-grid label {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 11px;
+  color: #9fb2d8;
+}
+
+.autopilot-checkbox {
+  margin-top: 8px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  color: #9fb2d8;
+}
+
+.autopilot-actions {
+  display: flex;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.autopilot-actions button {
+  flex: 1;
+  border: 1px solid #2f4f9f;
+  background: #1a2f62;
+  color: #e8f0ff;
+  border-radius: 7px;
+  padding: 6px 8px;
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.autopilot-actions button.danger {
+  border-color: #8d2f3f;
+  background: #3d1e29;
+}
+
+.autopilot-meta {
+  margin: 8px 0 0;
+  font-size: 10px;
+  color: #8f9aad;
+  word-break: break-all;
+}
+
+.autopilot-workers {
+  margin-top: 8px;
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+  padding-top: 8px;
+}
+
+.autopilot-workers strong {
+  display: block;
+  font-size: 11px;
+  color: #9fb2d8;
+  margin-bottom: 4px;
+}
+
+.autopilot-worker-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 10px;
+  color: #c5d0e3;
+  padding: 2px 0;
+}
+
 /* ---------- 상태 패널 공통 ---------- */
 
 .state-panel {
