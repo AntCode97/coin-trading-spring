@@ -3,6 +3,7 @@ package com.ant.cointrading.guided
 import com.ant.cointrading.api.bithumb.BithumbPrivateApi
 import com.ant.cointrading.api.bithumb.BithumbPublicApi
 import com.ant.cointrading.api.bithumb.BithumbApiException
+import com.ant.cointrading.api.bithumb.Balance
 import com.ant.cointrading.api.bithumb.OrderResponse
 import com.ant.cointrading.api.bithumb.TradeResponse
 import com.ant.cointrading.repository.OrderLifecycleStrategyGroup
@@ -50,6 +51,7 @@ class GuidedTradingService(
         const val WIN_RATE_CALC_CONCURRENCY = 8
         const val WIN_RATE_CALC_TIMEOUT_MILLIS = 2500L
         const val GUIDED_STRATEGY_CODE = "GUIDED_TRADING"
+        val MIN_EFFECTIVE_HOLDING_KRW: BigDecimal = BigDecimal("5000")
     }
 
     @PreDestroy
@@ -242,9 +244,16 @@ class GuidedTradingService(
         if (trades.isEmpty()) return emptyList()
         val markets = trades.map { it.market }.distinct()
         val tickerMap = fetchTickerMap(markets)
-        return trades.map { trade ->
-            val price = tickerMap[trade.market]?.tradePrice?.toDouble()
-            trade.toView(price)
+        val balancesByCurrency = fetchBalancesByCurrency()
+        return trades.mapNotNull { trade ->
+            val marketPrice = tickerMap[trade.market]?.tradePrice
+            if (
+                trade.status == GuidedTradeEntity.STATUS_OPEN &&
+                getActualHoldingQuantity(trade.market, marketPrice, balancesByCurrency) <= BigDecimal.ZERO
+            ) {
+                return@mapNotNull null
+            }
+            trade.toView(marketPrice?.toDouble())
         }
     }
 
@@ -263,11 +272,10 @@ class GuidedTradingService(
             )
         }
 
-        val actualQty = getActualHoldingQuantity(market)
-        require(actualQty > BigDecimal.ZERO) { "외부 포지션 편입 실패: 보유 수량이 없습니다." }
-
         val tickerPrice = bithumbPublicApi.getCurrentPrice(market)?.firstOrNull()?.tradePrice
         require(tickerPrice != null && tickerPrice > BigDecimal.ZERO) { "외부 포지션 편입 실패: 현재가를 조회할 수 없습니다." }
+        val actualQty = getActualHoldingQuantity(market, tickerPrice)
+        require(actualQty > BigDecimal.ZERO) { "외부 포지션 편입 실패: 실효 보유 수량이 없습니다(미세 잔고 제외)." }
 
         val mode = TradingMode.fromString(request.mode ?: TradingMode.SWING.name)
         val interval = request.interval?.ifBlank { null } ?: "minute30"
@@ -448,12 +456,12 @@ class GuidedTradingService(
         val allTrades = guidedTradeRepository.findByMarketAndStatusIn(market, OPEN_STATUSES)
         require(allTrades.isNotEmpty()) { "진행 중인 포지션이 없습니다." }
 
-        val actualQty = getActualHoldingQuantity(market)
         val currentPrice = bithumbPublicApi.getCurrentPrice(market)?.firstOrNull()?.tradePrice ?: allTrades.first().averageEntryPrice
+        val actualQty = getActualHoldingQuantity(market, currentPrice)
 
         if (actualQty > BigDecimal.ZERO) {
             val estimatedValue = actualQty.multiply(currentPrice)
-            if (estimatedValue >= BigDecimal("5000")) {
+            if (estimatedValue >= MIN_EFFECTIVE_HOLDING_KRW) {
                 try {
                     val sell = bithumbPrivateApi.sellMarketOrder(market, actualQty)
                     orderLifecycleTelemetryService.recordRequested(
@@ -499,7 +507,7 @@ class GuidedTradingService(
                     throw IllegalStateException("[$market] 매도 주문 실패 — 빗썸에서 직접 매도하세요. 원인: ${e.message}")
                 }
             } else {
-                log.warn("[$market] 잔여 수량 매도 불가 (추정금액 ${estimatedValue.toPlainString()}원 < 5,000원). DB 강제 종료.")
+                log.warn("[$market] 잔여 수량 매도 불가 (추정금액 ${estimatedValue.toPlainString()}원 < ${MIN_EFFECTIVE_HOLDING_KRW.toPlainString()}원). DB 강제 종료.")
             }
         }
 
@@ -581,8 +589,8 @@ class GuidedTradingService(
 
         val currentPrice = bithumbPublicApi.getCurrentPrice(trade.market)?.firstOrNull()?.tradePrice ?: trade.averageEntryPrice
         val estimatedValue = qty.multiply(currentPrice)
-        require(estimatedValue >= BigDecimal("5000")) {
-            "부분 익절 금액 ${estimatedValue.toPlainString()}원이 빗썸 최소 주문금액(5,000원) 미달입니다. 전체 청산을 이용하세요."
+        require(estimatedValue >= MIN_EFFECTIVE_HOLDING_KRW) {
+            "부분 익절 금액 ${estimatedValue.toPlainString()}원이 빗썸 최소 주문금액(${MIN_EFFECTIVE_HOLDING_KRW.toPlainString()}원) 미달입니다. 전체 청산을 이용하세요."
         }
 
         val sell = bithumbPrivateApi.sellMarketOrder(trade.market, qty)
@@ -716,15 +724,15 @@ class GuidedTradingService(
     private fun manageOpenTrade(trade: GuidedTradeEntity) {
         val currentPrice = bithumbPublicApi.getCurrentPrice(trade.market)?.firstOrNull()?.tradePrice ?: return
 
-        val actualHolding = getActualHoldingQuantity(trade.market)
+        val actualHolding = getActualHoldingQuantity(trade.market, currentPrice)
         if (actualHolding <= BigDecimal.ZERO && trade.remainingQuantity > BigDecimal.ZERO) {
             trade.remainingQuantity = BigDecimal.ZERO
             trade.status = GuidedTradeEntity.STATUS_CLOSED
             trade.closedAt = Instant.now()
-            trade.exitReason = "MANUAL_INTERVENTION"
-            trade.lastAction = "AUTO_CLOSED_MANUAL_INTERVENTION"
+            trade.exitReason = "NO_EFFECTIVE_BALANCE"
+            trade.lastAction = "AUTO_CLOSED_NO_EFFECTIVE_BALANCE"
             guidedTradeRepository.save(trade)
-            appendEvent(trade.id!!, "MANUAL_INTERVENTION_CLOSE", currentPrice, null, "수동 매도 감지로 자동매매 종료")
+            appendEvent(trade.id!!, "MANUAL_INTERVENTION_CLOSE", currentPrice, null, "실효 잔고 없음(미세 잔고 제외)으로 자동매매 종료")
             return
         }
 
@@ -913,12 +921,36 @@ class GuidedTradingService(
         return elapsed >= DCA_MIN_INTERVAL_SECONDS
     }
 
-    private fun getActualHoldingQuantity(market: String): BigDecimal {
+    private fun getActualHoldingQuantity(
+        market: String,
+        referencePrice: BigDecimal? = null,
+        balancesByCurrency: Map<String, Balance>? = null
+    ): BigDecimal {
         val currency = market.substringAfter("KRW-")
-        val balance = bithumbPrivateApi.getBalances()
-            ?.firstOrNull { it.currency.equals(currency, ignoreCase = true) }
+        val balance = balancesByCurrency?.get(currency.uppercase())
+            ?: bithumbPrivateApi.getBalances()
+                ?.firstOrNull { it.currency.equals(currency, ignoreCase = true) }
             ?: return BigDecimal.ZERO
-        return balance.balance.add(balance.locked ?: BigDecimal.ZERO)
+        val quantity = balance.balance.add(balance.locked ?: BigDecimal.ZERO)
+        if (quantity <= BigDecimal.ZERO) return BigDecimal.ZERO
+
+        val marketPrice = referencePrice
+            ?.takeIf { it > BigDecimal.ZERO }
+            ?: bithumbPublicApi.getCurrentPrice(market)?.firstOrNull()?.tradePrice
+
+        if (marketPrice != null && marketPrice > BigDecimal.ZERO) {
+            val estimatedKrw = quantity.multiply(marketPrice)
+            if (estimatedKrw < MIN_EFFECTIVE_HOLDING_KRW) {
+                return BigDecimal.ZERO
+            }
+        }
+        return quantity
+    }
+
+    private fun fetchBalancesByCurrency(): Map<String, Balance> {
+        return bithumbPrivateApi.getBalances()
+            .orEmpty()
+            .associateBy { it.currency.uppercase() }
     }
 
     private fun closeAllByMarket(trade: GuidedTradeEntity, reason: String) {
@@ -932,12 +964,23 @@ class GuidedTradingService(
         }
 
         val currentPrice = bithumbPublicApi.getCurrentPrice(trade.market)?.firstOrNull()?.tradePrice ?: trade.averageEntryPrice
-        val actualQty = getActualHoldingQuantity(trade.market)
-        val sellQty = if (actualQty > BigDecimal.ZERO) actualQty else trade.remainingQuantity
+        val actualQty = getActualHoldingQuantity(trade.market, currentPrice)
+        if (actualQty <= BigDecimal.ZERO) {
+            trade.status = GuidedTradeEntity.STATUS_CLOSED
+            trade.closedAt = Instant.now()
+            trade.exitReason = "${reason}_NO_EFFECTIVE_BALANCE"
+            trade.lastAction = "CLOSE_NO_EFFECTIVE_BALANCE"
+            trade.remainingQuantity = BigDecimal.ZERO
+            guidedTradeRepository.save(trade)
+            appendEvent(trade.id!!, "CLOSE_NO_EFFECTIVE_BALANCE", currentPrice, null, "실효 잔고 없음(미세 잔고 제외)으로 DB 종료")
+            return
+        }
+
+        val sellQty = actualQty
 
         val estimatedValue = sellQty.multiply(currentPrice)
-        if (estimatedValue < BigDecimal("5000")) {
-            log.warn("[${trade.market}] 잔여 수량 ${sellQty} 매도 불가 (추정금액 ${estimatedValue.toPlainString()}원 < 5,000원). DB 강제 종료.")
+        if (estimatedValue < MIN_EFFECTIVE_HOLDING_KRW) {
+            log.warn("[${trade.market}] 잔여 수량 ${sellQty} 매도 불가 (추정금액 ${estimatedValue.toPlainString()}원 < ${MIN_EFFECTIVE_HOLDING_KRW.toPlainString()}원). DB 강제 종료.")
             trade.status = GuidedTradeEntity.STATUS_CLOSED
             trade.closedAt = Instant.now()
             trade.exitReason = "${reason}_BELOW_MIN_ORDER"
@@ -1200,7 +1243,14 @@ class GuidedTradingService(
         val avgPnlPercent = if (closedToday.isNotEmpty())
             closedToday.map { it.realizedPnlPercent.toDouble() }.average() else 0.0
         val openPositions = guidedTradeRepository.findByStatusIn(OPEN_STATUSES)
-        val totalInvested = openPositions.sumOf {
+        val tickerMap = fetchTickerMap(openPositions.map { it.market }.distinct())
+        val balancesByCurrency = fetchBalancesByCurrency()
+        val effectiveOpenPositions = openPositions.filter { trade ->
+            if (trade.status == GuidedTradeEntity.STATUS_PENDING_ENTRY) return@filter true
+            val marketPrice = tickerMap[trade.market]?.tradePrice
+            getActualHoldingQuantity(trade.market, marketPrice, balancesByCurrency) > BigDecimal.ZERO
+        }
+        val totalInvested = effectiveOpenPositions.sumOf {
             it.averageEntryPrice.multiply(it.remainingQuantity).toDouble()
         }
         return GuidedDailyStats(
@@ -1210,7 +1260,7 @@ class GuidedTradingService(
             totalPnlKrw = totalPnl,
             avgPnlPercent = avgPnlPercent,
             winRate = if (closedToday.isNotEmpty()) wins.toDouble() / closedToday.size * 100.0 else 0.0,
-            openPositionCount = openPositions.size,
+            openPositionCount = effectiveOpenPositions.size,
             totalInvestedKrw = totalInvested,
             trades = closedToday.map { it.toClosedTradeView() }
         )
@@ -1220,21 +1270,24 @@ class GuidedTradingService(
     fun syncPositions(): GuidedSyncResult {
         val actions = mutableListOf<GuidedSyncAction>()
         val openTrades = guidedTradeRepository.findByStatusIn(OPEN_STATUSES)
+        val tickerMap = fetchTickerMap(openTrades.map { it.market }.distinct())
+        val balancesByCurrency = fetchBalancesByCurrency()
         var fixedCount = 0
 
         for (trade in openTrades) {
-            val actualQty = getActualHoldingQuantity(trade.market)
+            val marketPrice = tickerMap[trade.market]?.tradePrice
+            val actualQty = getActualHoldingQuantity(trade.market, marketPrice, balancesByCurrency)
 
             when {
-                actualQty < BigDecimal("0.0000001") -> {
+                actualQty <= BigDecimal.ZERO -> {
                     trade.remainingQuantity = BigDecimal.ZERO
                     trade.status = GuidedTradeEntity.STATUS_CLOSED
                     trade.closedAt = Instant.now()
                     trade.exitReason = "SYNC_MANUAL_SELL"
                     trade.lastAction = "SYNC_CLOSED"
                     guidedTradeRepository.save(trade)
-                    appendEvent(trade.id!!, "SYNC_CLOSE", null, null, "잔고 없음 - 외부 매도 감지")
-                    actions.add(GuidedSyncAction("CLOSED", trade.market, "잔고 없음 - 외부 매도 감지 (trade #${trade.id})"))
+                    appendEvent(trade.id!!, "SYNC_CLOSE", null, null, "실효 잔고 없음(미세 잔고 제외) - 외부 매도 감지")
+                    actions.add(GuidedSyncAction("CLOSED", trade.market, "실효 잔고 없음(미세 잔고 제외) - 외부 매도 감지 (trade #${trade.id})"))
                     fixedCount++
                 }
                 (actualQty.subtract(trade.remainingQuantity)).abs() > BigDecimal("0.0001") -> {

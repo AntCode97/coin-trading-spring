@@ -4,6 +4,7 @@
 
 Bithumb 암호화폐 거래소를 위한 **Spring Boot** 기반 자동화 트레이딩 시스템.
 룰 기반 실시간 트레이딩 + LLM 주기적 최적화 하이브리드 아키텍처.
+추가로 Electron 기반 데스크톱 클라이언트에서 Guided 수동 트레이딩과 오토파일럿 모드를 지원.
 
 ---
 
@@ -37,6 +38,12 @@ Bithumb 암호화폐 거래소를 위한 **Spring Boot** 기반 자동화 트레
 │   ├── StrategyTools         - 전략 파라미터 조정
 │   └── PerformanceTools      - 성과 분석 (data class 응답)
 │
+├── Guided Trading (Desktop API)
+│   ├── GuidedTradingService  - 추천 진입/승률/포지션 관리
+│   ├── GuidedTradingController - 데스크톱 Guided REST API
+│   ├── OrderLifecycleTelemetryService - 주문 생명주기 집계
+│   └── ManualTradingController - 수동 주문 API (텔레메트리 연동)
+│
 ├── LLM Optimizer (Spring AI)
 │   ├── LlmConfig            - ChatClient 빈 등록
 │   ├── ModelSelector        - 동적 모델 선택 (@Qualifier)
@@ -44,6 +51,13 @@ Bithumb 암호화폐 거래소를 위한 **Spring Boot** 기반 자동화 트레
 │
 └── 알림 시스템
     └── SlackNotifier        - Bot API (chat.postMessage)
+
+[coin-trading-client - Electron + React]
+│
+├── ManualTraderWorkspace     - Guided 수동 트레이딩 UI
+├── AutopilotOrchestrator     - 오토파일럿 의사결정/워커 오케스트레이션
+├── AutopilotLiveDock         - 실시간 후보/액션/주문 퍼널 도크
+└── electron/mcp              - MCP 허브 + Playwright MCP 프로세스 관리
 ```
 
 ---
@@ -80,10 +94,15 @@ coin-trading-spring/
 │       ├── controller/
 │       │   ├── SettingsController.kt
 │       │   ├── TradingController.kt
-│       │   └── OptimizerController.kt  # LLM 수동 최적화 API
+│       │   ├── OptimizerController.kt  # LLM 수동 최적화 API
+│       │   ├── GuidedTradingController.kt
+│       │   └── ManualTradingController.kt
+│       ├── guided/
+│       │   └── GuidedTradingService.kt
 │       ├── service/
 │       │   ├── KeyValueService.kt
-│       │   └── ModelSelector.kt        # @Qualifier 기반 모델 선택
+│       │   ├── ModelSelector.kt        # @Qualifier 기반 모델 선택
+│       │   └── OrderLifecycleTelemetryService.kt
 │       ├── strategy/
 │       │   ├── DcaStrategy.kt          # 상태 DB 저장 (@PostConstruct 복원)
 │       │   ├── GridStrategy.kt         # 상태 DB 저장 (JSON 직렬화)
@@ -99,6 +118,14 @@ coin-trading-spring/
 │       │   └── SlackNotifier.kt        # Bot API 방식
 │       └── ...
 │
+├── coin-trading-client/
+│   ├── src/components/ManualTraderWorkspace.tsx
+│   ├── src/components/autopilot/AutopilotLiveDock.tsx
+│   ├── src/lib/autopilot/AutopilotOrchestrator.ts
+│   └── electron/mcp/
+│       ├── mcp-hub.cjs
+│       └── playwright-manager.cjs
+│
 ├── http/                               # HTTP Client 테스트 파일
 ├── docs/
 │   ├── QUANT_RESEARCH.md              # 퀀트 연구 노트
@@ -109,6 +136,57 @@ coin-trading-spring/
 ├── .mcp.json                           # Claude Code MCP 연결 설정
 └── CLAUDE.md
 ```
+
+---
+
+## 최근 변경사항 (2026-02-24)
+
+### 1. 오토파일럿 라이브 도크 UX 추가 (Desktop)
+
+- 토글 ON 시 하단 전체폭 라이브 도크를 자동 오픈.
+- 실시간 노출 항목:
+  - 후보 코인 상위 10 + stage(`RULE_PASS`, `RULE_FAIL`, `SLOT_FULL`, `COOLDOWN`, `LLM_REJECT`, `PLAYWRIGHT_WARN`, `ENTERED`)
+  - Playwright/LLM/워커/주문 타임라인
+  - 워커 상태 카드
+  - 주문 퍼널 KPI (`매수 요청 → 매수 체결 → 매도 요청 → 매도 체결`)
+
+관련 파일:
+- `coin-trading-client/src/components/autopilot/AutopilotLiveDock.tsx`
+- `coin-trading-client/src/lib/autopilot/AutopilotOrchestrator.ts`
+- `coin-trading-client/src/lib/autopilot/MarketWorker.ts`
+
+### 2. 주문 생명주기 텔레메트리 추가 (Server)
+
+- 신규 엔티티/서비스:
+  - `OrderLifecycleEventEntity` (eventType, strategyGroup, orderId, market, side, createdAt)
+  - `OrderLifecycleTelemetryService` (집계 + reconcile)
+- 시간 기준: **KST 오늘 00:00 ~ 현재**
+- 전략 그룹 분리:
+  - `MANUAL`, `GUIDED`, `AUTOPILOT_MCP`, `CORE_ENGINE`
+- 체결 idempotent 규칙:
+  - 동일 `orderId + BUY_FILLED/SELL_FILLED` 이벤트는 1회만 기록
+
+관련 파일:
+- `coin-trading-server/src/main/kotlin/com/ant/cointrading/repository/OrderLifecycleEventEntity.kt`
+- `coin-trading-server/src/main/kotlin/com/ant/cointrading/service/OrderLifecycleTelemetryService.kt`
+
+### 3. 신규 Guided API
+
+- `GET /api/guided-trading/autopilot/live`
+  - 응답: `orderSummary`, `orderEvents`, `autopilotEvents`, `candidates`
+- `GuidedTradingService.getAutopilotLive(interval, mode)` 추가.
+
+### 4. 텔레메트리 기록 포인트 확장
+
+- `ManualTradingController`: 수동 매수/매도 요청 및 즉시 reconcile
+- `GuidedTradingService`: 진입/부분익절/전량청산/취소/재조정 경로에서 요청/체결/실패 기록
+- `TradingTools`: MCP 직접 주문(`AUTOPILOT_MCP`) 요청/체결/취소/실패 기록
+
+### 5. 테스트
+
+- `OrderLifecycleTelemetryServiceTest` 추가
+- `GuidedTradingControllerTest` 확장 (`autopilot/live` 응답 검증)
+- `GuidedTradingServiceTest` 생성자 의존성 반영
 
 ---
 

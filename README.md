@@ -1,6 +1,6 @@
 # Coin Trading Spring
 
-Bithumb 암호화폐 자동 트레이딩 시스템 (Spring Boot + Kotlin)
+Bithumb 암호화폐 자동 트레이딩 + 데스크톱 수동/오토파일럿 트레이딩 시스템 (Spring Boot + Kotlin + Electron)
 
 ---
 
@@ -26,6 +26,8 @@ Bithumb 암호화폐 자동 트레이딩 시스템 (Spring Boot + Kotlin)
 - **1분마다** 시장 분석 → 매수/매도 신호 생성 → 주문 실행
 - 시장 상황(레짐)에 따라 **자동으로 전략 전환**
 - LLM(Claude/GPT/Gemini)이 **주기적으로 전략 파라미터 최적화**
+- 데스크톱 워크스페이스에서 **Guided 수동 트레이딩**(추천가/손절/익절/승률 기반) 지원
+- 오토파일럿 모드에서 **후보 선별 → LLM 검토 → Playwright UI 검증 → 진입/모니터링** 자동 수행
 
 ### 핵심 특징
 
@@ -36,6 +38,9 @@ Bithumb 암호화폐 자동 트레이딩 시스템 (Spring Boot + Kotlin)
 | 다중 안전장치 | 서킷브레이커, 시장상태 검사, 슬리피지 감시 |
 | LLM 최적화 | 주 1회 AI가 성과 분석 후 파라미터 자동 조정 |
 | 동적 설정 | API로 런타임에 전략/모델/파라미터 변경 가능 |
+| Guided 수동 트레이딩 | 추천 진입가/현재가 승률 기반 정렬, 차트/호가/주문 스냅샷 제공 |
+| 오토파일럿 라이브 도크 | 실시간 후보/클릭/주문/워커 상태를 타임라인과 퍼널 KPI로 가시화 |
+| Playwright MCP 연동 | Electron CDP에 붙어 실제 앱 UI 스냅샷/클릭 증거를 이벤트로 기록 |
 
 ---
 
@@ -514,9 +519,30 @@ curl -X POST http://localhost:8080/api/settings/regime \
 | GET | `/actuator/health` | 헬스 체크 |
 | POST | `/mcp` | MCP 도구 호출 (LLM용) |
 
+### Guided Trading / Desktop
+
+| Method | Endpoint | 설명 |
+|--------|----------|------|
+| GET | `/api/guided-trading/markets` | 마켓 보드 조회 (승률 정렬 지원) |
+| GET | `/api/guided-trading/chart` | 차트/포지션/이벤트/호가 스냅샷 조회 |
+| GET | `/api/guided-trading/recommendation` | 추천 진입/손절/익절/승률 조회 |
+| POST | `/api/guided-trading/start` | Guided 진입 시작 |
+| POST | `/api/guided-trading/stop` | Guided 포지션 정지/청산 |
+| POST | `/api/guided-trading/partial-take-profit` | Guided 부분 익절 |
+| POST | `/api/guided-trading/positions/adopt` | MCP 직접 주문 포지션 편입 |
+| GET | `/api/guided-trading/autopilot/live` | 오토파일럿 라이브 도크 데이터(주문 퍼널/이벤트/후보) |
+
 ---
 
 ## 최근 개선사항
+
+### 오토파일럿 UX 2차 + 주문 생명주기 텔레메트리 (2026-02-24)
+
+1. 하단 전체폭 `오토파일럿 라이브 도크` 추가: 후보 상위 10개, 탈락/통과 사유, 워커 상태, 실시간 타임라인을 동시에 표시합니다.
+2. Playwright `browser_*` 액션 가시화 강화: 액션 로그와 스냅샷 증거를 이벤트로 기록하고, 실패 시에도 오토파일럿은 계속 진행합니다.
+3. 주문 퍼널 집계 추가: `매수 요청 → 매수 체결 → 매도 요청 → 매도 체결` 카운터를 KST 기준 당일(00:00~현재)로 제공합니다.
+4. 전략 그룹 분리 집계 추가: `MANUAL`, `GUIDED`, `AUTOPILOT_MCP`, `CORE_ENGINE` 별 카운트/이벤트를 분리 제공합니다.
+5. 신규 API 추가: `/api/guided-trading/autopilot/live`로 도크 렌더링에 필요한 `orderSummary/orderEvents/candidates`를 제공합니다.
 
 ### 서버 전략 개선 (고변동성 대응)
 

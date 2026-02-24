@@ -22,6 +22,8 @@ type TimelineItem = {
   source: 'LOCAL' | 'SERVER';
 };
 
+type OrderFeedFilter = 'ALL' | 'REQUESTED' | 'FILLED' | 'FAILED';
+
 const EMPTY_SUMMARY: OrderLifecycleGroupSummary = {
   buyRequested: 0,
   buyFilled: 0,
@@ -63,6 +65,53 @@ function stageLabel(stage: string): string {
   }
 }
 
+function orderEventLabel(eventType: string): string {
+  switch (eventType) {
+    case 'BUY_REQUESTED':
+      return '매수 요청';
+    case 'BUY_FILLED':
+      return '매수 체결';
+    case 'SELL_REQUESTED':
+      return '매도 요청';
+    case 'SELL_FILLED':
+      return '매도 체결';
+    case 'CANCEL_REQUESTED':
+      return '취소 요청';
+    case 'CANCELLED':
+      return '취소 완료';
+    case 'FAILED':
+      return '실패';
+    default:
+      return eventType;
+  }
+}
+
+function strategyGroupLabel(strategyGroup: string): string {
+  switch (strategyGroup) {
+    case 'MANUAL':
+      return '수동';
+    case 'GUIDED':
+      return 'Guided';
+    case 'AUTOPILOT_MCP':
+      return '오토파일럿(MCP)';
+    case 'CORE_ENGINE':
+      return '코어 엔진';
+    default:
+      return strategyGroup;
+  }
+}
+
+function orderFeedMatchesFilter(eventType: string, filter: OrderFeedFilter): boolean {
+  if (filter === 'ALL') return true;
+  if (filter === 'REQUESTED') {
+    return eventType.endsWith('_REQUESTED') || eventType === 'CANCEL_REQUESTED';
+  }
+  if (filter === 'FILLED') {
+    return eventType.endsWith('_FILLED');
+  }
+  return eventType === 'CANCELLED' || eventType === 'FAILED';
+}
+
 function toTimelineEvent(event: AutopilotTimelineEvent): TimelineItem {
   return {
     id: event.id,
@@ -75,20 +124,6 @@ function toTimelineEvent(event: AutopilotTimelineEvent): TimelineItem {
     screenshotId: event.screenshotId,
     source: 'LOCAL',
   };
-}
-
-function fromServerOrderEvent(liveData: AutopilotLiveResponse | undefined): TimelineItem[] {
-  if (!liveData) return [];
-  return liveData.orderEvents.map((event) => ({
-    id: `server-${event.id}`,
-    at: new Date(event.createdAt).getTime(),
-    market: event.market,
-    type: 'ORDER',
-    level: event.eventType === 'FAILED' ? 'ERROR' : 'INFO',
-    action: event.eventType,
-    detail: event.message || `${event.strategyGroup} ${event.eventType}`,
-    source: 'SERVER',
-  }));
 }
 
 function normalizeServerCandidates(liveData: AutopilotLiveResponse | undefined): AutopilotCandidateView[] {
@@ -125,6 +160,7 @@ export function AutopilotLiveDock({
   loading = false,
 }: AutopilotLiveDockProps) {
   const [selectedGroup, setSelectedGroup] = useState('TOTAL');
+  const [orderFeedFilter, setOrderFeedFilter] = useState<OrderFeedFilter>('ALL');
   const screenshotById = useMemo(
     () => new Map(autopilotState.screenshots.map((shot) => [shot.id, shot])),
     [autopilotState.screenshots]
@@ -132,11 +168,17 @@ export function AutopilotLiveDock({
 
   const timeline = useMemo(() => {
     const local = autopilotState.events.map(toTimelineEvent);
-    const server = fromServerOrderEvent(liveData);
-    return [...local, ...server]
+    return [...local]
       .sort((a, b) => b.at - a.at)
       .slice(0, 220);
-  }, [autopilotState.events, liveData]);
+  }, [autopilotState.events]);
+
+  const orderFeed = useMemo(() => {
+    const rows = liveData?.orderEvents ?? [];
+    return rows
+      .filter((event) => orderFeedMatchesFilter(event.eventType, orderFeedFilter))
+      .slice(0, 220);
+  }, [liveData?.orderEvents, orderFeedFilter]);
 
   const [selectedTimelineId, setSelectedTimelineId] = useState<string | null>(null);
   useEffect(() => {
@@ -310,6 +352,54 @@ export function AutopilotLiveDock({
                 ))}
                 {autopilotState.workers.length === 0 && <div className="empty">실행 중 워커 없음</div>}
               </div>
+            </div>
+          </div>
+
+          <div className="autopilot-order-feed">
+            <div className="autopilot-order-feed-head">
+              <strong>빗썸 주문/체결 타임라인</strong>
+              <div className="autopilot-order-feed-filters">
+                {(['ALL', 'REQUESTED', 'FILLED', 'FAILED'] as const).map((filter) => (
+                  <button
+                    key={filter}
+                    type="button"
+                    className={orderFeedFilter === filter ? 'active' : ''}
+                    onClick={() => setOrderFeedFilter(filter)}
+                  >
+                    {filter === 'ALL' ? '전체' : filter === 'REQUESTED' ? '요청' : filter === 'FILLED' ? '체결' : '취소/실패'}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            <div className="autopilot-order-feed-list">
+              {orderFeed.map((event) => (
+                <div key={event.id} className={`order-feed-item event-${event.eventType.toLowerCase()}`}>
+                  <div className="order-feed-top">
+                    <div className="order-feed-left">
+                      <strong>{event.market}</strong>
+                      <span>{orderEventLabel(event.eventType)}</span>
+                    </div>
+                    <div className="order-feed-right">
+                      <span>{formatTs(new Date(event.createdAt).getTime())}</span>
+                    </div>
+                  </div>
+                  <div className="order-feed-meta">
+                    <span className="engine-chip">
+                      엔진: {strategyGroupLabel(event.strategyGroup)}
+                      {event.strategyCode ? ` (${event.strategyCode})` : ''}
+                    </span>
+                    {event.side && <span>방향: {event.side}</span>}
+                    {event.orderId && <span>주문ID: {event.orderId}</span>}
+                    {event.price != null && <span>가격: {event.price.toLocaleString('ko-KR')}</span>}
+                    {event.quantity != null && <span>수량: {event.quantity}</span>}
+                  </div>
+                  {event.message && <p>{event.message}</p>}
+                </div>
+              ))}
+              {orderFeed.length === 0 && (
+                <div className="empty">{loading ? '주문 이력 로딩 중...' : '주문/체결 이력이 없습니다.'}</div>
+              )}
             </div>
           </div>
         </>

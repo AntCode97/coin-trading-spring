@@ -431,17 +431,37 @@ export class AutopilotOrchestrator {
         reason: `추천가 승률 ${recommended.toFixed(1)}% < ${this.config.minRecommendedWinRate}%`,
       };
     }
-    if (openMarketSet.has(market.market) || this.workers.has(market.market)) {
+    if (openMarketSet.has(market.market)) {
       return {
         stage: 'ALREADY_OPEN',
-        reason: '이미 포지션/워커가 존재',
+        reason: '이미 포지션 존재',
       };
     }
+    const now = Date.now();
     const cooldownUntil = this.cooldownUntilByMarket.get(market.market);
-    if (cooldownUntil && cooldownUntil > Date.now()) {
+    if (cooldownUntil && cooldownUntil > now) {
       return {
         stage: 'COOLDOWN',
-        reason: `쿨다운 ${Math.ceil((cooldownUntil - Date.now()) / 1000)}초`,
+        reason: `워커 쿨다운 ${Math.ceil((cooldownUntil - now) / 1000)}초`,
+      };
+    }
+
+    const workerState = this.workerStates.get(market.market);
+    if (
+      workerState?.status === 'COOLDOWN' &&
+      workerState.cooldownUntil != null &&
+      workerState.cooldownUntil > now
+    ) {
+      return {
+        stage: 'COOLDOWN',
+        reason: `워커 쿨다운 ${Math.ceil((workerState.cooldownUntil - now) / 1000)}초`,
+      };
+    }
+
+    if (this.workers.has(market.market)) {
+      return {
+        stage: 'ALREADY_OPEN',
+        reason: '이미 워커 실행 중',
       };
     }
     if (availableSlots <= 0) {

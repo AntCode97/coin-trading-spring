@@ -295,6 +295,132 @@
   text-align: center;
 }
 
+.autopilot-order-feed {
+  margin: 0 12px 12px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 10px;
+  background: rgba(10, 18, 32, 0.82);
+  overflow: hidden;
+}
+
+.autopilot-order-feed-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 10px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.autopilot-order-feed-head strong {
+  color: #dbe7ff;
+  font-size: 12px;
+}
+
+.autopilot-order-feed-filters {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.autopilot-order-feed-filters button {
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  background: rgba(16, 28, 53, 0.68);
+  color: #97b0dc;
+  border-radius: 999px;
+  font-size: 10px;
+  padding: 4px 8px;
+  cursor: pointer;
+}
+
+.autopilot-order-feed-filters button.active {
+  border-color: rgba(95, 145, 255, 0.8);
+  color: #deebff;
+  background: rgba(34, 60, 127, 0.85);
+}
+
+.autopilot-order-feed-list {
+  max-height: 260px;
+  overflow: auto;
+  padding: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.order-feed-item {
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 8px;
+  background: rgba(12, 23, 42, 0.82);
+  padding: 8px;
+}
+
+.order-feed-item.event-buy_filled,
+.order-feed-item.event-sell_filled {
+  border-color: rgba(61, 187, 122, 0.55);
+}
+
+.order-feed-item.event-failed,
+.order-feed-item.event-cancelled {
+  border-color: rgba(230, 88, 116, 0.5);
+}
+
+.order-feed-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.order-feed-left {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.order-feed-left strong {
+  color: #e2ecff;
+  font-size: 12px;
+}
+
+.order-feed-left span {
+  color: #b8c9e8;
+  font-size: 11px;
+}
+
+.order-feed-right span {
+  color: #88a2d3;
+  font-size: 10px;
+}
+
+.order-feed-meta {
+  margin-top: 6px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.order-feed-meta span {
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 6px;
+  padding: 2px 6px;
+  color: #9eb7df;
+  font-size: 10px;
+  background: rgba(15, 28, 53, 0.72);
+}
+
+.order-feed-meta .engine-chip {
+  border-color: rgba(114, 158, 255, 0.45);
+  color: #cde0ff;
+}
+
+.order-feed-item p {
+  margin: 7px 0 0;
+  color: #b9cae7;
+  font-size: 11px;
+  line-height: 1.35;
+}
+
 @media (max-width: 1400px) {
   .autopilot-live-body {
     grid-template-columns: 1fr;
@@ -306,5 +432,10 @@
 
   .autopilot-funnel-grid {
     grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
+  .autopilot-order-feed-head {
+    flex-direction: column;
+    align-items: flex-start;
   }
 }
