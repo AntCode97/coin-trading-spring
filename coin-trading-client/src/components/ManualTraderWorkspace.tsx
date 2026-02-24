@@ -74,6 +74,7 @@ type WorkspacePrefs = {
   tradingMode?: TradingMode;
   autopilotEnabled?: boolean;
   dailyLossLimitKrw?: number;
+  autopilotMaxConcurrentPositions?: number;
   playwrightEnabled?: boolean;
   playwrightAutoStart?: boolean;
   playwrightMcpPort?: number;
@@ -82,6 +83,7 @@ type WorkspacePrefs = {
   winRateThresholdMode?: 'DYNAMIC_P70' | 'FIXED';
   fixedMinRecommendedWinRate?: number;
   minLlmConfidence?: number;
+  rejectCooldownSeconds?: number;
   rejectCooldownMinutes?: number;
   postExitCooldownMinutes?: number;
 };
@@ -284,6 +286,9 @@ export default function ManualTraderWorkspace() {
   const [playwrightAction, setPlaywrightAction] = useState<'idle' | 'starting' | 'stopping'>('idle');
   const [autopilotEnabled, setAutopilotEnabled] = useState<boolean>(prefs.autopilotEnabled ?? false);
   const [dailyLossLimitKrw, setDailyLossLimitKrw] = useState<number>(prefs.dailyLossLimitKrw ?? -20000);
+  const [autopilotMaxConcurrentPositions, setAutopilotMaxConcurrentPositions] = useState<number>(
+    Math.min(10, Math.max(1, prefs.autopilotMaxConcurrentPositions ?? 3))
+  );
   const [autopilotDockCollapsed, setAutopilotDockCollapsed] = useState<boolean>(
     prefs.autopilotDockCollapsed ?? false
   );
@@ -294,7 +299,18 @@ export default function ManualTraderWorkspace() {
     prefs.fixedMinRecommendedWinRate ?? 60
   );
   const [minLlmConfidence, setMinLlmConfidence] = useState<number>(prefs.minLlmConfidence ?? 60);
-  const [rejectCooldownMinutes, setRejectCooldownMinutes] = useState<number>(prefs.rejectCooldownMinutes ?? 5);
+  const [rejectCooldownSeconds, setRejectCooldownSeconds] = useState<number>(
+    Math.min(
+      3600,
+      Math.max(
+        1,
+        Math.round(
+          prefs.rejectCooldownSeconds
+            ?? ((prefs.rejectCooldownMinutes ?? 5) * 60)
+        )
+      )
+    )
+  );
   const [postExitCooldownMinutes, setPostExitCooldownMinutes] = useState<number>(prefs.postExitCooldownMinutes ?? 30);
   const [autopilotState, setAutopilotState] = useState<AutopilotState>({
     enabled: false,
@@ -553,6 +569,7 @@ export default function ManualTraderWorkspace() {
       tradingMode,
       autopilotEnabled,
       dailyLossLimitKrw,
+      autopilotMaxConcurrentPositions,
       playwrightEnabled,
       playwrightAutoStart,
       playwrightMcpPort,
@@ -561,7 +578,7 @@ export default function ManualTraderWorkspace() {
       winRateThresholdMode,
       fixedMinRecommendedWinRate,
       minLlmConfidence,
-      rejectCooldownMinutes,
+      rejectCooldownSeconds,
       postExitCooldownMinutes,
     };
     window.localStorage.setItem(STORAGE_KEY, JSON.stringify(next));
@@ -574,6 +591,7 @@ export default function ManualTraderWorkspace() {
     tradingMode,
     autopilotEnabled,
     dailyLossLimitKrw,
+    autopilotMaxConcurrentPositions,
     playwrightEnabled,
     playwrightAutoStart,
     playwrightMcpPort,
@@ -582,7 +600,7 @@ export default function ManualTraderWorkspace() {
     winRateThresholdMode,
     fixedMinRecommendedWinRate,
     minLlmConfidence,
-    rejectCooldownMinutes,
+    rejectCooldownSeconds,
     postExitCooldownMinutes,
   ]);
 
@@ -916,12 +934,12 @@ export default function ManualTraderWorkspace() {
         tradingMode,
         amountKrw: 20000,
         dailyLossLimitKrw,
-        maxConcurrentPositions: 3,
+        maxConcurrentPositions: autopilotMaxConcurrentPositions,
         winRateThresholdMode,
         fixedMinRecommendedWinRate,
         minLlmConfidence,
         candidateLimit: 10,
-        rejectCooldownMs: rejectCooldownMinutes * 60 * 1000,
+        rejectCooldownMs: rejectCooldownSeconds * 1000,
         postExitCooldownMs: postExitCooldownMinutes * 60 * 1000,
         workerTickMs: 15000,
         llmReviewIntervalMs: 15000,
@@ -948,12 +966,13 @@ export default function ManualTraderWorkspace() {
     interval,
     tradingMode,
     dailyLossLimitKrw,
+    autopilotMaxConcurrentPositions,
     chatModel,
     playwrightEnabled,
     winRateThresholdMode,
     fixedMinRecommendedWinRate,
     minLlmConfidence,
-    rejectCooldownMinutes,
+    rejectCooldownSeconds,
     postExitCooldownMinutes,
   ]);
 
@@ -1373,6 +1392,22 @@ export default function ManualTraderWorkspace() {
                 </div>
                 <div className="autopilot-grid">
                   <label>
+                    동시 포지션 최대(종목)
+                    <input
+                      type="number"
+                      min={1}
+                      max={10}
+                      step={1}
+                      value={autopilotMaxConcurrentPositions}
+                      onChange={(event) => {
+                        const raw = Number(event.target.value || 3);
+                        setAutopilotMaxConcurrentPositions(Math.min(10, Math.max(1, raw)));
+                      }}
+                    />
+                  </label>
+                </div>
+                <div className="autopilot-grid">
+                  <label>
                     승률 임계값 모드
                     <select
                       value={winRateThresholdMode}
@@ -1408,14 +1443,17 @@ export default function ManualTraderWorkspace() {
                     />
                   </label>
                   <label>
-                    진입 거절/실패 쿨다운(분)
+                    진입 거절/실패 쿨다운(초)
                     <input
                       type="number"
                       min={1}
-                      max={60}
+                      max={3600}
                       step={1}
-                      value={rejectCooldownMinutes}
-                      onChange={(event) => setRejectCooldownMinutes(Number(event.target.value || 5))}
+                      value={rejectCooldownSeconds}
+                      onChange={(event) => {
+                        const raw = Number(event.target.value || 300);
+                        setRejectCooldownSeconds(Math.min(3600, Math.max(1, Math.round(raw))));
+                      }}
                     />
                   </label>
                 </div>
