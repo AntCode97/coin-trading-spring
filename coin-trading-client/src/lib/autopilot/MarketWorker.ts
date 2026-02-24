@@ -55,7 +55,8 @@ export interface WorkerOrderFlowEvent {
 export interface WorkerConfig {
   market: string;
   tickMs: number;
-  cooldownMs: number;
+  rejectCooldownMs: number;
+  postExitCooldownMs: number;
   llmReviewMs: number;
   minLlmConfidence: number;
   enablePlaywrightCheck: boolean;
@@ -192,7 +193,7 @@ export class MarketWorker {
 
       if (this.hadOpenPosition) {
         this.hadOpenPosition = false;
-        this.cooldownUntil = Date.now() + this.config.cooldownMs;
+        this.cooldownUntil = Date.now() + this.config.postExitCooldownMs;
         this.setState('COOLDOWN', '포지션 종료 감지, 재진입 쿨다운');
         return;
       }
@@ -202,7 +203,7 @@ export class MarketWorker {
       const message = error instanceof Error ? error.message : '알 수 없는 오류';
       this.setState('ERROR', message);
       this.deps.onLog(`[${this.config.market}] worker error: ${message}`);
-      this.cooldownUntil = Date.now() + this.config.cooldownMs;
+      this.cooldownUntil = Date.now() + this.config.rejectCooldownMs;
     } finally {
       this.ticking = false;
     }
@@ -218,7 +219,7 @@ export class MarketWorker {
         'WARN',
         `진입 거절 (${entryDecision.confidence.toFixed(0)}): ${entryDecision.reason}`
       );
-      this.cooldownUntil = Date.now() + this.config.cooldownMs;
+      this.cooldownUntil = Date.now() + this.config.rejectCooldownMs;
       this.setState('COOLDOWN', `진입 보류: ${entryDecision.reason}`);
       return;
     }
@@ -291,7 +292,7 @@ export class MarketWorker {
       await this.deps.stopPosition(this.config.market, '빠른 손절');
       this.emitOrderFlow('SELL_FILLED', '빠른 손절 체결');
       this.emitEvent('POSITION_EXIT', 'WARN', '빠른 손절 실행');
-      this.cooldownUntil = Date.now() + this.config.cooldownMs;
+      this.cooldownUntil = Date.now() + this.config.postExitCooldownMs;
       this.setState('COOLDOWN', '손절 후 쿨다운');
       return;
     }
@@ -309,7 +310,7 @@ export class MarketWorker {
       await this.deps.stopPosition(this.config.market, '목표 수익 청산');
       this.emitOrderFlow('SELL_FILLED', '목표 수익 청산 체결');
       this.emitEvent('POSITION_EXIT', 'INFO', '목표 수익 청산');
-      this.cooldownUntil = Date.now() + this.config.cooldownMs;
+      this.cooldownUntil = Date.now() + this.config.postExitCooldownMs;
       this.setState('COOLDOWN', '익절 후 쿨다운');
       return;
     }
@@ -322,7 +323,7 @@ export class MarketWorker {
         await this.deps.stopPosition(this.config.market, `LLM 조기청산: ${review.reason}`);
         this.emitOrderFlow('SELL_FILLED', `LLM 조기청산 체결: ${review.reason}`);
         this.emitEvent('POSITION_EXIT', 'WARN', `LLM 조기청산: ${review.reason}`);
-        this.cooldownUntil = Date.now() + this.config.cooldownMs;
+        this.cooldownUntil = Date.now() + this.config.postExitCooldownMs;
         this.setState('COOLDOWN', 'LLM 조기청산');
         return;
       }

@@ -131,6 +131,10 @@ trading:
     min-buy-confidence-weak: ${RISK_THROTTLE_MIN_BUY_CONFIDENCE_WEAK:65.0}
     min-buy-confidence-critical: ${RISK_THROTTLE_MIN_BUY_CONFIDENCE_CRITICAL:75.0}
     cache-minutes: ${RISK_THROTTLE_CACHE_MINUTES:10}
+  strategy-guard:
+    enabled: ${TRADING_STRATEGY_GUARD_ENABLED:true}
+    window-days: ${TRADING_STRATEGY_GUARD_WINDOW_DAYS:30}
+    min-sell-trades: ${TRADING_STRATEGY_GUARD_MIN_SELL_TRADES:8}
   close-recovery:
     polling-ms: ${CLOSE_RECOVERY_POLLING_MS:3000}
   strategy:

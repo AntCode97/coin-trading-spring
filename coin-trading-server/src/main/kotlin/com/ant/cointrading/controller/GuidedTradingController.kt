@@ -8,6 +8,7 @@ import com.ant.cointrading.guided.GuidedMarketItem
 import com.ant.cointrading.guided.GuidedRecommendation
 import com.ant.cointrading.guided.GuidedMarketSortBy
 import com.ant.cointrading.guided.GuidedAutopilotLiveResponse
+import com.ant.cointrading.guided.GuidedPnlReconcileResult
 import com.ant.cointrading.guided.GuidedRealtimeTickerView
 import com.ant.cointrading.guided.GuidedSortDirection
 import com.ant.cointrading.guided.GuidedStartRequest
@@ -15,6 +16,7 @@ import com.ant.cointrading.guided.GuidedSyncResult
 import com.ant.cointrading.guided.GuidedTradeView
 import com.ant.cointrading.guided.GuidedTradingService
 import com.ant.cointrading.guided.TradingMode
+import com.ant.cointrading.guided.GuidedWinRateThresholdMode
 import com.ant.cointrading.guided.GuidedAdoptPositionRequest
 import com.ant.cointrading.guided.GuidedAdoptPositionResponse
 import org.springframework.http.HttpStatus
@@ -136,6 +138,14 @@ class GuidedTradingController(
         return guidedTradingService.getClosedTrades(limit.coerceIn(1, 200))
     }
 
+    @PostMapping("/reconcile/closed")
+    fun reconcileClosedTrades(
+        @RequestParam(defaultValue = "30") windowDays: Long,
+        @RequestParam(defaultValue = "true") dryRun: Boolean
+    ): GuidedPnlReconcileResult {
+        return guidedTradingService.reconcileClosedTrades(windowDays = windowDays, dryRun = dryRun)
+    }
+
     @PostMapping("/sync")
     fun syncPositions(): GuidedSyncResult {
         return guidedTradingService.syncPositions()
@@ -168,11 +178,15 @@ class GuidedTradingController(
     @GetMapping("/autopilot/live")
     fun getAutopilotLive(
         @RequestParam(defaultValue = "minute30") interval: String,
-        @RequestParam(defaultValue = "SWING") mode: String
+        @RequestParam(defaultValue = "SWING") mode: String,
+        @RequestParam(required = false) thresholdMode: String?,
+        @RequestParam(required = false) minRecommendedWinRate: Double?
     ): GuidedAutopilotLiveResponse {
         return guidedTradingService.getAutopilotLive(
             interval = interval,
-            mode = TradingMode.fromString(mode)
+            mode = TradingMode.fromString(mode),
+            thresholdMode = GuidedWinRateThresholdMode.fromString(thresholdMode),
+            minRecommendedWinRate = minRecommendedWinRate
         )
     }
 }

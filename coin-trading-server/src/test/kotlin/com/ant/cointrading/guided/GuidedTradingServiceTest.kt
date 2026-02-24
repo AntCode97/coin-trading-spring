@@ -5,15 +5,19 @@ import com.ant.cointrading.api.bithumb.BithumbPublicApi
 import com.ant.cointrading.api.bithumb.Balance
 import com.ant.cointrading.api.bithumb.CandleResponse
 import com.ant.cointrading.api.bithumb.MarketInfo
+import com.ant.cointrading.api.bithumb.OrderResponse
 import com.ant.cointrading.api.bithumb.TickerInfo
 import com.ant.cointrading.repository.GuidedTradeEntity
+import com.ant.cointrading.repository.GuidedTradeEventEntity
 import com.ant.cointrading.repository.GuidedTradeEventRepository
 import com.ant.cointrading.repository.GuidedTradeRepository
 import com.ant.cointrading.service.OrderLifecycleTelemetryService
 import java.math.BigDecimal
+import java.time.Instant
 import kotlin.math.max
 import kotlin.math.min
 import kotlin.test.assertEquals
+import kotlin.test.assertNull
 import kotlin.test.assertTrue
 import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.BeforeEach
@@ -220,6 +224,188 @@ class GuidedTradingServiceTest {
     }
 
     @Test
+    @DisplayName("MARKET 진입가 계산은 locked보다 investedAmount를 우선 사용한다")
+    fun resolveEntryPricePrefersInvestedAmount() {
+        val method = GuidedTradingService::class.java.getDeclaredMethod(
+            "resolveEntryPrice",
+            OrderResponse::class.java,
+            String::class.java,
+            BigDecimal::class.java,
+            BigDecimal::class.java,
+            BigDecimal::class.java
+        )
+        method.isAccessible = true
+
+        val order = orderResponse(
+            uuid = "entry-1",
+            side = "bid",
+            market = "KRW-BTC",
+            price = BigDecimal("93000000"),
+            executedVolume = BigDecimal("0.00100000"),
+            locked = BigDecimal("20000")
+        )
+
+        val resolved = method.invoke(
+            service,
+            order,
+            GuidedTradeEntity.ORDER_TYPE_MARKET,
+            BigDecimal("10000"),
+            null,
+            BigDecimal("92000000")
+        ) as BigDecimal
+
+        assertEquals(0, resolved.compareTo(BigDecimal("10000000.00000000")))
+    }
+
+    @Test
+    @DisplayName("pending 진입은 getOrder null이어도 age timeout 취소를 수행한다")
+    fun reconcilePendingEntryTimeoutEvenWhenOrderMissing() {
+        val trade = GuidedTradeEntity(
+            id = 10L,
+            market = "KRW-BTC",
+            status = GuidedTradeEntity.STATUS_PENDING_ENTRY,
+            entryOrderType = GuidedTradeEntity.ORDER_TYPE_LIMIT,
+            entryOrderId = "entry-timeout",
+            averageEntryPrice = BigDecimal("92000000"),
+            targetAmountKrw = BigDecimal("10000"),
+            stopLossPrice = BigDecimal("90000000"),
+            takeProfitPrice = BigDecimal("94000000"),
+            createdAt = Instant.now().minusSeconds(901)
+        )
+
+        whenever(bithumbPrivateApi.getOrder("entry-timeout")).thenReturn(null)
+        whenever(bithumbPrivateApi.cancelOrder("entry-timeout")).thenReturn(
+            orderResponse(
+                uuid = "entry-timeout",
+                side = "bid",
+                market = "KRW-BTC",
+                state = "cancel"
+            )
+        )
+
+        val method = GuidedTradingService::class.java.getDeclaredMethod(
+            "reconcilePendingEntry",
+            GuidedTradeEntity::class.java
+        )
+        method.isAccessible = true
+        method.invoke(service, trade)
+
+        verify(bithumbPrivateApi, times(1)).cancelOrder("entry-timeout")
+        assertEquals(GuidedTradeEntity.STATUS_CANCELLED, trade.status)
+        assertEquals("ENTRY_TIMEOUT", trade.exitReason)
+    }
+
+    @Test
+    @DisplayName("수동 stop에서 매도 미체결이면 포지션을 강제 CLOSED 하지 않는다")
+    fun stopAutoTradingNoFillKeepsTradeOpen() {
+        val trade = GuidedTradeEntity(
+            id = 11L,
+            market = "KRW-BTC",
+            status = GuidedTradeEntity.STATUS_OPEN,
+            entryOrderType = GuidedTradeEntity.ORDER_TYPE_MARKET,
+            averageEntryPrice = BigDecimal("92000000"),
+            entryQuantity = BigDecimal("0.01000000"),
+            remainingQuantity = BigDecimal("0.01000000"),
+            stopLossPrice = BigDecimal("90000000"),
+            takeProfitPrice = BigDecimal("94000000"),
+        )
+        whenever(guidedTradeRepository.findByMarketAndStatusIn(eq("KRW-BTC"), any())).thenReturn(listOf(trade))
+        whenever(bithumbPublicApi.getCurrentPrice(eq("KRW-BTC"))).thenReturn(
+            listOf(
+                tickers.first().copy(
+                    market = "KRW-BTC",
+                    tradePrice = BigDecimal("93000000")
+                )
+            )
+        )
+        whenever(bithumbPrivateApi.getBalances()).thenReturn(
+            listOf(
+                Balance(
+                    currency = "BTC",
+                    balance = BigDecimal("0.01000000"),
+                    locked = BigDecimal.ZERO,
+                    avgBuyPrice = null,
+                    avgBuyPriceModified = null,
+                    unitCurrency = "KRW"
+                )
+            )
+        )
+        whenever(bithumbPrivateApi.sellMarketOrder(eq("KRW-BTC"), any())).thenReturn(
+            orderResponse(uuid = "exit-1", side = "ask", market = "KRW-BTC", state = "wait")
+        )
+        whenever(bithumbPrivateApi.getOrder("exit-1")).thenReturn(
+            orderResponse(
+                uuid = "exit-1",
+                side = "ask",
+                market = "KRW-BTC",
+                state = "wait",
+                executedVolume = BigDecimal.ZERO
+            )
+        )
+
+        val result = service.stopAutoTrading("KRW-BTC")
+
+        assertEquals(GuidedTradeEntity.STATUS_OPEN, trade.status)
+        assertEquals("MANUAL_STOP_PENDING_EXIT", trade.lastAction)
+        assertEquals("OPEN", result.status)
+        assertNull(trade.closedAt)
+    }
+
+    @Test
+    @DisplayName("최근 30일 보정은 이벤트 체결값으로 손익을 재계산하고 HIGH로 마킹한다")
+    fun reconcileClosedTradesRecalculatesFromEvents() {
+        val trade = GuidedTradeEntity(
+            id = 21L,
+            market = "KRW-BTC",
+            status = GuidedTradeEntity.STATUS_CLOSED,
+            entryOrderType = GuidedTradeEntity.ORDER_TYPE_MARKET,
+            averageEntryPrice = BigDecimal("1"),
+            entryQuantity = BigDecimal("1"),
+            remainingQuantity = BigDecimal.ZERO,
+            stopLossPrice = BigDecimal("1"),
+            takeProfitPrice = BigDecimal("1"),
+            cumulativeExitQuantity = BigDecimal("1"),
+            averageExitPrice = BigDecimal("1"),
+            realizedPnl = BigDecimal.ZERO,
+            realizedPnlPercent = BigDecimal.ZERO,
+            closedAt = Instant.now().minusSeconds(30)
+        )
+        whenever(
+            guidedTradeRepository.findByStatusAndClosedAtAfter(
+                eq(GuidedTradeEntity.STATUS_CLOSED),
+                any()
+            )
+        ).thenReturn(listOf(trade))
+        whenever(guidedTradeEventRepository.findByTradeIdOrderByCreatedAtAsc(eq(21L))).thenReturn(
+            listOf(
+                GuidedTradeEventEntity(
+                    tradeId = 21L,
+                    eventType = "ENTRY_FILLED",
+                    price = BigDecimal("1000000"),
+                    quantity = BigDecimal("0.01000000"),
+                    createdAt = Instant.now().minusSeconds(20)
+                ),
+                GuidedTradeEventEntity(
+                    tradeId = 21L,
+                    eventType = "CLOSE_ALL",
+                    price = BigDecimal("1020000"),
+                    quantity = BigDecimal("0.01000000"),
+                    createdAt = Instant.now().minusSeconds(10)
+                )
+            )
+        )
+
+        val result = service.reconcileClosedTrades(windowDays = 30, dryRun = false)
+
+        assertEquals(1, result.scannedTrades)
+        assertEquals(1, result.updatedTrades)
+        assertEquals(1, result.highConfidenceTrades)
+        assertEquals(0, result.lowConfidenceTrades)
+        assertEquals(GuidedTradeEntity.PNL_CONFIDENCE_HIGH, trade.pnlConfidence)
+        assertEquals(BigDecimal("200.00"), trade.realizedPnl)
+    }
+
+    @Test
     @DisplayName("외부 포지션 편입은 신규 Guided 포지션을 생성한다")
     fun adoptExternalPositionCreatesGuidedTrade() {
         whenever(guidedTradeRepository.findTopByMarketAndStatusInOrderByCreatedAtDesc(eq("KRW-BTC"), any()))
@@ -329,5 +515,33 @@ class GuidedTradingServiceTest {
                 prevClosingPrice = BigDecimal.valueOf(close - drift)
             )
         }
+    }
+
+    private fun orderResponse(
+        uuid: String,
+        side: String,
+        market: String,
+        state: String? = "done",
+        price: BigDecimal? = BigDecimal("93000000"),
+        volume: BigDecimal? = BigDecimal("0.01000000"),
+        executedVolume: BigDecimal? = BigDecimal("0.01000000"),
+        locked: BigDecimal? = BigDecimal.ZERO,
+    ): OrderResponse {
+        return OrderResponse(
+            uuid = uuid,
+            side = side,
+            ordType = "market",
+            price = price,
+            state = state,
+            market = market,
+            createdAt = "2026-02-24T00:00:00",
+            volume = volume,
+            remainingVolume = BigDecimal.ZERO,
+            reservedFee = BigDecimal.ZERO,
+            remainingFee = BigDecimal.ZERO,
+            paidFee = BigDecimal.ZERO,
+            locked = locked,
+            executedVolume = executedVolume
+        )
     }
 }

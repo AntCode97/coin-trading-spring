@@ -12,6 +12,7 @@ import com.ant.cointrading.repository.*
 import com.ant.cointrading.risk.CircuitBreaker
 import com.ant.cointrading.risk.MarketConditionChecker
 import com.ant.cointrading.risk.MarketConditionResult
+import com.ant.cointrading.strategy.StrategyCodeNormalizer
 import jakarta.annotation.PostConstruct
 import org.slf4j.LoggerFactory
 import org.springframework.scheduling.annotation.Scheduled
@@ -144,7 +145,7 @@ class PendingOrderManager(
             orderPrice = orderPrice,
             orderQuantity = orderQuantity,
             orderAmountKrw = orderAmountKrw,
-            strategy = signal.strategy,
+            strategy = StrategyCodeNormalizer.canonicalize(signal.strategy),
             signalConfidence = signal.confidence,
             signalReason = signal.reason.take(500),
             snapshotMidPrice = marketCondition.midPrice,
@@ -276,7 +277,15 @@ class PendingOrderManager(
 
             // 평균 체결가 계산 (locked 금액 기반)
             if (executedVolume > BigDecimal.ZERO) {
-                val executedAmount = response.locked ?: order.orderAmountKrw
+                val executedAmount = when {
+                    response.price != null && response.price > BigDecimal.ZERO -> response.price.multiply(executedVolume)
+                    order.orderPrice > BigDecimal.ZERO -> order.orderPrice.multiply(executedVolume)
+                    order.orderQuantity > BigDecimal.ZERO -> {
+                        val fillRatio = executedVolume.divide(order.orderQuantity, 8, RoundingMode.HALF_UP)
+                        order.orderAmountKrw.multiply(fillRatio)
+                    }
+                    else -> order.orderAmountKrw
+                }
                 order.avgFilledPrice = executedAmount.divide(executedVolume, 8, RoundingMode.HALF_UP)
             }
 
@@ -548,7 +557,7 @@ class PendingOrderManager(
             fee = fee.toDouble(),
             slippage = order.slippage,
             isPartialFill = true,
-            strategy = order.strategy,
+            strategy = StrategyCodeNormalizer.canonicalize(order.strategy),
             confidence = order.signalConfidence,
             reason = "${order.signalReason ?: ""} [부분체결: ${String.format("%.1f", order.fillRate() * 100)}%]",
             simulated = false

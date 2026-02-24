@@ -4,6 +4,7 @@ import com.ant.cointrading.api.bithumb.Balance
 import com.ant.cointrading.api.bithumb.BithumbPrivateApi
 import com.ant.cointrading.api.bithumb.OrderResponse
 import com.ant.cointrading.config.RiskThrottleProperties
+import com.ant.cointrading.config.StrategyGuardProperties
 import com.ant.cointrading.config.TradingProperties
 import com.ant.cointrading.model.OrderSide
 import com.ant.cointrading.model.OrderType
@@ -85,6 +86,7 @@ class OrderExecutorTest {
         whenever(tradingProperties.feeRate).thenReturn(BigDecimal("0.0004"))
         whenever(tradingProperties.enabled).thenReturn(false) // 기본 시뮬레이션 모드
         whenever(tradingProperties.riskThrottle).thenReturn(RiskThrottleProperties())
+        whenever(tradingProperties.strategyGuard).thenReturn(StrategyGuardProperties(enabled = false))
         whenever(riskThrottleService.getDecision(any(), any(), any())).thenReturn(
             RiskThrottleDecision(
                 multiplier = 1.0,
@@ -139,6 +141,35 @@ class OrderExecutorTest {
         locked = locked,
         executedVolume = executedVolume
     )
+
+    @Test
+    @DisplayName("MARKET 매수 평균단가 계산은 locked보다 positionSize를 우선 사용한다")
+    fun resolveInvestedAmountPrefersPositionSizeOverLocked() {
+        val method = OrderExecutor::class.java.getDeclaredMethod(
+            "resolveInvestedAmount",
+            TradingSignal::class.java,
+            OrderResponse::class.java,
+            BigDecimal::class.java
+        )
+        method.isAccessible = true
+
+        val signal = TradingSignal(
+            market = "BTC_KRW",
+            action = SignalAction.BUY,
+            confidence = 80.0,
+            price = BigDecimal("65000000"),
+            reason = "테스트",
+            strategy = "TEST"
+        )
+        val order = createOrderResponse(
+            locked = BigDecimal("99999"),
+            price = BigDecimal("65000000"),
+            executedVolume = BigDecimal("0.001")
+        )
+        val invested = method.invoke(orderExecutor, signal, order, BigDecimal("10000")) as BigDecimal
+
+        assertEquals(BigDecimal("10000"), invested)
+    }
 
     @Nested
     @DisplayName("최소 주문 금액 검증")

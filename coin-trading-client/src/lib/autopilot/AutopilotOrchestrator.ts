@@ -24,9 +24,12 @@ export interface AutopilotConfig {
   amountKrw: number;
   dailyLossLimitKrw: number;
   maxConcurrentPositions: number;
-  minRecommendedWinRate: number;
+  winRateThresholdMode: 'DYNAMIC_P70' | 'FIXED';
+  fixedMinRecommendedWinRate: number;
+  minLlmConfidence: number;
   candidateLimit: number;
-  cooldownMs: number;
+  rejectCooldownMs: number;
+  postExitCooldownMs: number;
   workerTickMs: number;
   llmReviewIntervalMs: number;
   llmModel: string;
@@ -37,7 +40,8 @@ export type CandidateStage =
   | 'RULE_PASS'
   | 'RULE_FAIL'
   | 'SLOT_FULL'
-  | 'ALREADY_OPEN'
+  | 'POSITION_OPEN'
+  | 'WORKER_ACTIVE'
   | 'COOLDOWN'
   | 'LLM_REJECT'
   | 'PLAYWRIGHT_WARN'
@@ -87,6 +91,8 @@ export interface AutopilotState {
   blockedByDailyLoss: boolean;
   blockedReason: string | null;
   startedAt: number | null;
+  thresholdMode: 'DYNAMIC_P70' | 'FIXED';
+  appliedRecommendedWinRateThreshold: number;
   workers: WorkerStateSnapshot[];
   logs: string[];
   events: AutopilotTimelineEvent[];
@@ -140,6 +146,7 @@ export class AutopilotOrchestrator {
   private startedAt: number | null = null;
   private blockedByDailyLoss = false;
   private blockedReason: string | null = null;
+  private appliedRecommendedWinRateThreshold = 0;
 
   constructor(config: AutopilotConfig, callbacks: OrchestratorCallbacks) {
     this.config = config;
@@ -218,6 +225,8 @@ export class AutopilotOrchestrator {
       blockedByDailyLoss: this.blockedByDailyLoss,
       blockedReason: this.blockedReason,
       startedAt: this.startedAt,
+      thresholdMode: this.config.winRateThresholdMode,
+      appliedRecommendedWinRateThreshold: this.appliedRecommendedWinRateThreshold,
       workers: Array.from(this.workerStates.values()).sort((a, b) => a.market.localeCompare(b.market)),
       logs: [...this.logs],
       events: [...this.events],
@@ -366,6 +375,8 @@ export class AutopilotOrchestrator {
       );
 
       const ranked = markets.slice(0, this.config.candidateLimit);
+      const appliedThreshold = this.resolveRecommendedThreshold(markets, ranked);
+      this.appliedRecommendedWinRateThreshold = appliedThreshold;
       const openMarketSet = new Set(
         openPositions
           .filter((position) => position.status === 'OPEN' || position.status === 'PENDING_ENTRY')
@@ -376,7 +387,12 @@ export class AutopilotOrchestrator {
       const nextCandidates: AutopilotCandidateView[] = [];
 
       for (const candidate of ranked) {
-        const evaluation = this.evaluateCandidateEligibility(candidate, openMarketSet, availableSlots);
+        const evaluation = this.evaluateCandidateEligibility(
+          candidate,
+          openMarketSet,
+          availableSlots,
+          appliedThreshold
+        );
         let stage: CandidateStage = evaluation.stage;
         let reason = evaluation.reason;
 
@@ -422,18 +438,19 @@ export class AutopilotOrchestrator {
   private evaluateCandidateEligibility(
     market: GuidedMarketItem,
     openMarketSet: Set<string>,
-    availableSlots: number
+    availableSlots: number,
+    minRecommendedWinRate: number
   ): { stage: CandidateStage; reason: string } {
-    const recommended = market.recommendedEntryWinRate ?? 0;
-    if (recommended < this.config.minRecommendedWinRate) {
+    const recommended = market.recommendedEntryWinRate;
+    if (recommended == null || recommended < minRecommendedWinRate) {
       return {
         stage: 'RULE_FAIL',
-        reason: `추천가 승률 ${recommended.toFixed(1)}% < ${this.config.minRecommendedWinRate}%`,
+        reason: `추천가 승률 ${recommended?.toFixed(1) ?? '-'}% < ${minRecommendedWinRate.toFixed(1)}%`,
       };
     }
     if (openMarketSet.has(market.market)) {
       return {
-        stage: 'ALREADY_OPEN',
+        stage: 'POSITION_OPEN',
         reason: '이미 포지션 존재',
       };
     }
@@ -460,7 +477,7 @@ export class AutopilotOrchestrator {
 
     if (this.workers.has(market.market)) {
       return {
-        stage: 'ALREADY_OPEN',
+        stage: 'WORKER_ACTIVE',
         reason: '이미 워커 실행 중',
       };
     }
@@ -472,7 +489,7 @@ export class AutopilotOrchestrator {
     }
     return {
       stage: 'RULE_PASS',
-      reason: `추천가 승률 ${recommended.toFixed(1)}% 규칙 통과`,
+      reason: `추천가 승률 ${recommended.toFixed(1)}% 규칙 통과 (기준 ${minRecommendedWinRate.toFixed(1)}%)`,
     };
   }
 
@@ -497,9 +514,10 @@ export class AutopilotOrchestrator {
       {
         market: normalized,
         tickMs: this.config.workerTickMs,
-        cooldownMs: this.config.cooldownMs,
+        rejectCooldownMs: this.config.rejectCooldownMs,
+        postExitCooldownMs: this.config.postExitCooldownMs,
         llmReviewMs: this.config.llmReviewIntervalMs,
-        minLlmConfidence: 70,
+        minLlmConfidence: this.config.minLlmConfidence,
         enablePlaywrightCheck: this.config.playwrightEnabled,
       },
       {
@@ -512,6 +530,8 @@ export class AutopilotOrchestrator {
             market: workerMarket,
             amountKrw: this.config.amountKrw,
             orderType: 'MARKET',
+            interval: this.config.interval,
+            mode: this.config.tradingMode,
           }).then(() => undefined),
         fallbackEntryByMcp: async (workerMarket) => this.fallbackEntryByMcp(workerMarket),
         getPosition: async (workerMarket) => guidedTradingApi.getPosition(workerMarket),
@@ -554,6 +574,35 @@ export class AutopilotOrchestrator {
         this.cooldownUntilByMarket.delete(market);
       }
     }
+  }
+
+  private resolveRecommendedThreshold(
+    markets: GuidedMarketItem[],
+    ranked: GuidedMarketItem[]
+  ): number {
+    if (this.config.winRateThresholdMode === 'FIXED') {
+      return Math.min(80, Math.max(50, this.config.fixedMinRecommendedWinRate));
+    }
+
+    const values = markets
+      .map((market) => market.recommendedEntryWinRate)
+      .filter((value): value is number => value != null && Number.isFinite(value));
+    if (values.length === 0) return 55;
+
+    const sorted = [...values].sort((a, b) => a - b);
+    const p70Index = Math.max(0, Math.ceil(sorted.length * 0.7) - 1);
+    let threshold = Math.min(65, Math.max(58, sorted[p70Index]));
+
+    while (threshold > 55) {
+      const eligibleCount = ranked.filter(
+        (candidate) => (candidate.recommendedEntryWinRate ?? 0) >= threshold
+      ).length;
+      if (eligibleCount >= 2) break;
+      threshold -= 1;
+    }
+
+    threshold = Math.max(55, threshold);
+    return Math.round(threshold * 10) / 10;
   }
 
   private async evaluateEntry(

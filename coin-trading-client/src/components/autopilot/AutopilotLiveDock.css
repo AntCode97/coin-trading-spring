@@ -102,6 +102,12 @@
   background: rgba(17, 29, 53, 0.72);
 }
 
+.autopilot-threshold-meta {
+  margin: 0 12px 10px;
+  color: #aac2ee;
+  font-size: 11px;
+}
+
 .autopilot-live-body {
   display: grid;
   grid-template-columns: 300px 1fr 260px;
@@ -226,6 +232,13 @@
 .stage-rule_pass {
   color: #9bf0c4;
   border-color: rgba(60, 190, 118, 0.6);
+}
+
+.stage-position_open,
+.stage-worker_active,
+.stage-cooldown {
+  color: #8ec3ff;
+  border-color: rgba(88, 150, 255, 0.6);
 }
 
 .stage-rule_fail,

@@ -51,8 +51,10 @@ function stageLabel(stage: string): string {
       return '규칙탈락';
     case 'SLOT_FULL':
       return '슬롯부족';
-    case 'ALREADY_OPEN':
-      return '기보유';
+    case 'POSITION_OPEN':
+      return '보유중';
+    case 'WORKER_ACTIVE':
+      return '워커실행중';
     case 'COOLDOWN':
       return '쿨다운';
     case 'LLM_REJECT':
@@ -252,6 +254,10 @@ export function AutopilotLiveDock({
   const candidates = autopilotState.candidates.length > 0
     ? autopilotState.candidates
     : normalizeServerCandidates(liveData);
+  const appliedThreshold = liveData?.appliedRecommendedWinRateThreshold
+    ?? autopilotState.appliedRecommendedWinRateThreshold;
+  const thresholdMode = liveData?.thresholdMode ?? autopilotState.thresholdMode;
+  const thresholdLabel = thresholdMode === 'DYNAMIC_P70' ? '동적 P70' : '고정';
 
   if (!open) return null;
 
@@ -312,6 +318,9 @@ export function AutopilotLiveDock({
           <div className="autopilot-local-funnel">
             로컬 추적: {localFlow.buyRequested} → {localFlow.buyFilled} → {localFlow.sellRequested} → {localFlow.sellFilled}
             {` (대기 ${localFlow.pending}, 취소 ${localFlow.cancelled})`}
+          </div>
+          <div className="autopilot-threshold-meta">
+            임계값 모드: {thresholdLabel} · 적용 기준: {appliedThreshold.toFixed(1)}%
           </div>
 
           <div className="autopilot-live-body">

@@ -7,6 +7,7 @@ import com.ant.cointrading.model.TradingSignal
 import com.ant.cointrading.notification.SlackNotifier
 import com.ant.cointrading.order.OrderExecutor
 import com.ant.cointrading.order.OrderResult
+import com.ant.cointrading.strategy.StrategyCodeNormalizer
 import org.slf4j.LoggerFactory
 import java.math.BigDecimal
 import java.time.Instant
@@ -174,7 +175,7 @@ class PositionCloser(
             confidence = 100.0,
             price = BigDecimal(exitPrice),
             reason = "$strategyName 청산: $reason",
-            strategy = strategyName
+            strategy = StrategyCodeNormalizer.canonicalize(strategyName)
         )
 
         val orderResult = orderExecutor.execute(sellSignal, positionAmount)

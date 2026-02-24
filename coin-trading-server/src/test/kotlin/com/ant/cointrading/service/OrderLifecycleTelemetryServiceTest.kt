@@ -13,6 +13,7 @@ import com.ant.cointrading.repository.TradeRepository
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.DisplayName
 import org.junit.jupiter.api.Test
+import org.junit.jupiter.api.assertDoesNotThrow
 import org.mockito.kotlin.any
 import org.mockito.kotlin.eq
 import org.mockito.kotlin.mock
@@ -188,6 +189,25 @@ class OrderLifecycleTelemetryServiceTest {
 
         assertEquals(Instant.parse("2026-02-23T15:00:00Z"), start)
         assertEquals(now, end)
+    }
+
+    @Test
+    @DisplayName("텔레메트리 저장 실패는 호출자 예외로 전파되지 않는다")
+    fun telemetryFailureIsIsolated() {
+        whenever(eventRepository.save(any())).thenThrow(RuntimeException("db down"))
+
+        assertDoesNotThrow {
+            service.recordRequested(
+                strategyGroup = OrderLifecycleStrategyGroup.GUIDED,
+                market = "KRW-BTC",
+                side = "BUY",
+                orderId = "order-x",
+                strategyCode = "GUIDED_TRADING",
+                price = BigDecimal("93000000"),
+                quantity = BigDecimal("0.001"),
+                message = "test"
+            )
+        }
     }
 
     private fun event(

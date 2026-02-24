@@ -776,6 +776,9 @@ export interface AutopilotLiveResponse {
   orderEvents: OrderLifecycleEvent[];
   autopilotEvents: AutopilotEventView[];
   candidates: AutopilotCandidateView[];
+  thresholdMode: 'DYNAMIC_P70' | 'FIXED';
+  appliedRecommendedWinRateThreshold: number;
+  requestedMinRecommendedWinRate?: number | null;
 }
 
 export interface GuidedStartRequest {
@@ -790,6 +793,8 @@ export interface GuidedStartRequest {
   maxDcaCount?: number;
   dcaStepPercent?: number;
   halfTakeProfitRatio?: number;
+  interval?: string;
+  mode?: string;
 }
 
 export interface GuidedAdoptRequest {
@@ -805,6 +810,27 @@ export interface GuidedAdoptResponse {
   adopted: boolean;
   avgEntryPrice: number;
   quantity: number;
+}
+
+export interface GuidedPnlReconcileItem {
+  tradeId: number;
+  market: string;
+  confidence: 'HIGH' | 'LOW' | 'LEGACY' | string;
+  reason: string;
+  recalculated: boolean;
+  realizedPnl: number;
+  realizedPnlPercent: number;
+}
+
+export interface GuidedPnlReconcileResult {
+  windowDays: number;
+  dryRun: boolean;
+  scannedTrades: number;
+  updatedTrades: number;
+  unchangedTrades: number;
+  highConfidenceTrades: number;
+  lowConfidenceTrades: number;
+  sample: GuidedPnlReconcileItem[];
 }
 
 export interface DesktopMcpTool {
@@ -898,11 +924,28 @@ export const guidedTradingApi = {
   getTodayStats: (): Promise<GuidedDailyStats> =>
     api.get('/guided-trading/stats/today').then((res) => res.data),
 
-  getAutopilotLive: (interval = 'minute30', mode?: string): Promise<AutopilotLiveResponse> =>
-    api.get('/guided-trading/autopilot/live', { params: { interval, mode } }).then((res) => res.data),
+  getAutopilotLive: (
+    interval = 'minute30',
+    mode?: string,
+    thresholdMode?: 'DYNAMIC_P70' | 'FIXED',
+    minRecommendedWinRate?: number
+  ): Promise<AutopilotLiveResponse> =>
+    api
+      .get('/guided-trading/autopilot/live', {
+        params: { interval, mode, thresholdMode, minRecommendedWinRate },
+      })
+      .then((res) => res.data),
 
   getClosedTrades: (limit = 50): Promise<GuidedClosedTradeView[]> =>
     api.get('/guided-trading/trades/closed', { params: { limit } }).then((res) => res.data),
+
+  reconcileClosedTrades: (
+    windowDays = 30,
+    dryRun = true
+  ): Promise<GuidedPnlReconcileResult> =>
+    api
+      .post('/guided-trading/reconcile/closed', null, { params: { windowDays, dryRun } })
+      .then((res) => res.data),
 
   syncPositions: (): Promise<GuidedSyncResult> =>
     api.post('/guided-trading/sync').then((res) => res.data),

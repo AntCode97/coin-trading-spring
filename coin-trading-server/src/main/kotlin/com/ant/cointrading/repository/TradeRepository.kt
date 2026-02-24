@@ -38,7 +38,11 @@ interface TradeRepository : JpaRepository<TradeEntity, Long> {
         @Param("simulated") simulated: Boolean
     ): TradeEntity?
 
-    @Query("SELECT t.strategy, COUNT(t), SUM(CASE WHEN t.pnl > 0 THEN 1 ELSE 0 END), SUM(COALESCE(t.pnl, 0)) FROM TradeEntity t WHERE t.createdAt >= :since GROUP BY t.strategy")
+    @Query(
+        "SELECT t.strategy, COUNT(t), SUM(CASE WHEN COALESCE(t.pnl, 0) > 0 THEN 1 ELSE 0 END), " +
+            "SUM(COALESCE(t.pnl, 0)) " +
+            "FROM TradeEntity t WHERE t.createdAt >= :since AND UPPER(t.side) = 'SELL' GROUP BY t.strategy"
+    )
     fun getStrategyStats(@Param("since") since: Instant): List<Array<Any>>
 
     @Query("SELECT COUNT(t) FROM TradeEntity t WHERE t.createdAt >= :since")

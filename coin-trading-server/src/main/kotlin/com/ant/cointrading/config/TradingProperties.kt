@@ -15,6 +15,7 @@ data class TradingProperties(
     val riskPerTradePercent: Double = 1.0,
     val feeRate: BigDecimal = TradingConstants.BITHUMB_FEE_RATE,
     val riskThrottle: RiskThrottleProperties = RiskThrottleProperties(),
+    val strategyGuard: StrategyGuardProperties = StrategyGuardProperties(),
     val strategy: StrategyConfig = StrategyConfig()
 )
 
@@ -35,6 +36,12 @@ data class RiskThrottleProperties(
     val minBuyConfidenceWeak: Double = 65.0,
     val minBuyConfidenceCritical: Double = 75.0,
     val cacheMinutes: Long = 10
+)
+
+data class StrategyGuardProperties(
+    val enabled: Boolean = true,
+    val windowDays: Long = 30,
+    val minSellTrades: Int = 8,
 )
 
 /**

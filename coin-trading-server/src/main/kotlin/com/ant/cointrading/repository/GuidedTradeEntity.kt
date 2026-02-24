@@ -41,40 +41,40 @@ class GuidedTradeEntity(
     @Column(length = 60)
     var lastExitOrderId: String? = null,
 
-    @Column(nullable = false)
+    @Column(nullable = false, precision = 20, scale = 2)
     var targetAmountKrw: BigDecimal = BigDecimal.ZERO,
 
-    @Column(nullable = false)
+    @Column(nullable = false, precision = 20, scale = 8)
     var averageEntryPrice: BigDecimal = BigDecimal.ZERO,
 
-    @Column(nullable = false)
+    @Column(nullable = false, precision = 20, scale = 8)
     var entryQuantity: BigDecimal = BigDecimal.ZERO,
 
-    @Column(nullable = false)
+    @Column(nullable = false, precision = 20, scale = 8)
     var remainingQuantity: BigDecimal = BigDecimal.ZERO,
 
-    @Column(nullable = false)
+    @Column(nullable = false, precision = 20, scale = 8)
     var stopLossPrice: BigDecimal = BigDecimal.ZERO,
 
-    @Column(nullable = false)
+    @Column(nullable = false, precision = 20, scale = 8)
     var takeProfitPrice: BigDecimal = BigDecimal.ZERO,
 
-    @Column(nullable = false)
+    @Column(nullable = false, precision = 10, scale = 4)
     var trailingTriggerPercent: BigDecimal = BigDecimal("2.0"),
 
-    @Column(nullable = false)
+    @Column(nullable = false, precision = 10, scale = 4)
     var trailingOffsetPercent: BigDecimal = BigDecimal("1.0"),
 
     @Column(nullable = false)
     var trailingActive: Boolean = false,
 
-    @Column
+    @Column(precision = 20, scale = 8)
     var trailingPeakPrice: BigDecimal? = null,
 
-    @Column
+    @Column(precision = 20, scale = 8)
     var trailingStopPrice: BigDecimal? = null,
 
-    @Column(nullable = false)
+    @Column(nullable = false, precision = 10, scale = 4)
     var dcaStepPercent: BigDecimal = BigDecimal("2.0"),
 
     @Column(nullable = false)
@@ -83,23 +83,29 @@ class GuidedTradeEntity(
     @Column(nullable = false)
     var dcaCount: Int = 0,
 
-    @Column(nullable = false)
+    @Column(nullable = false, precision = 10, scale = 4)
     var halfTakeProfitRatio: BigDecimal = BigDecimal("0.5"),
 
     @Column(nullable = false)
     var halfTakeProfitDone: Boolean = false,
 
-    @Column(nullable = false)
+    @Column(nullable = false, precision = 20, scale = 8)
     var cumulativeExitQuantity: BigDecimal = BigDecimal.ZERO,
 
-    @Column(nullable = false)
+    @Column(nullable = false, precision = 20, scale = 8)
     var averageExitPrice: BigDecimal = BigDecimal.ZERO,
 
-    @Column(nullable = false)
+    @Column(nullable = false, precision = 20, scale = 2)
     var realizedPnl: BigDecimal = BigDecimal.ZERO,
 
-    @Column(nullable = false)
+    @Column(nullable = false, precision = 10, scale = 4)
     var realizedPnlPercent: BigDecimal = BigDecimal.ZERO,
+
+    @Column(nullable = false, length = 16)
+    var pnlConfidence: String = PNL_CONFIDENCE_LEGACY,
+
+    @Column
+    var pnlReconciledAt: Instant? = null,
 
     @Column(length = 30)
     var exitReason: String? = null,
@@ -131,6 +137,10 @@ class GuidedTradeEntity(
         const val STATUS_FAILED = "FAILED"
         const val STATUS_CANCELLED = "CANCELLED"
 
+        const val PNL_CONFIDENCE_HIGH = "HIGH"
+        const val PNL_CONFIDENCE_LOW = "LOW"
+        const val PNL_CONFIDENCE_LEGACY = "LEGACY"
+
         const val ORDER_TYPE_MARKET = "MARKET"
         const val ORDER_TYPE_LIMIT = "LIMIT"
     }
@@ -155,10 +165,10 @@ class GuidedTradeEventEntity(
     @Column(nullable = false, length = 40)
     var eventType: String = "",
 
-    @Column
+    @Column(precision = 20, scale = 8)
     var price: BigDecimal? = null,
 
-    @Column
+    @Column(precision = 20, scale = 8)
     var quantity: BigDecimal? = null,
 
     @Column(columnDefinition = "TEXT")

@@ -16,11 +16,13 @@ import com.ant.cointrading.risk.MarketConditionResult
 import com.ant.cointrading.risk.PnlCalculator
 import com.ant.cointrading.risk.RiskThrottleDecision
 import com.ant.cointrading.risk.RiskThrottleService
+import com.ant.cointrading.strategy.StrategyCodeNormalizer
 import org.slf4j.LoggerFactory
 import org.springframework.stereotype.Component
 import java.math.BigDecimal
 import java.math.RoundingMode
 import java.time.Instant
+import java.time.temporal.ChronoUnit
 
 /**
  * 주문 실행기 (완전 재작성)
@@ -85,48 +87,67 @@ class OrderExecutor(
      * 주문 실행 (메인 진입점)
      */
     fun execute(signal: TradingSignal, positionSize: BigDecimal): OrderResult {
-        val side = signal.toOrderSide()
+        val normalizedSignal = signal.copy(
+            strategy = StrategyCodeNormalizer.canonicalize(signal.strategy)
+        )
+        val side = normalizedSignal.toOrderSide()
         val throttleDecision = if (side == OrderSide.BUY) {
-            riskThrottleService.getDecision(signal.market, signal.strategy)
+            riskThrottleService.getDecision(normalizedSignal.market, normalizedSignal.strategy)
         } else {
             null
+        }
+        if (side == OrderSide.BUY) {
+            resolveStrategyGuardBlockReason(normalizedSignal.strategy)?.let { reason ->
+                log.warn("[{}][{}] 전략 가드 차단: {}", normalizedSignal.market, normalizedSignal.strategy, reason)
+                return createFailureResult(
+                    signal = normalizedSignal,
+                    side = side,
+                    message = "전략 가드 차단: $reason",
+                    rejectionReason = OrderRejectionReason.RISK_THROTTLE_BLOCK
+                )
+            }
         }
         if (side == OrderSide.BUY && throttleDecision?.blockNewBuys == true) {
             log.warn(
                 "[{}][{}] 신규 매수 차단: severity={}, multiplier={}, reason={}",
-                signal.market,
-                signal.strategy,
+                normalizedSignal.market,
+                normalizedSignal.strategy,
                 throttleDecision.severity,
                 String.format("%.2f", throttleDecision.multiplier),
                 throttleDecision.reason
             )
             return createFailureResult(
-                signal = signal,
+                signal = normalizedSignal,
                 side = side,
                 message = "리스크 스로틀 차단: ${throttleDecision.reason}",
                 rejectionReason = OrderRejectionReason.RISK_THROTTLE_BLOCK
             )
         }
-        validateSignalQuality(signal, side, throttleDecision)?.let { return it }
-        val effectivePositionSize = applyRiskThrottle(positionSize, throttleDecision, signal.market, signal.strategy)
+        validateSignalQuality(normalizedSignal, side, throttleDecision)?.let { return it }
+        val effectivePositionSize = applyRiskThrottle(
+            positionSize,
+            throttleDecision,
+            normalizedSignal.market,
+            normalizedSignal.strategy
+        )
 
-        validateMinimumOrderAmount(signal, side, effectivePositionSize)?.let { return it }
+        validateMinimumOrderAmount(normalizedSignal, side, effectivePositionSize)?.let { return it }
 
         if (!tradingProperties.enabled) {
-            return executeSimulated(signal, effectivePositionSize)
+            return executeSimulated(normalizedSignal, effectivePositionSize)
         }
 
         val marketCondition = if (side == OrderSide.SELL) {
-            resolveSellSideMarketCondition(signal, effectivePositionSize)
+            resolveSellSideMarketCondition(normalizedSignal, effectivePositionSize)
         } else {
-            marketConditionChecker.checkMarketCondition(signal.market, effectivePositionSize)
+            marketConditionChecker.checkMarketCondition(normalizedSignal.market, effectivePositionSize)
         }
 
         if (side != OrderSide.SELL && !marketCondition.canTrade) {
-            return createMarketConditionFailure(signal, side, marketCondition)
+            return createMarketConditionFailure(normalizedSignal, side, marketCondition)
         }
 
-        return executeReal(signal, effectivePositionSize, marketCondition)
+        return executeReal(normalizedSignal, effectivePositionSize, marketCondition)
     }
 
     private fun resolveSellSideMarketCondition(
@@ -185,6 +206,36 @@ class OrderExecutor(
         )
 
         return adjusted
+    }
+
+    private fun resolveStrategyGuardBlockReason(strategy: String): String? {
+        val guard = tradingProperties.strategyGuard
+        if (!guard.enabled) return null
+
+        if (strategy != StrategyCodeNormalizer.DCA && strategy != StrategyCodeNormalizer.VOLUME_SURGE) {
+            return null
+        }
+
+        val windowDays = guard.windowDays.coerceAtLeast(1)
+        val minSellTrades = guard.minSellTrades.coerceAtLeast(1)
+        val since = Instant.now().minus(windowDays, ChronoUnit.DAYS)
+        val sells = tradeRepository.findByCreatedAtBetween(since, Instant.now())
+            .asSequence()
+            .filter { !it.simulated }
+            .filter { it.side.equals("SELL", ignoreCase = true) }
+            .filter { StrategyCodeNormalizer.canonicalize(it.strategy) == strategy }
+            .toList()
+
+        if (sells.size < minSellTrades) {
+            return null
+        }
+
+        val realizedPnlSum = sells.sumOf { it.pnl ?: 0.0 }
+        if (realizedPnlSum >= 0.0) {
+            return null
+        }
+
+        return "${strategy} 최근 ${windowDays}일 SELL 실현 PnL ${String.format("%.0f", realizedPnlSum)}원 (거래 ${sells.size}건)"
     }
 
     private fun validateSignalQuality(
@@ -1030,12 +1081,15 @@ class OrderExecutor(
         order: OrderResponse,
         positionSize: BigDecimal
     ): BigDecimal {
-        val locked = order.locked
-        if (locked != null && locked > BigDecimal.ZERO) {
-            return locked
+        if (positionSize > BigDecimal.ZERO) {
+            return positionSize
         }
-        log.debug("[${signal.market}] locked가 0 또는 null - positionSize($positionSize) 사용")
-        return positionSize
+        if (order.price != null && order.price > BigDecimal.ZERO) {
+            val executed = order.executedVolume ?: BigDecimal.ONE
+            return order.price.multiply(executed)
+        }
+        log.debug("[${signal.market}] invested amount fallback=0 (positionSize/order.price 모두 유효하지 않음)")
+        return BigDecimal.ZERO
     }
 
     private fun calculateSlippagePercent(
@@ -1171,7 +1225,7 @@ class OrderExecutor(
                 isPartialFill = isPartialFill,
                 pnl = pnlSnapshot.pnlAmount,
                 pnlPercent = pnlSnapshot.pnlPercent,
-                strategy = signal.strategy,
+                strategy = StrategyCodeNormalizer.canonicalize(signal.strategy),
                 regime = signal.regime,
                 confidence = signal.confidence,
                 reason = signal.reason.take(500),

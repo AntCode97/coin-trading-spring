@@ -1006,7 +1006,7 @@ class VolumeSurgeEngine(
             position = position,
             exitPrice = exitPrice,
             reason = reason,
-            strategyName = "Volume Surge",
+            strategyName = "VOLUME_SURGE",
             maxAttempts = TradingConstants.MAX_CLOSE_ATTEMPTS,
             backoffSeconds = 5L,
             updatePosition = { pos, status, price, qty, orderId ->

@@ -90,19 +90,21 @@ class OrderLifecycleTelemetryService(
         quantity: BigDecimal? = null,
         message: String? = null,
     ) {
-        val normalizedSide = normalizeSide(side) ?: return
-        val eventType = if (normalizedSide == "BUY") OrderLifecycleEventType.BUY_REQUESTED else OrderLifecycleEventType.SELL_REQUESTED
-        saveEvent(
-            orderId = normalizeOrderId(orderId),
-            market = normalizeMarket(market),
-            side = normalizedSide,
-            eventType = eventType,
-            strategyGroup = strategyGroup,
-            strategyCode = strategyCode,
-            price = price,
-            quantity = quantity,
-            message = message,
-        )
+        telemetrySafe(action = "recordRequested", fallback = Unit) {
+            val normalizedSide = normalizeSide(side) ?: return@telemetrySafe Unit
+            val eventType = if (normalizedSide == "BUY") OrderLifecycleEventType.BUY_REQUESTED else OrderLifecycleEventType.SELL_REQUESTED
+            saveEvent(
+                orderId = normalizeOrderId(orderId),
+                market = normalizeMarket(market),
+                side = normalizedSide,
+                eventType = eventType,
+                strategyGroup = strategyGroup,
+                strategyCode = strategyCode,
+                price = price,
+                quantity = quantity,
+                message = message,
+            )
+        }
     }
 
     fun recordFilledIfFirst(
@@ -115,26 +117,28 @@ class OrderLifecycleTelemetryService(
         strategyCode: String? = null,
         message: String? = null,
     ): Boolean {
-        val normalizedOrderId = normalizeOrderId(orderId) ?: return false
-        val normalizedSide = normalizeSide(side) ?: return false
-        val eventType = if (normalizedSide == "BUY") OrderLifecycleEventType.BUY_FILLED else OrderLifecycleEventType.SELL_FILLED
+        return telemetrySafe(action = "recordFilledIfFirst", fallback = false) {
+            val normalizedOrderId = normalizeOrderId(orderId) ?: return@telemetrySafe false
+            val normalizedSide = normalizeSide(side) ?: return@telemetrySafe false
+            val eventType = if (normalizedSide == "BUY") OrderLifecycleEventType.BUY_FILLED else OrderLifecycleEventType.SELL_FILLED
 
-        if (orderLifecycleEventRepository.existsByOrderIdAndEventType(normalizedOrderId, eventType)) {
-            return false
+            if (orderLifecycleEventRepository.existsByOrderIdAndEventType(normalizedOrderId, eventType)) {
+                return@telemetrySafe false
+            }
+
+            saveEvent(
+                orderId = normalizedOrderId,
+                market = normalizeMarket(market),
+                side = normalizedSide,
+                eventType = eventType,
+                strategyGroup = strategyGroup,
+                strategyCode = strategyCode,
+                price = price,
+                quantity = quantity,
+                message = message,
+            )
+            true
         }
-
-        saveEvent(
-            orderId = normalizedOrderId,
-            market = normalizeMarket(market),
-            side = normalizedSide,
-            eventType = eventType,
-            strategyGroup = strategyGroup,
-            strategyCode = strategyCode,
-            price = price,
-            quantity = quantity,
-            message = message,
-        )
-        return true
     }
 
     fun recordCancelRequested(
@@ -145,15 +149,17 @@ class OrderLifecycleTelemetryService(
         strategyCode: String? = null,
         message: String? = null,
     ) {
-        saveEvent(
-            orderId = normalizeOrderId(orderId),
-            market = normalizeMarket(market),
-            side = normalizeSide(side),
-            eventType = OrderLifecycleEventType.CANCEL_REQUESTED,
-            strategyGroup = strategyGroup,
-            strategyCode = strategyCode,
-            message = message,
-        )
+        telemetrySafe(action = "recordCancelRequested", fallback = Unit) {
+            saveEvent(
+                orderId = normalizeOrderId(orderId),
+                market = normalizeMarket(market),
+                side = normalizeSide(side),
+                eventType = OrderLifecycleEventType.CANCEL_REQUESTED,
+                strategyGroup = strategyGroup,
+                strategyCode = strategyCode,
+                message = message,
+            )
+        }
     }
 
     fun recordCancelledIfFirst(
@@ -164,21 +170,23 @@ class OrderLifecycleTelemetryService(
         strategyCode: String? = null,
         message: String? = null,
     ): Boolean {
-        val normalizedOrderId = normalizeOrderId(orderId) ?: return false
-        if (orderLifecycleEventRepository.existsByOrderIdAndEventType(normalizedOrderId, OrderLifecycleEventType.CANCELLED)) {
-            return false
-        }
+        return telemetrySafe(action = "recordCancelledIfFirst", fallback = false) {
+            val normalizedOrderId = normalizeOrderId(orderId) ?: return@telemetrySafe false
+            if (orderLifecycleEventRepository.existsByOrderIdAndEventType(normalizedOrderId, OrderLifecycleEventType.CANCELLED)) {
+                return@telemetrySafe false
+            }
 
-        saveEvent(
-            orderId = normalizedOrderId,
-            market = normalizeMarket(market),
-            side = normalizeSide(side),
-            eventType = OrderLifecycleEventType.CANCELLED,
-            strategyGroup = strategyGroup,
-            strategyCode = strategyCode,
-            message = message,
-        )
-        return true
+            saveEvent(
+                orderId = normalizedOrderId,
+                market = normalizeMarket(market),
+                side = normalizeSide(side),
+                eventType = OrderLifecycleEventType.CANCELLED,
+                strategyGroup = strategyGroup,
+                strategyCode = strategyCode,
+                message = message,
+            )
+            true
+        }
     }
 
     fun recordFailed(
@@ -189,15 +197,17 @@ class OrderLifecycleTelemetryService(
         strategyCode: String? = null,
         message: String? = null,
     ) {
-        saveEvent(
-            orderId = normalizeOrderId(orderId),
-            market = normalizeMarket(market),
-            side = normalizeSide(side),
-            eventType = OrderLifecycleEventType.FAILED,
-            strategyGroup = strategyGroup,
-            strategyCode = strategyCode,
-            message = message,
-        )
+        telemetrySafe(action = "recordFailed", fallback = Unit) {
+            saveEvent(
+                orderId = normalizeOrderId(orderId),
+                market = normalizeMarket(market),
+                side = normalizeSide(side),
+                eventType = OrderLifecycleEventType.FAILED,
+                strategyGroup = strategyGroup,
+                strategyCode = strategyCode,
+                message = message,
+            )
+        }
     }
 
     fun reconcileOrderState(
@@ -206,35 +216,37 @@ class OrderLifecycleTelemetryService(
         fallbackMarket: String? = null,
         strategyCode: String? = null,
     ) {
-        if (order == null) return
-        val orderId = normalizeOrderId(order.uuid) ?: return
-        val side = normalizeSide(order.side)
-        val market = normalizeMarket(order.market.ifBlank { fallbackMarket ?: "" })
-        val executedVolume = order.executedVolume ?: BigDecimal.ZERO
+        telemetrySafe(action = "reconcileOrderState", fallback = Unit) {
+            if (order == null) return@telemetrySafe Unit
+            val orderId = normalizeOrderId(order.uuid) ?: return@telemetrySafe Unit
+            val side = normalizeSide(order.side)
+            val market = normalizeMarket(order.market.ifBlank { fallbackMarket ?: "" })
+            val executedVolume = order.executedVolume ?: BigDecimal.ZERO
 
-        if (side != null && executedVolume > BigDecimal.ZERO) {
-            recordFilledIfFirst(
-                strategyGroup = strategyGroup,
-                market = market,
-                side = side,
-                orderId = orderId,
-                price = order.price,
-                quantity = executedVolume,
-                strategyCode = strategyCode,
-                message = "reconcile:${order.state}",
-            )
-        }
+            if (side != null && executedVolume > BigDecimal.ZERO) {
+                recordFilledIfFirst(
+                    strategyGroup = strategyGroup,
+                    market = market,
+                    side = side,
+                    orderId = orderId,
+                    price = order.price,
+                    quantity = executedVolume,
+                    strategyCode = strategyCode,
+                    message = "reconcile:${order.state}",
+                )
+            }
 
-        val state = order.state?.trim()?.lowercase()
-        if (state == "cancel") {
-            recordCancelledIfFirst(
-                strategyGroup = strategyGroup,
-                market = market,
-                side = side,
-                orderId = orderId,
-                strategyCode = strategyCode,
-                message = "reconcile:cancel",
-            )
+            val state = order.state?.trim()?.lowercase()
+            if (state == "cancel") {
+                recordCancelledIfFirst(
+                    strategyGroup = strategyGroup,
+                    market = market,
+                    side = side,
+                    orderId = orderId,
+                    strategyCode = strategyCode,
+                    message = "reconcile:cancel",
+                )
+            }
         }
     }
 
@@ -427,6 +439,15 @@ class OrderLifecycleTelemetryService(
                 message = message?.take(500),
             )
         )
+    }
+
+    private inline fun <T> telemetrySafe(action: String, fallback: T, block: () -> T): T {
+        return try {
+            block()
+        } catch (e: Exception) {
+            log.warn("order telemetry {} 실패: {}", action, e.message)
+            fallback
+        }
     }
 
     private fun normalizeSide(side: String?): String? {

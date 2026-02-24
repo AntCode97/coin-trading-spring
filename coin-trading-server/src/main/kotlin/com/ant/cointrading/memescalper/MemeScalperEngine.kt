@@ -902,7 +902,7 @@ class MemeScalperEngine(
             position = position,
             exitPrice = exitPrice,
             reason = reason,
-            strategyName = "Meme Scalper",
+            strategyName = "MEME_SCALPER",
             maxAttempts = TradingConstants.MAX_CLOSE_ATTEMPTS,
             backoffSeconds = CLOSE_RETRY_BACKOFF_SECONDS,
             updatePosition = { pos, status, price, qty, orderId ->

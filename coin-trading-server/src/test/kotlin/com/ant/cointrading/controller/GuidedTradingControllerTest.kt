@@ -5,11 +5,14 @@ import com.ant.cointrading.guided.GuidedAdoptPositionRequest
 import com.ant.cointrading.guided.GuidedAutopilotCandidateView
 import com.ant.cointrading.guided.GuidedAutopilotEvent
 import com.ant.cointrading.guided.GuidedAutopilotLiveResponse
+import com.ant.cointrading.guided.GuidedPnlReconcileItem
+import com.ant.cointrading.guided.GuidedPnlReconcileResult
 import com.ant.cointrading.guided.GuidedTradingService
 import org.junit.jupiter.api.DisplayName
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.assertThrows
 import org.mockito.kotlin.any
+import org.mockito.kotlin.anyOrNull
 import org.mockito.kotlin.mock
 import org.mockito.kotlin.whenever
 import org.springframework.http.HttpStatus
@@ -126,11 +129,49 @@ class GuidedTradingControllerTest {
                     stage = "RULE_PASS",
                     reason = "pass"
                 )
+            ),
+            thresholdMode = "DYNAMIC_P70",
+            appliedRecommendedWinRateThreshold = 60.0,
+            requestedMinRecommendedWinRate = null
+        )
+        whenever(guidedTradingService.getAutopilotLive(any(), any(), any(), anyOrNull())).thenReturn(expected)
+
+        val actual = controller.getAutopilotLive(
+            interval = "minute30",
+            mode = "SWING",
+            thresholdMode = null,
+            minRecommendedWinRate = null
+        )
+
+        kotlin.test.assertEquals(expected, actual)
+    }
+
+    @Test
+    @DisplayName("reconcile/closed는 서비스 결과를 그대로 반환한다")
+    fun reconcileClosedReturnsServicePayload() {
+        val expected = GuidedPnlReconcileResult(
+            windowDays = 30,
+            dryRun = true,
+            scannedTrades = 12,
+            updatedTrades = 6,
+            unchangedTrades = 6,
+            highConfidenceTrades = 8,
+            lowConfidenceTrades = 4,
+            sample = listOf(
+                GuidedPnlReconcileItem(
+                    tradeId = 1L,
+                    market = "KRW-BTC",
+                    confidence = "HIGH",
+                    reason = "events 기반",
+                    recalculated = true,
+                    realizedPnl = 1234.56,
+                    realizedPnlPercent = 1.23
+                )
             )
         )
-        whenever(guidedTradingService.getAutopilotLive(any(), any())).thenReturn(expected)
+        whenever(guidedTradingService.reconcileClosedTrades(30, true)).thenReturn(expected)
 
-        val actual = controller.getAutopilotLive(interval = "minute30", mode = "SWING")
+        val actual = controller.reconcileClosedTrades(windowDays = 30, dryRun = true)
 
         kotlin.test.assertEquals(expected, actual)
     }

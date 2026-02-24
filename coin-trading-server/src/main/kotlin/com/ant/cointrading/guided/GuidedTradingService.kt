@@ -22,6 +22,7 @@ import org.springframework.transaction.annotation.Transactional
 import java.math.BigDecimal
 import java.math.RoundingMode
 import java.time.Instant
+import java.time.temporal.ChronoUnit
 import java.util.concurrent.CompletableFuture
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
@@ -235,7 +236,14 @@ class GuidedTradingService(
 
     fun getActivePosition(market: String): GuidedTradeView? {
         val trade = getActiveTrade(market) ?: return null
-        val current = bithumbPublicApi.getCurrentPrice(market)?.firstOrNull()?.tradePrice?.toDouble()
+        val currentPrice = bithumbPublicApi.getCurrentPrice(market)?.firstOrNull()?.tradePrice
+        if (
+            trade.status == GuidedTradeEntity.STATUS_OPEN &&
+            getActualHoldingQuantity(market, currentPrice) <= BigDecimal.ZERO
+        ) {
+            return null
+        }
+        val current = currentPrice?.toDouble()
         return trade.toView(current)
     }
 
@@ -347,7 +355,14 @@ class GuidedTradingService(
         val existing = getActiveTrade(market)
         require(existing == null) { "이미 진행 중인 포지션이 있습니다." }
 
-        val recommendation = getRecommendation(market)
+        val interval = request.interval?.trim()?.ifBlank { "minute30" } ?: "minute30"
+        val mode = TradingMode.fromString(request.mode ?: TradingMode.SWING.name)
+        val recommendation = getRecommendation(
+            market = market,
+            interval = interval,
+            count = if (interval.equals("tick", ignoreCase = true)) 300 else 120,
+            mode = mode
+        )
 
         val orderType = (request.orderType ?: recommendation.suggestedOrderType).trim().uppercase()
         val amountKrw = BigDecimal.valueOf(request.amountKrw.coerceAtLeast(5100))
@@ -458,12 +473,18 @@ class GuidedTradingService(
 
         val currentPrice = bithumbPublicApi.getCurrentPrice(market)?.firstOrNull()?.tradePrice ?: allTrades.first().averageEntryPrice
         val actualQty = getActualHoldingQuantity(market, currentPrice)
+        var executedQty = BigDecimal.ZERO
+        var executedPrice = currentPrice
+        var exitOrderId: String? = null
+        var exitAttempted = false
 
         if (actualQty > BigDecimal.ZERO) {
             val estimatedValue = actualQty.multiply(currentPrice)
             if (estimatedValue >= MIN_EFFECTIVE_HOLDING_KRW) {
                 try {
                     val sell = bithumbPrivateApi.sellMarketOrder(market, actualQty)
+                    exitAttempted = true
+                    exitOrderId = sell.uuid
                     orderLifecycleTelemetryService.recordRequested(
                         strategyGroup = OrderLifecycleStrategyGroup.GUIDED,
                         market = market,
@@ -481,17 +502,17 @@ class GuidedTradingService(
                         fallbackMarket = market,
                         strategyCode = GUIDED_STRATEGY_CODE
                     )
-                    val execPrice = sellInfo.price ?: currentPrice
-                    val executedQty = sellInfo.executedVolume ?: actualQty
+                    executedPrice = sellInfo.price ?: currentPrice
+                    executedQty = (sellInfo.executedVolume ?: BigDecimal.ZERO).min(actualQty)
 
-                    for (trade in allTrades) {
-                        val tradeShare = if (executedQty > BigDecimal.ZERO && trade.remainingQuantity > BigDecimal.ZERO) {
-                            trade.remainingQuantity.min(executedQty)
-                        } else {
-                            trade.remainingQuantity
-                        }
-                        if (tradeShare > BigDecimal.ZERO) {
-                            applyExitFill(trade, tradeShare, execPrice, "MANUAL_STOP")
+                    if (executedQty > BigDecimal.ZERO) {
+                        var remainingToAllocate = executedQty
+                        for (trade in allTrades) {
+                            if (remainingToAllocate <= BigDecimal.ZERO) break
+                            val tradeShare = trade.remainingQuantity.min(remainingToAllocate)
+                            if (tradeShare <= BigDecimal.ZERO) continue
+                            applyExitFill(trade, tradeShare, executedPrice, "MANUAL_STOP")
+                            remainingToAllocate = remainingToAllocate.subtract(tradeShare).max(BigDecimal.ZERO)
                         }
                     }
                 } catch (e: Exception) {
@@ -507,22 +528,43 @@ class GuidedTradingService(
                     throw IllegalStateException("[$market] 매도 주문 실패 — 빗썸에서 직접 매도하세요. 원인: ${e.message}")
                 }
             } else {
-                log.warn("[$market] 잔여 수량 매도 불가 (추정금액 ${estimatedValue.toPlainString()}원 < ${MIN_EFFECTIVE_HOLDING_KRW.toPlainString()}원). DB 강제 종료.")
+                log.warn("[$market] 잔여 수량 매도 불가 (추정금액 ${estimatedValue.toPlainString()}원 < ${MIN_EFFECTIVE_HOLDING_KRW.toPlainString()}원). 자동 종료 생략.")
             }
         }
 
+        val hasEffectiveBalance = getActualHoldingQuantity(market, executedPrice) > BigDecimal.ZERO
+
         for (trade in allTrades) {
-            trade.remainingQuantity = BigDecimal.ZERO
-            trade.status = GuidedTradeEntity.STATUS_CLOSED
-            trade.closedAt = Instant.now()
-            trade.exitReason = "MANUAL_STOP"
-            trade.lastAction = "CLOSED_MANUAL_STOP"
+            trade.lastExitOrderId = exitOrderId ?: trade.lastExitOrderId
+            if (!hasEffectiveBalance || trade.remainingQuantity <= BigDecimal.ZERO) {
+                trade.remainingQuantity = BigDecimal.ZERO
+                trade.status = GuidedTradeEntity.STATUS_CLOSED
+                trade.closedAt = Instant.now()
+                trade.exitReason = "MANUAL_STOP"
+                trade.lastAction = "CLOSED_MANUAL_STOP"
+                guidedTradeRepository.save(trade)
+                appendEvent(trade.id!!, "CLOSE_ALL", executedPrice, executedQty.takeIf { it > BigDecimal.ZERO }, "수동 전체 청산")
+                continue
+            }
+
+            trade.status = GuidedTradeEntity.STATUS_OPEN
+            trade.lastAction = if (exitAttempted) {
+                if (executedQty > BigDecimal.ZERO) "MANUAL_STOP_PARTIAL"
+                else "MANUAL_STOP_PENDING_EXIT"
+            } else {
+                "MANUAL_STOP_SKIPPED"
+            }
             guidedTradeRepository.save(trade)
-            appendEvent(trade.id!!, "CLOSE_ALL", currentPrice, null, "수동 전체 청산")
+
+            if (exitAttempted && executedQty <= BigDecimal.ZERO) {
+                appendEvent(trade.id!!, "CLOSE_PENDING", executedPrice, BigDecimal.ZERO, "수동 청산 주문 미체결 - 포지션 유지")
+            } else if (exitAttempted && executedQty > BigDecimal.ZERO) {
+                appendEvent(trade.id!!, "PARTIAL_CLOSE", executedPrice, executedQty, "수동 청산 부분 체결 - 잔여 포지션 유지")
+            }
         }
 
         val primary = allTrades.first()
-        return primary.toView(currentPrice.toDouble())
+        return primary.toView(executedPrice.toDouble())
     }
 
     @Transactional
@@ -666,31 +708,33 @@ class GuidedTradingService(
 
     private fun reconcilePendingEntry(trade: GuidedTradeEntity) {
         val orderId = trade.entryOrderId ?: return
-        val order = bithumbPrivateApi.getOrder(orderId) ?: return
-        orderLifecycleTelemetryService.reconcileOrderState(
-            strategyGroup = OrderLifecycleStrategyGroup.GUIDED,
-            order = order,
-            fallbackMarket = trade.market,
-            strategyCode = GUIDED_STRATEGY_CODE
-        )
-        val executed = order.executedVolume ?: BigDecimal.ZERO
-
-        if (executed > BigDecimal.ZERO) {
-            val filledPrice = resolveEntryPrice(
+        val order = bithumbPrivateApi.getOrder(orderId)
+        if (order != null) {
+            orderLifecycleTelemetryService.reconcileOrderState(
+                strategyGroup = OrderLifecycleStrategyGroup.GUIDED,
                 order = order,
-                orderType = trade.entryOrderType,
-                investedAmount = trade.targetAmountKrw,
-                selectedLimitPrice = trade.averageEntryPrice,
-                fallbackPrice = trade.averageEntryPrice
+                fallbackMarket = trade.market,
+                strategyCode = GUIDED_STRATEGY_CODE
             )
-            trade.averageEntryPrice = filledPrice
-            trade.entryQuantity = executed
-            trade.remainingQuantity = executed
-            trade.status = GuidedTradeEntity.STATUS_OPEN
-            trade.lastAction = "ENTRY_FILLED"
-            guidedTradeRepository.save(trade)
-            appendEvent(trade.id!!, "ENTRY_FILLED", filledPrice, executed, "지정가 진입 체결")
-            return
+            val executed = order.executedVolume ?: BigDecimal.ZERO
+
+            if (executed > BigDecimal.ZERO) {
+                val filledPrice = resolveEntryPrice(
+                    order = order,
+                    orderType = trade.entryOrderType,
+                    investedAmount = trade.targetAmountKrw,
+                    selectedLimitPrice = trade.averageEntryPrice,
+                    fallbackPrice = trade.averageEntryPrice
+                )
+                trade.averageEntryPrice = filledPrice
+                trade.entryQuantity = executed
+                trade.remainingQuantity = executed
+                trade.status = GuidedTradeEntity.STATUS_OPEN
+                trade.lastAction = "ENTRY_FILLED"
+                guidedTradeRepository.save(trade)
+                appendEvent(trade.id!!, "ENTRY_FILLED", filledPrice, executed, "지정가 진입 체결")
+                return
+            }
         }
 
         val ageSec = Instant.now().epochSecond - trade.createdAt.epochSecond
@@ -1315,35 +1359,130 @@ class GuidedTradingService(
             .map { it.toClosedTradeView() }
     }
 
+    @Transactional
+    fun reconcileClosedTrades(windowDays: Long = 30, dryRun: Boolean = true): GuidedPnlReconcileResult {
+        val effectiveWindowDays = windowDays.coerceIn(1, 30)
+        val now = Instant.now()
+        val since = now.minus(effectiveWindowDays, ChronoUnit.DAYS)
+        val trades = guidedTradeRepository.findByStatusAndClosedAtAfter(GuidedTradeEntity.STATUS_CLOSED, since)
+            .sortedByDescending { it.closedAt ?: it.updatedAt }
+
+        var updatedCount = 0
+        var unchangedCount = 0
+        var highConfidenceCount = 0
+        var lowConfidenceCount = 0
+        val sample = mutableListOf<GuidedPnlReconcileItem>()
+
+        for (trade in trades) {
+            val recalculated = recalculateClosedTradeMetrics(trade)
+
+            if (recalculated.confidence == GuidedTradeEntity.PNL_CONFIDENCE_HIGH) {
+                highConfidenceCount++
+            } else {
+                lowConfidenceCount++
+            }
+
+            val changed = recalculated.canApply && (
+                trade.averageEntryPrice.compareTo(recalculated.averageEntryPrice) != 0 ||
+                    trade.entryQuantity.compareTo(recalculated.entryQuantity) != 0 ||
+                    trade.cumulativeExitQuantity.compareTo(recalculated.cumulativeExitQuantity) != 0 ||
+                    trade.averageExitPrice.compareTo(recalculated.averageExitPrice) != 0 ||
+                    trade.realizedPnl.setScale(2, RoundingMode.HALF_UP).compareTo(recalculated.realizedPnl) != 0 ||
+                    trade.realizedPnlPercent.setScale(4, RoundingMode.HALF_UP).compareTo(recalculated.realizedPnlPercent) != 0 ||
+                    trade.pnlConfidence != recalculated.confidence
+                )
+            if (changed) {
+                updatedCount++
+            } else {
+                unchangedCount++
+            }
+
+            if (!dryRun) {
+                trade.pnlConfidence = recalculated.confidence
+                trade.pnlReconciledAt = now
+                if (recalculated.canApply) {
+                    trade.averageEntryPrice = recalculated.averageEntryPrice
+                    trade.entryQuantity = recalculated.entryQuantity
+                    trade.cumulativeExitQuantity = recalculated.cumulativeExitQuantity
+                    trade.averageExitPrice = recalculated.averageExitPrice
+                    trade.realizedPnl = recalculated.realizedPnl
+                    trade.realizedPnlPercent = recalculated.realizedPnlPercent
+                }
+                val saved = guidedTradeRepository.save(trade)
+                appendEvent(
+                    tradeId = saved.id ?: continue,
+                    eventType = "PNL_RECONCILE",
+                    price = recalculated.averageExitPrice.takeIf { it > BigDecimal.ZERO },
+                    quantity = recalculated.cumulativeExitQuantity.takeIf { it > BigDecimal.ZERO },
+                    message = "최근 ${effectiveWindowDays}일 손익 보정(${recalculated.confidence}) - ${recalculated.reason}"
+                )
+            }
+
+            if (sample.size < 20) {
+                sample.add(
+                    GuidedPnlReconcileItem(
+                        tradeId = trade.id ?: 0L,
+                        market = trade.market,
+                        confidence = recalculated.confidence,
+                        reason = recalculated.reason,
+                        recalculated = recalculated.canApply,
+                        realizedPnl = recalculated.realizedPnl.toDouble(),
+                        realizedPnlPercent = recalculated.realizedPnlPercent.toDouble()
+                    )
+                )
+            }
+        }
+
+        return GuidedPnlReconcileResult(
+            windowDays = effectiveWindowDays,
+            dryRun = dryRun,
+            scannedTrades = trades.size,
+            updatedTrades = updatedCount,
+            unchangedTrades = unchangedCount,
+            highConfidenceTrades = highConfidenceCount,
+            lowConfidenceTrades = lowConfidenceCount,
+            sample = sample
+        )
+    }
+
     fun getAutopilotLive(
         interval: String = "minute30",
-        mode: TradingMode = TradingMode.SWING
+        mode: TradingMode = TradingMode.SWING,
+        thresholdMode: GuidedWinRateThresholdMode = GuidedWinRateThresholdMode.DYNAMIC_P70,
+        minRecommendedWinRate: Double? = null
     ): GuidedAutopilotLiveResponse {
         val telemetry = orderLifecycleTelemetryService.getLiveSnapshot()
-        val candidates = getMarketBoard(
+        val sortedMarkets = getMarketBoard(
             sortBy = GuidedMarketSortBy.MARKET_ENTRY_WIN_RATE,
             sortDirection = GuidedSortDirection.DESC,
             interval = interval,
             mode = mode
         )
-            .take(10)
-            .map { market ->
-                val recommendedWinRate = market.recommendedEntryWinRate
-                val marketWinRate = market.marketEntryWinRate
-                val pass = (recommendedWinRate ?: 0.0) >= 65.0
-                GuidedAutopilotCandidateView(
-                    market = market.market,
-                    koreanName = market.koreanName,
-                    recommendedEntryWinRate = recommendedWinRate,
-                    marketEntryWinRate = marketWinRate,
-                    stage = if (pass) "RULE_PASS" else "RULE_FAIL",
-                    reason = if (pass) {
-                        "추천가 승률 ${String.format("%.1f", recommendedWinRate ?: 0.0)}%가 65% 이상"
-                    } else {
-                        "추천가 승률 ${String.format("%.1f", recommendedWinRate ?: 0.0)}%가 65% 미만"
-                    }
-                )
-            }
+        val topCandidates = sortedMarkets.take(10)
+        val requestedMin = minRecommendedWinRate?.coerceIn(50.0, 80.0)
+        val recommendedRates = sortedMarkets.mapNotNull { it.recommendedEntryWinRate }
+        val appliedThreshold = when (thresholdMode) {
+            GuidedWinRateThresholdMode.FIXED -> requestedMin ?: 60.0
+            GuidedWinRateThresholdMode.DYNAMIC_P70 -> resolveDynamicRecommendedThreshold(recommendedRates)
+        }
+
+        val candidates = topCandidates.map { market ->
+            val recommendedWinRate = market.recommendedEntryWinRate
+            val marketWinRate = market.marketEntryWinRate
+            val pass = (recommendedWinRate ?: 0.0) >= appliedThreshold
+            GuidedAutopilotCandidateView(
+                market = market.market,
+                koreanName = market.koreanName,
+                recommendedEntryWinRate = recommendedWinRate,
+                marketEntryWinRate = marketWinRate,
+                stage = if (pass) "RULE_PASS" else "RULE_FAIL",
+                reason = if (pass) {
+                    "추천가 승률 ${String.format("%.1f", recommendedWinRate ?: 0.0)}% >= ${String.format("%.1f", appliedThreshold)}%"
+                } else {
+                    "추천가 승률 ${String.format("%.1f", recommendedWinRate ?: 0.0)}% < ${String.format("%.1f", appliedThreshold)}%"
+                }
+            )
+        }
 
         val autopilotEvents = telemetry.orderEvents
             .filter { it.strategyGroup == OrderLifecycleStrategyGroup.AUTOPILOT_MCP.name }
@@ -1362,8 +1501,151 @@ class GuidedTradingService(
             orderSummary = telemetry.orderSummary,
             orderEvents = telemetry.orderEvents,
             autopilotEvents = autopilotEvents,
-            candidates = candidates
+            candidates = candidates,
+            thresholdMode = thresholdMode.name,
+            appliedRecommendedWinRateThreshold = appliedThreshold,
+            requestedMinRecommendedWinRate = requestedMin
         )
+    }
+
+    private fun resolveDynamicRecommendedThreshold(rates: List<Double>): Double {
+        if (rates.isEmpty()) return 55.0
+        val sorted = rates.sorted()
+        val percentileIndex = kotlin.math.ceil(sorted.size * 0.7).toInt().coerceIn(1, sorted.size) - 1
+        var threshold = sorted[percentileIndex].coerceIn(58.0, 65.0)
+        while (threshold > 55.0 && sorted.count { it >= threshold } < 2) {
+            threshold -= 1.0
+        }
+        if (threshold < 55.0) threshold = 55.0
+        return (threshold * 10.0).toInt() / 10.0
+    }
+
+    private fun recalculateClosedTradeMetrics(trade: GuidedTradeEntity): ClosedTradeRecalculation {
+        val tradeId = trade.id ?: return ClosedTradeRecalculation(
+            canApply = false,
+            confidence = GuidedTradeEntity.PNL_CONFIDENCE_LOW,
+            averageEntryPrice = trade.averageEntryPrice,
+            entryQuantity = trade.entryQuantity,
+            cumulativeExitQuantity = trade.cumulativeExitQuantity,
+            averageExitPrice = trade.averageExitPrice,
+            realizedPnl = trade.realizedPnl.setScale(2, RoundingMode.HALF_UP),
+            realizedPnlPercent = trade.realizedPnlPercent.setScale(4, RoundingMode.HALF_UP),
+            reason = "trade id 없음"
+        )
+
+        val events = guidedTradeEventRepository.findByTradeIdOrderByCreatedAtAsc(tradeId)
+        val entryFills = events.filter { event ->
+            isEntryFillEvent(event.eventType) &&
+                (event.quantity ?: BigDecimal.ZERO) > BigDecimal.ZERO &&
+                (event.price ?: BigDecimal.ZERO) > BigDecimal.ZERO
+        }
+        val exitFills = events.filter { event ->
+            isExitFillEvent(event.eventType) &&
+                (event.quantity ?: BigDecimal.ZERO) > BigDecimal.ZERO &&
+                (event.price ?: BigDecimal.ZERO) > BigDecimal.ZERO
+        }
+
+        var confidence = if (entryFills.isNotEmpty() && exitFills.isNotEmpty()) {
+            GuidedTradeEntity.PNL_CONFIDENCE_HIGH
+        } else {
+            GuidedTradeEntity.PNL_CONFIDENCE_LOW
+        }
+
+        var entryQty = entryFills.fold(BigDecimal.ZERO) { acc, event -> acc.add(event.quantity ?: BigDecimal.ZERO) }
+        var entryValue = entryFills.fold(BigDecimal.ZERO) { acc, event ->
+            val qty = event.quantity ?: BigDecimal.ZERO
+            val price = event.price ?: BigDecimal.ZERO
+            acc.add(price.multiply(qty))
+        }
+
+        if (entryQty <= BigDecimal.ZERO || entryValue <= BigDecimal.ZERO) {
+            confidence = GuidedTradeEntity.PNL_CONFIDENCE_LOW
+            entryQty = trade.entryQuantity
+            entryValue = trade.averageEntryPrice.multiply(entryQty)
+        }
+
+        var exitQty = exitFills.fold(BigDecimal.ZERO) { acc, event -> acc.add(event.quantity ?: BigDecimal.ZERO) }
+        var exitValue = exitFills.fold(BigDecimal.ZERO) { acc, event ->
+            val qty = event.quantity ?: BigDecimal.ZERO
+            val price = event.price ?: BigDecimal.ZERO
+            acc.add(price.multiply(qty))
+        }
+
+        if (exitQty <= BigDecimal.ZERO || exitValue <= BigDecimal.ZERO) {
+            confidence = GuidedTradeEntity.PNL_CONFIDENCE_LOW
+            val exchangeFallback = trade.lastExitOrderId
+                ?.let { orderId -> runCatching { bithumbPrivateApi.getOrder(orderId) }.getOrNull() }
+                ?.let { order ->
+                    val qty = order.executedVolume ?: BigDecimal.ZERO
+                    val price = order.price ?: BigDecimal.ZERO
+                    if (qty > BigDecimal.ZERO && price > BigDecimal.ZERO) qty to price else null
+                }
+
+            if (exchangeFallback != null) {
+                exitQty = exchangeFallback.first
+                exitValue = exchangeFallback.second.multiply(exitQty)
+            } else {
+                exitQty = trade.cumulativeExitQuantity
+                exitValue = trade.averageExitPrice.multiply(exitQty)
+            }
+        }
+
+        val normalizedEntryQty = entryQty.max(BigDecimal.ZERO)
+        val normalizedExitQty = exitQty.max(BigDecimal.ZERO)
+        val effectiveClosedQty = normalizedEntryQty.min(normalizedExitQty)
+        if (effectiveClosedQty <= BigDecimal.ZERO || entryValue <= BigDecimal.ZERO || exitValue <= BigDecimal.ZERO) {
+            return ClosedTradeRecalculation(
+                canApply = false,
+                confidence = GuidedTradeEntity.PNL_CONFIDENCE_LOW,
+                averageEntryPrice = trade.averageEntryPrice,
+                entryQuantity = trade.entryQuantity,
+                cumulativeExitQuantity = trade.cumulativeExitQuantity,
+                averageExitPrice = trade.averageExitPrice,
+                realizedPnl = trade.realizedPnl.setScale(2, RoundingMode.HALF_UP),
+                realizedPnlPercent = trade.realizedPnlPercent.setScale(4, RoundingMode.HALF_UP),
+                reason = "체결 데이터 부족"
+            )
+        }
+
+        val averageEntryPrice = entryValue.divide(normalizedEntryQty, 8, RoundingMode.HALF_UP)
+        val averageExitPrice = exitValue.divide(normalizedExitQty, 8, RoundingMode.HALF_UP)
+        val invested = averageEntryPrice.multiply(effectiveClosedQty)
+        val realizedPnl = averageExitPrice.subtract(averageEntryPrice)
+            .multiply(effectiveClosedQty)
+            .setScale(2, RoundingMode.HALF_UP)
+        val realizedPnlPercent = if (invested > BigDecimal.ZERO) {
+            realizedPnl.divide(invested, 8, RoundingMode.HALF_UP).multiply(BigDecimal("100")).setScale(4, RoundingMode.HALF_UP)
+        } else {
+            BigDecimal.ZERO.setScale(4, RoundingMode.HALF_UP)
+        }
+
+        val sourceReason = if (confidence == GuidedTradeEntity.PNL_CONFIDENCE_HIGH) {
+            "events 기반"
+        } else {
+            "events 부족 - fallback 사용"
+        }
+
+        return ClosedTradeRecalculation(
+            canApply = true,
+            confidence = confidence,
+            averageEntryPrice = averageEntryPrice,
+            entryQuantity = normalizedEntryQty,
+            cumulativeExitQuantity = effectiveClosedQty,
+            averageExitPrice = averageExitPrice,
+            realizedPnl = realizedPnl,
+            realizedPnlPercent = realizedPnlPercent,
+            reason = sourceReason
+        )
+    }
+
+    private fun isEntryFillEvent(eventType: String): Boolean {
+        return eventType == "ENTRY_FILLED" || eventType == "DCA_BUY"
+    }
+
+    private fun isExitFillEvent(eventType: String): Boolean {
+        return eventType == "HALF_TAKE_PROFIT" ||
+            eventType == "PARTIAL_CLOSE" ||
+            eventType == "CLOSE_ALL"
     }
 
     private fun calibratePredictedWinRate(market: String, baseWinRate: Double): WinRateCalibration {
@@ -1663,9 +1945,8 @@ class GuidedTradingService(
         val executedQty = order.executedVolume ?: BigDecimal.ZERO
         if (executedQty > BigDecimal.ZERO) {
             val invested = when {
-                order.locked != null && order.locked > BigDecimal.ZERO -> order.locked
                 investedAmount > BigDecimal.ZERO -> investedAmount
-                order.price != null && order.price > BigDecimal.ZERO -> order.price
+                order.price != null && order.price > BigDecimal.ZERO -> order.price.multiply(executedQty)
                 else -> BigDecimal.ZERO
             }
             if (invested > BigDecimal.ZERO) {
@@ -1844,6 +2125,18 @@ enum class GuidedSortDirection {
     DESC
 }
 
+enum class GuidedWinRateThresholdMode {
+    DYNAMIC_P70,
+    FIXED;
+
+    companion object {
+        fun fromString(value: String?): GuidedWinRateThresholdMode {
+            val normalized = value?.trim()
+            return entries.firstOrNull { it.name.equals(normalized, ignoreCase = true) } ?: DYNAMIC_P70
+        }
+    }
+}
+
 data class GuidedCandle(
     val timestamp: Long,
     val open: Double,
@@ -1886,6 +2179,18 @@ data class GuidedWinRateBreakdown(
 private data class WinRateCalibration(
     val calibrated: Double,
     val note: String?
+)
+
+private data class ClosedTradeRecalculation(
+    val canApply: Boolean,
+    val confidence: String,
+    val averageEntryPrice: BigDecimal,
+    val entryQuantity: BigDecimal,
+    val cumulativeExitQuantity: BigDecimal,
+    val averageExitPrice: BigDecimal,
+    val realizedPnl: BigDecimal,
+    val realizedPnlPercent: BigDecimal,
+    val reason: String
 )
 
 data class GuidedTradeEventView(
@@ -1950,7 +2255,10 @@ data class GuidedAutopilotLiveResponse(
     val orderSummary: OrderLifecycleSummary,
     val orderEvents: List<OrderLifecycleEvent>,
     val autopilotEvents: List<GuidedAutopilotEvent>,
-    val candidates: List<GuidedAutopilotCandidateView>
+    val candidates: List<GuidedAutopilotCandidateView>,
+    val thresholdMode: String,
+    val appliedRecommendedWinRateThreshold: Double,
+    val requestedMinRecommendedWinRate: Double?
 )
 
 data class GuidedAutopilotEvent(
@@ -2062,7 +2370,9 @@ data class GuidedStartRequest(
     val trailingOffsetPercent: Double? = null,
     val maxDcaCount: Int? = null,
     val dcaStepPercent: Double? = null,
-    val halfTakeProfitRatio: Double? = null
+    val halfTakeProfitRatio: Double? = null,
+    val interval: String? = null,
+    val mode: String? = null
 )
 
 data class GuidedAdoptPositionRequest(
@@ -2091,6 +2401,27 @@ data class GuidedSyncAction(
     val type: String,
     val market: String,
     val detail: String
+)
+
+data class GuidedPnlReconcileResult(
+    val windowDays: Long,
+    val dryRun: Boolean,
+    val scannedTrades: Int,
+    val updatedTrades: Int,
+    val unchangedTrades: Int,
+    val highConfidenceTrades: Int,
+    val lowConfidenceTrades: Int,
+    val sample: List<GuidedPnlReconcileItem>
+)
+
+data class GuidedPnlReconcileItem(
+    val tradeId: Long,
+    val market: String,
+    val confidence: String,
+    val reason: String,
+    val recalculated: Boolean,
+    val realizedPnl: Double,
+    val realizedPnlPercent: Double
 )
 
 private fun GuidedTradeEntity.toClosedTradeView(): GuidedClosedTradeView {

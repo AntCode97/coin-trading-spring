@@ -79,6 +79,11 @@ type WorkspacePrefs = {
   playwrightMcpPort?: number;
   playwrightMcpUrl?: string;
   autopilotDockCollapsed?: boolean;
+  winRateThresholdMode?: 'DYNAMIC_P70' | 'FIXED';
+  fixedMinRecommendedWinRate?: number;
+  minLlmConfidence?: number;
+  rejectCooldownMinutes?: number;
+  postExitCooldownMinutes?: number;
 };
 
 type ConnectPlaywrightOptions = {
@@ -282,11 +287,22 @@ export default function ManualTraderWorkspace() {
   const [autopilotDockCollapsed, setAutopilotDockCollapsed] = useState<boolean>(
     prefs.autopilotDockCollapsed ?? false
   );
+  const [winRateThresholdMode, setWinRateThresholdMode] = useState<'DYNAMIC_P70' | 'FIXED'>(
+    prefs.winRateThresholdMode ?? 'DYNAMIC_P70'
+  );
+  const [fixedMinRecommendedWinRate, setFixedMinRecommendedWinRate] = useState<number>(
+    prefs.fixedMinRecommendedWinRate ?? 60
+  );
+  const [minLlmConfidence, setMinLlmConfidence] = useState<number>(prefs.minLlmConfidence ?? 60);
+  const [rejectCooldownMinutes, setRejectCooldownMinutes] = useState<number>(prefs.rejectCooldownMinutes ?? 5);
+  const [postExitCooldownMinutes, setPostExitCooldownMinutes] = useState<number>(prefs.postExitCooldownMinutes ?? 30);
   const [autopilotState, setAutopilotState] = useState<AutopilotState>({
     enabled: false,
     blockedByDailyLoss: false,
     blockedReason: null,
     startedAt: null,
+    thresholdMode: 'DYNAMIC_P70',
+    appliedRecommendedWinRateThreshold: 0,
     workers: [],
     logs: [],
     events: [],
@@ -361,8 +377,20 @@ export default function ManualTraderWorkspace() {
   });
 
   const autopilotLiveQuery = useQuery<AutopilotLiveResponse>({
-    queryKey: ['guided-autopilot-live', interval, tradingMode],
-    queryFn: () => guidedTradingApi.getAutopilotLive(interval, tradingMode),
+    queryKey: [
+      'guided-autopilot-live',
+      interval,
+      tradingMode,
+      winRateThresholdMode,
+      fixedMinRecommendedWinRate,
+    ],
+    queryFn: () =>
+      guidedTradingApi.getAutopilotLive(
+        interval,
+        tradingMode,
+        winRateThresholdMode,
+        fixedMinRecommendedWinRate
+      ),
     refetchInterval: 5000,
   });
 
@@ -530,6 +558,11 @@ export default function ManualTraderWorkspace() {
       playwrightMcpPort,
       playwrightMcpUrl,
       autopilotDockCollapsed,
+      winRateThresholdMode,
+      fixedMinRecommendedWinRate,
+      minLlmConfidence,
+      rejectCooldownMinutes,
+      postExitCooldownMinutes,
     };
     window.localStorage.setItem(STORAGE_KEY, JSON.stringify(next));
   }, [
@@ -546,6 +579,11 @@ export default function ManualTraderWorkspace() {
     playwrightMcpPort,
     playwrightMcpUrl,
     autopilotDockCollapsed,
+    winRateThresholdMode,
+    fixedMinRecommendedWinRate,
+    minLlmConfidence,
+    rejectCooldownMinutes,
+    postExitCooldownMinutes,
   ]);
 
   // 차트 초기화
@@ -824,6 +862,8 @@ export default function ManualTraderWorkspace() {
       limitPrice: orderType === 'LIMIT' && typeof limitPrice === 'number' ? limitPrice : undefined,
       stopLossPrice: typeof customStopLoss === 'number' ? customStopLoss : recommendation.stopLossPrice,
       takeProfitPrice: typeof customTakeProfit === 'number' ? customTakeProfit : recommendation.takeProfitPrice,
+      interval,
+      mode: tradingMode,
     };
     startMutation.mutate(payload);
   };
@@ -839,6 +879,8 @@ export default function ManualTraderWorkspace() {
       limitPrice: ot === 'LIMIT' ? recommendation.recommendedEntryPrice : undefined,
       stopLossPrice: recommendation.stopLossPrice,
       takeProfitPrice: recommendation.takeProfitPrice,
+      interval,
+      mode: tradingMode,
     };
     startMutation.mutate(payload);
   };
@@ -875,9 +917,12 @@ export default function ManualTraderWorkspace() {
         amountKrw: 20000,
         dailyLossLimitKrw,
         maxConcurrentPositions: 3,
-        minRecommendedWinRate: 65,
+        winRateThresholdMode,
+        fixedMinRecommendedWinRate,
+        minLlmConfidence,
         candidateLimit: 10,
-        cooldownMs: 30 * 60 * 1000,
+        rejectCooldownMs: rejectCooldownMinutes * 60 * 1000,
+        postExitCooldownMs: postExitCooldownMinutes * 60 * 1000,
         workerTickMs: 15000,
         llmReviewIntervalMs: 15000,
         llmModel: chatModel,
@@ -897,7 +942,20 @@ export default function ManualTraderWorkspace() {
         autopilotRef.current = null;
       }
     };
-  }, [autopilotEnabled, llmStatus, interval, tradingMode, dailyLossLimitKrw, chatModel, playwrightEnabled]);
+  }, [
+    autopilotEnabled,
+    llmStatus,
+    interval,
+    tradingMode,
+    dailyLossLimitKrw,
+    chatModel,
+    playwrightEnabled,
+    winRateThresholdMode,
+    fixedMinRecommendedWinRate,
+    minLlmConfidence,
+    rejectCooldownMinutes,
+    postExitCooldownMinutes,
+  ]);
 
   const positionState: PositionState = derivePositionState(
     activePosition,
@@ -1312,6 +1370,67 @@ export default function ManualTraderWorkspace() {
                     />
                   </label>
                   <small>기본 -20,000원</small>
+                </div>
+                <div className="autopilot-grid">
+                  <label>
+                    승률 임계값 모드
+                    <select
+                      value={winRateThresholdMode}
+                      onChange={(event) => setWinRateThresholdMode(event.target.value as 'DYNAMIC_P70' | 'FIXED')}
+                    >
+                      <option value="DYNAMIC_P70">동적(P70)</option>
+                      <option value="FIXED">고정</option>
+                    </select>
+                  </label>
+                  <label>
+                    고정 최소 추천가 승률(%)
+                    <input
+                      type="number"
+                      min={50}
+                      max={80}
+                      step={0.5}
+                      value={fixedMinRecommendedWinRate}
+                      onChange={(event) => setFixedMinRecommendedWinRate(Number(event.target.value || 60))}
+                      disabled={winRateThresholdMode !== 'FIXED'}
+                    />
+                  </label>
+                </div>
+                <div className="autopilot-grid">
+                  <label>
+                    LLM 최소 신뢰도
+                    <input
+                      type="number"
+                      min={0}
+                      max={100}
+                      step={1}
+                      value={minLlmConfidence}
+                      onChange={(event) => setMinLlmConfidence(Number(event.target.value || 60))}
+                    />
+                  </label>
+                  <label>
+                    진입 거절/실패 쿨다운(분)
+                    <input
+                      type="number"
+                      min={1}
+                      max={60}
+                      step={1}
+                      value={rejectCooldownMinutes}
+                      onChange={(event) => setRejectCooldownMinutes(Number(event.target.value || 5))}
+                    />
+                  </label>
+                </div>
+                <div className="autopilot-grid">
+                  <label>
+                    청산 후 쿨다운(분)
+                    <input
+                      type="number"
+                      min={5}
+                      max={180}
+                      step={1}
+                      value={postExitCooldownMinutes}
+                      onChange={(event) => setPostExitCooldownMinutes(Number(event.target.value || 30))}
+                    />
+                  </label>
                 </div>
                 {autopilotState.blockedByDailyLoss && autopilotState.blockedReason && (
                   <p className="autopilot-warning">{autopilotState.blockedReason}</p>
