@@ -488,6 +488,12 @@ export default function ManualTraderWorkspace() {
     if (status?.url) {
       resolvedPlaywrightUrl = status.url;
     }
+    if (status?.port && status.port > 0 && status.port !== playwrightMcpPort) {
+      setPlaywrightMcpPort(status.port);
+    }
+    if (status?.url && status.url !== playwrightMcpUrl) {
+      setPlaywrightMcpUrl(status.url);
+    }
     setPlaywrightStatus(status);
 
     const servers: DesktopMcpServerConfig[] = [{ serverId: 'trading', url: tradingMcpUrl }];
@@ -505,11 +511,18 @@ export default function ManualTraderWorkspace() {
     try {
       const next = await startPlaywrightMcp({ port: playwrightMcpPort, host: '127.0.0.1' });
       setPlaywrightStatus(next);
+      if (next?.port && next.port > 0) {
+        setPlaywrightMcpPort(next.port);
+      }
       if (next?.url) {
         setPlaywrightMcpUrl(next.url);
       }
       await connectMcpAndPlaywright({ allowAutoStart: false });
-      setStatusMessage('Playwright MCP 시작 및 연결 완료');
+      if (next?.port && next.port !== playwrightMcpPort) {
+        setStatusMessage(`Playwright MCP 시작 및 연결 완료 (포트 자동 전환: ${playwrightMcpPort} -> ${next.port})`);
+      } else {
+        setStatusMessage('Playwright MCP 시작 및 연결 완료');
+      }
     } catch (error) {
       setStatusMessage(error instanceof Error ? error.message : 'Playwright MCP 시작 실패');
     } finally {

@@ -1,5 +1,6 @@
 const { spawn } = require('node:child_process');
 const fs = require('node:fs');
+const net = require('node:net');
 const path = require('node:path');
 
 function dedupe(items) {
@@ -82,6 +83,38 @@ function resolveRunner(launchPath) {
   return null;
 }
 
+function isPortAvailable(port, host) {
+  return new Promise((resolve) => {
+    const server = net.createServer();
+    server.once('error', () => {
+      resolve(false);
+    });
+    server.once('listening', () => {
+      server.close(() => resolve(true));
+    });
+    server.listen(port, host);
+  });
+}
+
+function reserveEphemeralPort(host) {
+  return new Promise((resolve, reject) => {
+    const server = net.createServer();
+    server.once('error', (error) => reject(error));
+    server.once('listening', () => {
+      const address = server.address();
+      const ephemeralPort = typeof address === 'object' && address ? address.port : null;
+      server.close(() => {
+        if (typeof ephemeralPort === 'number' && ephemeralPort > 0) {
+          resolve(ephemeralPort);
+          return;
+        }
+        reject(new Error('사용 가능한 포트를 찾지 못했습니다.'));
+      });
+    });
+    server.listen(0, host);
+  });
+}
+
 class PlaywrightMcpManager {
   constructor() {
     this.process = null;
@@ -96,8 +129,16 @@ class PlaywrightMcpManager {
     if (this.process && this.status === 'running') {
       return this.getStatus();
     }
+    if (this.process && this.status !== 'running') {
+      try {
+        this.process.kill('SIGTERM');
+      } catch {
+        // no-op
+      }
+      this.process = null;
+    }
 
-    const port = Number(config.port) > 0 ? Number(config.port) : 8931;
+    const preferredPort = Number(config.port) > 0 ? Number(config.port) : 8931;
     const host = typeof config.host === 'string' && config.host.trim() ? config.host.trim() : '127.0.0.1';
     const cdpEndpoint = typeof config.cdpEndpoint === 'string' && config.cdpEndpoint.trim()
       ? config.cdpEndpoint.trim()
@@ -109,6 +150,18 @@ class PlaywrightMcpManager {
       this.status = 'error';
       this.lastError = 'npx/npm 실행 파일을 찾지 못했습니다. Node.js 설치 또는 PATH 설정을 확인하세요.';
       return this.getStatus();
+    }
+
+    let port = preferredPort;
+    const preferredPortAvailable = await isPortAvailable(preferredPort, host);
+    if (!preferredPortAvailable) {
+      try {
+        port = await reserveEphemeralPort(host);
+      } catch (error) {
+        this.status = 'error';
+        this.lastError = error instanceof Error ? error.message : '사용 가능한 포트를 찾지 못했습니다.';
+        return this.getStatus();
+      }
     }
 
     const args = [
