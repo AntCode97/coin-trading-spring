@@ -26,7 +26,7 @@ export interface AutopilotConfig {
   dailyLossLimitKrw: number;
   maxConcurrentPositions: number;
   winRateThresholdMode: 'DYNAMIC_P70' | 'FIXED';
-  fixedMinRecommendedWinRate: number;
+  fixedMinMarketWinRate: number;
   minLlmConfidence: number;
   candidateLimit: number;
   rejectCooldownMs: number;
@@ -424,7 +424,7 @@ export class AutopilotOrchestrator {
       const topTwenty = markets.slice(0, 20);
       await this.refreshRecommendationCache(topTwenty);
       const ranked = this.rankCandidates(topTwenty);
-      const appliedThreshold = this.resolveRecommendedThreshold(markets, ranked);
+      const appliedThreshold = this.resolveAppliedThreshold(markets, ranked);
       this.appliedRecommendedWinRateThreshold = appliedThreshold;
       const scopedCandidates = ranked.slice(0, this.config.candidateLimit);
       const llmShortlist = this.buildLlmShortlist(scopedCandidates, appliedThreshold);
@@ -500,13 +500,14 @@ export class AutopilotOrchestrator {
     market: GuidedMarketItem,
     openMarketSet: Set<string>,
     availableSlots: number,
-    minRecommendedWinRate: number
+    appliedThreshold: number
   ): { stage: CandidateStage; reason: string } {
-    const recommended = market.recommendedEntryWinRate;
-    if (recommended == null || recommended < minRecommendedWinRate) {
+    const thresholdValue = this.getThresholdValue(market);
+    const thresholdLabel = this.getThresholdLabel();
+    if (thresholdValue == null || thresholdValue < appliedThreshold) {
       return {
         stage: 'RULE_FAIL',
-        reason: `추천가 승률 ${recommended?.toFixed(1) ?? '-'}% < ${minRecommendedWinRate.toFixed(1)}%`,
+        reason: `${thresholdLabel} ${thresholdValue?.toFixed(1) ?? '-'}% < ${appliedThreshold.toFixed(1)}%`,
       };
     }
     if (openMarketSet.has(market.market)) {
@@ -550,7 +551,7 @@ export class AutopilotOrchestrator {
     }
     return {
       stage: 'RULE_PASS',
-      reason: `추천가 승률 ${recommended.toFixed(1)}% 규칙 통과 (기준 ${minRecommendedWinRate.toFixed(1)}%)`,
+      reason: `${thresholdLabel} ${thresholdValue.toFixed(1)}% 규칙 통과 (기준 ${appliedThreshold.toFixed(1)}%)`,
     };
   }
 
@@ -569,23 +570,25 @@ export class AutopilotOrchestrator {
 
   private buildLlmShortlist(
     candidates: GuidedMarketItem[],
-    minRecommendedWinRate: number
+    appliedThreshold: number
   ): LlmShortlistDecision {
     const budget = Math.min(6, Math.max(2, Math.ceil(this.config.maxConcurrentPositions * 1.5)));
     const strict: GuidedMarketItem[] = [];
     const relaxed: GuidedMarketItem[] = [];
+    const fixedMode = this.config.winRateThresholdMode === 'FIXED';
 
     for (const candidate of candidates) {
       const recommendedWin = candidate.recommendedEntryWinRate ?? 0;
-      if (recommendedWin < minRecommendedWinRate) continue;
-
       const marketWin = candidate.marketEntryWinRate ?? 0;
+      const thresholdValue = this.getThresholdValue(candidate);
+      if (thresholdValue == null || thresholdValue < appliedThreshold) continue;
+
       const score = this.candidateScoreByMarket.get(candidate.market);
       if (!score) continue;
 
       const strictPass =
-        recommendedWin >= minRecommendedWinRate + 0.5 &&
-        marketWin >= minRecommendedWinRate - 4 &&
+        (fixedMode ? marketWin >= appliedThreshold + 0.5 : recommendedWin >= appliedThreshold + 0.5) &&
+        (fixedMode ? recommendedWin >= Math.max(40, appliedThreshold - 8) : marketWin >= appliedThreshold - 4) &&
         score.score >= 60 &&
         score.riskRewardRatio >= 1.18 &&
         score.entryGapPct <= 0.9;
@@ -595,7 +598,7 @@ export class AutopilotOrchestrator {
       }
 
       const relaxedPass =
-        marketWin >= minRecommendedWinRate - 7 &&
+        (fixedMode ? recommendedWin >= Math.max(38, appliedThreshold - 12) : marketWin >= appliedThreshold - 7) &&
         score.score >= 56 &&
         score.riskRewardRatio >= 1.05 &&
         score.entryGapPct <= 1.2;
@@ -831,12 +834,12 @@ export class AutopilotOrchestrator {
       .map((item) => item.candidate);
   }
 
-  private resolveRecommendedThreshold(
+  private resolveAppliedThreshold(
     markets: GuidedMarketItem[],
     ranked: GuidedMarketItem[]
   ): number {
     if (this.config.winRateThresholdMode === 'FIXED') {
-      return Math.min(80, Math.max(50, this.config.fixedMinRecommendedWinRate));
+      return Math.min(80, Math.max(50, this.config.fixedMinMarketWinRate));
     }
 
     const values = markets
@@ -858,6 +861,19 @@ export class AutopilotOrchestrator {
 
     threshold = Math.max(54, threshold);
     return Math.round(threshold * 10) / 10;
+  }
+
+  private getThresholdLabel(): string {
+    return this.config.winRateThresholdMode === 'FIXED' ? '현재가 승률' : '추천가 승률';
+  }
+
+  private getThresholdValue(market: GuidedMarketItem): number | null {
+    const value =
+      this.config.winRateThresholdMode === 'FIXED'
+        ? market.marketEntryWinRate
+        : market.recommendedEntryWinRate;
+    if (value == null || !Number.isFinite(value)) return null;
+    return value;
   }
 
   private async evaluateEntry(

@@ -532,6 +532,11 @@ curl -X POST http://localhost:8080/api/settings/regime \
 | POST | `/api/guided-trading/positions/adopt` | MCP 직접 주문 포지션 편입 |
 | GET | `/api/guided-trading/autopilot/live` | 오토파일럿 라이브 도크 데이터(주문 퍼널/이벤트/후보) |
 
+`/api/guided-trading/autopilot/live` 쿼리 파라미터:
+- `thresholdMode`: `DYNAMIC_P70` 또는 `FIXED`
+- `minMarketWinRate`: 고정 모드(`FIXED`)에서 후보 선별용 최소 **현재가 승률**(%)
+- `minRecommendedWinRate`: 하위 호환 파라미터(신규 호출은 `minMarketWinRate` 권장)
+
 ---
 
 ## 최근 개선사항

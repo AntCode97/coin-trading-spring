@@ -153,12 +153,13 @@ class GuidedTradingControllerTest {
                 )
             )
         )
-        whenever(guidedTradingService.getAutopilotLive(any(), any(), any(), anyOrNull())).thenReturn(expected)
+        whenever(guidedTradingService.getAutopilotLive(any(), any(), any(), anyOrNull(), anyOrNull())).thenReturn(expected)
 
         val actual = controller.getAutopilotLive(
             interval = "minute30",
             mode = "SWING",
             thresholdMode = null,
+            minMarketWinRate = null,
             minRecommendedWinRate = null
         )
 

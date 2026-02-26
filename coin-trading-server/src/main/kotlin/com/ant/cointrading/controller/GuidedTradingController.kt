@@ -180,12 +180,14 @@ class GuidedTradingController(
         @RequestParam(defaultValue = "minute30") interval: String,
         @RequestParam(defaultValue = "SWING") mode: String,
         @RequestParam(required = false) thresholdMode: String?,
+        @RequestParam(required = false) minMarketWinRate: Double?,
         @RequestParam(required = false) minRecommendedWinRate: Double?
     ): GuidedAutopilotLiveResponse {
         return guidedTradingService.getAutopilotLive(
             interval = interval,
             mode = TradingMode.fromString(mode),
             thresholdMode = GuidedWinRateThresholdMode.fromString(thresholdMode),
+            minMarketWinRate = minMarketWinRate,
             minRecommendedWinRate = minRecommendedWinRate
         )
     }

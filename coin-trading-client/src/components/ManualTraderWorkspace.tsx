@@ -90,6 +90,7 @@ type WorkspacePrefs = {
   autopilotDockCollapsed?: boolean;
   winRateThresholdMode?: 'DYNAMIC_P70' | 'FIXED';
   fixedMinRecommendedWinRate?: number;
+  fixedMinMarketWinRate?: number;
   minLlmConfidence?: number;
   rejectCooldownSeconds?: number;
   rejectCooldownMinutes?: number;
@@ -427,8 +428,8 @@ export default function ManualTraderWorkspace() {
   const [winRateThresholdMode, setWinRateThresholdMode] = useState<'DYNAMIC_P70' | 'FIXED'>(
     prefs.winRateThresholdMode ?? 'DYNAMIC_P70'
   );
-  const [fixedMinRecommendedWinRate, setFixedMinRecommendedWinRate] = useState<number>(
-    prefs.fixedMinRecommendedWinRate ?? 60
+  const [fixedMinMarketWinRate, setFixedMinMarketWinRate] = useState<number>(
+    prefs.fixedMinMarketWinRate ?? prefs.fixedMinRecommendedWinRate ?? 60
   );
   const [minLlmConfidence, setMinLlmConfidence] = useState<number>(prefs.minLlmConfidence ?? 60);
   const [rejectCooldownSeconds, setRejectCooldownSeconds] = useState<number>(
@@ -534,14 +535,14 @@ export default function ManualTraderWorkspace() {
       autopilotInterval,
       autopilotMode,
       winRateThresholdMode,
-      fixedMinRecommendedWinRate,
+      fixedMinMarketWinRate,
     ],
     queryFn: () =>
       guidedTradingApi.getAutopilotLive(
         autopilotInterval,
         autopilotMode,
         winRateThresholdMode,
-        fixedMinRecommendedWinRate
+        fixedMinMarketWinRate
       ),
     refetchInterval: 5000,
   });
@@ -784,7 +785,7 @@ export default function ManualTraderWorkspace() {
       playwrightMcpUrl,
       autopilotDockCollapsed,
       winRateThresholdMode,
-      fixedMinRecommendedWinRate,
+      fixedMinMarketWinRate,
       minLlmConfidence,
       rejectCooldownSeconds,
       postExitCooldownMinutes,
@@ -813,7 +814,7 @@ export default function ManualTraderWorkspace() {
     playwrightMcpUrl,
     autopilotDockCollapsed,
     winRateThresholdMode,
-    fixedMinRecommendedWinRate,
+    fixedMinMarketWinRate,
     minLlmConfidence,
     rejectCooldownSeconds,
     postExitCooldownMinutes,
@@ -1184,7 +1185,7 @@ export default function ManualTraderWorkspace() {
         dailyLossLimitKrw,
         maxConcurrentPositions: autopilotMaxConcurrentPositions,
         winRateThresholdMode,
-        fixedMinRecommendedWinRate,
+        fixedMinMarketWinRate,
         minLlmConfidence,
         candidateLimit: 20,
         rejectCooldownMs: rejectCooldownSeconds * 1000,
@@ -1227,7 +1228,7 @@ export default function ManualTraderWorkspace() {
     pendingEntryTimeoutSec,
     marketFallbackAfterCancel,
     winRateThresholdMode,
-    fixedMinRecommendedWinRate,
+    fixedMinMarketWinRate,
     minLlmConfidence,
     rejectCooldownSeconds,
     postExitCooldownMinutes,
@@ -1861,14 +1862,14 @@ export default function ManualTraderWorkspace() {
                     </select>
                   </label>
                   <label>
-                    고정 최소 추천가 승률(%)
+                    고정 최소 현재가 승률(%)
                     <input
                       type="number"
                       min={50}
                       max={80}
                       step={0.5}
-                      value={fixedMinRecommendedWinRate}
-                      onChange={(event) => setFixedMinRecommendedWinRate(Number(event.target.value || 60))}
+                      value={fixedMinMarketWinRate}
+                      onChange={(event) => setFixedMinMarketWinRate(Number(event.target.value || 60))}
                       disabled={winRateThresholdMode !== 'FIXED'}
                     />
                   </label>

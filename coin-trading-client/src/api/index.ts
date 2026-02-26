@@ -779,6 +779,7 @@ export interface AutopilotLiveResponse {
   thresholdMode: 'DYNAMIC_P70' | 'FIXED';
   appliedRecommendedWinRateThreshold: number;
   requestedMinRecommendedWinRate?: number | null;
+  requestedMinMarketWinRate?: number | null;
   decisionStats?: {
     rulePass: number;
     ruleFail: number;
@@ -945,11 +946,11 @@ export const guidedTradingApi = {
     interval = 'minute30',
     mode?: string,
     thresholdMode?: 'DYNAMIC_P70' | 'FIXED',
-    minRecommendedWinRate?: number
+    minMarketWinRate?: number
   ): Promise<AutopilotLiveResponse> =>
     api
       .get('/guided-trading/autopilot/live', {
-        params: { interval, mode, thresholdMode, minRecommendedWinRate },
+        params: { interval, mode, thresholdMode, minMarketWinRate },
       })
       .then((res) => res.data),
 

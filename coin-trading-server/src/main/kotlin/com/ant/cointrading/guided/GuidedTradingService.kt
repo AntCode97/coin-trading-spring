@@ -1500,6 +1500,7 @@ class GuidedTradingService(
         interval: String = "minute30",
         mode: TradingMode = TradingMode.SWING,
         thresholdMode: GuidedWinRateThresholdMode = GuidedWinRateThresholdMode.DYNAMIC_P70,
+        minMarketWinRate: Double? = null,
         minRecommendedWinRate: Double? = null
     ): GuidedAutopilotLiveResponse {
         val telemetry = orderLifecycleTelemetryService.getLiveSnapshot()
@@ -1510,7 +1511,7 @@ class GuidedTradingService(
             mode = mode
         )
         val topCandidates = sortedMarkets.take(10)
-        val requestedMin = minRecommendedWinRate?.coerceIn(50.0, 80.0)
+        val requestedMin = (minMarketWinRate ?: minRecommendedWinRate)?.coerceIn(50.0, 80.0)
         val recommendedRates = sortedMarkets.mapNotNull { it.recommendedEntryWinRate }
         val appliedThreshold = when (thresholdMode) {
             GuidedWinRateThresholdMode.FIXED -> requestedMin ?: 60.0
@@ -1520,7 +1521,17 @@ class GuidedTradingService(
         val candidates = topCandidates.map { market ->
             val recommendedWinRate = market.recommendedEntryWinRate
             val marketWinRate = market.marketEntryWinRate
-            val pass = (recommendedWinRate ?: 0.0) >= appliedThreshold
+            val thresholdValue = if (thresholdMode == GuidedWinRateThresholdMode.FIXED) {
+                marketWinRate
+            } else {
+                recommendedWinRate
+            }
+            val thresholdLabel = if (thresholdMode == GuidedWinRateThresholdMode.FIXED) {
+                "현재가 승률"
+            } else {
+                "추천가 승률"
+            }
+            val pass = (thresholdValue ?: 0.0) >= appliedThreshold
             GuidedAutopilotCandidateView(
                 market = market.market,
                 koreanName = market.koreanName,
@@ -1528,9 +1539,9 @@ class GuidedTradingService(
                 marketEntryWinRate = marketWinRate,
                 stage = if (pass) "RULE_PASS" else "RULE_FAIL",
                 reason = if (pass) {
-                    "추천가 승률 ${String.format("%.1f", recommendedWinRate ?: 0.0)}% >= ${String.format("%.1f", appliedThreshold)}%"
+                    "$thresholdLabel ${String.format("%.1f", thresholdValue ?: 0.0)}% >= ${String.format("%.1f", appliedThreshold)}%"
                 } else {
-                    "추천가 승률 ${String.format("%.1f", recommendedWinRate ?: 0.0)}% < ${String.format("%.1f", appliedThreshold)}%"
+                    "$thresholdLabel ${String.format("%.1f", thresholdValue ?: 0.0)}% < ${String.format("%.1f", appliedThreshold)}%"
                 }
             )
         }
@@ -1593,6 +1604,7 @@ class GuidedTradingService(
             candidates = candidates,
             thresholdMode = thresholdMode.name,
             appliedRecommendedWinRateThreshold = appliedThreshold,
+            requestedMinMarketWinRate = requestedMin,
             requestedMinRecommendedWinRate = requestedMin,
             decisionStats = decisionStats,
             strategyCodeSummary = strategyCodeSummary,
@@ -2349,6 +2361,7 @@ data class GuidedAutopilotLiveResponse(
     val candidates: List<GuidedAutopilotCandidateView>,
     val thresholdMode: String,
     val appliedRecommendedWinRateThreshold: Double,
+    val requestedMinMarketWinRate: Double? = null,
     val requestedMinRecommendedWinRate: Double?,
     val decisionStats: GuidedAutopilotDecisionStats,
     val strategyCodeSummary: Map<String, GuidedStrategyCodeSummary>,

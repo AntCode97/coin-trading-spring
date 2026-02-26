@@ -191,7 +191,8 @@ coin-trading-spring/
 
 - `GET /api/guided-trading/autopilot/live`
   - 응답: `orderSummary`, `orderEvents`, `autopilotEvents`, `candidates`
-- `GuidedTradingService.getAutopilotLive(interval, mode)` 추가.
+  - 쿼리: `thresholdMode`, `minMarketWinRate`(고정 모드 현재가 승률 기준), `minRecommendedWinRate`(하위 호환)
+- `GuidedTradingService.getAutopilotLive(interval, mode, thresholdMode, minMarketWinRate)` 추가.
 
 ### 4. 텔레메트리 기록 포인트 확장
 

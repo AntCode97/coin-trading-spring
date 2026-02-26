@@ -269,7 +269,7 @@ export function AutopilotLiveDock({
   const appliedThreshold = liveData?.appliedRecommendedWinRateThreshold
     ?? autopilotState.appliedRecommendedWinRateThreshold;
   const thresholdMode = liveData?.thresholdMode ?? autopilotState.thresholdMode;
-  const thresholdLabel = thresholdMode === 'DYNAMIC_P70' ? '동적 P70' : '고정';
+  const thresholdLabel = thresholdMode === 'DYNAMIC_P70' ? '동적 P70(추천가)' : '고정(현재가)';
 
   if (!open) return null;
 
