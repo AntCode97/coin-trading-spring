@@ -52,6 +52,7 @@ class GuidedTradingService(
         const val WIN_RATE_CALC_CONCURRENCY = 8
         const val WIN_RATE_CALC_TIMEOUT_MILLIS = 2500L
         const val GUIDED_STRATEGY_CODE = "GUIDED_TRADING"
+        const val GUIDED_AUTOPILOT_STRATEGY_CODE = "GUIDED_AUTOPILOT"
         val MIN_EFFECTIVE_HOLDING_KRW: BigDecimal = BigDecimal("5000")
     }
 
@@ -373,6 +374,13 @@ class GuidedTradingService(
         val dcaStepPercent = (request.dcaStepPercent ?: 2.0).coerceIn(0.5, 15.0)
         val maxDcaCount = (request.maxDcaCount ?: 2).coerceIn(0, 3)
         val halfTakeProfitRatio = (request.halfTakeProfitRatio ?: 0.5).coerceIn(0.2, 0.8)
+        val entrySource = request.entrySource?.trim()?.uppercase()?.ifBlank { null } ?: "MANUAL"
+        val strategyCode = request.strategyCode
+            ?.trim()
+            ?.uppercase()
+            ?.ifBlank { null }
+            ?: if (entrySource == "AUTOPILOT") GUIDED_AUTOPILOT_STRATEGY_CODE else GUIDED_STRATEGY_CODE
+        val requestedMessage = if (entrySource == "AUTOPILOT") "autopilot_entry_requested" else "guided_entry_requested"
 
         val submitted = try {
             when (orderType) {
@@ -401,7 +409,7 @@ class GuidedTradingService(
                 market = market,
                 side = "BUY",
                 orderId = null,
-                strategyCode = GUIDED_STRATEGY_CODE,
+                strategyCode = strategyCode,
                 message = e.message
             )
             throw IllegalArgumentException(buildOrderErrorMessage(e))
@@ -412,10 +420,10 @@ class GuidedTradingService(
             market = market,
             side = "BUY",
             orderId = submitted.uuid,
-            strategyCode = GUIDED_STRATEGY_CODE,
+            strategyCode = strategyCode,
             price = if (orderType == GuidedTradeEntity.ORDER_TYPE_LIMIT) selectedLimitPrice else amountKrw,
             quantity = submitted.volume,
-            message = "guided_entry_requested"
+            message = requestedMessage
         )
 
         val order = bithumbPrivateApi.getOrder(submitted.uuid) ?: submitted
@@ -423,7 +431,7 @@ class GuidedTradingService(
             strategyGroup = OrderLifecycleStrategyGroup.GUIDED,
             order = order,
             fallbackMarket = market,
-            strategyCode = GUIDED_STRATEGY_CODE
+            strategyCode = strategyCode
         )
         val executedQuantity = order.executedVolume ?: BigDecimal.ZERO
         val tickerPrice = bithumbPublicApi.getCurrentPrice(market)?.firstOrNull()?.tradePrice
@@ -532,9 +540,34 @@ class GuidedTradingService(
             }
         }
 
-        val hasEffectiveBalance = getActualHoldingQuantity(market, executedPrice) > BigDecimal.ZERO
+        var hasEffectiveBalance = getActualHoldingQuantity(market, executedPrice) > BigDecimal.ZERO
+
+        if (executedQty <= BigDecimal.ZERO && !hasEffectiveBalance) {
+            val estimatedPrice = executedPrice.takeIf { it > BigDecimal.ZERO } ?: currentPrice
+            for (trade in allTrades) {
+                val remaining = trade.remainingQuantity
+                if (remaining > BigDecimal.ZERO) {
+                    applyExitFill(trade, remaining, estimatedPrice, "MANUAL_STOP_ESTIMATED")
+                }
+                trade.remainingQuantity = BigDecimal.ZERO
+                trade.status = GuidedTradeEntity.STATUS_CLOSED
+                trade.closedAt = Instant.now()
+                trade.exitReason = "MANUAL_STOP_ESTIMATED"
+                trade.lastAction = "CLOSED_MANUAL_STOP_ESTIMATED"
+                trade.pnlConfidence = GuidedTradeEntity.PNL_CONFIDENCE_LOW
+                if (trade.averageExitPrice <= BigDecimal.ZERO) {
+                    trade.averageExitPrice = estimatedPrice
+                }
+                guidedTradeRepository.save(trade)
+                appendEvent(trade.id!!, "CLOSE_ESTIMATED", estimatedPrice, null, "수동 청산 추정 종료(체결 조회 불가)")
+            }
+            hasEffectiveBalance = false
+        }
 
         for (trade in allTrades) {
+            if (trade.status == GuidedTradeEntity.STATUS_CLOSED) {
+                continue
+            }
             trade.lastExitOrderId = exitOrderId ?: trade.lastExitOrderId
             if (!hasEffectiveBalance || trade.remainingQuantity <= BigDecimal.ZERO) {
                 trade.remainingQuantity = BigDecimal.ZERO
@@ -542,6 +575,9 @@ class GuidedTradingService(
                 trade.closedAt = Instant.now()
                 trade.exitReason = "MANUAL_STOP"
                 trade.lastAction = "CLOSED_MANUAL_STOP"
+                if (trade.averageExitPrice <= BigDecimal.ZERO && executedPrice > BigDecimal.ZERO) {
+                    trade.averageExitPrice = executedPrice
+                }
                 guidedTradeRepository.save(trade)
                 appendEvent(trade.id!!, "CLOSE_ALL", executedPrice, executedQty.takeIf { it > BigDecimal.ZERO }, "수동 전체 청산")
                 continue
@@ -770,13 +806,18 @@ class GuidedTradingService(
 
         val actualHolding = getActualHoldingQuantity(trade.market, currentPrice)
         if (actualHolding <= BigDecimal.ZERO && trade.remainingQuantity > BigDecimal.ZERO) {
+            applyExitFill(trade, trade.remainingQuantity, currentPrice, "NO_EFFECTIVE_BALANCE")
             trade.remainingQuantity = BigDecimal.ZERO
             trade.status = GuidedTradeEntity.STATUS_CLOSED
             trade.closedAt = Instant.now()
             trade.exitReason = "NO_EFFECTIVE_BALANCE"
             trade.lastAction = "AUTO_CLOSED_NO_EFFECTIVE_BALANCE"
+            trade.pnlConfidence = GuidedTradeEntity.PNL_CONFIDENCE_LOW
+            if (trade.averageExitPrice <= BigDecimal.ZERO) {
+                trade.averageExitPrice = currentPrice
+            }
             guidedTradeRepository.save(trade)
-            appendEvent(trade.id!!, "MANUAL_INTERVENTION_CLOSE", currentPrice, null, "실효 잔고 없음(미세 잔고 제외)으로 자동매매 종료")
+            appendEvent(trade.id!!, "MANUAL_INTERVENTION_CLOSE", currentPrice, null, "실효 잔고 없음(미세 잔고 제외) 추정 종료")
             return
         }
 
@@ -1010,13 +1051,18 @@ class GuidedTradingService(
         val currentPrice = bithumbPublicApi.getCurrentPrice(trade.market)?.firstOrNull()?.tradePrice ?: trade.averageEntryPrice
         val actualQty = getActualHoldingQuantity(trade.market, currentPrice)
         if (actualQty <= BigDecimal.ZERO) {
+            applyExitFill(trade, trade.remainingQuantity, currentPrice, "${reason}_NO_EFFECTIVE_BALANCE")
             trade.status = GuidedTradeEntity.STATUS_CLOSED
             trade.closedAt = Instant.now()
             trade.exitReason = "${reason}_NO_EFFECTIVE_BALANCE"
             trade.lastAction = "CLOSE_NO_EFFECTIVE_BALANCE"
             trade.remainingQuantity = BigDecimal.ZERO
+            trade.pnlConfidence = GuidedTradeEntity.PNL_CONFIDENCE_LOW
+            if (trade.averageExitPrice <= BigDecimal.ZERO) {
+                trade.averageExitPrice = currentPrice
+            }
             guidedTradeRepository.save(trade)
-            appendEvent(trade.id!!, "CLOSE_NO_EFFECTIVE_BALANCE", currentPrice, null, "실효 잔고 없음(미세 잔고 제외)으로 DB 종료")
+            appendEvent(trade.id!!, "CLOSE_NO_EFFECTIVE_BALANCE", currentPrice, null, "실효 잔고 없음(미세 잔고 제외) 추정 종료")
             return
         }
 
@@ -1025,13 +1071,18 @@ class GuidedTradingService(
         val estimatedValue = sellQty.multiply(currentPrice)
         if (estimatedValue < MIN_EFFECTIVE_HOLDING_KRW) {
             log.warn("[${trade.market}] 잔여 수량 ${sellQty} 매도 불가 (추정금액 ${estimatedValue.toPlainString()}원 < ${MIN_EFFECTIVE_HOLDING_KRW.toPlainString()}원). DB 강제 종료.")
+            applyExitFill(trade, trade.remainingQuantity, currentPrice, "${reason}_BELOW_MIN_ORDER")
             trade.status = GuidedTradeEntity.STATUS_CLOSED
             trade.closedAt = Instant.now()
             trade.exitReason = "${reason}_BELOW_MIN_ORDER"
             trade.lastAction = "CLOSE_BELOW_MIN_ORDER"
             trade.remainingQuantity = BigDecimal.ZERO
+            trade.pnlConfidence = GuidedTradeEntity.PNL_CONFIDENCE_LOW
+            if (trade.averageExitPrice <= BigDecimal.ZERO) {
+                trade.averageExitPrice = currentPrice
+            }
             guidedTradeRepository.save(trade)
-            appendEvent(trade.id!!, "CLOSE_BELOW_MIN_ORDER", currentPrice, sellQty, "최소 주문금액 미달로 DB 종료 (${estimatedValue.toPlainString()}원)")
+            appendEvent(trade.id!!, "CLOSE_BELOW_MIN_ORDER", currentPrice, sellQty, "최소 주문금액 미달 추정 종료 (${estimatedValue.toPlainString()}원)")
             return
         }
 
@@ -1497,6 +1548,44 @@ class GuidedTradingService(
                 )
             }
 
+        val oneHourAgo = Instant.now().minus(1, ChronoUnit.HOURS)
+        val recentAutopilotOrderEvents = telemetry.orderEvents.filter { event ->
+            event.createdAt.isAfter(oneHourAgo) &&
+                (event.strategyCode?.uppercase()?.contains("AUTOPILOT") == true)
+        }
+        val decisionStats = GuidedAutopilotDecisionStats(
+            rulePass = candidates.count { it.stage == "RULE_PASS" },
+            ruleFail = candidates.count { it.stage == "RULE_FAIL" },
+            llmReject = recentAutopilotOrderEvents.count {
+                it.eventType == "FAILED" && (it.message?.contains("llm", ignoreCase = true) == true)
+            },
+            entered = recentAutopilotOrderEvents.count { it.eventType == "BUY_REQUESTED" },
+            pendingTimeout = recentAutopilotOrderEvents.count {
+                it.eventType == "CANCEL_REQUESTED" &&
+                    (
+                        it.message?.contains("pending", ignoreCase = true) == true ||
+                            it.message?.contains("timeout", ignoreCase = true) == true
+                        )
+            }
+        )
+        val strategyCodeSummary = telemetry.orderEvents
+            .groupBy { event ->
+                event.strategyCode
+                    ?.trim()
+                    ?.ifBlank { null }
+                    ?: GUIDED_STRATEGY_CODE
+            }
+            .mapValues { (_, events) ->
+                GuidedStrategyCodeSummary(
+                    buyRequested = events.count { it.eventType == "BUY_REQUESTED" },
+                    buyFilled = events.count { it.eventType == "BUY_FILLED" },
+                    sellRequested = events.count { it.eventType == "SELL_REQUESTED" },
+                    sellFilled = events.count { it.eventType == "SELL_FILLED" },
+                    failed = events.count { it.eventType == "FAILED" },
+                    cancelled = events.count { it.eventType == "CANCELLED" || it.eventType == "CANCEL_REQUESTED" },
+                )
+            }
+
         return GuidedAutopilotLiveResponse(
             orderSummary = telemetry.orderSummary,
             orderEvents = telemetry.orderEvents,
@@ -1504,7 +1593,9 @@ class GuidedTradingService(
             candidates = candidates,
             thresholdMode = thresholdMode.name,
             appliedRecommendedWinRateThreshold = appliedThreshold,
-            requestedMinRecommendedWinRate = requestedMin
+            requestedMinRecommendedWinRate = requestedMin,
+            decisionStats = decisionStats,
+            strategyCodeSummary = strategyCodeSummary,
         )
     }
 
@@ -2258,7 +2349,26 @@ data class GuidedAutopilotLiveResponse(
     val candidates: List<GuidedAutopilotCandidateView>,
     val thresholdMode: String,
     val appliedRecommendedWinRateThreshold: Double,
-    val requestedMinRecommendedWinRate: Double?
+    val requestedMinRecommendedWinRate: Double?,
+    val decisionStats: GuidedAutopilotDecisionStats,
+    val strategyCodeSummary: Map<String, GuidedStrategyCodeSummary>,
+)
+
+data class GuidedAutopilotDecisionStats(
+    val rulePass: Int,
+    val ruleFail: Int,
+    val llmReject: Int,
+    val entered: Int,
+    val pendingTimeout: Int,
+)
+
+data class GuidedStrategyCodeSummary(
+    val buyRequested: Int,
+    val buyFilled: Int,
+    val sellRequested: Int,
+    val sellFilled: Int,
+    val failed: Int,
+    val cancelled: Int,
 )
 
 data class GuidedAutopilotEvent(
@@ -2372,7 +2482,9 @@ data class GuidedStartRequest(
     val dcaStepPercent: Double? = null,
     val halfTakeProfitRatio: Double? = null,
     val interval: String? = null,
-    val mode: String? = null
+    val mode: String? = null,
+    val entrySource: String? = null,
+    val strategyCode: String? = null,
 )
 
 data class GuidedAdoptPositionRequest(

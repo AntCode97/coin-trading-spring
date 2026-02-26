@@ -779,6 +779,21 @@ export interface AutopilotLiveResponse {
   thresholdMode: 'DYNAMIC_P70' | 'FIXED';
   appliedRecommendedWinRateThreshold: number;
   requestedMinRecommendedWinRate?: number | null;
+  decisionStats?: {
+    rulePass: number;
+    ruleFail: number;
+    llmReject: number;
+    entered: number;
+    pendingTimeout: number;
+  };
+  strategyCodeSummary?: Record<string, {
+    buyRequested: number;
+    buyFilled: number;
+    sellRequested: number;
+    sellFilled: number;
+    failed: number;
+    cancelled: number;
+  }>;
 }
 
 export interface GuidedStartRequest {
@@ -795,6 +810,8 @@ export interface GuidedStartRequest {
   halfTakeProfitRatio?: number;
   interval?: string;
   mode?: string;
+  entrySource?: 'MANUAL' | 'AUTOPILOT';
+  strategyCode?: string;
 }
 
 export interface GuidedAdoptRequest {

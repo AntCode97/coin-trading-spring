@@ -386,6 +386,19 @@
   font-size: 12px;
 }
 
+.autopilot-order-feed-title {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+}
+
+.autopilot-order-feed-title span {
+  color: #8fa4ca;
+  font-size: 10px;
+  line-height: 1.4;
+}
+
 .autopilot-order-feed-filters {
   display: flex;
   align-items: center;
@@ -415,6 +428,44 @@
   display: flex;
   flex-direction: column;
   gap: 8px;
+}
+
+.autopilot-order-feed-decision-stats {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 8px 10px 0;
+}
+
+.autopilot-order-feed-decision-stats span {
+  border: 1px solid rgba(109, 147, 242, 0.35);
+  border-radius: 999px;
+  padding: 2px 8px;
+  font-size: 10px;
+  color: #b6cbef;
+  background: rgba(16, 28, 53, 0.64);
+}
+
+.autopilot-order-feed-strategy-tabs {
+  display: flex;
+  gap: 6px;
+  padding: 8px 10px 0;
+}
+
+.autopilot-order-feed-strategy-tabs button {
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  background: rgba(16, 28, 53, 0.68);
+  color: #97b0dc;
+  border-radius: 999px;
+  font-size: 10px;
+  padding: 4px 10px;
+  cursor: pointer;
+}
+
+.autopilot-order-feed-strategy-tabs button.active {
+  border-color: rgba(95, 145, 255, 0.8);
+  color: #deebff;
+  background: rgba(34, 60, 127, 0.85);
 }
 
 .order-feed-pagination {
@@ -511,6 +562,14 @@
 
   .autopilot-order-feed-head {
     flex-direction: column;
-    align-items: flex-start;
+    align-items: stretch;
+  }
+
+  .autopilot-order-feed-title span {
+    white-space: normal;
+  }
+
+  .autopilot-order-feed-filters {
+    flex-wrap: wrap;
   }
 }

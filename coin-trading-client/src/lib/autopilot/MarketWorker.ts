@@ -60,6 +60,26 @@ export interface WorkerConfig {
   llmReviewMs: number;
   minLlmConfidence: number;
   enablePlaywrightCheck: boolean;
+  entryPolicy: 'BALANCED' | 'AGGRESSIVE' | 'CONSERVATIVE';
+  entryOrderMode: 'ADAPTIVE' | 'MARKET' | 'LIMIT';
+  pendingEntryTimeoutMs: number;
+  marketFallbackAfterCancel: boolean;
+}
+
+interface WorkerEntryDecision {
+  approve: boolean;
+  confidence: number;
+  reason: string;
+  severity: 'LOW' | 'MEDIUM' | 'HIGH';
+  riskTags?: string[];
+}
+
+interface WorkerEntryPlan {
+  allow: boolean;
+  reason: string;
+  orderType: 'MARKET' | 'LIMIT';
+  limitPrice?: number;
+  entryGapPct: number;
 }
 
 export interface WorkerDependencies {
@@ -67,10 +87,15 @@ export interface WorkerDependencies {
   evaluateEntry: (
     market: string,
     context: GuidedAgentContextResponse
-  ) => Promise<{ approve: boolean; confidence: number; reason: string }>;
+  ) => Promise<WorkerEntryDecision>;
+  planEntryOrder: (
+    market: string,
+    context: GuidedAgentContextResponse
+  ) => Promise<WorkerEntryPlan>;
   verifyWithPlaywright: (market: string) => Promise<{ ok: boolean; note: string }>;
-  startGuidedEntry: (market: string) => Promise<void>;
+  startGuidedEntry: (market: string, plan?: { orderType: 'MARKET' | 'LIMIT'; limitPrice?: number }) => Promise<void>;
   fallbackEntryByMcp: (market: string) => Promise<void>;
+  cancelPendingEntry: (market: string) => Promise<void>;
   getPosition: (market: string) => Promise<GuidedTradePosition | null>;
   stopPosition: (market: string, reason: string) => Promise<void>;
   partialTakeProfit: (market: string, ratio: number, reason: string) => Promise<void>;
@@ -97,6 +122,8 @@ export class MarketWorker {
   private ticking = false;
   private lastLlmReviewAt = 0;
   private hadOpenPosition = false;
+  private pendingEntryObservedAt: number | null = null;
+  private pendingFallbackTried = false;
 
   constructor(config: WorkerConfig, deps: WorkerDependencies) {
     this.config = config;
@@ -187,7 +214,13 @@ export class MarketWorker {
       const position = await this.deps.getPosition(this.config.market);
       if (position && (position.status === 'OPEN' || position.status === 'PENDING_ENTRY')) {
         this.hadOpenPosition = position.status === 'OPEN';
-        await this.managePosition(position);
+        if (position.status === 'PENDING_ENTRY') {
+          await this.managePendingEntry();
+        } else {
+          this.pendingEntryObservedAt = null;
+          this.pendingFallbackTried = false;
+          await this.managePosition(position);
+        }
         return;
       }
 
@@ -198,6 +231,8 @@ export class MarketWorker {
         return;
       }
 
+      this.pendingEntryObservedAt = null;
+      this.pendingFallbackTried = false;
       await this.tryEntry();
     } catch (error) {
       const message = error instanceof Error ? error.message : '알 수 없는 오류';
@@ -210,17 +245,38 @@ export class MarketWorker {
   }
 
   private async tryEntry(): Promise<void> {
-    this.setState('ANALYZING', '진입 조건 점검');
+    this.setState('ANALYZING', 'deterministicCheck');
     const context = await this.deps.fetchContext(this.config.market);
+    const deterministic = this.deterministicCheck(context);
+    if (!deterministic.allow) {
+      const cooldownMs = this.resolveRejectCooldownMs('MEDIUM', 0);
+      this.emitEvent('LLM_REJECT', 'WARN', `규칙 거절: ${deterministic.reason}`);
+      this.cooldownUntil = Date.now() + cooldownMs;
+      this.setState('COOLDOWN', `규칙 거절(${Math.ceil(cooldownMs / 1000)}초): ${deterministic.reason}`);
+      return;
+    }
+
+    this.setState('ANALYZING', 'llmCheck');
     const entryDecision = await this.deps.evaluateEntry(this.config.market, context);
-    if (!entryDecision.approve || entryDecision.confidence < this.config.minLlmConfidence) {
+    const llmResult = this.evaluateLlmDecision(entryDecision);
+    if (!llmResult.allow) {
+      const cooldownMs = this.resolveRejectCooldownMs(entryDecision.severity, entryDecision.confidence);
       this.emitEvent(
         'LLM_REJECT',
-        'WARN',
-        `진입 거절 (${entryDecision.confidence.toFixed(0)}): ${entryDecision.reason}`
+        entryDecision.severity === 'HIGH' ? 'ERROR' : 'WARN',
+        `진입 거절 (${entryDecision.confidence.toFixed(0)}/${entryDecision.severity}): ${entryDecision.reason}`
       );
-      this.cooldownUntil = Date.now() + this.config.rejectCooldownMs;
-      this.setState('COOLDOWN', `진입 보류: ${entryDecision.reason}`);
+      this.cooldownUntil = Date.now() + cooldownMs;
+      this.setState('COOLDOWN', `진입 보류(${Math.ceil(cooldownMs / 1000)}초): ${entryDecision.reason}`);
+      return;
+    }
+
+    this.setState('ANALYZING', 'orderPlan');
+    const plan = await this.deps.planEntryOrder(this.config.market, context);
+    if (!plan.allow) {
+      this.emitEvent('LLM_REJECT', 'WARN', `주문 계획 거절: ${plan.reason}`);
+      this.cooldownUntil = Date.now() + this.resolveRejectCooldownMs('MEDIUM', 55);
+      this.setState('COOLDOWN', `주문 계획 거절: ${plan.reason}`);
       return;
     }
 
@@ -236,7 +292,12 @@ export class MarketWorker {
     this.setState('ENTERING', '진입 실행');
     this.emitOrderFlow('BUY_REQUESTED', '진입 주문 요청');
     try {
-      await this.deps.startGuidedEntry(this.config.market);
+      await this.deps.startGuidedEntry(this.config.market, {
+        orderType: plan.orderType,
+        limitPrice: plan.limitPrice,
+      });
+      this.pendingEntryObservedAt = Date.now();
+      this.pendingFallbackTried = false;
       this.emitOrderFlow('BUY_FILLED', 'Guided 진입 성공');
       this.emitEvent('ENTRY_SUCCESS', 'INFO', 'Guided API 진입 성공');
       this.setState('MANAGING', 'Guided 진입 성공');
@@ -256,6 +317,8 @@ export class MarketWorker {
       this.emitOrderFlow('BUY_REQUESTED', 'MCP 폴백 진입 요청');
       try {
         await this.deps.fallbackEntryByMcp(this.config.market);
+        this.pendingEntryObservedAt = null;
+        this.pendingFallbackTried = false;
         this.emitOrderFlow('BUY_FILLED', 'MCP 폴백 진입 성공');
         this.emitEvent('ENTRY_SUCCESS', 'INFO', 'MCP 폴백 진입 성공');
         this.setState('MANAGING', 'MCP 폴백 진입 성공');
@@ -274,15 +337,116 @@ export class MarketWorker {
   private async manageExistingPosition(): Promise<void> {
     const position = await this.deps.getPosition(this.config.market);
     if (!position) return;
+    if (position.status === 'PENDING_ENTRY') {
+      await this.managePendingEntry();
+      return;
+    }
     await this.managePosition(position);
   }
 
-  private async managePosition(position: GuidedTradePosition): Promise<void> {
-    if (position.status === 'PENDING_ENTRY') {
-      this.setState('MANAGING', '진입 체결 대기');
+  private async managePendingEntry(): Promise<void> {
+    this.setState('MANAGING', '진입 체결 대기');
+    if (this.pendingEntryObservedAt == null) {
+      this.pendingEntryObservedAt = Date.now();
+      this.pendingFallbackTried = false;
       return;
     }
 
+    const elapsed = Date.now() - this.pendingEntryObservedAt;
+    if (elapsed < this.config.pendingEntryTimeoutMs) return;
+
+    this.deps.onLog(`[${this.config.market}] pending 진입 타임아웃(${Math.round(elapsed / 1000)}초), 주문 취소`);
+    await this.deps.cancelPendingEntry(this.config.market);
+    this.emitOrderFlow('CANCELLED', '진입 대기 취소');
+    this.emitEvent('ENTRY_FAILED', 'WARN', `pending timeout 취소 (${Math.round(elapsed / 1000)}초)`);
+
+    if (this.config.marketFallbackAfterCancel && !this.pendingFallbackTried) {
+      this.pendingFallbackTried = true;
+      this.emitOrderFlow('BUY_REQUESTED', 'pending timeout 후 시장가 폴백');
+      try {
+        await this.deps.startGuidedEntry(this.config.market, { orderType: 'MARKET' });
+        this.emitOrderFlow('BUY_FILLED', '시장가 폴백 진입 성공');
+        this.emitEvent('ENTRY_SUCCESS', 'INFO', 'pending timeout 시장가 폴백 성공');
+        this.pendingEntryObservedAt = Date.now();
+        this.setState('MANAGING', '시장가 폴백 진입');
+        return;
+      } catch (error) {
+        this.emitEvent(
+          'ENTRY_FAILED',
+          'ERROR',
+          `시장가 폴백 실패: ${error instanceof Error ? error.message : '알 수 없는 오류'}`
+        );
+      }
+    }
+
+    const cooldownMs = this.resolveRejectCooldownMs('MEDIUM', 50);
+    this.cooldownUntil = Date.now() + cooldownMs;
+    this.pendingEntryObservedAt = null;
+    this.setState('COOLDOWN', `pending timeout 후 쿨다운 ${Math.ceil(cooldownMs / 1000)}초`);
+  }
+
+  private deterministicCheck(context: GuidedAgentContextResponse): { allow: boolean; reason: string } {
+    const recommendation = context.chart.recommendation;
+    const rr = recommendation.riskRewardRatio;
+    const current = recommendation.currentPrice;
+    const stopLoss = recommendation.stopLossPrice;
+    const takeProfit = recommendation.takeProfitPrice;
+
+    if (!Number.isFinite(rr) || rr < 1.05) {
+      return { allow: false, reason: `Risk/Reward ${rr.toFixed(2)}R < 1.05R` };
+    }
+
+    if (current > 0 && stopLoss > 0 && current <= stopLoss * 1.003) {
+      return { allow: false, reason: '현재가가 손절가에 과도하게 근접' };
+    }
+
+    if (current > 0 && takeProfit > 0 && current >= takeProfit * 0.995) {
+      return { allow: false, reason: '현재가가 익절가에 과도하게 근접' };
+    }
+
+    return { allow: true, reason: '정량 기본 규칙 통과' };
+  }
+
+  private evaluateLlmDecision(decision: WorkerEntryDecision): { allow: boolean; reason: string } {
+    const severity = decision.severity || 'MEDIUM';
+    const confidence = Number.isFinite(decision.confidence) ? decision.confidence : 0;
+
+    if (this.config.entryPolicy === 'AGGRESSIVE') {
+      if (severity === 'HIGH') {
+        return { allow: false, reason: `고위험 신호(${decision.reason})` };
+      }
+      return { allow: true, reason: '공격형 정책: 고위험 외 진입 허용' };
+    }
+
+    if (this.config.entryPolicy === 'CONSERVATIVE') {
+      if (!decision.approve || confidence < this.config.minLlmConfidence) {
+        return { allow: false, reason: `보수형 정책 거절 (${confidence.toFixed(0)})` };
+      }
+      return { allow: true, reason: '보수형 정책 승인' };
+    }
+
+    if (decision.approve && confidence >= this.config.minLlmConfidence) {
+      return { allow: true, reason: 'BALANCED: LLM 승인' };
+    }
+
+    if (!decision.approve && severity !== 'HIGH' && confidence >= 40) {
+      return { allow: true, reason: 'BALANCED: 저/중위험 거절은 진입 허용' };
+    }
+
+    if (severity === 'HIGH') {
+      return { allow: false, reason: `BALANCED: 고위험 거절 (${decision.reason})` };
+    }
+
+    return { allow: false, reason: `BALANCED: 신뢰도 부족 (${confidence.toFixed(0)})` };
+  }
+
+  private resolveRejectCooldownMs(severity: 'LOW' | 'MEDIUM' | 'HIGH', confidence: number): number {
+    if (severity === 'HIGH') return 300_000;
+    if (confidence >= 60) return 45_000;
+    return Math.max(120_000, this.config.rejectCooldownMs);
+  }
+
+  private async managePosition(position: GuidedTradePosition): Promise<void> {
     this.hadOpenPosition = true;
     const pnl = position.unrealizedPnlPercent;
     this.setState('MANAGING', `모니터링 (${pnl >= 0 ? '+' : ''}${pnl.toFixed(2)}%)`);

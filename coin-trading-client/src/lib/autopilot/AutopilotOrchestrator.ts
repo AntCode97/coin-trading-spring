@@ -2,6 +2,7 @@ import {
   guidedTradingApi,
   type GuidedAgentContextResponse,
   type GuidedMarketItem,
+  type GuidedRecommendation,
   type GuidedTradePosition,
 } from '../../api';
 import {
@@ -34,6 +35,10 @@ export interface AutopilotConfig {
   llmReviewIntervalMs: number;
   llmModel: string;
   playwrightEnabled: boolean;
+  entryPolicy: 'BALANCED' | 'AGGRESSIVE' | 'CONSERVATIVE';
+  entryOrderMode: 'ADAPTIVE' | 'MARKET' | 'LIMIT';
+  pendingEntryTimeoutSec: number;
+  marketFallbackAfterCancel: boolean;
 }
 
 export type CandidateStage =
@@ -128,6 +133,34 @@ interface McpImagePayload {
   data: string;
 }
 
+interface CandidateScoreInfo {
+  market: string;
+  score: number;
+  riskRewardRatio: number;
+  entryGapPct: number;
+}
+
+interface CachedRecommendationMeta {
+  at: number;
+  recommendation: GuidedRecommendation;
+}
+
+interface EntryDecision {
+  approve: boolean;
+  confidence: number;
+  reason: string;
+  severity: 'LOW' | 'MEDIUM' | 'HIGH';
+  riskTags: string[];
+}
+
+interface PlannedEntryOrder {
+  allow: boolean;
+  reason: string;
+  orderType: 'MARKET' | 'LIMIT';
+  limitPrice?: number;
+  entryGapPct: number;
+}
+
 export class AutopilotOrchestrator {
   private config: AutopilotConfig;
   private readonly callbacks: OrchestratorCallbacks;
@@ -137,8 +170,10 @@ export class AutopilotOrchestrator {
   private readonly logs: string[] = [];
   private readonly events: AutopilotTimelineEvent[] = [];
   private readonly candidatesByMarket = new Map<string, AutopilotCandidateView>();
+  private readonly candidateScoreByMarket = new Map<string, CandidateScoreInfo>();
   private readonly screenshots = new Map<string, AutopilotScreenshot>();
   private readonly screenshotOrder: string[] = [];
+  private readonly recommendationCache = new Map<string, CachedRecommendationMeta>();
   private orderFlowLocal: AutopilotOrderFlowLocal = createEmptyOrderFlow();
   private loopId: number | null = null;
   private supervisorId: number | null = null;
@@ -279,6 +314,12 @@ export class AutopilotOrchestrator {
   private replaceCandidates(candidates: AutopilotCandidateView[]): void {
     this.candidatesByMarket.clear();
     candidates.forEach((candidate) => this.candidatesByMarket.set(candidate.market, candidate));
+    const candidateMarkets = new Set(candidates.map((candidate) => candidate.market));
+    for (const market of this.candidateScoreByMarket.keys()) {
+      if (!candidateMarkets.has(market)) {
+        this.candidateScoreByMarket.delete(market);
+      }
+    }
   }
 
   private applyOrderFlowEvent(event: WorkerOrderFlowEvent): void {
@@ -373,8 +414,9 @@ export class AutopilotOrchestrator {
         this.config.interval,
         this.config.tradingMode
       );
-
-      const ranked = markets.slice(0, this.config.candidateLimit);
+      const topTwenty = markets.slice(0, 20);
+      await this.refreshRecommendationCache(topTwenty);
+      const ranked = this.rankCandidates(topTwenty);
       const appliedThreshold = this.resolveRecommendedThreshold(markets, ranked);
       this.appliedRecommendedWinRateThreshold = appliedThreshold;
       const openMarketSet = new Set(
@@ -386,7 +428,7 @@ export class AutopilotOrchestrator {
       let availableSlots = Math.max(0, this.config.maxConcurrentPositions - openMarketSet.size);
       const nextCandidates: AutopilotCandidateView[] = [];
 
-      for (const candidate of ranked) {
+      for (const candidate of ranked.slice(0, this.config.candidateLimit)) {
         const evaluation = this.evaluateCandidateEligibility(
           candidate,
           openMarketSet,
@@ -395,9 +437,13 @@ export class AutopilotOrchestrator {
         );
         let stage: CandidateStage = evaluation.stage;
         let reason = evaluation.reason;
+        const scoreInfo = this.candidateScoreByMarket.get(candidate.market);
+        if (scoreInfo) {
+          reason = `${reason} · score ${scoreInfo.score.toFixed(1)} / RR ${scoreInfo.riskRewardRatio.toFixed(2)} / 괴리 ${scoreInfo.entryGapPct.toFixed(2)}%`;
+        }
 
         if (evaluation.stage === 'RULE_PASS') {
-          this.spawnWorker(candidate.market, candidate);
+          this.spawnWorker(candidate.market, candidate, scoreInfo);
           stage = 'ENTERED';
           reason = '워커 생성 후 진입 분석 시작';
           availableSlots -= 1;
@@ -506,7 +552,11 @@ export class AutopilotOrchestrator {
     }
   }
 
-  private spawnWorker(market: string, seedCandidate?: Partial<AutopilotCandidateView>): void {
+  private spawnWorker(
+    market: string,
+    seedCandidate?: Partial<AutopilotCandidateView>,
+    scoreInfo?: CandidateScoreInfo
+  ): void {
     const normalized = market.trim().toUpperCase();
     if (this.workers.has(normalized)) return;
 
@@ -519,21 +569,30 @@ export class AutopilotOrchestrator {
         llmReviewMs: this.config.llmReviewIntervalMs,
         minLlmConfidence: this.config.minLlmConfidence,
         enablePlaywrightCheck: this.config.playwrightEnabled,
+        entryPolicy: this.config.entryPolicy,
+        entryOrderMode: this.config.entryOrderMode,
+        pendingEntryTimeoutMs: Math.max(10_000, this.config.pendingEntryTimeoutSec * 1000),
+        marketFallbackAfterCancel: this.config.marketFallbackAfterCancel,
       },
       {
         fetchContext: async (workerMarket) =>
           guidedTradingApi.getAgentContext(workerMarket, this.config.interval, this.config.interval === 'tick' ? 300 : 120, 20, this.config.tradingMode),
         evaluateEntry: async (workerMarket, context) => this.evaluateEntry(workerMarket, context),
+        planEntryOrder: async (workerMarket, context) => this.planEntryOrder(workerMarket, context),
         verifyWithPlaywright: async (workerMarket) => this.verifyWithPlaywright(workerMarket),
-        startGuidedEntry: async (workerMarket) =>
+        startGuidedEntry: async (workerMarket, plan) =>
           guidedTradingApi.start({
             market: workerMarket,
             amountKrw: this.config.amountKrw,
-            orderType: 'MARKET',
+            orderType: plan?.orderType ?? 'MARKET',
+            limitPrice: plan?.orderType === 'LIMIT' ? plan.limitPrice : undefined,
             interval: this.config.interval,
             mode: this.config.tradingMode,
+            entrySource: 'AUTOPILOT',
+            strategyCode: 'GUIDED_AUTOPILOT',
           }).then(() => undefined),
         fallbackEntryByMcp: async (workerMarket) => this.fallbackEntryByMcp(workerMarket),
+        cancelPendingEntry: async (workerMarket) => guidedTradingApi.cancelPending(workerMarket).then(() => undefined),
         getPosition: async (workerMarket) => guidedTradingApi.getPosition(workerMarket),
         stopPosition: async (workerMarket, reason) => {
           this.writeLog(`[${workerMarket}] 청산 실행: ${reason}`);
@@ -562,7 +621,8 @@ export class AutopilotOrchestrator {
     );
 
     this.workers.set(normalized, worker);
-    this.setCandidateStage(normalized, 'ENTERED', '워커 생성', seedCandidate);
+    const scoreNote = scoreInfo ? `score ${scoreInfo.score.toFixed(1)}` : 'score -';
+    this.setCandidateStage(normalized, 'ENTERED', `워커 생성 (${scoreNote})`, seedCandidate);
     worker.start();
     this.writeLog(`[${normalized}] 워커 생성`);
   }
@@ -576,6 +636,80 @@ export class AutopilotOrchestrator {
     }
   }
 
+  private async refreshRecommendationCache(candidates: GuidedMarketItem[]): Promise<void> {
+    const now = Date.now();
+    const staleMarkets = candidates
+      .map((candidate) => candidate.market)
+      .filter((market) => {
+        const cached = this.recommendationCache.get(market);
+        return !cached || now - cached.at >= 60_000;
+      })
+      .slice(0, 5);
+
+    if (staleMarkets.length === 0) return;
+
+    const settled = await Promise.allSettled(
+      staleMarkets.map((market) =>
+        guidedTradingApi.getRecommendation(
+          market,
+          this.config.interval,
+          this.config.interval === 'tick' ? 300 : 120,
+          this.config.tradingMode
+        )
+      )
+    );
+
+    settled.forEach((result, idx) => {
+      const market = staleMarkets[idx];
+      if (result.status !== 'fulfilled') {
+        this.pushEvent({
+          type: 'SYSTEM',
+          level: 'WARN',
+          market,
+          action: 'RECOMMENDATION_CACHE_WARN',
+          detail: result.reason instanceof Error ? result.reason.message : '추천 정보 조회 실패',
+        });
+        return;
+      }
+      this.recommendationCache.set(market, {
+        at: now,
+        recommendation: result.value,
+      });
+    });
+  }
+
+  private rankCandidates(candidates: GuidedMarketItem[]): GuidedMarketItem[] {
+    const scored = candidates.map((candidate) => {
+      const recommendedWin = candidate.recommendedEntryWinRate ?? 0;
+      const marketWin = candidate.marketEntryWinRate ?? 0;
+      const cached = this.recommendationCache.get(candidate.market)?.recommendation;
+      const riskReward = cached?.riskRewardRatio ?? 1.0;
+      const entryGapPct = cached?.recommendedEntryPrice && cached.recommendedEntryPrice > 0
+        ? Math.max(0, ((candidate.tradePrice - cached.recommendedEntryPrice) / cached.recommendedEntryPrice) * 100)
+        : 0;
+
+      const rrScore = Math.max(0, Math.min(100, ((riskReward - 0.8) / 1.6) * 100));
+      const gapScore = Math.max(0, Math.min(100, 100 - entryGapPct * 70));
+      const finalScore =
+        marketWin * 0.44 +
+        recommendedWin * 0.34 +
+        rrScore * 0.16 +
+        gapScore * 0.06;
+
+      this.candidateScoreByMarket.set(candidate.market, {
+        market: candidate.market,
+        score: finalScore,
+        riskRewardRatio: riskReward,
+        entryGapPct,
+      });
+      return { candidate, score: finalScore };
+    });
+
+    return scored
+      .sort((left, right) => right.score - left.score)
+      .map((item) => item.candidate);
+  }
+
   private resolveRecommendedThreshold(
     markets: GuidedMarketItem[],
     ranked: GuidedMarketItem[]
@@ -587,13 +721,13 @@ export class AutopilotOrchestrator {
     const values = markets
       .map((market) => market.recommendedEntryWinRate)
       .filter((value): value is number => value != null && Number.isFinite(value));
-    if (values.length === 0) return 55;
+    if (values.length === 0) return 54;
 
     const sorted = [...values].sort((a, b) => a - b);
-    const p70Index = Math.max(0, Math.ceil(sorted.length * 0.7) - 1);
-    let threshold = Math.min(65, Math.max(58, sorted[p70Index]));
+    const p65Index = Math.max(0, Math.ceil(sorted.length * 0.65) - 1);
+    let threshold = Math.min(63, Math.max(56, sorted[p65Index]));
 
-    while (threshold > 55) {
+    while (threshold > 54) {
       const eligibleCount = ranked.filter(
         (candidate) => (candidate.recommendedEntryWinRate ?? 0) >= threshold
       ).length;
@@ -601,14 +735,14 @@ export class AutopilotOrchestrator {
       threshold -= 1;
     }
 
-    threshold = Math.max(55, threshold);
+    threshold = Math.max(54, threshold);
     return Math.round(threshold * 10) / 10;
   }
 
   private async evaluateEntry(
     market: string,
     context: GuidedAgentContextResponse
-  ): Promise<{ approve: boolean; confidence: number; reason: string }> {
+  ): Promise<EntryDecision> {
     const response = await requestOneShotText({
       model: this.config.llmModel,
       tradingMode: this.config.tradingMode,
@@ -616,7 +750,7 @@ export class AutopilotOrchestrator {
       prompt: [
         `${market} 진입 승인 여부를 판단해.`,
         '반드시 JSON 한 줄로만 답해.',
-        '형식: {"approve":true|false,"confidence":0-100,"reason":"..."}',
+        '형식: {"approve":true|false,"confidence":0-100,"severity":"LOW|MEDIUM|HIGH","riskTags":["..."],"reason":"..."}',
         '규칙: 변동성 과다/손절 근접/추세 훼손이면 approve=false.',
       ].join('\n'),
     });
@@ -625,16 +759,81 @@ export class AutopilotOrchestrator {
     const approve = Boolean(parsed?.approve);
     const confidence = this.toSafeNumber(parsed?.confidence, 0);
     const reason = typeof parsed?.reason === 'string' ? parsed.reason : 'LLM 응답 파싱 실패';
+    const severity = this.parseRiskSeverity(parsed?.severity, reason);
+    const riskTags = this.parseRiskTags(parsed?.riskTags, reason);
 
     this.pushEvent({
       type: 'LLM',
-      level: approve ? 'INFO' : 'WARN',
+      level: approve ? 'INFO' : severity === 'HIGH' ? 'ERROR' : 'WARN',
       market,
       action: 'ENTRY_REVIEW',
-      detail: `${approve ? '승인' : '거절'} (${confidence.toFixed(0)}): ${reason}`,
+      detail: `${approve ? '승인' : '거절'} (${confidence.toFixed(0)}/${severity}): ${reason}`,
     });
 
-    return { approve, confidence, reason };
+    return { approve, confidence, reason, severity, riskTags };
+  }
+
+  private async planEntryOrder(
+    market: string,
+    context: GuidedAgentContextResponse
+  ): Promise<PlannedEntryOrder> {
+    const recommendation = context.chart.recommendation;
+    const current = recommendation.currentPrice;
+    const recommended = recommendation.recommendedEntryPrice;
+    const entryGapPct = recommended > 0 ? Math.max(0, ((current - recommended) / recommended) * 100) : 0;
+
+    if (this.config.entryOrderMode === 'MARKET') {
+      return {
+        allow: true,
+        reason: '시장가 고정 모드',
+        orderType: 'MARKET',
+        entryGapPct,
+      };
+    }
+
+    if (this.config.entryOrderMode === 'LIMIT') {
+      return {
+        allow: true,
+        reason: '지정가 고정 모드',
+        orderType: 'LIMIT',
+        limitPrice: recommended,
+        entryGapPct,
+      };
+    }
+
+    if (entryGapPct <= 0.25) {
+      return {
+        allow: true,
+        reason: `괴리 ${entryGapPct.toFixed(2)}% <= 0.25%`,
+        orderType: 'MARKET',
+        entryGapPct,
+      };
+    }
+
+    if (entryGapPct <= 1.2) {
+      return {
+        allow: true,
+        reason: `괴리 ${entryGapPct.toFixed(2)}% -> 지정가 진입`,
+        orderType: 'LIMIT',
+        limitPrice: recommended,
+        entryGapPct,
+      };
+    }
+
+    this.pushEvent({
+      type: 'CANDIDATE',
+      level: 'WARN',
+      market,
+      action: 'CHASE_RISK',
+      detail: `진입 거절: 추천가 대비 괴리 ${entryGapPct.toFixed(2)}%`,
+    });
+    return {
+      allow: false,
+      reason: `추천가 대비 괴리 ${entryGapPct.toFixed(2)}% > 1.2%`,
+      orderType: 'LIMIT',
+      limitPrice: recommended,
+      entryGapPct,
+    };
   }
 
   private async verifyWithPlaywright(market: string): Promise<{ ok: boolean; note: string }> {
@@ -816,6 +1015,40 @@ export class AutopilotOrchestrator {
     } catch {
       return null;
     }
+  }
+
+  private parseRiskSeverity(value: unknown, reason: string): 'LOW' | 'MEDIUM' | 'HIGH' {
+    if (typeof value === 'string') {
+      const normalized = value.trim().toUpperCase();
+      if (normalized === 'LOW' || normalized === 'MEDIUM' || normalized === 'HIGH') {
+        return normalized;
+      }
+    }
+    const loweredReason = reason.toLowerCase();
+    if (
+      loweredReason.includes('손절 근접') ||
+      loweredReason.includes('추세 훼손') ||
+      loweredReason.includes('급락') ||
+      loweredReason.includes('고위험')
+    ) {
+      return 'HIGH';
+    }
+    return 'MEDIUM';
+  }
+
+  private parseRiskTags(value: unknown, reason: string): string[] {
+    if (Array.isArray(value)) {
+      return value
+        .map((item) => (typeof item === 'string' ? item.trim().toUpperCase() : ''))
+        .filter((item) => item.length > 0)
+        .slice(0, 6);
+    }
+    const fallback: string[] = [];
+    const loweredReason = reason.toLowerCase();
+    if (loweredReason.includes('손절')) fallback.push('STOPLOSS_NEAR');
+    if (loweredReason.includes('추세')) fallback.push('TREND_BROKEN');
+    if (loweredReason.includes('변동성')) fallback.push('HIGH_VOLATILITY');
+    return fallback;
   }
 
   private toSafeNumber(value: unknown, fallback: number): number {

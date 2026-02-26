@@ -371,6 +371,194 @@
   color: #6ea0ff;
 }
 
+.guided-trade-history-card {
+  margin-top: 10px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 10px;
+  background: rgba(12, 17, 24, 0.72);
+  padding: 10px;
+}
+
+.guided-trade-history-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+}
+
+.guided-trade-history-head strong {
+  font-size: 13px;
+  color: #dce6f8;
+}
+
+.guided-trade-history-head span {
+  font-size: 11px;
+  color: #90a0bc;
+}
+
+.guided-trade-history-summary {
+  margin-top: 8px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.guided-trade-history-summary span {
+  display: inline-flex;
+  align-items: center;
+  padding: 3px 8px;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  background: rgba(255, 255, 255, 0.04);
+  font-size: 11px;
+  color: #c5d0e3;
+}
+
+.guided-trade-history-summary span.funnel.buy-requested {
+  color: #91b5ff;
+  border-color: rgba(110, 160, 255, 0.45);
+}
+
+.guided-trade-history-summary span.funnel.buy-filled {
+  color: #6ea0ff;
+  border-color: rgba(110, 160, 255, 0.7);
+}
+
+.guided-trade-history-summary span.funnel.sell-requested {
+  color: #ffa3b3;
+  border-color: rgba(255, 127, 147, 0.45);
+}
+
+.guided-trade-history-summary span.funnel.sell-filled {
+  color: #ff7f93;
+  border-color: rgba(255, 127, 147, 0.7);
+}
+
+.guided-trade-history-summary span.done {
+  color: #4fd38d;
+  border-color: rgba(79, 211, 141, 0.45);
+}
+
+.guided-trade-history-summary span.wait {
+  color: #f4cc62;
+  border-color: rgba(244, 204, 98, 0.45);
+}
+
+.guided-trade-history-summary span.cancel {
+  color: #a6b3ca;
+  border-color: rgba(166, 179, 202, 0.4);
+}
+
+.guided-trade-history-empty {
+  margin-top: 10px;
+  border-radius: 8px;
+  border: 1px dashed rgba(255, 255, 255, 0.15);
+  background: rgba(255, 255, 255, 0.02);
+  color: #8f9aad;
+  font-size: 12px;
+  text-align: center;
+  padding: 12px;
+}
+
+.guided-trade-history-list {
+  margin-top: 10px;
+  max-height: 220px;
+  overflow: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding-right: 2px;
+}
+
+.guided-trade-history-row {
+  display: grid;
+  grid-template-columns: minmax(160px, 200px) minmax(170px, 1fr) auto;
+  gap: 8px;
+  align-items: center;
+  border: 1px solid rgba(255, 255, 255, 0.07);
+  border-radius: 8px;
+  background: rgba(19, 24, 33, 0.7);
+  padding: 8px;
+}
+
+.guided-trade-history-row .left {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+}
+
+.guided-trade-history-row .left .side,
+.guided-trade-history-row .left .state,
+.guided-trade-history-row .left .ordtype {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  font-size: 10px;
+  line-height: 1;
+  padding: 4px 7px;
+  white-space: nowrap;
+}
+
+.guided-trade-history-row .left .side.buy {
+  color: #78a8ff;
+  border-color: rgba(110, 160, 255, 0.7);
+}
+
+.guided-trade-history-row .left .side.sell {
+  color: #ff8fa3;
+  border-color: rgba(255, 127, 147, 0.7);
+}
+
+.guided-trade-history-row .left .side.unknown {
+  color: #9aa8bf;
+}
+
+.guided-trade-history-row .left .state.done {
+  color: #4fd38d;
+  border-color: rgba(79, 211, 141, 0.6);
+}
+
+.guided-trade-history-row .left .state.wait {
+  color: #f4cc62;
+  border-color: rgba(244, 204, 98, 0.6);
+}
+
+.guided-trade-history-row .left .state.cancel {
+  color: #9eaac0;
+  border-color: rgba(166, 179, 202, 0.6);
+}
+
+.guided-trade-history-row .left .state.unknown {
+  color: #9eaac0;
+}
+
+.guided-trade-history-row .left .ordtype {
+  color: #9db0d2;
+  border-color: rgba(157, 176, 210, 0.45);
+}
+
+.guided-trade-history-row .mid strong {
+  display: block;
+  font-size: 12px;
+  color: #dce6f8;
+}
+
+.guided-trade-history-row .mid small {
+  display: block;
+  margin-top: 2px;
+  font-size: 11px;
+  color: #91a0ba;
+}
+
+.guided-trade-history-row .right {
+  font-size: 11px;
+  color: #8291aa;
+  white-space: nowrap;
+}
+
 .guided-recommendation span {
   display: block;
   font-size: 11px;
@@ -1245,7 +1433,8 @@
 }
 
 .autopilot-row input,
-.autopilot-grid input {
+.autopilot-grid input,
+.autopilot-grid select {
   background: #111722;
   border: 1px solid #2a3445;
   color: #e8eefb;
@@ -1274,7 +1463,7 @@
 
 .autopilot-grid {
   display: grid;
-  grid-template-columns: 90px 1fr;
+  grid-template-columns: 1fr 1fr;
   gap: 8px;
 }
 
@@ -1293,6 +1482,12 @@
   gap: 6px;
   font-size: 11px;
   color: #9fb2d8;
+}
+
+.autopilot-checkbox.inline {
+  margin-top: 0;
+  justify-content: flex-start;
+  padding-top: 22px;
 }
 
 .autopilot-actions {
@@ -1910,6 +2105,15 @@
 
   .guided-recommendation {
     grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .guided-trade-history-row {
+    grid-template-columns: 1fr;
+    gap: 5px;
+  }
+
+  .guided-trade-history-row .right {
+    justify-self: flex-start;
   }
 }
 

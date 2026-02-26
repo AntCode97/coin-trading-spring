@@ -5,6 +5,8 @@ import com.ant.cointrading.guided.GuidedAdoptPositionRequest
 import com.ant.cointrading.guided.GuidedAutopilotCandidateView
 import com.ant.cointrading.guided.GuidedAutopilotEvent
 import com.ant.cointrading.guided.GuidedAutopilotLiveResponse
+import com.ant.cointrading.guided.GuidedAutopilotDecisionStats
+import com.ant.cointrading.guided.GuidedStrategyCodeSummary
 import com.ant.cointrading.guided.GuidedPnlReconcileItem
 import com.ant.cointrading.guided.GuidedPnlReconcileResult
 import com.ant.cointrading.guided.GuidedTradingService
@@ -132,7 +134,24 @@ class GuidedTradingControllerTest {
             ),
             thresholdMode = "DYNAMIC_P70",
             appliedRecommendedWinRateThreshold = 60.0,
-            requestedMinRecommendedWinRate = null
+            requestedMinRecommendedWinRate = null,
+            decisionStats = GuidedAutopilotDecisionStats(
+                rulePass = 1,
+                ruleFail = 0,
+                llmReject = 0,
+                entered = 1,
+                pendingTimeout = 0
+            ),
+            strategyCodeSummary = mapOf(
+                "GUIDED_TRADING" to GuidedStrategyCodeSummary(
+                    buyRequested = 2,
+                    buyFilled = 1,
+                    sellRequested = 1,
+                    sellFilled = 1,
+                    failed = 0,
+                    cancelled = 0
+                )
+            )
         )
         whenever(guidedTradingService.getAutopilotLive(any(), any(), any(), anyOrNull())).thenReturn(expected)
 

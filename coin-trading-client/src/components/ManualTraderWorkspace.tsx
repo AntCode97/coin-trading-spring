@@ -22,6 +22,7 @@ import {
   type GuidedMarketItem,
   type GuidedMarketSortBy,
   type GuidedSortDirection,
+  type GuidedOrderItem,
   type GuidedRealtimeTicker,
   type GuidedStartRequest,
   type GuidedTradePosition,
@@ -75,6 +76,13 @@ type WorkspacePrefs = {
   autopilotEnabled?: boolean;
   dailyLossLimitKrw?: number;
   autopilotMaxConcurrentPositions?: number;
+  autopilotAmountKrw?: number;
+  autopilotInterval?: string;
+  autopilotMode?: TradingMode;
+  entryPolicy?: 'BALANCED' | 'AGGRESSIVE' | 'CONSERVATIVE';
+  entryOrderMode?: 'ADAPTIVE' | 'MARKET' | 'LIMIT';
+  pendingEntryTimeoutSec?: number;
+  marketFallbackAfterCancel?: boolean;
   playwrightEnabled?: boolean;
   playwrightAutoStart?: boolean;
   playwrightMcpPort?: number;
@@ -185,6 +193,73 @@ function toCandlestick(candle: GuidedCandle): CandlestickData<Time> {
   };
 }
 
+function buildFallbackCandle(payload: GuidedChartResponse, interval: string): CandlestickData<Time> | null {
+  const anchorPrice =
+    payload.recommendation.currentPrice > 0
+      ? payload.recommendation.currentPrice
+      : payload.recommendation.recommendedEntryPrice;
+  if (!Number.isFinite(anchorPrice) || anchorPrice <= 0) return null;
+
+  const nowSec = Math.floor(Date.now() / 1000);
+  const bucket = toBucketStart(nowSec, interval);
+  return {
+    time: asUtc(bucket),
+    open: anchorPrice,
+    high: anchorPrice,
+    low: anchorPrice,
+    close: anchorPrice,
+  };
+}
+
+function computeVisiblePriceRange(
+  payload: GuidedChartResponse,
+  candles: CandlestickData<Time>[]
+): { from: number; to: number } | null {
+  const values: number[] = [];
+  for (const candle of candles) {
+    values.push(candle.open, candle.high, candle.low, candle.close);
+  }
+
+  values.push(
+    payload.recommendation.currentPrice,
+    payload.recommendation.recommendedEntryPrice,
+    payload.recommendation.stopLossPrice,
+    payload.recommendation.takeProfitPrice
+  );
+
+  if (payload.activePosition) {
+    values.push(
+      payload.activePosition.averageEntryPrice,
+      payload.activePosition.stopLossPrice,
+      payload.activePosition.takeProfitPrice
+    );
+    if (payload.activePosition.trailingStopPrice != null) {
+      values.push(payload.activePosition.trailingStopPrice);
+    }
+  }
+
+  if (payload.recommendation.keyLevels) {
+    for (const level of payload.recommendation.keyLevels) {
+      values.push(level.price);
+    }
+  }
+
+  const finite = values.filter((value) => Number.isFinite(value) && value > 0);
+  if (finite.length === 0) return null;
+
+  const minPrice = Math.min(...finite);
+  const maxPrice = Math.max(...finite);
+  if (!Number.isFinite(minPrice) || !Number.isFinite(maxPrice)) return null;
+
+  const spread = Math.max(maxPrice - minPrice, maxPrice * 0.002);
+  const padding = spread * 0.2;
+  const from = Math.max(0.00000001, minPrice - padding);
+  const to = maxPrice + padding;
+  if (!(to > from)) return null;
+
+  return { from, to };
+}
+
 // KST 시간 포맷터
 function formatKstTime(epochSec: number): string {
   const d = new Date(epochSec * 1000);
@@ -200,6 +275,42 @@ function formatKstDateTime(epochSec: number): string {
     hour: '2-digit',
     minute: '2-digit',
   });
+}
+
+function formatOrderDateTime(value?: string | null): string {
+  if (!value) return '-';
+  const parsed = new Date(value);
+  if (!Number.isFinite(parsed.getTime())) return value;
+  return parsed.toLocaleString('ko-KR', {
+    timeZone: 'Asia/Seoul',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+  });
+}
+
+function normalizeOrderSide(side?: string | null): 'BUY' | 'SELL' | 'UNKNOWN' {
+  const normalized = side?.trim().toLowerCase();
+  if (normalized === 'bid' || normalized === 'buy') return 'BUY';
+  if (normalized === 'ask' || normalized === 'sell') return 'SELL';
+  return 'UNKNOWN';
+}
+
+function orderStateLabel(state?: string | null): string {
+  const normalized = state?.trim().toLowerCase();
+  if (normalized === 'done') return '체결';
+  if (normalized === 'wait') return '대기';
+  if (normalized === 'cancel') return '취소';
+  return normalized ? normalized.toUpperCase() : '-';
+}
+
+function orderTypeLabel(ordType?: string | null): string {
+  const normalized = ordType?.trim().toLowerCase();
+  if (normalized === 'limit') return '지정가';
+  if (normalized === 'price' || normalized === 'market') return '시장가';
+  return ordType ? ordType.toUpperCase() : '-';
 }
 
 // MCP URL을 API Base URL에서 도출
@@ -285,9 +396,30 @@ export default function ManualTraderWorkspace() {
   const [playwrightStatus, setPlaywrightStatus] = useState<PlaywrightMcpStatus | null>(null);
   const [playwrightAction, setPlaywrightAction] = useState<'idle' | 'starting' | 'stopping'>('idle');
   const [autopilotEnabled, setAutopilotEnabled] = useState<boolean>(prefs.autopilotEnabled ?? false);
-  const [dailyLossLimitKrw, setDailyLossLimitKrw] = useState<number>(prefs.dailyLossLimitKrw ?? -20000);
+  const [dailyLossLimitKrw, setDailyLossLimitKrw] = useState<number>(prefs.dailyLossLimitKrw ?? -15000);
   const [autopilotMaxConcurrentPositions, setAutopilotMaxConcurrentPositions] = useState<number>(
-    Math.min(10, Math.max(1, prefs.autopilotMaxConcurrentPositions ?? 3))
+    Math.min(10, Math.max(1, prefs.autopilotMaxConcurrentPositions ?? 2))
+  );
+  const [autopilotAmountKrw, setAutopilotAmountKrw] = useState<number>(
+    Math.max(5100, Math.round(prefs.autopilotAmountKrw ?? 10000))
+  );
+  const [autopilotInterval, setAutopilotInterval] = useState<string>(
+    prefs.autopilotInterval ?? 'minute1'
+  );
+  const [autopilotMode, setAutopilotMode] = useState<TradingMode>(
+    prefs.autopilotMode ?? 'SCALP'
+  );
+  const [entryPolicy, setEntryPolicy] = useState<'BALANCED' | 'AGGRESSIVE' | 'CONSERVATIVE'>(
+    prefs.entryPolicy ?? 'BALANCED'
+  );
+  const [entryOrderMode, setEntryOrderMode] = useState<'ADAPTIVE' | 'MARKET' | 'LIMIT'>(
+    prefs.entryOrderMode ?? 'ADAPTIVE'
+  );
+  const [pendingEntryTimeoutSec, setPendingEntryTimeoutSec] = useState<number>(
+    Math.min(900, Math.max(30, Math.round(prefs.pendingEntryTimeoutSec ?? 90)))
+  );
+  const [marketFallbackAfterCancel, setMarketFallbackAfterCancel] = useState<boolean>(
+    prefs.marketFallbackAfterCancel ?? true
   );
   const [autopilotDockCollapsed, setAutopilotDockCollapsed] = useState<boolean>(
     prefs.autopilotDockCollapsed ?? false
@@ -306,7 +438,7 @@ export default function ManualTraderWorkspace() {
         1,
         Math.round(
           prefs.rejectCooldownSeconds
-            ?? ((prefs.rejectCooldownMinutes ?? 5) * 60)
+            ?? ((prefs.rejectCooldownMinutes ?? 2) * 60)
         )
       )
     )
@@ -334,6 +466,10 @@ export default function ManualTraderWorkspace() {
     screenshots: [],
   });
   const autopilotRef = useRef<AutopilotOrchestrator | null>(null);
+  const chatBusyRef = useRef(false);
+  const agentContextRef = useRef<GuidedAgentContextResponse | null>(null);
+  const mcpToolsRef = useRef<McpTool[]>([]);
+  const autoAnalysisInFlightRef = useRef(false);
   const chatEndRef = useRef<HTMLDivElement | null>(null);
   const winRateSort = isWinRateSort(sortBy);
 
@@ -395,15 +531,15 @@ export default function ManualTraderWorkspace() {
   const autopilotLiveQuery = useQuery<AutopilotLiveResponse>({
     queryKey: [
       'guided-autopilot-live',
-      interval,
-      tradingMode,
+      autopilotInterval,
+      autopilotMode,
       winRateThresholdMode,
       fixedMinRecommendedWinRate,
     ],
     queryFn: () =>
       guidedTradingApi.getAutopilotLive(
-        interval,
-        tradingMode,
+        autopilotInterval,
+        autopilotMode,
         winRateThresholdMode,
         fixedMinRecommendedWinRate
       ),
@@ -452,6 +588,58 @@ export default function ManualTraderWorkspace() {
   const activePosition = chartQuery.data?.activePosition;
   const events = chartQuery.data?.events ?? [];
   const orderbook = chartQuery.data?.orderbook;
+  const orderSnapshot = chartQuery.data?.orderSnapshot;
+  const marketOrderHistory = useMemo<GuidedOrderItem[]>(() => {
+    if (!orderSnapshot) return [];
+    const merged: GuidedOrderItem[] = [];
+    if (orderSnapshot.currentOrder) merged.push(orderSnapshot.currentOrder);
+    merged.push(...orderSnapshot.pendingOrders);
+    merged.push(...orderSnapshot.completedOrders);
+
+    const deduped = new Map<string, GuidedOrderItem>();
+    for (const order of merged) {
+      if (!order?.uuid) continue;
+      const prev = deduped.get(order.uuid);
+      if (!prev) {
+        deduped.set(order.uuid, order);
+        continue;
+      }
+      const prevDate = prev.createdAt ? Date.parse(prev.createdAt) : 0;
+      const nextDate = order.createdAt ? Date.parse(order.createdAt) : 0;
+      if (nextDate >= prevDate) {
+        deduped.set(order.uuid, order);
+      }
+    }
+
+    return Array.from(deduped.values()).sort((a, b) => {
+      const ta = a.createdAt ? Date.parse(a.createdAt) : 0;
+      const tb = b.createdAt ? Date.parse(b.createdAt) : 0;
+      return tb - ta;
+    });
+  }, [orderSnapshot]);
+  const marketOrderStats = useMemo(() => {
+    let done = 0;
+    let wait = 0;
+    let cancel = 0;
+    let buyRequested = 0;
+    let buyFilled = 0;
+    let sellRequested = 0;
+    let sellFilled = 0;
+    for (const order of marketOrderHistory) {
+      const state = order.state?.trim().toLowerCase();
+      const side = normalizeOrderSide(order.side);
+      if (state === 'done') done += 1;
+      else if (state === 'wait') wait += 1;
+      else if (state === 'cancel') cancel += 1;
+
+      const isRequested = state === 'wait' || state === 'done' || state === 'cancel';
+      if (side === 'BUY' && isRequested) buyRequested += 1;
+      if (side === 'SELL' && isRequested) sellRequested += 1;
+      if (side === 'BUY' && state === 'done') buyFilled += 1;
+      if (side === 'SELL' && state === 'done') sellFilled += 1;
+    }
+    return { done, wait, cancel, buyRequested, buyFilled, sellRequested, sellFilled };
+  }, [marketOrderHistory]);
 
   const { plan, currentPrice: planCurrentPrice, startPlan, cancelPlan, dismissPlan, isRunning: isPlanRunning } =
     usePlanExecution({
@@ -583,6 +771,13 @@ export default function ManualTraderWorkspace() {
       autopilotEnabled,
       dailyLossLimitKrw,
       autopilotMaxConcurrentPositions,
+      autopilotAmountKrw,
+      autopilotInterval,
+      autopilotMode,
+      entryPolicy,
+      entryOrderMode,
+      pendingEntryTimeoutSec,
+      marketFallbackAfterCancel,
       playwrightEnabled,
       playwrightAutoStart,
       playwrightMcpPort,
@@ -605,6 +800,13 @@ export default function ManualTraderWorkspace() {
     autopilotEnabled,
     dailyLossLimitKrw,
     autopilotMaxConcurrentPositions,
+    autopilotAmountKrw,
+    autopilotInterval,
+    autopilotMode,
+    entryPolicy,
+    entryOrderMode,
+    pendingEntryTimeoutSec,
+    marketFallbackAfterCancel,
     playwrightEnabled,
     playwrightAutoStart,
     playwrightMcpPort,
@@ -677,6 +879,21 @@ export default function ManualTraderWorkspace() {
   useEffect(() => {
     shouldAutoFitRef.current = true;
     liveCandlesRef.current = [];
+    const series = candleSeriesRef.current;
+    const chart = chartRef.current;
+    if (series) {
+      series.setData([]);
+      createSeriesMarkers(series, []);
+      priceLinesRef.current.forEach((line) => series.removePriceLine(line));
+      priceLinesRef.current = [];
+    }
+    if (chart) {
+      chart.priceScale('right').applyOptions({
+        autoScale: true,
+        mode: 0,
+        invertScale: false,
+      });
+    }
   }, [selectedMarket, interval]);
 
   useEffect(() => {
@@ -697,7 +914,11 @@ export default function ManualTraderWorkspace() {
     const payload = chartQuery.data;
     if (!series || !chart || !payload) return;
 
-    const candlesticks: CandlestickData<Time>[] = payload.candles.map(toCandlestick);
+    let candlesticks: CandlestickData<Time>[] = payload.candles.map(toCandlestick);
+    if (candlesticks.length === 0) {
+      const fallback = buildFallbackCandle(payload, interval);
+      candlesticks = fallback ? [fallback] : [];
+    }
     series.setData(candlesticks);
     liveCandlesRef.current = candlesticks;
 
@@ -750,10 +971,19 @@ export default function ManualTraderWorkspace() {
     createSeriesMarkers(series, markers);
 
     if (shouldAutoFitRef.current) {
+      chart.priceScale('right').applyOptions({
+        autoScale: true,
+        mode: 0,
+        invertScale: false,
+      });
       chart.timeScale().fitContent();
+      const visibleRange = computeVisiblePriceRange(payload, candlesticks);
+      if (visibleRange) {
+        chart.priceScale('right').setVisibleRange(visibleRange);
+      }
       shouldAutoFitRef.current = false;
     }
-  }, [chartQuery.data, events]);
+  }, [chartQuery.data, events, interval]);
 
   // 실시간 캔들 업데이트
   useEffect(() => {
@@ -761,6 +991,7 @@ export default function ManualTraderWorkspace() {
     const ticker = tickerQuery.data;
     const payload = chartQuery.data;
     if (!series || !ticker || !payload) return;
+    if (ticker.market !== payload.market || payload.market !== selectedMarket) return;
     if (ticker.tradePrice <= 0) return;
 
     const nowSec = ticker.timestamp
@@ -798,7 +1029,7 @@ export default function ManualTraderWorkspace() {
     candles.push(next);
     liveCandlesRef.current = candles;
     series.update(next);
-  }, [tickerQuery.data, interval, chartQuery.data]);
+  }, [tickerQuery.data, interval, chartQuery.data, selectedMarket]);
 
   useEffect(() => {
     if (!recommendation) return;
@@ -895,6 +1126,8 @@ export default function ManualTraderWorkspace() {
       takeProfitPrice: typeof customTakeProfit === 'number' ? customTakeProfit : recommendation.takeProfitPrice,
       interval,
       mode: tradingMode,
+      entrySource: 'MANUAL',
+      strategyCode: 'GUIDED_TRADING',
     };
     startMutation.mutate(payload);
   };
@@ -912,6 +1145,8 @@ export default function ManualTraderWorkspace() {
       takeProfitPrice: recommendation.takeProfitPrice,
       interval,
       mode: tradingMode,
+      entrySource: 'MANUAL',
+      strategyCode: 'GUIDED_TRADING',
     };
     startMutation.mutate(payload);
   };
@@ -943,21 +1178,25 @@ export default function ManualTraderWorkspace() {
     const orchestrator = new AutopilotOrchestrator(
       {
         enabled: autopilotEnabled,
-        interval,
-        tradingMode,
-        amountKrw: 20000,
+        interval: autopilotInterval,
+        tradingMode: autopilotMode,
+        amountKrw: autopilotAmountKrw,
         dailyLossLimitKrw,
         maxConcurrentPositions: autopilotMaxConcurrentPositions,
         winRateThresholdMode,
         fixedMinRecommendedWinRate,
         minLlmConfidence,
-        candidateLimit: 10,
+        candidateLimit: 20,
         rejectCooldownMs: rejectCooldownSeconds * 1000,
         postExitCooldownMs: postExitCooldownMinutes * 60 * 1000,
         workerTickMs: 15000,
         llmReviewIntervalMs: 15000,
         llmModel: chatModel,
         playwrightEnabled,
+        entryPolicy,
+        entryOrderMode,
+        pendingEntryTimeoutSec,
+        marketFallbackAfterCancel,
       },
       {
         onState: (next) => setAutopilotState(next),
@@ -976,12 +1215,17 @@ export default function ManualTraderWorkspace() {
   }, [
     autopilotEnabled,
     llmStatus,
-    interval,
-    tradingMode,
+    autopilotInterval,
+    autopilotMode,
+    autopilotAmountKrw,
     dailyLossLimitKrw,
     autopilotMaxConcurrentPositions,
     chatModel,
     playwrightEnabled,
+    entryPolicy,
+    entryOrderMode,
+    pendingEntryTimeoutSec,
+    marketFallbackAfterCancel,
     winRateThresholdMode,
     fixedMinRecommendedWinRate,
     minLlmConfidence,
@@ -1068,14 +1312,34 @@ export default function ManualTraderWorkspace() {
 
   // 자동 분석
   useEffect(() => {
+    chatBusyRef.current = chatBusy;
+  }, [chatBusy]);
+
+  useEffect(() => {
+    agentContextRef.current = agentContextQuery.data ?? null;
+  }, [agentContextQuery.data]);
+
+  useEffect(() => {
+    mcpToolsRef.current = mcpTools;
+  }, [mcpTools]);
+
+  useEffect(() => {
     if (!autoAnalysis || llmStatus !== 'connected') return;
-    const timer = window.setInterval(() => {
-      if (chatBusy) return;
-      const context = agentContextQuery.data ?? null;
+
+    let cancelled = false;
+    const runAutoAnalysis = () => {
+      if (cancelled) return;
+      if (chatBusyRef.current || autoAnalysisInFlightRef.current) return;
+
+      const context = agentContextRef.current;
       if (!context) return;
+
+      autoAnalysisInFlightRef.current = true;
+      chatBusyRef.current = true;
       setChatBusy(true);
       setChatStreamText('');
-      const llmTools = mcpTools;
+
+      const llmTools = mcpToolsRef.current;
       sendChatMessage({
         userMessage: '현재 시점 분석과 조언을 부탁합니다.',
         model: chatModel,
@@ -1085,14 +1349,32 @@ export default function ManualTraderWorkspace() {
         onStreamDelta: (text) => setChatStreamText(text),
       })
         .then((msgs) => {
+          if (cancelled) return;
           setChatMessages((prev) => [...prev, ...msgs]);
           setChatStreamText('');
         })
-        .catch(() => { /* 자동 분석 실패 무시 */ })
-        .finally(() => setChatBusy(false));
-    }, 15000);
-    return () => window.clearInterval(timer);
-  }, [autoAnalysis, chatModel, llmStatus, chatBusy, agentContextQuery.data, mcpTools]);
+        .catch((error) => {
+          if (cancelled) return;
+          const msg = error instanceof Error ? error.message : '자동 분석 실패';
+          setChatMessages((prev) => [
+            ...prev,
+            { id: crypto.randomUUID(), role: 'system', content: `[자동분석 실패] ${msg}`, timestamp: Date.now() },
+          ]);
+        })
+        .finally(() => {
+          autoAnalysisInFlightRef.current = false;
+          chatBusyRef.current = false;
+          setChatBusy(false);
+        });
+    };
+
+    runAutoAnalysis();
+    const timer = window.setInterval(runAutoAnalysis, 15000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+  }, [autoAnalysis, chatModel, llmStatus, tradingMode]);
 
   useEffect(() => {
     void handleCheckStatus();
@@ -1313,6 +1595,64 @@ export default function ManualTraderWorkspace() {
               </div>
             </div>
           )}
+
+          {orderSnapshot && (
+            <div className="guided-trade-history-card">
+              <div className="guided-trade-history-head">
+                <strong>{selectedMarket} 주문/체결 내역</strong>
+                <span>최근 {Math.min(20, marketOrderHistory.length)} / 총 {marketOrderHistory.length}건</span>
+              </div>
+              <div className="guided-trade-history-summary">
+                <span className="funnel buy-requested">매수요청 {marketOrderStats.buyRequested}</span>
+                <span className="funnel buy-filled">매수체결 {marketOrderStats.buyFilled}</span>
+                <span className="funnel sell-requested">매도요청 {marketOrderStats.sellRequested}</span>
+                <span className="funnel sell-filled">매도체결 {marketOrderStats.sellFilled}</span>
+                <span className="done">체결 {marketOrderStats.done}</span>
+                <span className="wait">대기 {marketOrderStats.wait}</span>
+                <span className="cancel">취소 {marketOrderStats.cancel}</span>
+              </div>
+              {marketOrderHistory.length === 0 ? (
+                <div className="guided-trade-history-empty">최근 주문 내역이 없습니다.</div>
+              ) : (
+                <div className="guided-trade-history-list">
+                  {marketOrderHistory.slice(0, 20).map((order) => {
+                    const side = normalizeOrderSide(order.side);
+                    const state = order.state?.trim().toLowerCase();
+                    const stateClass = state === 'done' ? 'done' : state === 'wait' ? 'wait' : state === 'cancel' ? 'cancel' : 'unknown';
+                    const volume = order.volume != null && Number.isFinite(order.volume) ? order.volume : null;
+                    const executedVolume = order.executedVolume != null && Number.isFinite(order.executedVolume)
+                      ? order.executedVolume
+                      : null;
+                    const fillRatio = volume != null && volume > 0 && executedVolume != null
+                      ? Math.min(100, (executedVolume / volume) * 100)
+                      : null;
+                    return (
+                      <div key={order.uuid} className="guided-trade-history-row">
+                        <div className="left">
+                          <span className={`side ${side === 'BUY' ? 'buy' : side === 'SELL' ? 'sell' : 'unknown'}`}>
+                            {side === 'BUY' ? '매수' : side === 'SELL' ? '매도' : '-'}
+                          </span>
+                          <span className={`state ${stateClass}`}>
+                            {orderStateLabel(order.state)}
+                          </span>
+                          <span className="ordtype">{orderTypeLabel(order.ordType)}</span>
+                        </div>
+                        <div className="mid">
+                          <strong>{order.price != null ? formatKrw(order.price) : '시장가'}</strong>
+                          <small>
+                            체결 {executedVolume != null ? formatPlain(executedVolume) : '-'}
+                            {` / 주문 ${volume != null ? formatPlain(volume) : '-'}`}
+                            {fillRatio != null ? ` (${fillRatio.toFixed(0)}%)` : ''}
+                          </small>
+                        </div>
+                        <div className="right">{formatOrderDateTime(order.createdAt)}</div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          )}
         </div>
 
         {/* 우측: 탭 기반 패널 */}
@@ -1403,12 +1743,22 @@ export default function ManualTraderWorkspace() {
                       type="number"
                       value={dailyLossLimitKrw}
                       step={1000}
-                      onChange={(event) => setDailyLossLimitKrw(Number(event.target.value || -20000))}
+                      onChange={(event) => setDailyLossLimitKrw(Number(event.target.value || -15000))}
                     />
                   </label>
-                  <small>기본 -20,000원</small>
+                  <small>기본 -15,000원</small>
                 </div>
                 <div className="autopilot-grid">
+                  <label>
+                    포지션당 투자금(원)
+                    <input
+                      type="number"
+                      min={5100}
+                      step={100}
+                      value={autopilotAmountKrw}
+                      onChange={(event) => setAutopilotAmountKrw(Math.max(5100, Math.round(Number(event.target.value || 10000))))}
+                    />
+                  </label>
                   <label>
                     동시 포지션 최대(종목)
                     <input
@@ -1418,10 +1768,85 @@ export default function ManualTraderWorkspace() {
                       step={1}
                       value={autopilotMaxConcurrentPositions}
                       onChange={(event) => {
-                        const raw = Number(event.target.value || 3);
+                        const raw = Number(event.target.value || 2);
                         setAutopilotMaxConcurrentPositions(Math.min(10, Math.max(1, raw)));
                       }}
                     />
+                  </label>
+                </div>
+                <div className="autopilot-grid">
+                  <label>
+                    오토파일럿 간격
+                    <select
+                      value={autopilotInterval}
+                      onChange={(event) => setAutopilotInterval(event.target.value)}
+                    >
+                      <option value="tick">틱</option>
+                      <option value="minute1">1분</option>
+                      <option value="minute10">10분</option>
+                      <option value="minute30">30분</option>
+                      <option value="minute60">60분</option>
+                      <option value="day">일봉</option>
+                    </select>
+                  </label>
+                  <label>
+                    오토파일럿 모드
+                    <select
+                      value={autopilotMode}
+                      onChange={(event) => setAutopilotMode(event.target.value as TradingMode)}
+                    >
+                      <option value="SCALP">SCALP</option>
+                      <option value="SWING">SWING</option>
+                      <option value="POSITION">POSITION</option>
+                    </select>
+                  </label>
+                </div>
+                <div className="autopilot-grid">
+                  <label>
+                    진입 정책
+                    <select
+                      value={entryPolicy}
+                      onChange={(event) => setEntryPolicy(event.target.value as 'BALANCED' | 'AGGRESSIVE' | 'CONSERVATIVE')}
+                    >
+                      <option value="BALANCED">균형형</option>
+                      <option value="AGGRESSIVE">공격형</option>
+                      <option value="CONSERVATIVE">보수형</option>
+                    </select>
+                  </label>
+                  <label>
+                    주문 정책
+                    <select
+                      value={entryOrderMode}
+                      onChange={(event) => setEntryOrderMode(event.target.value as 'ADAPTIVE' | 'MARKET' | 'LIMIT')}
+                    >
+                      <option value="ADAPTIVE">적응형</option>
+                      <option value="MARKET">시장가</option>
+                      <option value="LIMIT">지정가</option>
+                    </select>
+                  </label>
+                </div>
+                <div className="autopilot-grid">
+                  <label>
+                    PENDING_ENTRY 타임아웃(초)
+                    <input
+                      type="number"
+                      min={30}
+                      max={900}
+                      step={1}
+                      value={pendingEntryTimeoutSec}
+                      onChange={(event) => {
+                        const raw = Number(event.target.value || 90);
+                        setPendingEntryTimeoutSec(Math.min(900, Math.max(30, Math.round(raw))));
+                      }}
+                    />
+                  </label>
+                  <label className="autopilot-checkbox inline">
+                    <input
+                      type="checkbox"
+                      checked={marketFallbackAfterCancel}
+                      onChange={(event) => setMarketFallbackAfterCancel(event.target.checked)}
+                    />
+                    타임아웃 취소 후 시장가 폴백
                   </label>
                 </div>
                 <div className="autopilot-grid">
@@ -1469,7 +1894,7 @@ export default function ManualTraderWorkspace() {
                       step={1}
                       value={rejectCooldownSeconds}
                       onChange={(event) => {
-                        const raw = Number(event.target.value || 300);
+                        const raw = Number(event.target.value || 120);
                         setRejectCooldownSeconds(Math.min(3600, Math.max(1, Math.round(raw))));
                       }}
                     />

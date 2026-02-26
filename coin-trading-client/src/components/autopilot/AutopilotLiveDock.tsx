@@ -23,6 +23,7 @@ type TimelineItem = {
 };
 
 type OrderFeedFilter = 'ALL' | 'REQUESTED' | 'FILLED' | 'FAILED';
+type StrategyCodeFilter = 'ALL' | 'AUTOPILOT' | 'MANUAL';
 const PAGE_SIZE_OPTIONS = [30, 50, 100] as const;
 
 const EMPTY_SUMMARY: OrderLifecycleGroupSummary = {
@@ -115,6 +116,15 @@ function orderFeedMatchesFilter(eventType: string, filter: OrderFeedFilter): boo
   return eventType === 'CANCELLED' || eventType === 'FAILED';
 }
 
+function orderFeedMatchesStrategyCode(strategyCode: string | null | undefined, filter: StrategyCodeFilter): boolean {
+  if (filter === 'ALL') return true;
+  const code = (strategyCode || 'GUIDED_TRADING').toUpperCase();
+  if (filter === 'AUTOPILOT') {
+    return code.includes('AUTOPILOT');
+  }
+  return !code.includes('AUTOPILOT');
+}
+
 function toTimelineEvent(event: AutopilotTimelineEvent): TimelineItem {
   return {
     id: event.id,
@@ -163,7 +173,8 @@ export function AutopilotLiveDock({
   loading = false,
 }: AutopilotLiveDockProps) {
   const [selectedGroup, setSelectedGroup] = useState('TOTAL');
-  const [orderFeedFilter, setOrderFeedFilter] = useState<OrderFeedFilter>('ALL');
+  const [orderFeedFilter, setOrderFeedFilter] = useState<OrderFeedFilter>('FILLED');
+  const [strategyCodeFilter, setStrategyCodeFilter] = useState<StrategyCodeFilter>('ALL');
   const [timelinePageSize, setTimelinePageSize] = useState<number>(30);
   const [orderFeedPageSize, setOrderFeedPageSize] = useState<number>(30);
   const [timelinePage, setTimelinePage] = useState(1);
@@ -184,8 +195,9 @@ export function AutopilotLiveDock({
     const rows = liveData?.orderEvents ?? [];
     return rows
       .filter((event) => orderFeedMatchesFilter(event.eventType, orderFeedFilter))
+      .filter((event) => orderFeedMatchesStrategyCode(event.strategyCode, strategyCodeFilter))
       .slice(0, 400);
-  }, [liveData?.orderEvents, orderFeedFilter]);
+  }, [liveData?.orderEvents, orderFeedFilter, strategyCodeFilter]);
 
   const timelinePageCount = useMemo(
     () => Math.max(1, Math.ceil(timeline.length / timelinePageSize)),
@@ -205,7 +217,7 @@ export function AutopilotLiveDock({
   }, [orderFeed, orderFeedPage, orderFeedPageSize]);
   useEffect(() => {
     setOrderFeedPage(1);
-  }, [orderFeedFilter]);
+  }, [orderFeedFilter, strategyCodeFilter]);
   useEffect(() => {
     setTimelinePage(1);
   }, [timelinePageSize]);
@@ -437,7 +449,10 @@ export function AutopilotLiveDock({
 
           <div className="autopilot-order-feed">
             <div className="autopilot-order-feed-head">
-              <strong>빗썸 주문/체결 타임라인</strong>
+              <div className="autopilot-order-feed-title">
+                <strong>전체 코인 체결 내역</strong>
+                <span>기본 필터는 체결이며, 필요 시 요청/취소·실패까지 확인할 수 있습니다.</span>
+              </div>
               <div className="autopilot-order-feed-filters">
                 <label className="page-size-select">
                   <span>개수</span>
@@ -461,6 +476,31 @@ export function AutopilotLiveDock({
                   </button>
                 ))}
               </div>
+            </div>
+            {liveData?.decisionStats && (
+              <div className="autopilot-order-feed-decision-stats">
+                <span>RULE_PASS {liveData.decisionStats.rulePass}</span>
+                <span>RULE_FAIL {liveData.decisionStats.ruleFail}</span>
+                <span>LLM_REJECT {liveData.decisionStats.llmReject}</span>
+                <span>ENTERED {liveData.decisionStats.entered}</span>
+                <span>PENDING_TIMEOUT {liveData.decisionStats.pendingTimeout}</span>
+              </div>
+            )}
+            <div className="autopilot-order-feed-strategy-tabs">
+              {([
+                ['ALL', '전체'],
+                ['AUTOPILOT', '오토파일럿'],
+                ['MANUAL', '수동/기타'],
+              ] as const).map(([filter, label]) => (
+                <button
+                  key={filter}
+                  type="button"
+                  className={strategyCodeFilter === filter ? 'active' : ''}
+                  onClick={() => setStrategyCodeFilter(filter)}
+                >
+                  {label}
+                </button>
+              ))}
             </div>
 
             <div className="autopilot-order-feed-list">
