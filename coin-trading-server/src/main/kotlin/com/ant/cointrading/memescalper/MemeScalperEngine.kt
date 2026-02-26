@@ -422,27 +422,6 @@ class MemeScalperEngine(
             return false
         }
 
-        // KRW 잔고 예약 (BalanceReservationService 원자적 체크)
-        val requiredKrw = tradingAmountService.getAdaptiveAmount("memescalper")
-        if (!balanceReservationService.reserve("MEME_SCALPER", market, requiredKrw)) {
-            return false
-        }
-
-        // 코인 잔고 체크 - 이미 보유 시 진입 불가 (ABANDONED 케이스 방지)
-        val coinSymbol = market.removePrefix("KRW-")
-        try {
-            val coinBalance = getCoinTotalBalance(market)
-            if (coinBalance > BigDecimal.ZERO) {
-                log.warn("[$market] 이미 $coinSymbol 잔고 보유 중: $coinBalance - 중복 진입 방지")
-                balanceReservationService.release("MEME_SCALPER", market)
-                return false
-            }
-        } catch (e: Exception) {
-            log.warn("[$market] 잔고 조회 실패, 진입 보류: ${e.message}")
-            balanceReservationService.release("MEME_SCALPER", market)
-            return false
-        }
-
         // RSI 과매수 체크
         if (signal.rsi > properties.maxRsi) {
             log.debug("[$market] RSI 과매수 (${signal.rsi} > ${properties.maxRsi})")
@@ -455,7 +434,45 @@ class MemeScalperEngine(
             return false
         }
 
-        return true
+        // 진입 Imbalance 유지 필터
+        val imbalanceValidation = detector.validateEntryImbalancePersistence(signal)
+        if (!imbalanceValidation.passed) {
+            val current = String.format("%.2f", imbalanceValidation.currentImbalance)
+            val avg = String.format("%.2f", imbalanceValidation.averageImbalance)
+            val drop = String.format("%.2f", imbalanceValidation.dropFromSignal)
+            log.info(
+                "[$market] Imbalance 유지 검증 실패 (${imbalanceValidation.reason}): " +
+                        "current=$current, avg=$avg, drop=$drop, samples=${imbalanceValidation.sampleCount}"
+            )
+            return false
+        }
+
+        // KRW 잔고 예약 (BalanceReservationService 원자적 체크)
+        val requiredKrw = tradingAmountService.getAdaptiveAmount("memescalper")
+        if (!balanceReservationService.reserve("MEME_SCALPER", market, requiredKrw)) {
+            return false
+        }
+
+        var keepReservation = false
+        try {
+            // 코인 잔고 체크 - 이미 보유 시 진입 불가 (ABANDONED 케이스 방지)
+            val coinSymbol = market.removePrefix("KRW-")
+            val coinBalance = getCoinTotalBalance(market)
+            if (coinBalance > BigDecimal.ZERO) {
+                log.warn("[$market] 이미 $coinSymbol 잔고 보유 중: $coinBalance - 중복 진입 방지")
+                return false
+            }
+
+            keepReservation = true
+            return true
+        } catch (e: Exception) {
+            log.warn("[$market] 잔고 조회 실패, 진입 보류: ${e.message}")
+            return false
+        } finally {
+            if (!keepReservation) {
+                balanceReservationService.release("MEME_SCALPER", market)
+            }
+        }
     }
 
     /**

@@ -261,6 +261,11 @@ memescalper:
   price-spike-percent: ${MEME_SCALPER_PRICE_SPIKE:3.0}
   min-bid-imbalance: ${MEME_SCALPER_MIN_IMBALANCE:0.3}
   max-rsi: ${MEME_SCALPER_MAX_RSI:80}
+  # 진입 전 Imbalance 유지 검증 (IMBALANCE_FLIP/TIMEOUT 감소 목적)
+  entry-imbalance-persistence-enabled: ${MEME_SCALPER_ENTRY_IMBALANCE_PERSISTENCE_ENABLED:true}
+  entry-imbalance-persistence-min: ${MEME_SCALPER_ENTRY_IMBALANCE_PERSISTENCE_MIN:0.5}
+  entry-imbalance-drop-threshold: ${MEME_SCALPER_ENTRY_IMBALANCE_DROP_THRESHOLD:0.2}
+  entry-imbalance-lookback-candles: ${MEME_SCALPER_ENTRY_IMBALANCE_LOOKBACK_CANDLES:2}
   # 웹소켓 기반 선제 후보 추출 (경보제 의존 제거)
   use-websocket-feed: ${MEME_SCALPER_USE_WS_FEED:true}
   websocket-candidate-limit: ${MEME_SCALPER_WS_CANDIDATE_LIMIT:40}

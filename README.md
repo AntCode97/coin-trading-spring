@@ -536,6 +536,12 @@ curl -X POST http://localhost:8080/api/settings/regime \
 
 ## 최근 개선사항
 
+### Meme Scalper 진입 Imbalance 유지 필터 추가 (2026-02-25)
+
+1. 진입 신호 직후 `1~2분` 구간의 Imbalance 평균 유지 여부를 검증하는 필터를 추가했습니다.
+2. `entryImbalance - currentImbalance >= 0.2` 급감 또는 평균 Imbalance `< 0.5`이면 진입을 취소합니다.
+3. 설정 키 추가: `entry-imbalance-persistence-enabled/min/drop-threshold/lookback-candles`.
+
 ### 오토파일럿 UX 2차 + 주문 생명주기 텔레메트리 (2026-02-24)
 
 1. 하단 전체폭 `오토파일럿 라이브 도크` 추가: 후보 상위 10개, 탈락/통과 사유, 워커 상태, 실시간 타임라인을 동시에 표시합니다.

@@ -139,6 +139,23 @@ coin-trading-spring/
 
 ---
 
+## 최근 변경사항 (2026-02-25)
+
+### Meme Scalper 진입 Imbalance 유지 검증 필터
+
+- `MemeScalperDetector.validateEntryImbalancePersistence()` 추가.
+- 진입 직전 1~2분(1분봉 기준) Imbalance 평균이 기준 미달이면 진입 취소:
+  - `averageImbalance < entry-imbalance-persistence-min(기본 0.5)`
+- 진입 신호 대비 Imbalance 급감 시 진입 취소:
+  - `entryImbalance - currentImbalance >= entry-imbalance-drop-threshold(기본 0.2)`
+- 신규 설정 키:
+  - `memescalper.entry-imbalance-persistence-enabled`
+  - `memescalper.entry-imbalance-persistence-min`
+  - `memescalper.entry-imbalance-drop-threshold`
+  - `memescalper.entry-imbalance-lookback-candles`
+
+---
+
 ## 최근 변경사항 (2026-02-24)
 
 ### 1. 오토파일럿 라이브 도크 UX 추가 (Desktop)

@@ -57,6 +57,20 @@ data class MemeScalperProperties(
     /** RSI 상한 (과매수 진입 방지) */
     var maxRsi: Int = 80,
 
+    // === 진입 Imbalance 유지 필터 ===
+
+    /** 진입 직전 Imbalance 유지 검증 활성화 */
+    var entryImbalancePersistenceEnabled: Boolean = true,
+
+    /** 진입 Imbalance 유지 평균 최소값 */
+    var entryImbalancePersistenceMin: Double = 0.5,
+
+    /** 진입 시점 대비 Imbalance 급감 허용치 (entry - current >= threshold 이면 취소) */
+    var entryImbalanceDropThreshold: Double = 0.2,
+
+    /** 진입 검증에 사용할 1분봉 lookback 캔들 수 (1~2 권장) */
+    var entryImbalanceLookbackCandles: Int = 2,
+
     // === 웹소켓 후보 추출 ===
 
     /** 웹소켓 피드 기반 후보 추출 사용 여부 */

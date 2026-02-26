@@ -11,6 +11,7 @@ import org.springframework.stereotype.Component
 import java.math.BigDecimal
 import java.time.Instant
 import java.time.temporal.ChronoUnit
+import java.util.concurrent.ConcurrentHashMap
 
 /**
  * 펌프 감지 결과
@@ -26,6 +27,18 @@ data class PumpSignal(
     val currentPrice: BigDecimal,    // 현재가
     val tradingValue: BigDecimal,    // 24시간 거래대금
     val score: Int                   // 종합 점수 (0-100)
+)
+
+/**
+ * 진입 직전 Imbalance 유지 검증 결과
+ */
+data class EntryImbalanceValidationResult(
+    val passed: Boolean,
+    val currentImbalance: Double,
+    val averageImbalance: Double,
+    val dropFromSignal: Double,
+    val sampleCount: Int,
+    val reason: String? = null
 )
 
 /**
@@ -47,6 +60,9 @@ class MemeScalperDetector(
     // 실패 마켓 캐시 (TTL 기반)
     private val failedMarkets = mutableMapOf<String, Instant>()
 
+    // 마켓별 Imbalance 히스토리 (진입 유지 검증용)
+    private val imbalanceHistory = ConcurrentHashMap<String, MutableList<ImbalanceSnapshot>>()
+
     companion object {
         // 기술적 지표 상수 (스캘핑용 빠른 설정은 TradingConstants 사용)
         const val RSI_PERIOD = TradingConstants.RSI_PERIOD_FAST
@@ -60,11 +76,20 @@ class MemeScalperDetector(
 
         // 실패 마켓 캐시 TTL (1시간)
         private val FAILURE_TTL_MINUTES = 60L
+
+        // Imbalance 히스토리 보관 상수 (진입 검증은 최대 2분, 여유 버퍼 5분)
+        private const val IMBALANCE_HISTORY_RETENTION_MINUTES = 5L
+        private const val IMBALANCE_HISTORY_MAX_POINTS = 240
     }
 
     private data class ScanTargets(
         val markets: List<String>,
         val source: String
+    )
+
+    private data class ImbalanceSnapshot(
+        val imbalance: Double,
+        val timestamp: Instant
     )
 
     /**
@@ -101,6 +126,102 @@ class MemeScalperDetector(
      */
     fun getRealtimePrice(market: String): Double? {
         return marketWebSocketFeed?.latestPrice(market)
+    }
+
+    /**
+     * 진입 직전 Imbalance 유지 검증
+     *
+     * 조건:
+     * 1) 진입 신호 대비 Imbalance 급감폭이 임계값 이상이면 취소
+     * 2) 최근 1~2분 평균 Imbalance가 기준 미만이면 취소
+     */
+    fun validateEntryImbalancePersistence(signal: PumpSignal): EntryImbalanceValidationResult {
+        if (!properties.entryImbalancePersistenceEnabled) {
+            return EntryImbalanceValidationResult(
+                passed = true,
+                currentImbalance = signal.bidImbalance,
+                averageImbalance = signal.bidImbalance,
+                dropFromSignal = 0.0,
+                sampleCount = 1
+            )
+        }
+
+        val market = signal.market
+        val now = Instant.now()
+        val currentImbalance = calculateImbalance(market)
+        recordImbalanceSnapshot(market, currentImbalance, now)
+
+        val lookbackCandles = properties.entryImbalanceLookbackCandles.coerceIn(1, 2)
+        val since = now.minus(lookbackCandles.toLong(), ChronoUnit.MINUTES)
+        val recentImbalances = readRecentImbalances(market, since)
+        val samples = recentImbalances.toMutableList()
+        if (samples.size < 2) {
+            samples.add(signal.bidImbalance)
+        }
+
+        val averageImbalance = samples.average()
+        val dropFromSignal = signal.bidImbalance - currentImbalance
+        val minAverage = properties.entryImbalancePersistenceMin
+        val maxDrop = properties.entryImbalanceDropThreshold
+
+        if (dropFromSignal >= maxDrop) {
+            return EntryImbalanceValidationResult(
+                passed = false,
+                currentImbalance = currentImbalance,
+                averageImbalance = averageImbalance,
+                dropFromSignal = dropFromSignal,
+                sampleCount = samples.size,
+                reason = "IMBALANCE_DROP"
+            )
+        }
+
+        if (averageImbalance < minAverage) {
+            return EntryImbalanceValidationResult(
+                passed = false,
+                currentImbalance = currentImbalance,
+                averageImbalance = averageImbalance,
+                dropFromSignal = dropFromSignal,
+                sampleCount = samples.size,
+                reason = "IMBALANCE_AVERAGE_LOW"
+            )
+        }
+
+        return EntryImbalanceValidationResult(
+            passed = true,
+            currentImbalance = currentImbalance,
+            averageImbalance = averageImbalance,
+            dropFromSignal = dropFromSignal,
+            sampleCount = samples.size
+        )
+    }
+
+    private fun recordImbalanceSnapshot(
+        market: String,
+        imbalance: Double,
+        now: Instant = Instant.now()
+    ) {
+        val history = imbalanceHistory.computeIfAbsent(market) { mutableListOf() }
+        synchronized(history) {
+            history.add(ImbalanceSnapshot(imbalance = imbalance, timestamp = now))
+
+            val retentionCutoff = now.minus(IMBALANCE_HISTORY_RETENTION_MINUTES, ChronoUnit.MINUTES)
+            history.removeIf { it.timestamp.isBefore(retentionCutoff) }
+
+            if (history.size > IMBALANCE_HISTORY_MAX_POINTS) {
+                history.subList(0, history.size - IMBALANCE_HISTORY_MAX_POINTS).clear()
+            }
+        }
+    }
+
+    private fun readRecentImbalances(market: String, since: Instant): List<Double> {
+        val history = imbalanceHistory[market] ?: return emptyList()
+        synchronized(history) {
+            return history
+                .asSequence()
+                .filter { !it.timestamp.isBefore(since) }
+                .map { it.imbalance }
+                .toList()
+        }
     }
 
     private fun resolveScanTargets(): ScanTargets {
@@ -234,6 +355,7 @@ class MemeScalperDetector(
         val orderbook = bithumbPublicApi.getOrderbook(market)?.firstOrNull()
         val bidImbalance = calculateImbalanceFromOrderbook(orderbook)
         val spreadPercent = calculateSpread(orderbook)
+        recordImbalanceSnapshot(market, bidImbalance)
 
         // 스프레드 필터 (0.5% 초과 시 제외 - 슬리피지 위험)
         if (spreadPercent > TradingConstants.MAX_SPREAD_PERCENT) {
@@ -432,6 +554,7 @@ class MemeScalperDetector(
 
         // 호가창 반전 체크
         val imbalance = calculateImbalance(market)
+        recordImbalanceSnapshot(market, imbalance)
         if (imbalance < properties.imbalanceExitThreshold) {
             return ExitSignal(
                 market = market,
