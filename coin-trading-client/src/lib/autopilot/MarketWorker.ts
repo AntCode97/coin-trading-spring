@@ -72,6 +72,7 @@ interface WorkerEntryDecision {
   reason: string;
   severity: 'LOW' | 'MEDIUM' | 'HIGH';
   riskTags?: string[];
+  suggestedCooldownSec?: number | null;
 }
 
 interface WorkerEntryPlan {
@@ -260,11 +261,11 @@ export class MarketWorker {
     const entryDecision = await this.deps.evaluateEntry(this.config.market, context);
     const llmResult = this.evaluateLlmDecision(entryDecision);
     if (!llmResult.allow) {
-      const cooldownMs = this.resolveRejectCooldownMs(entryDecision.severity, entryDecision.confidence);
+      const cooldownMs = this.resolveLlmRejectCooldownMs(entryDecision);
       this.emitEvent(
         'LLM_REJECT',
         entryDecision.severity === 'HIGH' ? 'ERROR' : 'WARN',
-        `진입 거절 (${entryDecision.confidence.toFixed(0)}/${entryDecision.severity}): ${entryDecision.reason}`
+        `진입 거절 (${entryDecision.confidence.toFixed(0)}/${entryDecision.severity}) · 쿨다운 ${Math.ceil(cooldownMs / 1000)}초: ${entryDecision.reason}`
       );
       this.cooldownUntil = Date.now() + cooldownMs;
       this.setState('COOLDOWN', `진입 보류(${Math.ceil(cooldownMs / 1000)}초): ${entryDecision.reason}`);
@@ -444,6 +445,30 @@ export class MarketWorker {
     if (severity === 'HIGH') return 300_000;
     if (confidence >= 60) return 45_000;
     return Math.max(120_000, this.config.rejectCooldownMs);
+  }
+
+  private resolveLlmRejectCooldownMs(decision: WorkerEntryDecision): number {
+    const fallbackMs = this.resolveRejectCooldownMs(decision.severity, decision.confidence);
+    const suggestedSec = this.normalizeSuggestedCooldownSec(decision.suggestedCooldownSec);
+    if (suggestedSec == null) return fallbackMs;
+
+    const severityFloorSec = decision.severity === 'HIGH' ? 180 : decision.severity === 'MEDIUM' ? 45 : 30;
+    const severityCeilSec = decision.severity === 'HIGH' ? 1200 : decision.severity === 'MEDIUM' ? 900 : 600;
+    const boundedSec = Math.min(severityCeilSec, Math.max(severityFloorSec, suggestedSec));
+    return boundedSec * 1000;
+  }
+
+  private normalizeSuggestedCooldownSec(value: unknown): number | null {
+    if (typeof value === 'number' && Number.isFinite(value)) {
+      return Math.min(1200, Math.max(30, Math.round(value)));
+    }
+    if (typeof value === 'string') {
+      const parsed = Number(value);
+      if (Number.isFinite(parsed)) {
+        return Math.min(1200, Math.max(30, Math.round(parsed)));
+      }
+    }
+    return null;
   }
 
   private async managePosition(position: GuidedTradePosition): Promise<void> {

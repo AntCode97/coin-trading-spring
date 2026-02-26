@@ -151,6 +151,7 @@ interface EntryDecision {
   reason: string;
   severity: 'LOW' | 'MEDIUM' | 'HIGH';
   riskTags: string[];
+  suggestedCooldownSec: number | null;
 }
 
 interface PlannedEntryOrder {
@@ -159,6 +160,11 @@ interface PlannedEntryOrder {
   orderType: 'MARKET' | 'LIMIT';
   limitPrice?: number;
   entryGapPct: number;
+}
+
+interface LlmShortlistDecision {
+  markets: Set<string>;
+  budget: number;
 }
 
 export class AutopilotOrchestrator {
@@ -182,6 +188,7 @@ export class AutopilotOrchestrator {
   private blockedByDailyLoss = false;
   private blockedReason: string | null = null;
   private appliedRecommendedWinRateThreshold = 0;
+  private lastLlmShortlistSignature: string | null = null;
 
   constructor(config: AutopilotConfig, callbacks: OrchestratorCallbacks) {
     this.config = config;
@@ -419,6 +426,9 @@ export class AutopilotOrchestrator {
       const ranked = this.rankCandidates(topTwenty);
       const appliedThreshold = this.resolveRecommendedThreshold(markets, ranked);
       this.appliedRecommendedWinRateThreshold = appliedThreshold;
+      const scopedCandidates = ranked.slice(0, this.config.candidateLimit);
+      const llmShortlist = this.buildLlmShortlist(scopedCandidates, appliedThreshold);
+      this.emitLlmShortlistEvent(scopedCandidates.length, llmShortlist);
       const openMarketSet = new Set(
         openPositions
           .filter((position) => position.status === 'OPEN' || position.status === 'PENDING_ENTRY')
@@ -428,7 +438,7 @@ export class AutopilotOrchestrator {
       let availableSlots = Math.max(0, this.config.maxConcurrentPositions - openMarketSet.size);
       const nextCandidates: AutopilotCandidateView[] = [];
 
-      for (const candidate of ranked.slice(0, this.config.candidateLimit)) {
+      for (const candidate of scopedCandidates) {
         const evaluation = this.evaluateCandidateEligibility(
           candidate,
           openMarketSet,
@@ -438,11 +448,15 @@ export class AutopilotOrchestrator {
         let stage: CandidateStage = evaluation.stage;
         let reason = evaluation.reason;
         const scoreInfo = this.candidateScoreByMarket.get(candidate.market);
+        if (evaluation.stage === 'RULE_PASS' && !llmShortlist.markets.has(candidate.market)) {
+          stage = 'RULE_FAIL';
+          reason = `고확신 필터 미통과로 LLM 생략 (상한 ${llmShortlist.budget}개)`;
+        }
         if (scoreInfo) {
           reason = `${reason} · score ${scoreInfo.score.toFixed(1)} / RR ${scoreInfo.riskRewardRatio.toFixed(2)} / 괴리 ${scoreInfo.entryGapPct.toFixed(2)}%`;
         }
 
-        if (evaluation.stage === 'RULE_PASS') {
+        if (stage === 'RULE_PASS') {
           this.spawnWorker(candidate.market, candidate, scoreInfo);
           stage = 'ENTERED';
           reason = '워커 생성 후 진입 분석 시작';
@@ -467,6 +481,7 @@ export class AutopilotOrchestrator {
         });
       }
 
+      this.pruneIdleWorkers(llmShortlist.markets, openMarketSet);
       this.replaceCandidates(nextCandidates);
       this.emitState();
     } catch (error) {
@@ -548,6 +563,112 @@ export class AutopilotOrchestrator {
         koreanName: position.market,
         recommendedEntryWinRate: null,
         marketEntryWinRate: null,
+      });
+    }
+  }
+
+  private buildLlmShortlist(
+    candidates: GuidedMarketItem[],
+    minRecommendedWinRate: number
+  ): LlmShortlistDecision {
+    const budget = Math.min(6, Math.max(2, Math.ceil(this.config.maxConcurrentPositions * 1.5)));
+    const strict: GuidedMarketItem[] = [];
+    const relaxed: GuidedMarketItem[] = [];
+
+    for (const candidate of candidates) {
+      const recommendedWin = candidate.recommendedEntryWinRate ?? 0;
+      if (recommendedWin < minRecommendedWinRate) continue;
+
+      const marketWin = candidate.marketEntryWinRate ?? 0;
+      const score = this.candidateScoreByMarket.get(candidate.market);
+      if (!score) continue;
+
+      const strictPass =
+        recommendedWin >= minRecommendedWinRate + 0.5 &&
+        marketWin >= minRecommendedWinRate - 4 &&
+        score.score >= 60 &&
+        score.riskRewardRatio >= 1.18 &&
+        score.entryGapPct <= 0.9;
+      if (strictPass) {
+        strict.push(candidate);
+        continue;
+      }
+
+      const relaxedPass =
+        marketWin >= minRecommendedWinRate - 7 &&
+        score.score >= 56 &&
+        score.riskRewardRatio >= 1.05 &&
+        score.entryGapPct <= 1.2;
+      if (relaxedPass) {
+        relaxed.push(candidate);
+      }
+    }
+
+    const byScoreDesc = (left: GuidedMarketItem, right: GuidedMarketItem): number => {
+      const l = this.candidateScoreByMarket.get(left.market)?.score ?? 0;
+      const r = this.candidateScoreByMarket.get(right.market)?.score ?? 0;
+      return r - l;
+    };
+
+    strict.sort(byScoreDesc);
+    relaxed.sort(byScoreDesc);
+
+    const merged: GuidedMarketItem[] = [];
+    const seen = new Set<string>();
+    for (const candidate of strict) {
+      if (seen.has(candidate.market)) continue;
+      merged.push(candidate);
+      seen.add(candidate.market);
+    }
+    for (const candidate of relaxed) {
+      if (seen.has(candidate.market)) continue;
+      merged.push(candidate);
+      seen.add(candidate.market);
+    }
+
+    return {
+      markets: new Set(merged.slice(0, budget).map((candidate) => candidate.market)),
+      budget,
+    };
+  }
+
+  private emitLlmShortlistEvent(candidateCount: number, shortlist: LlmShortlistDecision): void {
+    const markets = Array.from(shortlist.markets).sort();
+    const signature = `${candidateCount}|${shortlist.budget}|${markets.join(',')}`;
+    if (this.lastLlmShortlistSignature === signature) return;
+    this.lastLlmShortlistSignature = signature;
+
+    this.pushEvent({
+      type: 'SYSTEM',
+      level: 'INFO',
+      action: 'LLM_SHORTLIST',
+      detail: `후보 ${candidateCount}개 중 ${shortlist.markets.size}개만 LLM 평가 (${markets.join(', ') || '-'})`,
+    });
+  }
+
+  private pruneIdleWorkers(
+    shortlistMarkets: Set<string>,
+    openMarketSet: Set<string>
+  ): void {
+    for (const [market, worker] of this.workers.entries()) {
+      if (openMarketSet.has(market) || shortlistMarkets.has(market)) continue;
+      const state = this.workerStates.get(market);
+      if (
+        state &&
+        (state.status === 'ENTERING'
+          || state.status === 'MANAGING'
+          || state.status === 'PLAYWRIGHT_CHECK'
+          || state.status === 'PAUSED')
+      ) {
+        continue;
+      }
+      worker.stop('고확신 후보군 제외로 워커 정리');
+      this.pushEvent({
+        type: 'WORKER',
+        level: 'INFO',
+        market,
+        action: 'WORKER_PRUNED',
+        detail: 'LLM 평가 대상 축소로 비활성 워커 정리',
       });
     }
   }
@@ -750,8 +871,9 @@ export class AutopilotOrchestrator {
       prompt: [
         `${market} 진입 승인 여부를 판단해.`,
         '반드시 JSON 한 줄로만 답해.',
-        '형식: {"approve":true|false,"confidence":0-100,"severity":"LOW|MEDIUM|HIGH","riskTags":["..."],"reason":"..."}',
+        '형식: {"approve":true|false,"confidence":0-100,"severity":"LOW|MEDIUM|HIGH","riskTags":["..."],"cooldownSec":30-1200,"reason":"..."}',
         '규칙: 변동성 과다/손절 근접/추세 훼손이면 approve=false.',
+        'approve=false면 cooldownSec을 반드시 넣어. 위험 높을수록 길게.',
       ].join('\n'),
     });
 
@@ -761,16 +883,23 @@ export class AutopilotOrchestrator {
     const reason = typeof parsed?.reason === 'string' ? parsed.reason : 'LLM 응답 파싱 실패';
     const severity = this.parseRiskSeverity(parsed?.severity, reason);
     const riskTags = this.parseRiskTags(parsed?.riskTags, reason);
+    const suggestedCooldownRaw = this.toSafeNumber(
+      parsed?.cooldownSec ?? parsed?.retryAfterSec ?? parsed?.recheckSec,
+      Number.NaN
+    );
+    const suggestedCooldownSec = Number.isFinite(suggestedCooldownRaw)
+      ? Math.min(1200, Math.max(30, Math.round(suggestedCooldownRaw)))
+      : null;
 
     this.pushEvent({
       type: 'LLM',
       level: approve ? 'INFO' : severity === 'HIGH' ? 'ERROR' : 'WARN',
       market,
       action: 'ENTRY_REVIEW',
-      detail: `${approve ? '승인' : '거절'} (${confidence.toFixed(0)}/${severity}): ${reason}`,
+      detail: `${approve ? '승인' : '거절'} (${confidence.toFixed(0)}/${severity})${suggestedCooldownSec ? ` · 쿨다운 ${suggestedCooldownSec}초` : ''}: ${reason}`,
     });
 
-    return { approve, confidence, reason, severity, riskTags };
+    return { approve, confidence, reason, severity, riskTags, suggestedCooldownSec };
   }
 
   private async planEntryOrder(
@@ -1062,7 +1191,9 @@ export class AutopilotOrchestrator {
 
   private async supervise(): Promise<void> {
     if (!this.running || !this.config.enabled) return;
+    const advisoryStatuses = new Set<WorkerStatus>(['ENTERING', 'MANAGING', 'PLAYWRIGHT_CHECK']);
     const workerSummary = Array.from(this.workerStates.values())
+      .filter((worker) => advisoryStatuses.has(worker.status))
       .map((worker) => `${worker.market}:${worker.status}`)
       .join(', ');
     if (!workerSummary) return;
