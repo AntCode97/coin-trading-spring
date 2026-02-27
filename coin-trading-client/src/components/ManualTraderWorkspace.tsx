@@ -145,6 +145,15 @@ function formatWinRate(value: number | null | undefined): string {
   return `${value.toFixed(1)}%`;
 }
 
+function normalizeFocusedScalpMarket(raw: string): string | null {
+  const token = raw.trim().toUpperCase();
+  if (!token) return null;
+  const market = token.startsWith('KRW-') ? token : `KRW-${token}`;
+  const symbol = market.slice(4);
+  if (!symbol || !/^[A-Z0-9]+$/.test(symbol)) return null;
+  return market;
+}
+
 function normalizeFocusedScalpMarkets(raw: string): { markets: string[]; invalidTokens: string[] } {
   const tokens = raw
     .split(/[,\s]+/)
@@ -155,9 +164,8 @@ function normalizeFocusedScalpMarkets(raw: string): { markets: string[]; invalid
   const seen = new Set<string>();
   let overflowed = false;
   for (const token of tokens) {
-    const market = token.startsWith('KRW-') ? token : `KRW-${token}`;
-    const symbol = market.replace('KRW-', '');
-    if (!symbol || !/^[A-Z0-9]+$/.test(symbol)) {
+    const market = normalizeFocusedScalpMarket(token);
+    if (!market) {
       invalidTokens.push(token);
       continue;
     }
@@ -174,6 +182,14 @@ function normalizeFocusedScalpMarkets(raw: string): { markets: string[]; invalid
   }
   return { markets, invalidTokens };
 }
+
+type FocusedScalpContextMenu = {
+  x: number;
+  y: number;
+  market: string;
+  koreanName: string;
+  included: boolean;
+};
 
 function isWinRateSort(sortBy: GuidedMarketSortBy): boolean {
   return sortBy === 'RECOMMENDED_ENTRY_WIN_RATE' || sortBy === 'MARKET_ENTRY_WIN_RATE';
@@ -482,6 +498,11 @@ export default function ManualTraderWorkspace() {
   const [focusedScalpMarketsInput, setFocusedScalpMarketsInput] = useState<string>(
     (prefs.focusedScalpMarkets ?? []).join(', ')
   );
+  const [focusedScalpWindowOpen, setFocusedScalpWindowOpen] = useState(false);
+  const [focusedScalpTargetMarket, setFocusedScalpTargetMarket] = useState<string>(
+    prefs.selectedMarket ?? 'KRW-BTC'
+  );
+  const [focusedScalpContextMenu, setFocusedScalpContextMenu] = useState<FocusedScalpContextMenu | null>(null);
   const [focusedScalpPollIntervalSec, setFocusedScalpPollIntervalSec] = useState<number>(
     Math.min(300, Math.max(5, Math.round(prefs.focusedScalpPollIntervalSec ?? 20)))
   );
@@ -722,6 +743,57 @@ export default function ManualTraderWorkspace() {
       row.symbol.toLowerCase().includes(keyword)
     );
   }, [marketsQuery.data, search]);
+  const focusedScalpMarketSet = useMemo(() => new Set(focusedScalpParsed.markets), [focusedScalpParsed.markets]);
+
+  const applyFocusedScalpMarkets = useCallback((nextMarkets: string[]) => {
+    setFocusedScalpMarketsInput(nextMarkets.join(', '));
+  }, []);
+
+  const addFocusedScalpMarket = useCallback((market: string) => {
+    const normalized = normalizeFocusedScalpMarket(market);
+    if (!normalized) return false;
+    if (focusedScalpMarketSet.has(normalized)) return true;
+    if (focusedScalpParsed.markets.length >= 8) {
+      setStatusMessage('선택 코인 단타는 최대 8개까지만 등록할 수 있습니다.');
+      return false;
+    }
+    applyFocusedScalpMarkets([...focusedScalpParsed.markets, normalized]);
+    setStatusMessage(`${normalized} 선택 코인 단타에 추가`);
+    return true;
+  }, [applyFocusedScalpMarkets, focusedScalpMarketSet, focusedScalpParsed.markets]);
+
+  const removeFocusedScalpMarket = useCallback((market: string) => {
+    const normalized = normalizeFocusedScalpMarket(market);
+    if (!normalized) return;
+    if (!focusedScalpMarketSet.has(normalized)) return;
+    applyFocusedScalpMarkets(focusedScalpParsed.markets.filter((item) => item !== normalized));
+    setStatusMessage(`${normalized} 선택 코인 단타에서 제거`);
+  }, [applyFocusedScalpMarkets, focusedScalpMarketSet, focusedScalpParsed.markets]);
+
+  const clearFocusedScalpMarkets = useCallback(() => {
+    applyFocusedScalpMarkets([]);
+    setStatusMessage('선택 코인 단타 목록을 초기화했습니다.');
+  }, [applyFocusedScalpMarkets]);
+
+  const openFocusedScalpWindow = useCallback((market?: string) => {
+    const normalized = normalizeFocusedScalpMarket(market ?? selectedMarket) ?? selectedMarket;
+    setFocusedScalpTargetMarket(normalized);
+    setFocusedScalpWindowOpen(true);
+  }, [selectedMarket]);
+
+  const handleMarketContextMenu = useCallback((event: React.MouseEvent<HTMLButtonElement>, item: GuidedMarketItem) => {
+    event.preventDefault();
+    const menuWidth = 240;
+    const menuHeight = 132;
+    setSelectedMarket(item.market);
+    setFocusedScalpContextMenu({
+      x: Math.max(8, Math.min(event.clientX, window.innerWidth - menuWidth)),
+      y: Math.max(8, Math.min(event.clientY, window.innerHeight - menuHeight)),
+      market: item.market,
+      koreanName: item.koreanName,
+      included: focusedScalpMarketSet.has(item.market),
+    });
+  }, [focusedScalpMarketSet]);
 
   const connectMcpAndPlaywright = useCallback(async (options?: ConnectPlaywrightOptions) => {
     const tradingMcpUrl = deriveMcpUrl();
@@ -884,6 +956,37 @@ export default function ManualTraderWorkspace() {
     focusedScalpParsed.markets,
     focusedScalpPollIntervalSec,
   ]);
+
+  useEffect(() => {
+    if (!focusedScalpContextMenu) return;
+    const close = () => setFocusedScalpContextMenu(null);
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        close();
+      }
+    };
+    window.addEventListener('click', close);
+    window.addEventListener('scroll', close, true);
+    window.addEventListener('resize', close);
+    window.addEventListener('keydown', onKeyDown);
+    return () => {
+      window.removeEventListener('click', close);
+      window.removeEventListener('scroll', close, true);
+      window.removeEventListener('resize', close);
+      window.removeEventListener('keydown', onKeyDown);
+    };
+  }, [focusedScalpContextMenu]);
+
+  useEffect(() => {
+    if (!focusedScalpWindowOpen) return;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        setFocusedScalpWindowOpen(false);
+      }
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [focusedScalpWindowOpen]);
 
   // 차트 초기화
   useEffect(() => {
@@ -1533,13 +1636,17 @@ export default function ManualTraderWorkspace() {
             {filteredMarkets.map((item) => (
               <button
                 key={item.market}
-                className={`guided-market-row ${selectedMarket === item.market ? 'active' : ''}`}
+                className={`guided-market-row ${selectedMarket === item.market ? 'active' : ''} ${focusedScalpMarketSet.has(item.market) ? 'focused' : ''}`}
                 onClick={() => setSelectedMarket(item.market)}
+                onContextMenu={(event) => handleMarketContextMenu(event, item)}
                 type="button"
               >
                 <div className="name-wrap">
                   <strong>{item.koreanName}</strong>
-                  <span>{item.market}</span>
+                  <span>
+                    {item.market}
+                    {focusedScalpMarketSet.has(item.market) && <em className="focused-chip">단타</em>}
+                  </span>
                 </div>
                 <div className="price-wrap">
                   <strong>{formatKrw(item.tradePrice)}</strong>
@@ -1902,27 +2009,44 @@ export default function ManualTraderWorkspace() {
                     />
                   </label>
                 </div>
-                <div className="autopilot-row">
-                  <label>
-                    선택 코인 목록 (최대 8개, 콤마/공백 구분)
-                    <input
-                      type="text"
-                      value={focusedScalpMarketsInput}
-                      onChange={(event) => setFocusedScalpMarketsInput(event.target.value)}
-                      placeholder="KRW-BTC, KRW-ETH, XRP"
-                    />
-                  </label>
-                  <small>
-                    유효 코인 {focusedScalpParsed.markets.length}개: {focusedScalpParsed.markets.join(', ') || '-'}
-                  </small>
+                <div className="focused-scalp-ux">
+                  <div className="focused-scalp-ux-head">
+                    <strong>선택 코인 단타 주문창</strong>
+                    <div className="focused-scalp-ux-actions">
+                      <button type="button" onClick={() => openFocusedScalpWindow()}>
+                        주문창 열기
+                      </button>
+                      <button
+                        type="button"
+                        className="ghost"
+                        onClick={clearFocusedScalpMarkets}
+                        disabled={focusedScalpParsed.markets.length === 0}
+                      >
+                        목록 비우기
+                      </button>
+                    </div>
+                  </div>
+                  <small>왼쪽 코인 리스트에서 코인을 우클릭해 추가/제거하세요. (최대 8개)</small>
+                  <div className="focused-scalp-chip-list">
+                    {focusedScalpParsed.markets.length === 0 ? (
+                      <span className="focused-scalp-chip-empty">등록된 코인이 없습니다.</span>
+                    ) : (
+                      focusedScalpParsed.markets.map((market) => (
+                        <span key={market} className="focused-scalp-chip">
+                          {market}
+                          <button
+                            type="button"
+                            onClick={() => removeFocusedScalpMarket(market)}
+                            aria-label={`${market} 제거`}
+                          >
+                            ×
+                          </button>
+                        </span>
+                      ))
+                    )}
+                  </div>
                   {focusedScalpEnabled && focusedScalpParsed.markets.length === 0 && (
-                    <small className="autopilot-warning">선택 코인 단타 루프가 켜져 있지만 유효 코인 목록이 비어 있습니다.</small>
-                  )}
-                  {focusedScalpParsed.invalidTokens.length > 0 && (
-                    <small className="autopilot-warning">
-                      제외된 입력: {focusedScalpParsed.invalidTokens.filter((token) => token !== 'MAX_8_EXCEEDED').join(', ') || '-'}
-                      {focusedScalpParsed.invalidTokens.includes('MAX_8_EXCEEDED') ? ' · 최대 8개까지만 사용됩니다.' : ''}
-                    </small>
+                    <small className="autopilot-warning">선택 코인 단타 루프가 켜져 있지만 등록된 코인이 없습니다.</small>
                   )}
                 </div>
                 <div className="autopilot-grid">
@@ -2504,6 +2628,112 @@ export default function ManualTraderWorkspace() {
           {statusMessage && <p className="guided-status">{statusMessage}</p>}
         </aside>
       </div>
+
+      {focusedScalpContextMenu && (
+        <div
+          className="focused-scalp-context-menu"
+          style={{ left: focusedScalpContextMenu.x, top: focusedScalpContextMenu.y }}
+          onClick={(event) => event.stopPropagation()}
+        >
+          <div className="menu-title">
+            {focusedScalpContextMenu.koreanName} <span>{focusedScalpContextMenu.market}</span>
+          </div>
+          <button
+            type="button"
+            onClick={() => {
+              if (focusedScalpContextMenu.included) {
+                removeFocusedScalpMarket(focusedScalpContextMenu.market);
+              } else {
+                addFocusedScalpMarket(focusedScalpContextMenu.market);
+              }
+              setFocusedScalpContextMenu(null);
+            }}
+          >
+            {focusedScalpContextMenu.included ? '선택 코인 단타에서 제거' : '선택 코인 단타에 추가'}
+          </button>
+          <button
+            type="button"
+            onClick={() => {
+              openFocusedScalpWindow(focusedScalpContextMenu.market);
+              setFocusedScalpContextMenu(null);
+            }}
+          >
+            단타 주문창 열기
+          </button>
+        </div>
+      )}
+
+      {focusedScalpWindowOpen && (
+        <div className="focused-scalp-modal-backdrop" onClick={() => setFocusedScalpWindowOpen(false)}>
+          <div className="focused-scalp-modal" onClick={(event) => event.stopPropagation()}>
+            <div className="focused-scalp-modal-head">
+              <strong>선택 코인 단타 주문창</strong>
+              <button type="button" onClick={() => setFocusedScalpWindowOpen(false)}>닫기</button>
+            </div>
+            <label>
+              대상 코인
+              <select
+                value={focusedScalpTargetMarket}
+                onChange={(event) => setFocusedScalpTargetMarket(event.target.value)}
+              >
+                {!marketsQuery.data?.some((item) => item.market === focusedScalpTargetMarket) && (
+                  <option value={focusedScalpTargetMarket}>{focusedScalpTargetMarket}</option>
+                )}
+                {(marketsQuery.data ?? []).map((item) => (
+                  <option key={item.market} value={item.market}>
+                    {item.market} · {item.koreanName}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <div className="focused-scalp-modal-actions">
+              <button
+                type="button"
+                onClick={() => {
+                  if (focusedScalpMarketSet.has(focusedScalpTargetMarket)) {
+                    removeFocusedScalpMarket(focusedScalpTargetMarket);
+                  } else {
+                    addFocusedScalpMarket(focusedScalpTargetMarket);
+                  }
+                }}
+              >
+                {focusedScalpMarketSet.has(focusedScalpTargetMarket) ? '목록에서 제거' : '목록에 추가'}
+              </button>
+              <button
+                type="button"
+                className="ghost"
+                onClick={() => {
+                  setSelectedMarket(focusedScalpTargetMarket);
+                  setFocusedScalpWindowOpen(false);
+                }}
+              >
+                차트로 이동
+              </button>
+            </div>
+            <div className="focused-scalp-modal-list">
+              <strong>등록된 선택 코인 ({focusedScalpParsed.markets.length}/8)</strong>
+              <div className="focused-scalp-chip-list">
+                {focusedScalpParsed.markets.length === 0 ? (
+                  <span className="focused-scalp-chip-empty">등록된 코인이 없습니다.</span>
+                ) : (
+                  focusedScalpParsed.markets.map((market) => (
+                    <span key={market} className="focused-scalp-chip">
+                      {market}
+                      <button
+                        type="button"
+                        onClick={() => removeFocusedScalpMarket(market)}
+                        aria-label={`${market} 제거`}
+                      >
+                        ×
+                      </button>
+                    </span>
+                  ))
+                )}
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
 
       <AutopilotLiveDock
         open={true}
