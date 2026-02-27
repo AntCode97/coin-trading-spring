@@ -51,6 +51,7 @@ import { PlanPanel } from './PlanPanel';
 import {
   AutopilotOrchestrator,
   type AutopilotState,
+  type AutopilotTimelineEvent,
 } from '../lib/autopilot/AutopilotOrchestrator';
 import { AutopilotLiveDock } from './autopilot/AutopilotLiveDock';
 import './ManualTraderWorkspace.css';
@@ -190,6 +191,90 @@ type FocusedScalpContextMenu = {
   koreanName: string;
   included: boolean;
 };
+
+type FocusedScalpEntryState = 'ENTERED' | 'PENDING' | 'NO_ENTRY' | 'NONE';
+type FocusedScalpManageState = 'TAKE_PROFIT' | 'STOP_LOSS' | 'HOLD' | 'SUPERVISION' | 'NONE';
+
+type FocusedScalpDecisionCard = {
+  market: string;
+  koreanName: string;
+  workerStatus: string;
+  workerNote: string;
+  positionStatus: string;
+  entryState: FocusedScalpEntryState;
+  entryLabel: string;
+  entryDetail: string;
+  entryAt: number | null;
+  manageState: FocusedScalpManageState;
+  manageLabel: string;
+  manageDetail: string;
+  manageAt: number | null;
+  recentEvents: AutopilotTimelineEvent[];
+};
+
+function formatTimelineAt(epochMillis: number): string {
+  return new Date(epochMillis).toLocaleTimeString('ko-KR', {
+    timeZone: 'Asia/Seoul',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+  });
+}
+
+function classifyFocusedEntryEvent(event?: AutopilotTimelineEvent): {
+  state: FocusedScalpEntryState;
+  label: string;
+  detail: string;
+  at: number | null;
+} {
+  if (!event) {
+    return { state: 'NONE', label: '진입 판단 없음', detail: '-', at: null };
+  }
+  if (event.action === 'ENTRY_SUCCESS' || event.action === 'BUY_FILLED') {
+    return { state: 'ENTERED', label: '진입 완료', detail: event.detail, at: event.at };
+  }
+  if (event.action === 'BUY_REQUESTED') {
+    return { state: 'PENDING', label: '진입 주문 진행', detail: event.detail, at: event.at };
+  }
+  if (event.action === 'LLM_REJECT') {
+    return { state: 'NO_ENTRY', label: '진입 보류', detail: event.detail, at: event.at };
+  }
+  if (event.action === 'ENTRY_FAILED' || event.action === 'CANCELLED') {
+    return { state: 'NO_ENTRY', label: '진입 실패', detail: event.detail, at: event.at };
+  }
+  return { state: 'NONE', label: event.action, detail: event.detail, at: event.at };
+}
+
+function classifyFocusedManageEvent(event?: AutopilotTimelineEvent): {
+  state: FocusedScalpManageState;
+  label: string;
+  detail: string;
+  at: number | null;
+} {
+  if (!event) {
+    return { state: 'NONE', label: '관리 판단 없음', detail: '-', at: null };
+  }
+  const detailUpper = event.detail.toUpperCase();
+  if (event.action === 'POSITION_REVIEW' && detailUpper.startsWith('HOLD')) {
+    return { state: 'HOLD', label: '유지 판단', detail: event.detail, at: event.at };
+  }
+  if (event.action === 'PARTIAL_TP' || event.detail.includes('익절') || detailUpper.includes('PARTIAL_TP')) {
+    return { state: 'TAKE_PROFIT', label: '익절 실행', detail: event.detail, at: event.at };
+  }
+  if (
+    event.action === 'POSITION_EXIT' &&
+    (event.detail.includes('손절') || event.detail.includes('강제청산') || event.detail.includes('조기청산'))
+  ) {
+    return { state: 'STOP_LOSS', label: '손절/강제청산', detail: event.detail, at: event.at };
+  }
+  if (event.action === 'POSITION_EXIT') {
+    return { state: 'TAKE_PROFIT', label: '포지션 청산', detail: event.detail, at: event.at };
+  }
+  if (event.action === 'SUPERVISION' || event.action === 'SELL_REQUESTED' || event.action === 'SELL_FILLED') {
+    return { state: 'SUPERVISION', label: '감시/청산 진행', detail: event.detail, at: event.at };
+  }
+  return { state: 'NONE', label: event.action, detail: event.detail, at: event.at };
+}
 
 function isWinRateSort(sortBy: GuidedMarketSortBy): boolean {
   return sortBy === 'RECOMMENDED_ENTRY_WIN_RATE' || sortBy === 'MARKET_ENTRY_WIN_RATE';
@@ -794,6 +879,71 @@ export default function ManualTraderWorkspace() {
       included: focusedScalpMarketSet.has(item.market),
     });
   }, [focusedScalpMarketSet]);
+
+  const focusedScalpDecisionCards = useMemo<FocusedScalpDecisionCard[]>(() => {
+    const marketNameMap = new Map((marketsQuery.data ?? []).map((item) => [item.market, item.koreanName]));
+    const openPositionMap = new Map(
+      (openPositionsQuery.data ?? [])
+        .filter((position) => position.status === 'OPEN' || position.status === 'PENDING_ENTRY')
+        .map((position) => [position.market, position])
+    );
+    const workerMap = new Map(autopilotState.workers.map((worker) => [worker.market, worker]));
+
+    const entryActions = new Set(['ENTRY_SUCCESS', 'ENTRY_FAILED', 'LLM_REJECT', 'BUY_REQUESTED', 'BUY_FILLED', 'CANCELLED']);
+    const manageActions = new Set(['POSITION_REVIEW', 'PARTIAL_TP', 'POSITION_EXIT', 'SUPERVISION', 'SELL_REQUESTED', 'SELL_FILLED']);
+
+    return focusedScalpParsed.markets.map((market) => {
+      const worker = workerMap.get(market);
+      const openPosition = openPositionMap.get(market);
+      const marketEvents = autopilotState.events.filter((event) => event.market === market);
+      const entryEvent = marketEvents.find((event) => entryActions.has(event.action));
+      const manageEvent = marketEvents.find((event) => manageActions.has(event.action));
+      const entry = classifyFocusedEntryEvent(entryEvent);
+      const manage = classifyFocusedManageEvent(manageEvent);
+      const recentEvents = marketEvents
+        .filter((event) => event.type === 'WORKER' || event.type === 'ORDER' || event.type === 'LLM' || event.type === 'SYSTEM')
+        .slice(0, 6);
+
+      return {
+        market,
+        koreanName: marketNameMap.get(market) ?? market,
+        workerStatus: worker?.status ?? 'IDLE',
+        workerNote: worker?.note ?? '워커 대기',
+        positionStatus: openPosition?.status ?? 'NO_POSITION',
+        entryState: entry.state,
+        entryLabel: entry.label,
+        entryDetail: entry.detail,
+        entryAt: entry.at,
+        manageState: manage.state,
+        manageLabel: manage.label,
+        manageDetail: manage.detail,
+        manageAt: manage.at,
+        recentEvents,
+      };
+    });
+  }, [autopilotState.events, autopilotState.workers, focusedScalpParsed.markets, marketsQuery.data, openPositionsQuery.data]);
+
+  const focusedScalpDecisionSummary = useMemo(() => {
+    let entered = 0;
+    let pending = 0;
+    let noEntry = 0;
+    let takeProfit = 0;
+    let stopLoss = 0;
+    let hold = 0;
+    let supervision = 0;
+
+    for (const card of focusedScalpDecisionCards) {
+      if (card.entryState === 'ENTERED') entered += 1;
+      if (card.entryState === 'PENDING') pending += 1;
+      if (card.entryState === 'NO_ENTRY') noEntry += 1;
+      if (card.manageState === 'TAKE_PROFIT') takeProfit += 1;
+      if (card.manageState === 'STOP_LOSS') stopLoss += 1;
+      if (card.manageState === 'HOLD') hold += 1;
+      if (card.manageState === 'SUPERVISION') supervision += 1;
+    }
+
+    return { entered, pending, noEntry, takeProfit, stopLoss, hold, supervision };
+  }, [focusedScalpDecisionCards]);
 
   const connectMcpAndPlaywright = useCallback(async (options?: ConnectPlaywrightOptions) => {
     const tradingMcpUrl = deriveMcpUrl();
@@ -2248,6 +2398,76 @@ export default function ManualTraderWorkspace() {
                     <span>{autopilotState.candidates.length}개</span>
                   </div>
                 </div>
+              </div>
+
+              <div className="focused-decision-panel">
+                <div className="focused-decision-header">
+                  <strong>선택 단타 판단 패널</strong>
+                  <span>{focusedScalpDecisionCards.length}개 코인</span>
+                </div>
+                {!focusedScalpEnabled && (
+                  <p className="focused-decision-empty">선택 코인 단타 루프를 켜면 진입/미진입/청산 판단 로그가 여기에 표시됩니다.</p>
+                )}
+                {focusedScalpEnabled && focusedScalpDecisionCards.length === 0 && (
+                  <p className="focused-decision-empty">등록된 선택 코인이 없습니다. 왼쪽 코인 리스트 우클릭으로 추가하세요.</p>
+                )}
+                {focusedScalpEnabled && focusedScalpDecisionCards.length > 0 && (
+                  <>
+                    <div className="focused-decision-summary">
+                      <span className="chip entered">진입 {focusedScalpDecisionSummary.entered}</span>
+                      <span className="chip pending">대기 {focusedScalpDecisionSummary.pending}</span>
+                      <span className="chip no-entry">미진입 {focusedScalpDecisionSummary.noEntry}</span>
+                      <span className="chip tp">익절 {focusedScalpDecisionSummary.takeProfit}</span>
+                      <span className="chip sl">손절/청산 {focusedScalpDecisionSummary.stopLoss}</span>
+                      <span className="chip hold">유지 {focusedScalpDecisionSummary.hold}</span>
+                    </div>
+                    <div className="focused-decision-list">
+                      {focusedScalpDecisionCards.map((card) => (
+                        <div key={card.market} className="focused-decision-card">
+                          <div className="top">
+                            <div className="name">
+                              <strong>{card.koreanName}</strong>
+                              <span>{card.market}</span>
+                            </div>
+                            <div className="status">
+                              <span className="worker">{card.workerStatus}</span>
+                              <span className={`position ${card.positionStatus === 'OPEN' ? 'open' : card.positionStatus === 'PENDING_ENTRY' ? 'pending' : 'none'}`}>
+                                {card.positionStatus}
+                              </span>
+                            </div>
+                          </div>
+                          <div className="focused-decision-line">
+                            <span className="label">진입 판단</span>
+                            <span className={`state ${card.entryState.toLowerCase()}`}>{card.entryLabel}</span>
+                            <span className="detail">{card.entryDetail}</span>
+                            <span className="time">{card.entryAt ? formatTimelineAt(card.entryAt) : '-'}</span>
+                          </div>
+                          <div className="focused-decision-line">
+                            <span className="label">포지션 관리</span>
+                            <span className={`state ${card.manageState.toLowerCase()}`}>{card.manageLabel}</span>
+                            <span className="detail">{card.manageDetail}</span>
+                            <span className="time">{card.manageAt ? formatTimelineAt(card.manageAt) : '-'}</span>
+                          </div>
+                          <div className="focused-decision-note">{card.workerNote}</div>
+                          <div className="focused-decision-events">
+                            {card.recentEvents.length === 0 ? (
+                              <span className="empty">최근 이벤트 없음</span>
+                            ) : (
+                              card.recentEvents.map((event) => (
+                                <div key={event.id} className="event-row">
+                                  <span className="event-time">{formatTimelineAt(event.at)}</span>
+                                  <span className={`event-level ${event.level.toLowerCase()}`}>{event.level}</span>
+                                  <span className="event-action">{event.action}</span>
+                                  <span className="event-detail">{event.detail}</span>
+                                </div>
+                              ))
+                            )}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </>
+                )}
               </div>
 
               {/* PlanPanel — 플랜 실행 중이면 주문 패널 대신 표시 */}
