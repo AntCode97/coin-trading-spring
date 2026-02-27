@@ -531,15 +531,36 @@ curl -X POST http://localhost:8080/api/settings/regime \
 | POST | `/api/guided-trading/partial-take-profit` | Guided 부분 익절 |
 | POST | `/api/guided-trading/positions/adopt` | MCP 직접 주문 포지션 편입 |
 | GET | `/api/guided-trading/autopilot/live` | 오토파일럿 라이브 도크 데이터(주문 퍼널/이벤트/후보) |
+| GET | `/api/guided-trading/autopilot/opportunities` | 오토파일럿 기회 스코어/기대값 후보 조회 |
 
 `/api/guided-trading/autopilot/live` 쿼리 파라미터:
 - `thresholdMode`: `DYNAMIC_P70` 또는 `FIXED`
 - `minMarketWinRate`: 고정 모드(`FIXED`)에서 후보 선별용 최소 **현재가 승률**(%)
 - `minRecommendedWinRate`: 하위 호환 파라미터(신규 호출은 `minMarketWinRate` 권장)
 
+`/api/guided-trading/autopilot/opportunities` 쿼리 파라미터:
+- `interval`: 기본 `minute1` (진입 축)
+- `confirmInterval`: 기본 `minute10` (확인 축)
+- `mode`: 기본 `SCALP`
+- `universeLimit`: 기본 `15`
+
+`/api/guided-trading/autopilot/opportunities` 응답 핵심 필드:
+- `generatedAt`, `primaryInterval`, `confirmInterval`, `mode`, `appliedUniverseLimit`
+- `opportunities[]`: `market`, `koreanName`, `recommendedEntryWinRate1m/10m`, `marketEntryWinRate1m/10m`, `riskReward1m`, `entryGapPct1m`, `expectancyPct`, `score`, `stage`, `reason`
+- `stage`: `AUTO_PASS` | `BORDERLINE` | `RULE_FAIL`
+
 ---
 
 ## 최근 개선사항
+
+### 오토파일럿 Expectancy 중심 기회 포착 강화 (2026-02-27)
+
+1. 신규 API `/api/guided-trading/autopilot/opportunities`를 추가해 거래대금 상위 15종목을 `minute1`(진입) + `minute10`(확인)으로 평가합니다.
+2. 후보 평가는 승률 단일 지표 대신 `expectancyPct`와 `score`를 기준으로 고정했으며 stage를 `AUTO_PASS/BORDERLINE/RULE_FAIL`로 분류합니다.
+3. 오토파일럿은 `AUTO_PASS`만 즉시 워커 진입, `BORDERLINE`만 LLM 진입 심사를 수행합니다.
+4. 포지션 LLM 평가는 주기 호출을 제거하고 이벤트 트리거(`손실 확대`, `수익 구간`, `피크 대비 되돌림`)에서만 실행합니다.
+5. 기본 운영값을 `일손실 -30,000원`, `동시 포지션 6`, `pendingEntryTimeout 45초`로 상향 조정했습니다.
+6. LLM 일 240회는 차단 없이 소프트 경고만 노출하며, `entrySource/strategyCode`를 포지션 엔티티에 영속화합니다.
 
 ### Meme Scalper 진입 Imbalance 유지 필터 추가 (2026-02-25)
 

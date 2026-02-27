@@ -797,6 +797,30 @@ export interface AutopilotLiveResponse {
   }>;
 }
 
+export interface AutopilotOpportunityView {
+  market: string;
+  koreanName: string;
+  recommendedEntryWinRate1m?: number | null;
+  recommendedEntryWinRate10m?: number | null;
+  marketEntryWinRate1m?: number | null;
+  marketEntryWinRate10m?: number | null;
+  riskReward1m: number;
+  entryGapPct1m: number;
+  expectancyPct: number;
+  score: number;
+  stage: 'AUTO_PASS' | 'BORDERLINE' | 'RULE_FAIL' | string;
+  reason: string;
+}
+
+export interface AutopilotOpportunitiesResponse {
+  generatedAt: string;
+  primaryInterval: string;
+  confirmInterval: string;
+  mode: string;
+  appliedUniverseLimit: number;
+  opportunities: AutopilotOpportunityView[];
+}
+
 export interface GuidedStartRequest {
   market: string;
   amountKrw: number;
@@ -951,6 +975,18 @@ export const guidedTradingApi = {
     api
       .get('/guided-trading/autopilot/live', {
         params: { interval, mode, thresholdMode, minMarketWinRate },
+      })
+      .then((res) => res.data),
+
+  getAutopilotOpportunities: (
+    interval = 'minute1',
+    confirmInterval = 'minute10',
+    mode?: string,
+    universeLimit = 15
+  ): Promise<AutopilotOpportunitiesResponse> =>
+    api
+      .get('/guided-trading/autopilot/opportunities', {
+        params: { interval, confirmInterval, mode, universeLimit },
       })
       .then((res) => res.data),
 

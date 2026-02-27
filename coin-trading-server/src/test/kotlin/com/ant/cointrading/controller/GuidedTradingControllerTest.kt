@@ -5,6 +5,8 @@ import com.ant.cointrading.guided.GuidedAdoptPositionRequest
 import com.ant.cointrading.guided.GuidedAutopilotCandidateView
 import com.ant.cointrading.guided.GuidedAutopilotEvent
 import com.ant.cointrading.guided.GuidedAutopilotLiveResponse
+import com.ant.cointrading.guided.GuidedAutopilotOpportunitiesResponse
+import com.ant.cointrading.guided.GuidedAutopilotOpportunityView
 import com.ant.cointrading.guided.GuidedAutopilotDecisionStats
 import com.ant.cointrading.guided.GuidedStrategyCodeSummary
 import com.ant.cointrading.guided.GuidedPnlReconcileItem
@@ -161,6 +163,44 @@ class GuidedTradingControllerTest {
             thresholdMode = null,
             minMarketWinRate = null,
             minRecommendedWinRate = null
+        )
+
+        kotlin.test.assertEquals(expected, actual)
+    }
+
+    @Test
+    @DisplayName("autopilot/opportunities는 서비스 응답 스키마를 그대로 반환한다")
+    fun getAutopilotOpportunitiesReturnsServicePayload() {
+        val expected = GuidedAutopilotOpportunitiesResponse(
+            generatedAt = Instant.parse("2026-02-24T01:00:00Z"),
+            primaryInterval = "minute1",
+            confirmInterval = "minute10",
+            mode = "SCALP",
+            appliedUniverseLimit = 15,
+            opportunities = listOf(
+                GuidedAutopilotOpportunityView(
+                    market = "KRW-BTC",
+                    koreanName = "비트코인",
+                    recommendedEntryWinRate1m = 63.2,
+                    recommendedEntryWinRate10m = 60.1,
+                    marketEntryWinRate1m = 58.4,
+                    marketEntryWinRate10m = 56.0,
+                    riskReward1m = 1.24,
+                    entryGapPct1m = 0.22,
+                    expectancyPct = 0.31,
+                    score = 71.4,
+                    stage = "AUTO_PASS",
+                    reason = "score 71.4 / expectancy 0.310%"
+                )
+            )
+        )
+        whenever(guidedTradingService.getAutopilotOpportunities(any(), any(), any(), any())).thenReturn(expected)
+
+        val actual = controller.getAutopilotOpportunities(
+            interval = "minute1",
+            confirmInterval = "minute10",
+            mode = "SCALP",
+            universeLimit = 15
         )
 
         kotlin.test.assertEquals(expected, actual)

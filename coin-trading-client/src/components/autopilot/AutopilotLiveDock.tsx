@@ -46,6 +46,10 @@ function formatTs(ts: number): string {
 
 function stageLabel(stage: string): string {
   switch (stage) {
+    case 'AUTO_PASS':
+      return '자동통과';
+    case 'BORDERLINE':
+      return '경계';
     case 'RULE_PASS':
       return '규칙통과';
     case 'RULE_FAIL':
@@ -263,9 +267,38 @@ export function AutopilotLiveDock({
   }, [liveData, selectedGroup]);
 
   const localFlow = autopilotState.orderFlowLocal;
-  const candidates = autopilotState.candidates.length > 0
-    ? autopilotState.candidates
-    : normalizeServerCandidates(liveData);
+  const candidates = useMemo(() => {
+    const base = autopilotState.candidates.length > 0
+      ? autopilotState.candidates
+      : normalizeServerCandidates(liveData);
+    return [...base].sort((left, right) => {
+      const scoreGap = (right.score ?? Number.NEGATIVE_INFINITY) - (left.score ?? Number.NEGATIVE_INFINITY);
+      if (Number.isFinite(scoreGap) && scoreGap !== 0) return scoreGap;
+      return (right.expectancyPct ?? Number.NEGATIVE_INFINITY) - (left.expectancyPct ?? Number.NEGATIVE_INFINITY);
+    });
+  }, [autopilotState.candidates, liveData]);
+  const stageBreakdown = useMemo(() => {
+    if (autopilotState.candidates.length > 0) {
+      return autopilotState.decisionBreakdown;
+    }
+    return candidates.reduce(
+      (acc, candidate) => {
+        if (candidate.stage === 'AUTO_PASS') acc.autoPass += 1;
+        else if (candidate.stage === 'BORDERLINE') acc.borderline += 1;
+        else if (candidate.stage === 'RULE_FAIL') acc.ruleFail += 1;
+        return acc;
+      },
+      { autoPass: 0, borderline: 0, ruleFail: 0 }
+    );
+  }, [autopilotState.candidates.length, autopilotState.decisionBreakdown, candidates]);
+  const expectancyLeaders = useMemo(
+    () =>
+      candidates
+        .filter((candidate) => candidate.expectancyPct != null && Number.isFinite(candidate.expectancyPct))
+        .sort((left, right) => (right.expectancyPct ?? 0) - (left.expectancyPct ?? 0))
+        .slice(0, 5),
+    [candidates]
+  );
   const appliedThreshold = liveData?.appliedRecommendedWinRateThreshold
     ?? autopilotState.appliedRecommendedWinRateThreshold;
   const thresholdMode = liveData?.thresholdMode ?? autopilotState.thresholdMode;
@@ -334,10 +367,28 @@ export function AutopilotLiveDock({
           <div className="autopilot-threshold-meta">
             임계값 모드: {thresholdLabel} · 적용 기준: {appliedThreshold.toFixed(1)}%
           </div>
+          <div className="autopilot-opportunity-meta">
+            <span>AUTO_PASS {stageBreakdown.autoPass}</span>
+            <span>BORDERLINE {stageBreakdown.borderline}</span>
+            <span>RULE_FAIL {stageBreakdown.ruleFail}</span>
+          </div>
+          <div className={`autopilot-llm-budget ${autopilotState.llmBudget.exceeded ? 'warn' : ''}`}>
+            LLM 사용량 {autopilotState.llmBudget.usedToday}/{autopilotState.llmBudget.dailySoftCap}
+            {autopilotState.llmBudget.exceeded ? ' · 소프트 상한 초과(호출 계속 허용)' : ''}
+          </div>
 
           <div className="autopilot-live-body">
             <div className="dock-column candidates">
               <div className="column-title">후보 상위 {candidates.length}</div>
+              {expectancyLeaders.length > 0 && (
+                <div className="expectancy-leaders">
+                  {expectancyLeaders.map((candidate) => (
+                    <span key={candidate.market}>
+                      {candidate.market} {candidate.expectancyPct?.toFixed(3)}%
+                    </span>
+                  ))}
+                </div>
+              )}
               <div className="candidate-list">
                 {candidates.map((candidate) => (
                   <div key={candidate.market} className="candidate-item">
@@ -347,6 +398,9 @@ export function AutopilotLiveDock({
                     </div>
                     <div className="candidate-metrics">
                       추천 {candidate.recommendedEntryWinRate?.toFixed(1) ?? '-'}% · 현재 {candidate.marketEntryWinRate?.toFixed(1) ?? '-'}%
+                    </div>
+                    <div className="candidate-metrics">
+                      기대값 {candidate.expectancyPct?.toFixed(3) ?? '-'}% · score {candidate.score?.toFixed(1) ?? '-'} · RR {candidate.riskRewardRatio?.toFixed(2) ?? '-'}R · 괴리 {candidate.entryGapPct?.toFixed(2) ?? '-'}%
                     </div>
                     <p>{candidate.reason}</p>
                   </div>

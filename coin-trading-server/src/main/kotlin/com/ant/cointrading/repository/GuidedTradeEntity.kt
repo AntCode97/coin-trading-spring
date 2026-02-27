@@ -113,6 +113,12 @@ class GuidedTradeEntity(
     @Column(length = 120)
     var lastAction: String? = null,
 
+    @Column(length = 30)
+    var entrySource: String? = null,
+
+    @Column(length = 50)
+    var strategyCode: String? = null,
+
     @Column(columnDefinition = "TEXT")
     var recommendationReason: String? = null,
 

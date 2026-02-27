@@ -108,6 +108,32 @@
   font-size: 11px;
 }
 
+.autopilot-opportunity-meta {
+  margin: 0 12px 8px;
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.autopilot-opportunity-meta span {
+  border: 1px solid rgba(109, 147, 242, 0.35);
+  border-radius: 999px;
+  padding: 2px 8px;
+  font-size: 10px;
+  color: #b6cbef;
+  background: rgba(16, 28, 53, 0.64);
+}
+
+.autopilot-llm-budget {
+  margin: 0 12px 10px;
+  color: #9fb6df;
+  font-size: 11px;
+}
+
+.autopilot-llm-budget.warn {
+  color: #ffb3c0;
+}
+
 .autopilot-live-body {
   display: grid;
   grid-template-columns: 300px 1fr 260px;
@@ -196,6 +222,22 @@
   gap: 8px;
 }
 
+.expectancy-leaders {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 8px 8px 0;
+}
+
+.expectancy-leaders span {
+  border: 1px solid rgba(60, 190, 118, 0.45);
+  border-radius: 999px;
+  padding: 2px 8px;
+  font-size: 10px;
+  color: #b8f3d2;
+  background: rgba(12, 37, 27, 0.7);
+}
+
 .candidate-item,
 .worker-card {
   border: 1px solid rgba(255, 255, 255, 0.08);
@@ -229,11 +271,13 @@
 }
 
 .stage-entered,
+.stage-auto_pass,
 .stage-rule_pass {
   color: #9bf0c4;
   border-color: rgba(60, 190, 118, 0.6);
 }
 
+.stage-borderline,
 .stage-position_open,
 .stage-worker_active,
 .stage-cooldown {

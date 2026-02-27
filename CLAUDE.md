@@ -141,6 +141,35 @@ coin-trading-spring/
 
 ## 최근 변경사항 (2026-02-25)
 
+## 최근 변경사항 (2026-02-27)
+
+### 오토파일럿 기회 포착/수익 빈도 강화 (Expectancy 중심)
+
+- 신규 API `GET /api/guided-trading/autopilot/opportunities` 추가.
+  - 기본 축: `minute1`(진입) + `minute10`(확인)
+  - 기본 유니버스: 거래대금 상위 `15`
+  - 응답 후보 필드: `expectancyPct`, `score`, `riskReward1m`, `entryGapPct1m`, `stage`, `reason`
+- stage 규칙 고정:
+  - `AUTO_PASS`: `score >= 64` and `expectancyPct >= 0.12`
+  - `BORDERLINE`: `score >= 56` and `expectancyPct >= 0.02`
+  - `RULE_FAIL`: 위 기준 미달 또는 RR/괴리 규칙 위반
+- 오케스트레이터 정책 변경:
+  - `AUTO_PASS` 즉시 워커 생성
+  - `BORDERLINE`만 LLM 진입 심사
+  - LLM 일 240회는 차단 없이 소프트 경고만 노출
+- 워커 LLM 호출 정책 변경:
+  - 주기적 포지션 리뷰 제거
+  - 이벤트 트리거(`pnl <= -0.6%`, `pnl >= +1.6%`, trailing 이후 피크 대비 `-0.7%` 되돌림)에서만 호출
+- 기본 운영값 변경:
+  - `dailyLossLimitKrw=-30000`
+  - `maxConcurrentPositions=6`
+  - `pendingEntryTimeoutSec=45`
+- `GuidedTradeEntity`에 `entrySource`, `strategyCode` 컬럼 저장 반영.
+
+---
+
+## 최근 변경사항 (2026-02-25)
+
 ### Meme Scalper 진입 Imbalance 유지 검증 필터
 
 - `MemeScalperDetector.validateEntryImbalancePersistence()` 추가.
@@ -162,7 +191,7 @@ coin-trading-spring/
 
 - 토글 ON 시 하단 전체폭 라이브 도크를 자동 오픈.
 - 실시간 노출 항목:
-  - 후보 코인 상위 10 + stage(`RULE_PASS`, `RULE_FAIL`, `SLOT_FULL`, `COOLDOWN`, `LLM_REJECT`, `PLAYWRIGHT_WARN`, `ENTERED`)
+  - 후보 코인 상위 + stage(`AUTO_PASS`, `BORDERLINE`, `RULE_FAIL`, `SLOT_FULL`, `COOLDOWN`, `LLM_REJECT`, `PLAYWRIGHT_WARN`, `ENTERED`)
   - Playwright/LLM/워커/주문 타임라인
   - 워커 상태 카드
   - 주문 퍼널 KPI (`매수 요청 → 매수 체결 → 매도 요청 → 매도 체결`)
@@ -192,7 +221,11 @@ coin-trading-spring/
 - `GET /api/guided-trading/autopilot/live`
   - 응답: `orderSummary`, `orderEvents`, `autopilotEvents`, `candidates`
   - 쿼리: `thresholdMode`, `minMarketWinRate`(고정 모드 현재가 승률 기준), `minRecommendedWinRate`(하위 호환)
+- `GET /api/guided-trading/autopilot/opportunities`
+  - 응답: `generatedAt`, `primaryInterval`, `confirmInterval`, `mode`, `appliedUniverseLimit`, `opportunities[]`
+  - 후보 stage: `AUTO_PASS` | `BORDERLINE` | `RULE_FAIL`
 - `GuidedTradingService.getAutopilotLive(interval, mode, thresholdMode, minMarketWinRate)` 추가.
+- `GuidedTradingService.getAutopilotOpportunities(interval, confirmInterval, mode, universeLimit)` 추가.
 
 ### 4. 텔레메트리 기록 포인트 확장
 

@@ -64,6 +64,7 @@ export interface WorkerConfig {
   entryOrderMode: 'ADAPTIVE' | 'MARKET' | 'LIMIT';
   pendingEntryTimeoutMs: number;
   marketFallbackAfterCancel: boolean;
+  skipLlmEntryReview: boolean;
 }
 
 interface WorkerEntryDecision {
@@ -121,7 +122,8 @@ export class MarketWorker {
   private timerId: number | null = null;
   private running = false;
   private ticking = false;
-  private lastLlmReviewAt = 0;
+  private lastEventReviewAt = 0;
+  private peakPnlPercent = Number.NEGATIVE_INFINITY;
   private hadOpenPosition = false;
   private pendingEntryObservedAt: number | null = null;
   private pendingFallbackTried = false;
@@ -227,6 +229,7 @@ export class MarketWorker {
 
       if (this.hadOpenPosition) {
         this.hadOpenPosition = false;
+        this.peakPnlPercent = Number.NEGATIVE_INFINITY;
         this.cooldownUntil = Date.now() + this.config.postExitCooldownMs;
         this.setState('COOLDOWN', '포지션 종료 감지, 재진입 쿨다운');
         return;
@@ -234,6 +237,7 @@ export class MarketWorker {
 
       this.pendingEntryObservedAt = null;
       this.pendingFallbackTried = false;
+      this.peakPnlPercent = Number.NEGATIVE_INFINITY;
       await this.tryEntry();
     } catch (error) {
       const message = error instanceof Error ? error.message : '알 수 없는 오류';
@@ -250,33 +254,37 @@ export class MarketWorker {
     const context = await this.deps.fetchContext(this.config.market);
     const deterministic = this.deterministicCheck(context);
     if (!deterministic.allow) {
-      const cooldownMs = this.resolveRejectCooldownMs('MEDIUM', 0);
+      const cooldownMs = 45_000;
       this.emitEvent('LLM_REJECT', 'WARN', `규칙 거절: ${deterministic.reason}`);
       this.cooldownUntil = Date.now() + cooldownMs;
       this.setState('COOLDOWN', `규칙 거절(${Math.ceil(cooldownMs / 1000)}초): ${deterministic.reason}`);
       return;
     }
 
-    this.setState('ANALYZING', 'llmCheck');
-    const entryDecision = await this.deps.evaluateEntry(this.config.market, context);
-    const llmResult = this.evaluateLlmDecision(entryDecision);
-    if (!llmResult.allow) {
-      const cooldownMs = this.resolveLlmRejectCooldownMs(entryDecision);
-      this.emitEvent(
-        'LLM_REJECT',
-        entryDecision.severity === 'HIGH' ? 'ERROR' : 'WARN',
-        `진입 거절 (${entryDecision.confidence.toFixed(0)}/${entryDecision.severity}) · 쿨다운 ${Math.ceil(cooldownMs / 1000)}초: ${entryDecision.reason}`
-      );
-      this.cooldownUntil = Date.now() + cooldownMs;
-      this.setState('COOLDOWN', `진입 보류(${Math.ceil(cooldownMs / 1000)}초): ${entryDecision.reason}`);
-      return;
+    if (!this.config.skipLlmEntryReview) {
+      this.setState('ANALYZING', 'llmCheck');
+      const entryDecision = await this.deps.evaluateEntry(this.config.market, context);
+      const llmResult = this.evaluateLlmDecision(entryDecision);
+      if (!llmResult.allow) {
+        const cooldownMs = this.resolveLlmRejectCooldownMs(entryDecision);
+        this.emitEvent(
+          'LLM_REJECT',
+          entryDecision.severity === 'HIGH' ? 'ERROR' : 'WARN',
+          `진입 거절 (${entryDecision.confidence.toFixed(0)}/${entryDecision.severity}) · 쿨다운 ${Math.ceil(cooldownMs / 1000)}초: ${entryDecision.reason}`
+        );
+        this.cooldownUntil = Date.now() + cooldownMs;
+        this.setState('COOLDOWN', `진입 보류(${Math.ceil(cooldownMs / 1000)}초): ${entryDecision.reason}`);
+        return;
+      }
+    } else {
+      this.emitEvent('STATE', 'INFO', 'AUTO_PASS fast-lane: LLM 진입 심사 생략');
     }
 
     this.setState('ANALYZING', 'orderPlan');
     const plan = await this.deps.planEntryOrder(this.config.market, context);
     if (!plan.allow) {
       this.emitEvent('LLM_REJECT', 'WARN', `주문 계획 거절: ${plan.reason}`);
-      this.cooldownUntil = Date.now() + this.resolveRejectCooldownMs('MEDIUM', 55);
+      this.cooldownUntil = Date.now() + 45_000;
       this.setState('COOLDOWN', `주문 계획 거절: ${plan.reason}`);
       return;
     }
@@ -380,7 +388,7 @@ export class MarketWorker {
       }
     }
 
-    const cooldownMs = this.resolveRejectCooldownMs('MEDIUM', 50);
+    const cooldownMs = 90_000;
     this.cooldownUntil = Date.now() + cooldownMs;
     this.pendingEntryObservedAt = null;
     this.setState('COOLDOWN', `pending timeout 후 쿨다운 ${Math.ceil(cooldownMs / 1000)}초`);
@@ -442,9 +450,9 @@ export class MarketWorker {
   }
 
   private resolveRejectCooldownMs(severity: 'LOW' | 'MEDIUM' | 'HIGH', confidence: number): number {
-    if (severity === 'HIGH') return 300_000;
+    if (severity === 'HIGH') return 90_000;
     if (confidence >= 60) return 45_000;
-    return Math.max(120_000, this.config.rejectCooldownMs);
+    return Math.max(45_000, this.config.rejectCooldownMs);
   }
 
   private resolveLlmRejectCooldownMs(decision: WorkerEntryDecision): number {
@@ -452,8 +460,8 @@ export class MarketWorker {
     const suggestedSec = this.normalizeSuggestedCooldownSec(decision.suggestedCooldownSec);
     if (suggestedSec == null) return fallbackMs;
 
-    const severityFloorSec = decision.severity === 'HIGH' ? 180 : decision.severity === 'MEDIUM' ? 45 : 30;
-    const severityCeilSec = decision.severity === 'HIGH' ? 1200 : decision.severity === 'MEDIUM' ? 900 : 600;
+    const severityFloorSec = decision.severity === 'HIGH' ? 90 : 45;
+    const severityCeilSec = decision.severity === 'HIGH' ? 300 : 120;
     const boundedSec = Math.min(severityCeilSec, Math.max(severityFloorSec, suggestedSec));
     return boundedSec * 1000;
   }
@@ -474,14 +482,39 @@ export class MarketWorker {
   private async managePosition(position: GuidedTradePosition): Promise<void> {
     this.hadOpenPosition = true;
     const pnl = position.unrealizedPnlPercent;
+    this.peakPnlPercent = Math.max(this.peakPnlPercent, pnl);
+    const peakDrawdown = this.peakPnlPercent - pnl;
     this.setState('MANAGING', `모니터링 (${pnl >= 0 ? '+' : ''}${pnl.toFixed(2)}%)`);
+
+    if (this.deps.reviewOpenPosition && this.shouldRunEventDrivenReview(pnl, peakDrawdown, position.trailingActive)) {
+      this.lastEventReviewAt = Date.now();
+      const review = await this.deps.reviewOpenPosition(this.config.market, position);
+      if (review.action === 'FULL_EXIT') {
+        this.emitOrderFlow('SELL_REQUESTED', `LLM 조기청산 요청: ${review.reason}`);
+        await this.deps.stopPosition(this.config.market, `LLM 조기청산: ${review.reason}`);
+        this.emitOrderFlow('SELL_FILLED', `LLM 조기청산 체결: ${review.reason}`);
+        this.emitEvent('POSITION_EXIT', 'WARN', `LLM 조기청산: ${review.reason}`);
+        this.cooldownUntil = Date.now() + (pnl <= 0 ? 8 * 60_000 : 3 * 60_000);
+        this.peakPnlPercent = Number.NEGATIVE_INFINITY;
+        this.setState('COOLDOWN', 'LLM 조기청산');
+        return;
+      }
+      if (review.action === 'PARTIAL_TP' && !position.halfTakeProfitDone) {
+        this.emitOrderFlow('SELL_REQUESTED', `LLM 부분익절 요청: ${review.reason}`);
+        await this.deps.partialTakeProfit(this.config.market, 0.5, `LLM 부분익절: ${review.reason}`);
+        this.emitOrderFlow('SELL_FILLED', `LLM 부분익절 실행: ${review.reason}`);
+        this.emitEvent('PARTIAL_TP', 'INFO', `LLM 부분익절: ${review.reason}`);
+        this.deps.onLog(`[${this.config.market}] LLM 권고 부분익절 실행`);
+      }
+    }
 
     if (pnl <= -0.8) {
       this.emitOrderFlow('SELL_REQUESTED', '빠른 손절 요청');
       await this.deps.stopPosition(this.config.market, '빠른 손절');
       this.emitOrderFlow('SELL_FILLED', '빠른 손절 체결');
       this.emitEvent('POSITION_EXIT', 'WARN', '빠른 손절 실행');
-      this.cooldownUntil = Date.now() + this.config.postExitCooldownMs;
+      this.cooldownUntil = Date.now() + 8 * 60_000;
+      this.peakPnlPercent = Number.NEGATIVE_INFINITY;
       this.setState('COOLDOWN', '손절 후 쿨다운');
       return;
     }
@@ -499,30 +532,18 @@ export class MarketWorker {
       await this.deps.stopPosition(this.config.market, '목표 수익 청산');
       this.emitOrderFlow('SELL_FILLED', '목표 수익 청산 체결');
       this.emitEvent('POSITION_EXIT', 'INFO', '목표 수익 청산');
-      this.cooldownUntil = Date.now() + this.config.postExitCooldownMs;
+      this.cooldownUntil = Date.now() + 3 * 60_000;
+      this.peakPnlPercent = Number.NEGATIVE_INFINITY;
       this.setState('COOLDOWN', '익절 후 쿨다운');
       return;
     }
+  }
 
-    if (this.deps.reviewOpenPosition && Date.now() - this.lastLlmReviewAt >= this.config.llmReviewMs) {
-      this.lastLlmReviewAt = Date.now();
-      const review = await this.deps.reviewOpenPosition(this.config.market, position);
-      if (review.action === 'FULL_EXIT') {
-        this.emitOrderFlow('SELL_REQUESTED', `LLM 조기청산 요청: ${review.reason}`);
-        await this.deps.stopPosition(this.config.market, `LLM 조기청산: ${review.reason}`);
-        this.emitOrderFlow('SELL_FILLED', `LLM 조기청산 체결: ${review.reason}`);
-        this.emitEvent('POSITION_EXIT', 'WARN', `LLM 조기청산: ${review.reason}`);
-        this.cooldownUntil = Date.now() + this.config.postExitCooldownMs;
-        this.setState('COOLDOWN', 'LLM 조기청산');
-        return;
-      }
-      if (review.action === 'PARTIAL_TP' && !position.halfTakeProfitDone) {
-        this.emitOrderFlow('SELL_REQUESTED', `LLM 부분익절 요청: ${review.reason}`);
-        await this.deps.partialTakeProfit(this.config.market, 0.5, `LLM 부분익절: ${review.reason}`);
-        this.emitOrderFlow('SELL_FILLED', `LLM 부분익절 실행: ${review.reason}`);
-        this.emitEvent('PARTIAL_TP', 'INFO', `LLM 부분익절: ${review.reason}`);
-        this.deps.onLog(`[${this.config.market}] LLM 권고 부분익절 실행`);
-      }
-    }
+  private shouldRunEventDrivenReview(pnl: number, peakDrawdown: number, trailingActive: boolean): boolean {
+    if (Date.now() - this.lastEventReviewAt < 30_000) return false;
+    if (pnl <= -0.6) return true;
+    if (pnl >= 1.6) return true;
+    if (trailingActive && peakDrawdown >= 0.7) return true;
+    return false;
   }
 }

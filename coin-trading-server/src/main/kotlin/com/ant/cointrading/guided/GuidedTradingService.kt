@@ -24,6 +24,7 @@ import java.math.RoundingMode
 import java.time.Instant
 import java.time.temporal.ChronoUnit
 import java.util.concurrent.CompletableFuture
+import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
@@ -31,6 +32,7 @@ import java.util.concurrent.TimeoutException
 import kotlin.math.abs
 import kotlin.math.ln
 import kotlin.math.max
+import kotlin.math.min
 
 @Service
 class GuidedTradingService(
@@ -42,6 +44,18 @@ class GuidedTradingService(
 ) {
     private val log = LoggerFactory.getLogger(javaClass)
     private val marketWinRateExecutor: ExecutorService = Executors.newFixedThreadPool(WIN_RATE_CALC_CONCURRENCY)
+    private val opportunityRecommendationCache = ConcurrentHashMap<OpportunityRecommendationCacheKey, CachedOpportunityRecommendation>()
+
+    private data class OpportunityRecommendationCacheKey(
+        val market: String,
+        val interval: String,
+        val mode: TradingMode
+    )
+
+    private data class CachedOpportunityRecommendation(
+        val atMillis: Long,
+        val recommendation: GuidedRecommendation
+    )
 
     private companion object {
         val OPEN_STATUSES = listOf(GuidedTradeEntity.STATUS_PENDING_ENTRY, GuidedTradeEntity.STATUS_OPEN)
@@ -53,6 +67,8 @@ class GuidedTradingService(
         const val WIN_RATE_CALC_TIMEOUT_MILLIS = 2500L
         const val GUIDED_STRATEGY_CODE = "GUIDED_TRADING"
         const val GUIDED_AUTOPILOT_STRATEGY_CODE = "GUIDED_AUTOPILOT"
+        const val AUTOPILOT_OPPORTUNITY_UNIVERSE_LIMIT = 15
+        const val AUTOPILOT_OPPORTUNITY_CACHE_TTL_MILLIS = 30_000L
         val MIN_EFFECTIVE_HOLDING_KRW: BigDecimal = BigDecimal("5000")
     }
 
@@ -307,7 +323,16 @@ class GuidedTradingService(
             ?: defaultTakeProfit
 
         val estimatedAmount = tickerPrice.multiply(actualQty).setScale(0, RoundingMode.HALF_UP)
-        val entrySource = request.entrySource?.takeIf { it.isNotBlank() } ?: "EXTERNAL"
+        val entrySource = request.entrySource
+            ?.trim()
+            ?.uppercase()
+            ?.ifBlank { null }
+            ?: "EXTERNAL"
+        val strategyCode = if (entrySource.contains("AUTOPILOT") || entrySource.contains("MCP")) {
+            GUIDED_AUTOPILOT_STRATEGY_CODE
+        } else {
+            GUIDED_STRATEGY_CODE
+        }
         val note = request.notes?.takeIf { it.isNotBlank() }
         val reasonParts = buildList {
             add("entrySource=$entrySource")
@@ -333,6 +358,8 @@ class GuidedTradingService(
             dcaStepPercent = BigDecimal.valueOf(2.0),
             maxDcaCount = 2,
             halfTakeProfitRatio = BigDecimal.valueOf(0.5),
+            entrySource = entrySource,
+            strategyCode = strategyCode,
             recommendationReason = reasonParts.joinToString(" | "),
             lastAction = "ADOPTED_EXTERNAL_ENTRY"
         )
@@ -460,6 +487,8 @@ class GuidedTradingService(
             dcaStepPercent = BigDecimal.valueOf(dcaStepPercent),
             maxDcaCount = maxDcaCount,
             halfTakeProfitRatio = BigDecimal.valueOf(halfTakeProfitRatio),
+            entrySource = entrySource,
+            strategyCode = strategyCode,
             recommendationReason = recommendation.rationale.joinToString(" | "),
             lastAction = "ENTRY_SUBMITTED"
         )
@@ -1496,6 +1525,55 @@ class GuidedTradingService(
         )
     }
 
+    fun getAutopilotOpportunities(
+        interval: String = "minute1",
+        confirmInterval: String = "minute10",
+        mode: TradingMode = TradingMode.SCALP,
+        universeLimit: Int = AUTOPILOT_OPPORTUNITY_UNIVERSE_LIMIT
+    ): GuidedAutopilotOpportunitiesResponse {
+        val effectiveUniverseLimit = universeLimit.coerceIn(5, 50)
+        val universe = getMarketBoard(
+            sortBy = GuidedMarketSortBy.TURNOVER,
+            sortDirection = GuidedSortDirection.DESC,
+            interval = interval,
+            mode = mode
+        ).take(effectiveUniverseLimit)
+
+        if (universe.isEmpty()) {
+            return GuidedAutopilotOpportunitiesResponse(
+                generatedAt = Instant.now(),
+                primaryInterval = interval,
+                confirmInterval = confirmInterval,
+                mode = mode.name,
+                appliedUniverseLimit = effectiveUniverseLimit,
+                opportunities = emptyList()
+            )
+        }
+
+        val markets = universe.map { it.market }
+        val primaryRecommendations = fetchRecommendationsWithCache(markets, interval, mode)
+        val confirmRecommendations = fetchRecommendationsWithCache(markets, confirmInterval, mode)
+
+        val opportunities = universe
+            .map { marketItem ->
+                buildAutopilotOpportunity(
+                    marketItem = marketItem,
+                    primaryRecommendation = primaryRecommendations[marketItem.market],
+                    confirmRecommendation = confirmRecommendations[marketItem.market]
+                )
+            }
+            .sortedByDescending { it.score }
+
+        return GuidedAutopilotOpportunitiesResponse(
+            generatedAt = Instant.now(),
+            primaryInterval = interval,
+            confirmInterval = confirmInterval,
+            mode = mode.name,
+            appliedUniverseLimit = effectiveUniverseLimit,
+            opportunities = opportunities
+        )
+    }
+
     fun getAutopilotLive(
         interval: String = "minute30",
         mode: TradingMode = TradingMode.SWING,
@@ -1532,14 +1610,19 @@ class GuidedTradingService(
                 "추천가 승률"
             }
             val pass = (thresholdValue ?: 0.0) >= appliedThreshold
+            val stage = when {
+                !pass -> "RULE_FAIL"
+                (thresholdValue ?: 0.0) >= appliedThreshold + 2.0 -> "AUTO_PASS"
+                else -> "BORDERLINE"
+            }
             GuidedAutopilotCandidateView(
                 market = market.market,
                 koreanName = market.koreanName,
                 recommendedEntryWinRate = recommendedWinRate,
                 marketEntryWinRate = marketWinRate,
-                stage = if (pass) "RULE_PASS" else "RULE_FAIL",
+                stage = stage,
                 reason = if (pass) {
-                    "$thresholdLabel ${String.format("%.1f", thresholdValue ?: 0.0)}% >= ${String.format("%.1f", appliedThreshold)}%"
+                    "$thresholdLabel ${String.format("%.1f", thresholdValue ?: 0.0)}% >= ${String.format("%.1f", appliedThreshold)}% ($stage)"
                 } else {
                     "$thresholdLabel ${String.format("%.1f", thresholdValue ?: 0.0)}% < ${String.format("%.1f", appliedThreshold)}%"
                 }
@@ -1565,7 +1648,7 @@ class GuidedTradingService(
                 (event.strategyCode?.uppercase()?.contains("AUTOPILOT") == true)
         }
         val decisionStats = GuidedAutopilotDecisionStats(
-            rulePass = candidates.count { it.stage == "RULE_PASS" },
+            rulePass = candidates.count { it.stage != "RULE_FAIL" },
             ruleFail = candidates.count { it.stage == "RULE_FAIL" },
             llmReject = recentAutopilotOrderEvents.count {
                 it.eventType == "FAILED" && (it.message?.contains("llm", ignoreCase = true) == true)
@@ -1608,6 +1691,167 @@ class GuidedTradingService(
             requestedMinRecommendedWinRate = requestedMin,
             decisionStats = decisionStats,
             strategyCodeSummary = strategyCodeSummary,
+        )
+    }
+
+    private fun fetchRecommendationsWithCache(
+        markets: List<String>,
+        interval: String,
+        mode: TradingMode
+    ): Map<String, GuidedRecommendation?> {
+        if (markets.isEmpty()) return emptyMap()
+        val normalizedInterval = interval.lowercase()
+        val now = System.currentTimeMillis()
+        val candleCount = if (normalizedInterval == "tick") 300 else 120
+
+        val staleMarkets = markets.filter { market ->
+            val key = OpportunityRecommendationCacheKey(market = market, interval = normalizedInterval, mode = mode)
+            val cached = opportunityRecommendationCache[key]
+            cached == null || (now - cached.atMillis) >= AUTOPILOT_OPPORTUNITY_CACHE_TTL_MILLIS
+        }
+
+        if (staleMarkets.isNotEmpty()) {
+            val futures = staleMarkets.associateWith { market ->
+                CompletableFuture.supplyAsync(
+                    {
+                        runCatching {
+                            getRecommendation(market, normalizedInterval, candleCount, mode)
+                        }.getOrNull()
+                    },
+                    marketWinRateExecutor
+                )
+            }
+
+            futures.forEach { (market, future) ->
+                try {
+                    val recommendation = future.get(WIN_RATE_CALC_TIMEOUT_MILLIS, TimeUnit.MILLISECONDS) ?: return@forEach
+                    val key = OpportunityRecommendationCacheKey(market = market, interval = normalizedInterval, mode = mode)
+                    opportunityRecommendationCache[key] = CachedOpportunityRecommendation(
+                        atMillis = now,
+                        recommendation = recommendation
+                    )
+                } catch (e: TimeoutException) {
+                    future.cancel(true)
+                    log.warn(
+                        "오토파일럿 추천 캐시 갱신 타임아웃: market={}, interval={}, mode={}",
+                        market,
+                        normalizedInterval,
+                        mode.name
+                    )
+                } catch (e: InterruptedException) {
+                    Thread.currentThread().interrupt()
+                } catch (e: Exception) {
+                    log.warn(
+                        "오토파일럿 추천 캐시 갱신 실패: market={}, interval={}, mode={}, error={}",
+                        market,
+                        normalizedInterval,
+                        mode.name,
+                        e.message
+                    )
+                }
+            }
+        }
+
+        return markets.associateWith { market ->
+            val key = OpportunityRecommendationCacheKey(market = market, interval = normalizedInterval, mode = mode)
+            opportunityRecommendationCache[key]?.recommendation
+        }
+    }
+
+    private fun buildAutopilotOpportunity(
+        marketItem: GuidedMarketItem,
+        primaryRecommendation: GuidedRecommendation?,
+        confirmRecommendation: GuidedRecommendation?
+    ): GuidedAutopilotOpportunityView {
+        val recWin1m = primaryRecommendation?.recommendedEntryWinRate?.takeIf { it.isFinite() }
+        val recWin10m = confirmRecommendation?.recommendedEntryWinRate?.takeIf { it.isFinite() }
+        val marketWin1m = primaryRecommendation?.marketEntryWinRate?.takeIf { it.isFinite() }
+        val marketWin10m = confirmRecommendation?.marketEntryWinRate?.takeIf { it.isFinite() }
+
+        val rr1m = primaryRecommendation?.riskRewardRatio?.takeIf { it.isFinite() } ?: 0.0
+        val rr10m = confirmRecommendation?.riskRewardRatio?.takeIf { it.isFinite() } ?: 0.0
+        val entryPrice = primaryRecommendation?.recommendedEntryPrice ?: 0.0
+        val currentPrice = primaryRecommendation?.currentPrice ?: 0.0
+        val stopLoss = primaryRecommendation?.stopLossPrice ?: 0.0
+        val takeProfit = primaryRecommendation?.takeProfitPrice ?: 0.0
+
+        val entryGapPct = if (entryPrice > 0.0 && currentPrice > 0.0) {
+            max(0.0, (currentPrice - entryPrice) / entryPrice * 100.0)
+        } else {
+            0.0
+        }
+
+        if (
+            recWin1m == null ||
+            recWin10m == null ||
+            marketWin1m == null ||
+            marketWin10m == null ||
+            !rr1m.isFinite() ||
+            !rr10m.isFinite()
+        ) {
+            return GuidedAutopilotOpportunityView(
+                market = marketItem.market,
+                koreanName = marketItem.koreanName,
+                recommendedEntryWinRate1m = recWin1m,
+                recommendedEntryWinRate10m = recWin10m,
+                marketEntryWinRate1m = marketWin1m,
+                marketEntryWinRate10m = marketWin10m,
+                riskReward1m = rr1m,
+                entryGapPct1m = entryGapPct,
+                expectancyPct = 0.0,
+                score = 0.0,
+                stage = "RULE_FAIL",
+                reason = "승률 또는 RR 데이터 부족"
+            )
+        }
+
+        val profitPct = if (entryPrice > 0.0 && takeProfit > 0.0) {
+            (takeProfit - entryPrice) / entryPrice * 100.0
+        } else {
+            0.0
+        }
+        val lossPct = if (entryPrice > 0.0 && stopLoss > 0.0) {
+            max(0.0, (entryPrice - stopLoss) / entryPrice * 100.0)
+        } else {
+            0.0
+        }
+        val p = 0.6 * (recWin1m / 100.0) + 0.4 * (recWin10m / 100.0)
+        val expectancyPct = p * profitPct - (1.0 - p) * lossPct
+        val rawScore =
+            50.0 +
+                22.0 * expectancyPct +
+                12.0 * (rr1m - 1.0) +
+                0.35 * (recWin1m - 50.0) +
+                0.25 * (recWin10m - 50.0) -
+                8.0 * max(0.0, entryGapPct - 0.35)
+        val score = rawScore.coerceIn(0.0, 100.0)
+
+        val isRuleFail = rr1m < 1.02 || rr10m < 1.08 || entryGapPct > 1.4
+        val stage = when {
+            isRuleFail -> "RULE_FAIL"
+            score >= 64.0 && expectancyPct >= 0.12 -> "AUTO_PASS"
+            score >= 56.0 && expectancyPct >= 0.02 -> "BORDERLINE"
+            else -> "RULE_FAIL"
+        }
+        val reason = when (stage) {
+            "RULE_FAIL" -> "RR1m ${String.format("%.2f", rr1m)}, RR10m ${String.format("%.2f", rr10m)}, 괴리 ${String.format("%.2f", entryGapPct)}%"
+            "AUTO_PASS" -> "score ${String.format("%.1f", score)} / expectancy ${String.format("%.3f", expectancyPct)}%"
+            else -> "경계구간 score ${String.format("%.1f", score)} / expectancy ${String.format("%.3f", expectancyPct)}%"
+        }
+
+        return GuidedAutopilotOpportunityView(
+            market = marketItem.market,
+            koreanName = marketItem.koreanName,
+            recommendedEntryWinRate1m = recWin1m,
+            recommendedEntryWinRate10m = recWin10m,
+            marketEntryWinRate1m = marketWin1m,
+            marketEntryWinRate10m = marketWin10m,
+            riskReward1m = rr1m,
+            entryGapPct1m = entryGapPct,
+            expectancyPct = expectancyPct,
+            score = score,
+            stage = stage,
+            reason = reason
         )
     }
 
@@ -2397,6 +2641,30 @@ data class GuidedAutopilotCandidateView(
     val koreanName: String,
     val recommendedEntryWinRate: Double?,
     val marketEntryWinRate: Double?,
+    val stage: String,
+    val reason: String
+)
+
+data class GuidedAutopilotOpportunitiesResponse(
+    val generatedAt: Instant,
+    val primaryInterval: String,
+    val confirmInterval: String,
+    val mode: String,
+    val appliedUniverseLimit: Int,
+    val opportunities: List<GuidedAutopilotOpportunityView>
+)
+
+data class GuidedAutopilotOpportunityView(
+    val market: String,
+    val koreanName: String,
+    val recommendedEntryWinRate1m: Double?,
+    val recommendedEntryWinRate10m: Double?,
+    val marketEntryWinRate1m: Double?,
+    val marketEntryWinRate10m: Double?,
+    val riskReward1m: Double,
+    val entryGapPct1m: Double,
+    val expectancyPct: Double,
+    val score: Double,
     val stage: String,
     val reason: String
 )

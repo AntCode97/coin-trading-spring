@@ -397,9 +397,9 @@ export default function ManualTraderWorkspace() {
   const [playwrightStatus, setPlaywrightStatus] = useState<PlaywrightMcpStatus | null>(null);
   const [playwrightAction, setPlaywrightAction] = useState<'idle' | 'starting' | 'stopping'>('idle');
   const [autopilotEnabled, setAutopilotEnabled] = useState<boolean>(prefs.autopilotEnabled ?? false);
-  const [dailyLossLimitKrw, setDailyLossLimitKrw] = useState<number>(prefs.dailyLossLimitKrw ?? -15000);
+  const [dailyLossLimitKrw, setDailyLossLimitKrw] = useState<number>(prefs.dailyLossLimitKrw ?? -30000);
   const [autopilotMaxConcurrentPositions, setAutopilotMaxConcurrentPositions] = useState<number>(
-    Math.min(10, Math.max(1, prefs.autopilotMaxConcurrentPositions ?? 2))
+    Math.min(10, Math.max(1, prefs.autopilotMaxConcurrentPositions ?? 6))
   );
   const [autopilotAmountKrw, setAutopilotAmountKrw] = useState<number>(
     Math.max(5100, Math.round(prefs.autopilotAmountKrw ?? 10000))
@@ -417,7 +417,7 @@ export default function ManualTraderWorkspace() {
     prefs.entryOrderMode ?? 'ADAPTIVE'
   );
   const [pendingEntryTimeoutSec, setPendingEntryTimeoutSec] = useState<number>(
-    Math.min(900, Math.max(30, Math.round(prefs.pendingEntryTimeoutSec ?? 90)))
+    Math.min(900, Math.max(30, Math.round(prefs.pendingEntryTimeoutSec ?? 45)))
   );
   const [marketFallbackAfterCancel, setMarketFallbackAfterCancel] = useState<boolean>(
     prefs.marketFallbackAfterCancel ?? true
@@ -439,12 +439,12 @@ export default function ManualTraderWorkspace() {
         1,
         Math.round(
           prefs.rejectCooldownSeconds
-            ?? ((prefs.rejectCooldownMinutes ?? 2) * 60)
+            ?? ((prefs.rejectCooldownMinutes ?? 0.75) * 60)
         )
       )
     )
   );
-  const [postExitCooldownMinutes, setPostExitCooldownMinutes] = useState<number>(prefs.postExitCooldownMinutes ?? 30);
+  const [postExitCooldownMinutes, setPostExitCooldownMinutes] = useState<number>(prefs.postExitCooldownMinutes ?? 8);
   const [autopilotState, setAutopilotState] = useState<AutopilotState>({
     enabled: false,
     blockedByDailyLoss: false,
@@ -456,6 +456,16 @@ export default function ManualTraderWorkspace() {
     logs: [],
     events: [],
     candidates: [],
+    decisionBreakdown: {
+      autoPass: 0,
+      borderline: 0,
+      ruleFail: 0,
+    },
+    llmBudget: {
+      dailySoftCap: 240,
+      usedToday: 0,
+      exceeded: false,
+    },
     orderFlowLocal: {
       buyRequested: 0,
       buyFilled: 0,
@@ -1180,6 +1190,7 @@ export default function ManualTraderWorkspace() {
       {
         enabled: autopilotEnabled,
         interval: autopilotInterval,
+        confirmInterval: 'minute10',
         tradingMode: autopilotMode,
         amountKrw: autopilotAmountKrw,
         dailyLossLimitKrw,
@@ -1187,17 +1198,18 @@ export default function ManualTraderWorkspace() {
         winRateThresholdMode,
         fixedMinMarketWinRate,
         minLlmConfidence,
-        candidateLimit: 20,
+        candidateLimit: 15,
         rejectCooldownMs: rejectCooldownSeconds * 1000,
         postExitCooldownMs: postExitCooldownMinutes * 60 * 1000,
-        workerTickMs: 15000,
-        llmReviewIntervalMs: 15000,
+        workerTickMs: 8000,
+        llmReviewIntervalMs: 8000,
         llmModel: chatModel,
         playwrightEnabled,
         entryPolicy,
         entryOrderMode,
         pendingEntryTimeoutSec,
         marketFallbackAfterCancel,
+        llmDailySoftCap: 240,
       },
       {
         onState: (next) => setAutopilotState(next),

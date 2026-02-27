@@ -2,6 +2,7 @@ package com.ant.cointrading.controller
 
 import com.ant.cointrading.guided.GuidedChartResponse
 import com.ant.cointrading.guided.GuidedAgentContextResponse
+import com.ant.cointrading.guided.GuidedAutopilotOpportunitiesResponse
 import com.ant.cointrading.guided.GuidedClosedTradeView
 import com.ant.cointrading.guided.GuidedDailyStats
 import com.ant.cointrading.guided.GuidedMarketItem
@@ -189,6 +190,21 @@ class GuidedTradingController(
             thresholdMode = GuidedWinRateThresholdMode.fromString(thresholdMode),
             minMarketWinRate = minMarketWinRate,
             minRecommendedWinRate = minRecommendedWinRate
+        )
+    }
+
+    @GetMapping("/autopilot/opportunities")
+    fun getAutopilotOpportunities(
+        @RequestParam(defaultValue = "minute1") interval: String,
+        @RequestParam(defaultValue = "minute10") confirmInterval: String,
+        @RequestParam(defaultValue = "SCALP") mode: String,
+        @RequestParam(defaultValue = "15") universeLimit: Int
+    ): GuidedAutopilotOpportunitiesResponse {
+        return guidedTradingService.getAutopilotOpportunities(
+            interval = interval,
+            confirmInterval = confirmInterval,
+            mode = TradingMode.fromString(mode),
+            universeLimit = universeLimit
         )
     }
 }

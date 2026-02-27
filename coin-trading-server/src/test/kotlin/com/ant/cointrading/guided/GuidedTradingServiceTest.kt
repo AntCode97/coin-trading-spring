@@ -25,6 +25,7 @@ import org.junit.jupiter.api.DisplayName
 import org.junit.jupiter.api.Test
 import org.mockito.kotlin.any
 import org.mockito.kotlin.anyOrNull
+import org.mockito.kotlin.argumentCaptor
 import org.mockito.kotlin.eq
 import org.mockito.kotlin.isNull
 import org.mockito.kotlin.mock
@@ -224,6 +225,95 @@ class GuidedTradingServiceTest {
     }
 
     @Test
+    @DisplayName("오토파일럿 opportunities는 유니버스 제한(15)과 stage 산출 규칙을 적용한다")
+    fun autopilotOpportunitiesUseUniverseLimitAndStageRules() {
+        val result = service.getAutopilotOpportunities(
+            interval = "minute1",
+            confirmInterval = "minute10",
+            mode = TradingMode.SCALP,
+            universeLimit = 15
+        )
+
+        val expectedUniverse = markets.take(15).map { it.market }.toSet()
+        assertEquals(15, result.appliedUniverseLimit)
+        assertEquals(15, result.opportunities.size)
+        assertTrue(result.opportunities.all { it.market in expectedUniverse })
+        assertTrue(result.opportunities.all { it.score in 0.0..100.0 })
+        assertTrue(result.opportunities.all { it.stage in setOf("AUTO_PASS", "BORDERLINE", "RULE_FAIL") })
+        assertTrue(result.opportunities.zipWithNext().all { (left, right) -> left.score >= right.score })
+    }
+
+    @Test
+    @DisplayName("오토파일럿 opportunities 기대값/점수 계산식은 고정 산식을 따른다")
+    fun autopilotOpportunityFormulaMatchesSpec() {
+        val method = GuidedTradingService::class.java.getDeclaredMethod(
+            "buildAutopilotOpportunity",
+            GuidedMarketItem::class.java,
+            GuidedRecommendation::class.java,
+            GuidedRecommendation::class.java
+        )
+        method.isAccessible = true
+
+        val marketItem = GuidedMarketItem(
+            market = "KRW-TEST",
+            symbol = "TEST",
+            koreanName = "테스트",
+            englishName = "TEST",
+            tradePrice = 100.0,
+            changeRate = 0.0,
+            changePrice = 0.0,
+            accTradePrice = 1_000_000.0,
+            accTradeVolume = 10_000.0,
+            surgeRate = 0.0
+        )
+        val primary = GuidedRecommendation(
+            market = "KRW-TEST",
+            currentPrice = 100.0,
+            recommendedEntryPrice = 99.5,
+            stopLossPrice = 98.9,
+            takeProfitPrice = 101.7,
+            confidence = 68.0,
+            predictedWinRate = 61.0,
+            recommendedEntryWinRate = 62.0,
+            marketEntryWinRate = 59.0,
+            riskRewardRatio = 1.45,
+            winRateBreakdown = GuidedWinRateBreakdown(
+                trend = 60.0,
+                pullback = 58.0,
+                volatility = 55.0,
+                riskReward = 62.0
+            ),
+            suggestedOrderType = "LIMIT",
+            rationale = listOf("formula-test")
+        )
+        val confirm = primary.copy(
+            recommendedEntryWinRate = 58.0,
+            marketEntryWinRate = 57.0,
+            riskRewardRatio = 1.22
+        )
+
+        val result = method.invoke(service, marketItem, primary, confirm) as GuidedAutopilotOpportunityView
+
+        val p = 0.6 * (62.0 / 100.0) + 0.4 * (58.0 / 100.0)
+        val profitPct = (101.7 - 99.5) / 99.5 * 100.0
+        val lossPct = (99.5 - 98.9) / 99.5 * 100.0
+        val expectancy = p * profitPct - (1 - p) * lossPct
+        val entryGapPct = max(0.0, (100.0 - 99.5) / 99.5 * 100.0)
+        val rawScore =
+            50.0 +
+                22.0 * expectancy +
+                12.0 * (1.45 - 1.0) +
+                0.35 * (62.0 - 50.0) +
+                0.25 * (58.0 - 50.0) -
+                8.0 * max(0.0, entryGapPct - 0.35)
+        val expectedScore = rawScore.coerceIn(0.0, 100.0)
+
+        assertEquals(expectancy, result.expectancyPct, 1e-9)
+        assertEquals(expectedScore, result.score, 1e-9)
+        assertEquals("AUTO_PASS", result.stage)
+    }
+
+    @Test
     @DisplayName("MARKET 진입가 계산은 locked보다 investedAmount를 우선 사용한다")
     fun resolveEntryPricePrefersInvestedAmount() {
         val method = GuidedTradingService::class.java.getDeclaredMethod(
@@ -255,6 +345,53 @@ class GuidedTradingServiceTest {
         ) as BigDecimal
 
         assertEquals(0, resolved.compareTo(BigDecimal("10000000.00000000")))
+    }
+
+    @Test
+    @DisplayName("AUTOPILOT 진입은 entrySource/strategyCode를 포지션에 저장한다")
+    fun startAutoTradingPersistsEntrySourceAndStrategyCode() {
+        whenever(
+            bithumbPrivateApi.buyMarketOrder(
+                eq("KRW-BTC"),
+                eq(BigDecimal("10000"))
+            )
+        ).thenReturn(
+            orderResponse(
+                uuid = "entry-1",
+                side = "bid",
+                market = "KRW-BTC",
+                state = "done",
+                executedVolume = BigDecimal("0.00100000"),
+                volume = BigDecimal("0.00100000")
+            )
+        )
+        whenever(bithumbPrivateApi.getOrder("entry-1")).thenReturn(
+            orderResponse(
+                uuid = "entry-1",
+                side = "bid",
+                market = "KRW-BTC",
+                state = "done",
+                executedVolume = BigDecimal("0.00100000"),
+                volume = BigDecimal("0.00100000")
+            )
+        )
+
+        service.startAutoTrading(
+            GuidedStartRequest(
+                market = "KRW-BTC",
+                amountKrw = 10000,
+                orderType = "MARKET",
+                interval = "minute1",
+                mode = "SCALP",
+                entrySource = "AUTOPILOT",
+                strategyCode = "guided_autopilot"
+            )
+        )
+
+        val captor = argumentCaptor<GuidedTradeEntity>()
+        verify(guidedTradeRepository, times(1)).save(captor.capture())
+        assertEquals("AUTOPILOT", captor.firstValue.entrySource)
+        assertEquals("GUIDED_AUTOPILOT", captor.firstValue.strategyCode)
     }
 
     @Test
@@ -458,7 +595,10 @@ class GuidedTradingServiceTest {
         assertTrue(adopted.adopted)
         assertEquals(1L, adopted.positionId)
         assertEquals(0.01, adopted.quantity, 0.0000001)
-        verify(guidedTradeRepository, times(1)).save(any())
+        val captor = argumentCaptor<GuidedTradeEntity>()
+        verify(guidedTradeRepository, times(1)).save(captor.capture())
+        assertEquals("MCP_DIRECT", captor.firstValue.entrySource)
+        assertEquals("GUIDED_AUTOPILOT", captor.firstValue.strategyCode)
     }
 
     @Test
@@ -486,7 +626,11 @@ class GuidedTradingServiceTest {
     }
 
     private fun buildCandles(market: String): List<CandleResponse> {
-        val idx = market.removePrefix("KRW-C").toInt()
+        val symbol = market.removePrefix("KRW-")
+        val idx = symbol
+            .filter { it.isDigit() }
+            .toIntOrNull()
+            ?: (symbol.fold(0) { acc, ch -> acc + ch.code } % 60 + 1)
         val drift = when (idx % 4) {
             0 -> 2.2
             1 -> 1.0

@@ -1,8 +1,7 @@
 import {
+  type AutopilotOpportunityView,
   guidedTradingApi,
   type GuidedAgentContextResponse,
-  type GuidedMarketItem,
-  type GuidedRecommendation,
   type GuidedTradePosition,
 } from '../../api';
 import {
@@ -21,6 +20,7 @@ import {
 export interface AutopilotConfig {
   enabled: boolean;
   interval: string;
+  confirmInterval: string;
   tradingMode: TradingMode;
   amountKrw: number;
   dailyLossLimitKrw: number;
@@ -39,9 +39,12 @@ export interface AutopilotConfig {
   entryOrderMode: 'ADAPTIVE' | 'MARKET' | 'LIMIT';
   pendingEntryTimeoutSec: number;
   marketFallbackAfterCancel: boolean;
+  llmDailySoftCap: number;
 }
 
 export type CandidateStage =
+  | 'AUTO_PASS'
+  | 'BORDERLINE'
   | 'RULE_PASS'
   | 'RULE_FAIL'
   | 'SLOT_FULL'
@@ -57,6 +60,10 @@ export interface AutopilotCandidateView {
   koreanName: string;
   recommendedEntryWinRate: number | null;
   marketEntryWinRate: number | null;
+  expectancyPct?: number | null;
+  score?: number | null;
+  riskRewardRatio?: number | null;
+  entryGapPct?: number | null;
   stage: CandidateStage;
   reason: string;
   updatedAt: number;
@@ -102,6 +109,16 @@ export interface AutopilotState {
   logs: string[];
   events: AutopilotTimelineEvent[];
   candidates: AutopilotCandidateView[];
+  decisionBreakdown: {
+    autoPass: number;
+    borderline: number;
+    ruleFail: number;
+  };
+  llmBudget: {
+    dailySoftCap: number;
+    usedToday: number;
+    exceeded: boolean;
+  };
   orderFlowLocal: AutopilotOrderFlowLocal;
   screenshots: AutopilotScreenshot[];
 }
@@ -138,11 +155,7 @@ interface CandidateScoreInfo {
   score: number;
   riskRewardRatio: number;
   entryGapPct: number;
-}
-
-interface CachedRecommendationMeta {
-  at: number;
-  recommendation: GuidedRecommendation;
+  expectancyPct: number;
 }
 
 interface EntryDecision {
@@ -162,9 +175,10 @@ interface PlannedEntryOrder {
   entryGapPct: number;
 }
 
-interface LlmShortlistDecision {
-  markets: Set<string>;
-  budget: number;
+interface SpawnWorkerOptions {
+  skipLlmEntryReview: boolean;
+  entryAmountKrw: number;
+  sourceStage: 'AUTO_PASS' | 'BORDERLINE';
 }
 
 export class AutopilotOrchestrator {
@@ -179,16 +193,21 @@ export class AutopilotOrchestrator {
   private readonly candidateScoreByMarket = new Map<string, CandidateScoreInfo>();
   private readonly screenshots = new Map<string, AutopilotScreenshot>();
   private readonly screenshotOrder: string[] = [];
-  private readonly recommendationCache = new Map<string, CachedRecommendationMeta>();
   private orderFlowLocal: AutopilotOrderFlowLocal = createEmptyOrderFlow();
   private loopId: number | null = null;
-  private supervisorId: number | null = null;
   private running = false;
   private startedAt: number | null = null;
   private blockedByDailyLoss = false;
   private blockedReason: string | null = null;
   private appliedRecommendedWinRateThreshold = 0;
-  private lastLlmShortlistSignature: string | null = null;
+  private llmUsageDateKst = this.kstDateKey();
+  private llmUsageToday = 0;
+  private llmSoftCapWarned = false;
+  private decisionBreakdown = {
+    autoPass: 0,
+    borderline: 0,
+    ruleFail: 0,
+  };
 
   constructor(config: AutopilotConfig, callbacks: OrchestratorCallbacks) {
     this.config = config;
@@ -207,8 +226,7 @@ export class AutopilotOrchestrator {
       detail: '오토파일럿을 시작했습니다.',
     });
     void this.tick();
-    this.loopId = window.setInterval(() => void this.tick(), 15000);
-    this.supervisorId = window.setInterval(() => void this.supervise(), 60000);
+    this.loopId = window.setInterval(() => void this.tick(), 10000);
     this.emitState();
   }
 
@@ -217,10 +235,6 @@ export class AutopilotOrchestrator {
     if (this.loopId != null) {
       window.clearInterval(this.loopId);
       this.loopId = null;
-    }
-    if (this.supervisorId != null) {
-      window.clearInterval(this.supervisorId);
-      this.supervisorId = null;
     }
     for (const worker of this.workers.values()) {
       worker.stop('오케스트레이터 중지');
@@ -273,6 +287,12 @@ export class AutopilotOrchestrator {
       logs: [...this.logs],
       events: [...this.events],
       candidates: Array.from(this.candidatesByMarket.values()).sort((a, b) => a.market.localeCompare(b.market)),
+      decisionBreakdown: { ...this.decisionBreakdown },
+      llmBudget: {
+        dailySoftCap: this.config.llmDailySoftCap,
+        usedToday: this.llmUsageToday,
+        exceeded: this.llmUsageToday >= this.config.llmDailySoftCap,
+      },
       orderFlowLocal: { ...this.orderFlowLocal },
       screenshots: Array.from(this.screenshots.values()),
     };
@@ -312,6 +332,10 @@ export class AutopilotOrchestrator {
       koreanName: seed?.koreanName ?? prev?.koreanName ?? normalized,
       recommendedEntryWinRate: seed?.recommendedEntryWinRate ?? prev?.recommendedEntryWinRate ?? null,
       marketEntryWinRate: seed?.marketEntryWinRate ?? prev?.marketEntryWinRate ?? null,
+      expectancyPct: seed?.expectancyPct ?? prev?.expectancyPct ?? null,
+      score: seed?.score ?? prev?.score ?? null,
+      riskRewardRatio: seed?.riskRewardRatio ?? prev?.riskRewardRatio ?? null,
+      entryGapPct: seed?.entryGapPct ?? prev?.entryGapPct ?? null,
       stage,
       reason,
       updatedAt: Date.now(),
@@ -388,6 +412,7 @@ export class AutopilotOrchestrator {
   private async tick(): Promise<void> {
     if (!this.running || !this.config.enabled) return;
     try {
+      this.rolloverLlmUsageIfNeeded();
       const stats = await guidedTradingApi.getTodayStats();
       const nextBlockedByDailyLoss = stats.totalPnlKrw <= this.config.dailyLossLimitKrw;
       const nextBlockedReason = nextBlockedByDailyLoss
@@ -415,20 +440,14 @@ export class AutopilotOrchestrator {
         return;
       }
 
-      const markets = await guidedTradingApi.getMarkets(
-        'MARKET_ENTRY_WIN_RATE',
-        'DESC',
+      const opportunities = await guidedTradingApi.getAutopilotOpportunities(
         this.config.interval,
-        this.config.tradingMode
+        this.config.confirmInterval,
+        this.config.tradingMode,
+        this.config.candidateLimit
       );
-      const topTwenty = markets.slice(0, 20);
-      await this.refreshRecommendationCache(topTwenty);
-      const ranked = this.rankCandidates(topTwenty);
-      const appliedThreshold = this.resolveAppliedThreshold(markets, ranked);
-      this.appliedRecommendedWinRateThreshold = appliedThreshold;
-      const scopedCandidates = ranked.slice(0, this.config.candidateLimit);
-      const llmShortlist = this.buildLlmShortlist(scopedCandidates, appliedThreshold);
-      this.emitLlmShortlistEvent(scopedCandidates.length, llmShortlist);
+      const scopedCandidates = opportunities.opportunities.slice(0, this.config.candidateLimit);
+      this.appliedRecommendedWinRateThreshold = this.resolveOpportunityDisplayThreshold(scopedCandidates);
       const openMarketSet = new Set(
         openPositions
           .filter((position) => position.status === 'OPEN' || position.status === 'PENDING_ENTRY')
@@ -437,51 +456,86 @@ export class AutopilotOrchestrator {
 
       let availableSlots = Math.max(0, this.config.maxConcurrentPositions - openMarketSet.size);
       const nextCandidates: AutopilotCandidateView[] = [];
+      const activeOpportunityMarkets = new Set<string>();
+      let autoPass = 0;
+      let borderline = 0;
+      let ruleFail = 0;
 
       for (const candidate of scopedCandidates) {
-        const evaluation = this.evaluateCandidateEligibility(
+        this.candidateScoreByMarket.set(candidate.market, {
+          market: candidate.market,
+          score: candidate.score,
+          riskRewardRatio: candidate.riskReward1m,
+          entryGapPct: candidate.entryGapPct1m,
+          expectancyPct: candidate.expectancyPct,
+        });
+
+        if (candidate.stage === 'AUTO_PASS') autoPass += 1;
+        else if (candidate.stage === 'BORDERLINE') borderline += 1;
+        else ruleFail += 1;
+
+        const evaluation = this.evaluateOpportunityEligibility(
           candidate,
           openMarketSet,
-          availableSlots,
-          appliedThreshold
+          availableSlots
         );
-        let stage: CandidateStage = evaluation.stage;
-        let reason = evaluation.reason;
-        const scoreInfo = this.candidateScoreByMarket.get(candidate.market);
-        if (evaluation.stage === 'RULE_PASS' && !llmShortlist.markets.has(candidate.market)) {
-          stage = 'RULE_FAIL';
-          reason = `고확신 필터 미통과로 LLM 생략 (상한 ${llmShortlist.budget}개)`;
-        }
-        if (scoreInfo) {
-          reason = `${reason} · score ${scoreInfo.score.toFixed(1)} / RR ${scoreInfo.riskRewardRatio.toFixed(2)} / 괴리 ${scoreInfo.entryGapPct.toFixed(2)}%`;
-        }
+        let stage: CandidateStage = candidate.stage as CandidateStage;
+        let reason = candidate.reason;
 
-        if (stage === 'RULE_PASS') {
-          this.spawnWorker(candidate.market, candidate, scoreInfo);
+        if (!evaluation.allow) {
+          stage = evaluation.stage;
+          reason = evaluation.reason;
+        } else if (stage === 'AUTO_PASS' || stage === 'BORDERLINE') {
+          activeOpportunityMarkets.add(candidate.market);
+          const sourceStage = stage === 'AUTO_PASS' ? 'AUTO_PASS' : 'BORDERLINE';
+          const entryAmountKrw = this.resolveEntryAmount(sourceStage);
+          this.spawnWorker(
+            candidate.market,
+            {
+              market: candidate.market,
+              koreanName: candidate.koreanName,
+              recommendedEntryWinRate: candidate.recommendedEntryWinRate1m ?? null,
+              marketEntryWinRate: candidate.marketEntryWinRate1m ?? null,
+              expectancyPct: candidate.expectancyPct,
+              score: candidate.score,
+              riskRewardRatio: candidate.riskReward1m,
+              entryGapPct: candidate.entryGapPct1m,
+            },
+            {
+              skipLlmEntryReview: sourceStage === 'AUTO_PASS',
+              entryAmountKrw,
+              sourceStage,
+            }
+          );
           stage = 'ENTERED';
-          reason = '워커 생성 후 진입 분석 시작';
+          reason = `${sourceStage} 워커 생성 (진입금 ${entryAmountKrw.toLocaleString('ko-KR')}원)`;
           availableSlots -= 1;
           this.pushEvent({
             type: 'CANDIDATE',
             level: 'INFO',
             market: candidate.market,
             action: 'ENTERED',
-            detail: `${candidate.koreanName} 후보 진입 파이프라인 시작`,
+            detail: `${candidate.koreanName} ${sourceStage} 후보 진입 파이프라인 시작`,
           });
         }
 
         nextCandidates.push({
           market: candidate.market,
           koreanName: candidate.koreanName,
-          recommendedEntryWinRate: candidate.recommendedEntryWinRate ?? null,
-          marketEntryWinRate: candidate.marketEntryWinRate ?? null,
+          recommendedEntryWinRate: candidate.recommendedEntryWinRate1m ?? null,
+          marketEntryWinRate: candidate.marketEntryWinRate1m ?? null,
+          expectancyPct: candidate.expectancyPct,
+          score: candidate.score,
+          riskRewardRatio: candidate.riskReward1m,
+          entryGapPct: candidate.entryGapPct1m,
           stage,
           reason,
           updatedAt: Date.now(),
         });
       }
 
-      this.pruneIdleWorkers(llmShortlist.markets, openMarketSet);
+      this.decisionBreakdown = { autoPass, borderline, ruleFail };
+      this.pruneIdleWorkers(activeOpportunityMarkets, openMarketSet);
       this.replaceCandidates(nextCandidates);
       this.emitState();
     } catch (error) {
@@ -496,63 +550,80 @@ export class AutopilotOrchestrator {
     }
   }
 
-  private evaluateCandidateEligibility(
-    market: GuidedMarketItem,
+  private evaluateOpportunityEligibility(
+    candidate: AutopilotOpportunityView,
     openMarketSet: Set<string>,
-    availableSlots: number,
-    appliedThreshold: number
-  ): { stage: CandidateStage; reason: string } {
-    const thresholdValue = this.getThresholdValue(market);
-    const thresholdLabel = this.getThresholdLabel();
-    if (thresholdValue == null || thresholdValue < appliedThreshold) {
+    availableSlots: number
+  ): { allow: boolean; stage: CandidateStage; reason: string } {
+    if (candidate.stage === 'RULE_FAIL') {
       return {
+        allow: false,
         stage: 'RULE_FAIL',
-        reason: `${thresholdLabel} ${thresholdValue?.toFixed(1) ?? '-'}% < ${appliedThreshold.toFixed(1)}%`,
+        reason: candidate.reason,
       };
     }
-    if (openMarketSet.has(market.market)) {
+    if (openMarketSet.has(candidate.market)) {
       return {
+        allow: false,
         stage: 'POSITION_OPEN',
         reason: '이미 포지션 존재',
       };
     }
     const now = Date.now();
-    const cooldownUntil = this.cooldownUntilByMarket.get(market.market);
+    const cooldownUntil = this.cooldownUntilByMarket.get(candidate.market);
     if (cooldownUntil && cooldownUntil > now) {
       return {
+        allow: false,
         stage: 'COOLDOWN',
         reason: `워커 쿨다운 ${Math.ceil((cooldownUntil - now) / 1000)}초`,
       };
     }
-
-    const workerState = this.workerStates.get(market.market);
+    const workerState = this.workerStates.get(candidate.market);
     if (
       workerState?.status === 'COOLDOWN' &&
       workerState.cooldownUntil != null &&
       workerState.cooldownUntil > now
     ) {
       return {
+        allow: false,
         stage: 'COOLDOWN',
         reason: `워커 쿨다운 ${Math.ceil((workerState.cooldownUntil - now) / 1000)}초`,
       };
     }
-
-    if (this.workers.has(market.market)) {
+    if (this.workers.has(candidate.market)) {
       return {
+        allow: false,
         stage: 'WORKER_ACTIVE',
         reason: '이미 워커 실행 중',
       };
     }
     if (availableSlots <= 0) {
       return {
+        allow: false,
         stage: 'SLOT_FULL',
         reason: '동시 포지션 슬롯 부족',
       };
     }
     return {
+      allow: true,
       stage: 'RULE_PASS',
-      reason: `${thresholdLabel} ${thresholdValue.toFixed(1)}% 규칙 통과 (기준 ${appliedThreshold.toFixed(1)}%)`,
+      reason: '진입 가능',
     };
+  }
+
+  private resolveEntryAmount(stage: 'AUTO_PASS' | 'BORDERLINE'): number {
+    const scale = stage === 'AUTO_PASS' ? 1.15 : 0.85;
+    const scaled = Math.round(this.config.amountKrw * scale);
+    return Math.max(5100, Math.min(20_000, scaled));
+  }
+
+  private resolveOpportunityDisplayThreshold(candidates: AutopilotOpportunityView[]): number {
+    const wins = candidates
+      .map((candidate) => candidate.recommendedEntryWinRate1m)
+      .filter((value): value is number => value != null && Number.isFinite(value));
+    if (wins.length === 0) return 0;
+    const avg = wins.reduce((acc, value) => acc + value, 0) / wins.length;
+    return Math.round(avg * 10) / 10;
   }
 
   private ensureWorkersForOpenPositions(openPositions: GuidedTradePosition[]): void {
@@ -566,87 +637,6 @@ export class AutopilotOrchestrator {
         marketEntryWinRate: null,
       });
     }
-  }
-
-  private buildLlmShortlist(
-    candidates: GuidedMarketItem[],
-    appliedThreshold: number
-  ): LlmShortlistDecision {
-    const budget = Math.min(6, Math.max(2, Math.ceil(this.config.maxConcurrentPositions * 1.5)));
-    const strict: GuidedMarketItem[] = [];
-    const relaxed: GuidedMarketItem[] = [];
-    const fixedMode = this.config.winRateThresholdMode === 'FIXED';
-
-    for (const candidate of candidates) {
-      const recommendedWin = candidate.recommendedEntryWinRate ?? 0;
-      const marketWin = candidate.marketEntryWinRate ?? 0;
-      const thresholdValue = this.getThresholdValue(candidate);
-      if (thresholdValue == null || thresholdValue < appliedThreshold) continue;
-
-      const score = this.candidateScoreByMarket.get(candidate.market);
-      if (!score) continue;
-
-      const strictPass =
-        (fixedMode ? marketWin >= appliedThreshold + 0.5 : recommendedWin >= appliedThreshold + 0.5) &&
-        (fixedMode ? recommendedWin >= Math.max(40, appliedThreshold - 8) : marketWin >= appliedThreshold - 4) &&
-        score.score >= 60 &&
-        score.riskRewardRatio >= 1.18 &&
-        score.entryGapPct <= 0.9;
-      if (strictPass) {
-        strict.push(candidate);
-        continue;
-      }
-
-      const relaxedPass =
-        (fixedMode ? recommendedWin >= Math.max(38, appliedThreshold - 12) : marketWin >= appliedThreshold - 7) &&
-        score.score >= 56 &&
-        score.riskRewardRatio >= 1.05 &&
-        score.entryGapPct <= 1.2;
-      if (relaxedPass) {
-        relaxed.push(candidate);
-      }
-    }
-
-    const byScoreDesc = (left: GuidedMarketItem, right: GuidedMarketItem): number => {
-      const l = this.candidateScoreByMarket.get(left.market)?.score ?? 0;
-      const r = this.candidateScoreByMarket.get(right.market)?.score ?? 0;
-      return r - l;
-    };
-
-    strict.sort(byScoreDesc);
-    relaxed.sort(byScoreDesc);
-
-    const merged: GuidedMarketItem[] = [];
-    const seen = new Set<string>();
-    for (const candidate of strict) {
-      if (seen.has(candidate.market)) continue;
-      merged.push(candidate);
-      seen.add(candidate.market);
-    }
-    for (const candidate of relaxed) {
-      if (seen.has(candidate.market)) continue;
-      merged.push(candidate);
-      seen.add(candidate.market);
-    }
-
-    return {
-      markets: new Set(merged.slice(0, budget).map((candidate) => candidate.market)),
-      budget,
-    };
-  }
-
-  private emitLlmShortlistEvent(candidateCount: number, shortlist: LlmShortlistDecision): void {
-    const markets = Array.from(shortlist.markets).sort();
-    const signature = `${candidateCount}|${shortlist.budget}|${markets.join(',')}`;
-    if (this.lastLlmShortlistSignature === signature) return;
-    this.lastLlmShortlistSignature = signature;
-
-    this.pushEvent({
-      type: 'SYSTEM',
-      level: 'INFO',
-      action: 'LLM_SHORTLIST',
-      detail: `후보 ${candidateCount}개 중 ${shortlist.markets.size}개만 LLM 평가 (${markets.join(', ') || '-'})`,
-    });
   }
 
   private pruneIdleWorkers(
@@ -679,10 +669,15 @@ export class AutopilotOrchestrator {
   private spawnWorker(
     market: string,
     seedCandidate?: Partial<AutopilotCandidateView>,
-    scoreInfo?: CandidateScoreInfo
+    options?: SpawnWorkerOptions
   ): void {
     const normalized = market.trim().toUpperCase();
     if (this.workers.has(normalized)) return;
+    const effectiveOptions: SpawnWorkerOptions = options ?? {
+      skipLlmEntryReview: false,
+      entryAmountKrw: this.resolveEntryAmount('BORDERLINE'),
+      sourceStage: 'BORDERLINE',
+    };
 
     const worker = new MarketWorker(
       {
@@ -697,6 +692,7 @@ export class AutopilotOrchestrator {
         entryOrderMode: this.config.entryOrderMode,
         pendingEntryTimeoutMs: Math.max(10_000, this.config.pendingEntryTimeoutSec * 1000),
         marketFallbackAfterCancel: this.config.marketFallbackAfterCancel,
+        skipLlmEntryReview: effectiveOptions.skipLlmEntryReview,
       },
       {
         fetchContext: async (workerMarket) =>
@@ -707,7 +703,7 @@ export class AutopilotOrchestrator {
         startGuidedEntry: async (workerMarket, plan) =>
           guidedTradingApi.start({
             market: workerMarket,
-            amountKrw: this.config.amountKrw,
+            amountKrw: effectiveOptions.entryAmountKrw,
             orderType: plan?.orderType ?? 'MARKET',
             limitPrice: plan?.orderType === 'LIMIT' ? plan.limitPrice : undefined,
             interval: this.config.interval,
@@ -745,10 +741,17 @@ export class AutopilotOrchestrator {
     );
 
     this.workers.set(normalized, worker);
-    const scoreNote = scoreInfo ? `score ${scoreInfo.score.toFixed(1)}` : 'score -';
-    this.setCandidateStage(normalized, 'ENTERED', `워커 생성 (${scoreNote})`, seedCandidate);
+    const scoreNote = seedCandidate?.score != null ? `score ${seedCandidate.score.toFixed(1)}` : 'score -';
+    this.setCandidateStage(
+      normalized,
+      'ENTERED',
+      `워커 생성 (${effectiveOptions.sourceStage}, ${scoreNote}, ${effectiveOptions.entryAmountKrw.toLocaleString('ko-KR')}원)`,
+      seedCandidate
+    );
     worker.start();
-    this.writeLog(`[${normalized}] 워커 생성`);
+    this.writeLog(
+      `[${normalized}] 워커 생성 (${effectiveOptions.sourceStage}, 진입금 ${effectiveOptions.entryAmountKrw.toLocaleString('ko-KR')}원)`
+    );
   }
 
   private cleanupExpiredCooldowns(): void {
@@ -760,126 +763,39 @@ export class AutopilotOrchestrator {
     }
   }
 
-  private async refreshRecommendationCache(candidates: GuidedMarketItem[]): Promise<void> {
-    const now = Date.now();
-    const staleMarkets = candidates
-      .map((candidate) => candidate.market)
-      .filter((market) => {
-        const cached = this.recommendationCache.get(market);
-        return !cached || now - cached.at >= 60_000;
-      })
-      .slice(0, 5);
+  private kstDateKey(now = new Date()): string {
+    return now.toLocaleDateString('en-CA', { timeZone: 'Asia/Seoul' });
+  }
 
-    if (staleMarkets.length === 0) return;
+  private rolloverLlmUsageIfNeeded(): void {
+    const key = this.kstDateKey();
+    if (this.llmUsageDateKst === key) return;
+    this.llmUsageDateKst = key;
+    this.llmUsageToday = 0;
+    this.llmSoftCapWarned = false;
+  }
 
-    const settled = await Promise.allSettled(
-      staleMarkets.map((market) =>
-        guidedTradingApi.getRecommendation(
-          market,
-          this.config.interval,
-          this.config.interval === 'tick' ? 300 : 120,
-          this.config.tradingMode
-        )
-      )
-    );
-
-    settled.forEach((result, idx) => {
-      const market = staleMarkets[idx];
-      if (result.status !== 'fulfilled') {
-        this.pushEvent({
-          type: 'SYSTEM',
-          level: 'WARN',
-          market,
-          action: 'RECOMMENDATION_CACHE_WARN',
-          detail: result.reason instanceof Error ? result.reason.message : '추천 정보 조회 실패',
-        });
-        return;
-      }
-      this.recommendationCache.set(market, {
-        at: now,
-        recommendation: result.value,
+  private recordLlmUsage(action: string, market?: string): void {
+    this.rolloverLlmUsageIfNeeded();
+    this.llmUsageToday += 1;
+    if (!this.llmSoftCapWarned && this.llmUsageToday >= this.config.llmDailySoftCap) {
+      this.llmSoftCapWarned = true;
+      this.pushEvent({
+        type: 'LLM',
+        level: 'WARN',
+        market,
+        action: 'LLM_SOFT_CAP',
+        detail: `일일 LLM 사용량이 소프트 상한(${this.config.llmDailySoftCap}회)을 초과했습니다. 호출은 계속 허용됩니다. (${action})`,
       });
-    });
-  }
-
-  private rankCandidates(candidates: GuidedMarketItem[]): GuidedMarketItem[] {
-    const scored = candidates.map((candidate) => {
-      const recommendedWin = candidate.recommendedEntryWinRate ?? 0;
-      const marketWin = candidate.marketEntryWinRate ?? 0;
-      const cached = this.recommendationCache.get(candidate.market)?.recommendation;
-      const riskReward = cached?.riskRewardRatio ?? 1.0;
-      const entryGapPct = cached?.recommendedEntryPrice && cached.recommendedEntryPrice > 0
-        ? Math.max(0, ((candidate.tradePrice - cached.recommendedEntryPrice) / cached.recommendedEntryPrice) * 100)
-        : 0;
-
-      const rrScore = Math.max(0, Math.min(100, ((riskReward - 0.8) / 1.6) * 100));
-      const gapScore = Math.max(0, Math.min(100, 100 - entryGapPct * 70));
-      const finalScore =
-        marketWin * 0.44 +
-        recommendedWin * 0.34 +
-        rrScore * 0.16 +
-        gapScore * 0.06;
-
-      this.candidateScoreByMarket.set(candidate.market, {
-        market: candidate.market,
-        score: finalScore,
-        riskRewardRatio: riskReward,
-        entryGapPct,
-      });
-      return { candidate, score: finalScore };
-    });
-
-    return scored
-      .sort((left, right) => right.score - left.score)
-      .map((item) => item.candidate);
-  }
-
-  private resolveAppliedThreshold(
-    markets: GuidedMarketItem[],
-    ranked: GuidedMarketItem[]
-  ): number {
-    if (this.config.winRateThresholdMode === 'FIXED') {
-      return Math.min(80, Math.max(50, this.config.fixedMinMarketWinRate));
+      this.writeLog(`LLM 소프트 상한 초과: ${this.llmUsageToday}/${this.config.llmDailySoftCap}`);
     }
-
-    const values = markets
-      .map((market) => market.recommendedEntryWinRate)
-      .filter((value): value is number => value != null && Number.isFinite(value));
-    if (values.length === 0) return 54;
-
-    const sorted = [...values].sort((a, b) => a - b);
-    const p65Index = Math.max(0, Math.ceil(sorted.length * 0.65) - 1);
-    let threshold = Math.min(63, Math.max(56, sorted[p65Index]));
-
-    while (threshold > 54) {
-      const eligibleCount = ranked.filter(
-        (candidate) => (candidate.recommendedEntryWinRate ?? 0) >= threshold
-      ).length;
-      if (eligibleCount >= 2) break;
-      threshold -= 1;
-    }
-
-    threshold = Math.max(54, threshold);
-    return Math.round(threshold * 10) / 10;
-  }
-
-  private getThresholdLabel(): string {
-    return this.config.winRateThresholdMode === 'FIXED' ? '현재가 승률' : '추천가 승률';
-  }
-
-  private getThresholdValue(market: GuidedMarketItem): number | null {
-    const value =
-      this.config.winRateThresholdMode === 'FIXED'
-        ? market.marketEntryWinRate
-        : market.recommendedEntryWinRate;
-    if (value == null || !Number.isFinite(value)) return null;
-    return value;
   }
 
   private async evaluateEntry(
     market: string,
     context: GuidedAgentContextResponse
   ): Promise<EntryDecision> {
+    this.recordLlmUsage('ENTRY_REVIEW', market);
     const response = await requestOneShotText({
       model: this.config.llmModel,
       tradingMode: this.config.tradingMode,
@@ -1118,6 +1034,7 @@ export class AutopilotOrchestrator {
     market: string,
     position: GuidedTradePosition
   ): Promise<{ action: 'HOLD' | 'PARTIAL_TP' | 'FULL_EXIT'; reason: string }> {
+    this.recordLlmUsage('POSITION_REVIEW', market);
     const response = await requestOneShotText({
       model: this.config.llmModel,
       tradingMode: this.config.tradingMode,
@@ -1203,45 +1120,6 @@ export class AutopilotOrchestrator {
       if (Number.isFinite(parsed)) return parsed;
     }
     return fallback;
-  }
-
-  private async supervise(): Promise<void> {
-    if (!this.running || !this.config.enabled) return;
-    const advisoryStatuses = new Set<WorkerStatus>(['ENTERING', 'MANAGING', 'PLAYWRIGHT_CHECK']);
-    const workerSummary = Array.from(this.workerStates.values())
-      .filter((worker) => advisoryStatuses.has(worker.status))
-      .map((worker) => `${worker.market}:${worker.status}`)
-      .join(', ');
-    if (!workerSummary) return;
-    try {
-      const advice = await requestOneShotText({
-        model: this.config.llmModel,
-        tradingMode: this.config.tradingMode,
-        prompt: [
-          '오토파일럿 워커 상태 요약 기반으로 1줄 조언을 해줘.',
-          `workers=${workerSummary}`,
-          '리스크 증가 시 손절 가속 또는 신규 진입 억제 우선.',
-        ].join('\n'),
-      });
-      if (advice) {
-        this.writeLog(`Supervisor: ${advice}`);
-        this.pushEvent({
-          type: 'LLM',
-          level: 'INFO',
-          action: 'SUPERVISOR_ADVICE',
-          detail: advice,
-        });
-      }
-    } catch (error) {
-      const message = error instanceof Error ? error.message : '알 수 없는 오류';
-      this.writeLog(`Supervisor 실패: ${message}`);
-      this.pushEvent({
-        type: 'SYSTEM',
-        level: 'WARN',
-        action: 'SUPERVISOR_ERROR',
-        detail: message,
-      });
-    }
   }
 }
 
