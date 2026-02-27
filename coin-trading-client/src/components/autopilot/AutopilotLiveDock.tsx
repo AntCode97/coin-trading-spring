@@ -303,6 +303,16 @@ export function AutopilotLiveDock({
     ?? autopilotState.appliedRecommendedWinRateThreshold;
   const thresholdMode = liveData?.thresholdMode ?? autopilotState.thresholdMode;
   const thresholdLabel = thresholdMode === 'DYNAMIC_P70' ? '동적 P70(추천가)' : '고정(현재가)';
+  const focusedMarkets = autopilotState.focusedScalp.markets;
+  const focusedEnabled = autopilotState.focusedScalp.enabled;
+  const focusedWorkerSummary = useMemo(() => {
+    if (focusedMarkets.length === 0) return '-';
+    const focusedSet = new Set(focusedMarkets);
+    const items = autopilotState.workers
+      .filter((worker) => focusedSet.has(worker.market))
+      .map((worker) => `${worker.market}:${worker.status}`);
+    return items.length > 0 ? items.join(', ') : '대기';
+  }, [autopilotState.workers, focusedMarkets]);
 
   if (!open) return null;
 
@@ -376,10 +386,24 @@ export function AutopilotLiveDock({
             LLM 사용량 {autopilotState.llmBudget.usedToday}/{autopilotState.llmBudget.dailySoftCap}
             {autopilotState.llmBudget.exceeded ? ' · 소프트 상한 초과(호출 계속 허용)' : ''}
           </div>
+          <div className="autopilot-focused-meta">
+            <span>선택 코인 루프: {focusedEnabled ? 'ON' : 'OFF'}</span>
+            <span>주기: {autopilotState.focusedScalp.pollIntervalSec}s</span>
+            <span>대상: {focusedMarkets.length > 0 ? focusedMarkets.join(', ') : '-'}</span>
+            <span>워커: {focusedWorkerSummary}</span>
+            {focusedEnabled && focusedMarkets.length > 0 && (
+              <span>전역 후보 제외: {focusedMarkets.length}개</span>
+            )}
+          </div>
 
           <div className="autopilot-live-body">
             <div className="dock-column candidates">
               <div className="column-title">후보 상위 {candidates.length}</div>
+              {focusedEnabled && focusedMarkets.length > 0 && (
+                <div className="candidate-exclusion-note">
+                  선택 코인({focusedMarkets.join(', ')})은 전역 후보 선별에서 제외됩니다.
+                </div>
+              )}
               {expectancyLeaders.length > 0 && (
                 <div className="expectancy-leaders">
                   {expectancyLeaders.map((candidate) => (

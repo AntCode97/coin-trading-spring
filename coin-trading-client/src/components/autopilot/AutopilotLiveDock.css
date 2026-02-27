@@ -134,6 +134,22 @@
   color: #ffb3c0;
 }
 
+.autopilot-focused-meta {
+  margin: 0 12px 10px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.autopilot-focused-meta span {
+  border: 1px solid rgba(108, 146, 243, 0.35);
+  border-radius: 999px;
+  padding: 2px 8px;
+  font-size: 10px;
+  color: #b8ccef;
+  background: rgba(16, 28, 53, 0.64);
+}
+
 .autopilot-live-body {
   display: grid;
   grid-template-columns: 300px 1fr 260px;
@@ -227,6 +243,16 @@
   flex-wrap: wrap;
   gap: 6px;
   padding: 8px 8px 0;
+}
+
+.candidate-exclusion-note {
+  margin: 8px 8px 0;
+  padding: 6px 8px;
+  border: 1px solid rgba(108, 146, 243, 0.35);
+  border-radius: 8px;
+  background: rgba(16, 28, 53, 0.64);
+  color: #b8ccef;
+  font-size: 11px;
 }
 
 .expectancy-leaders span {

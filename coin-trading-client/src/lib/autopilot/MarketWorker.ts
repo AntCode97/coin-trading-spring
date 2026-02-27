@@ -65,6 +65,8 @@ export interface WorkerConfig {
   pendingEntryTimeoutMs: number;
   marketFallbackAfterCancel: boolean;
   skipLlmEntryReview: boolean;
+  warnHoldingMs?: number | null;
+  maxHoldingMs?: number | null;
 }
 
 interface WorkerEntryDecision {
@@ -105,6 +107,7 @@ export interface WorkerDependencies {
     market: string,
     position: GuidedTradePosition
   ) => Promise<{ action: 'HOLD' | 'PARTIAL_TP' | 'FULL_EXIT'; reason: string }>;
+  canEnterNewPosition?: (market: string) => { allow: boolean; reason?: string };
   onState: (snapshot: WorkerStateSnapshot) => void;
   onLog: (message: string) => void;
   onEvent?: (event: WorkerEvent) => void;
@@ -127,6 +130,7 @@ export class MarketWorker {
   private hadOpenPosition = false;
   private pendingEntryObservedAt: number | null = null;
   private pendingFallbackTried = false;
+  private warnedHoldingTradeIds = new Set<number>();
 
   constructor(config: WorkerConfig, deps: WorkerDependencies) {
     this.config = config;
@@ -230,6 +234,7 @@ export class MarketWorker {
       if (this.hadOpenPosition) {
         this.hadOpenPosition = false;
         this.peakPnlPercent = Number.NEGATIVE_INFINITY;
+        this.warnedHoldingTradeIds.clear();
         this.cooldownUntil = Date.now() + this.config.postExitCooldownMs;
         this.setState('COOLDOWN', '포지션 종료 감지, 재진입 쿨다운');
         return;
@@ -238,6 +243,7 @@ export class MarketWorker {
       this.pendingEntryObservedAt = null;
       this.pendingFallbackTried = false;
       this.peakPnlPercent = Number.NEGATIVE_INFINITY;
+      this.warnedHoldingTradeIds.clear();
       await this.tryEntry();
     } catch (error) {
       const message = error instanceof Error ? error.message : '알 수 없는 오류';
@@ -258,6 +264,16 @@ export class MarketWorker {
       this.emitEvent('LLM_REJECT', 'WARN', `규칙 거절: ${deterministic.reason}`);
       this.cooldownUntil = Date.now() + cooldownMs;
       this.setState('COOLDOWN', `규칙 거절(${Math.ceil(cooldownMs / 1000)}초): ${deterministic.reason}`);
+      return;
+    }
+
+    const capacity = this.deps.canEnterNewPosition?.(this.config.market);
+    if (capacity && !capacity.allow) {
+      const cooldownMs = 45_000;
+      const reason = capacity.reason || '신규 포지션 진입 제한';
+      this.emitEvent('ENTRY_FAILED', 'WARN', `진입 제한: ${reason}`);
+      this.cooldownUntil = Date.now() + cooldownMs;
+      this.setState('COOLDOWN', `진입 제한(${Math.ceil(cooldownMs / 1000)}초): ${reason}`);
       return;
     }
 
@@ -481,10 +497,79 @@ export class MarketWorker {
 
   private async managePosition(position: GuidedTradePosition): Promise<void> {
     this.hadOpenPosition = true;
+    this.warnedHoldingTradeIds.forEach((tradeId) => {
+      if (tradeId !== position.tradeId) {
+        this.warnedHoldingTradeIds.delete(tradeId);
+      }
+    });
     const pnl = position.unrealizedPnlPercent;
     this.peakPnlPercent = Math.max(this.peakPnlPercent, pnl);
     const peakDrawdown = this.peakPnlPercent - pnl;
     this.setState('MANAGING', `모니터링 (${pnl >= 0 ? '+' : ''}${pnl.toFixed(2)}%)`);
+
+    const openedAt = Date.parse(position.createdAt);
+    const holdingMs = Number.isFinite(openedAt) ? Math.max(0, Date.now() - openedAt) : null;
+    const warnHoldingMs = this.config.warnHoldingMs ?? null;
+    const maxHoldingMs = this.config.maxHoldingMs ?? null;
+
+    if (
+      holdingMs != null &&
+      warnHoldingMs != null &&
+      warnHoldingMs > 0 &&
+      holdingMs >= warnHoldingMs &&
+      !this.warnedHoldingTradeIds.has(position.tradeId)
+    ) {
+      this.warnedHoldingTradeIds.add(position.tradeId);
+      this.emitEvent(
+        'SUPERVISION',
+        'WARN',
+        `보유시간 경고: ${Math.floor(holdingMs / 60000)}분 경과 (기준 ${Math.floor(warnHoldingMs / 60000)}분)`
+      );
+      this.deps.onLog(
+        `[${this.config.market}] 보유시간 경고: ${Math.floor(holdingMs / 60000)}분 경과`
+      );
+      if (this.deps.reviewOpenPosition) {
+        this.lastEventReviewAt = Date.now();
+        const review = await this.deps.reviewOpenPosition(this.config.market, position);
+        if (review.action === 'FULL_EXIT') {
+          this.emitOrderFlow('SELL_REQUESTED', `보유시간 경고 리뷰 청산: ${review.reason}`);
+          await this.deps.stopPosition(this.config.market, `보유시간 경고 리뷰 청산: ${review.reason}`);
+          this.emitOrderFlow('SELL_FILLED', `보유시간 경고 리뷰 청산 체결: ${review.reason}`);
+          this.emitEvent('POSITION_EXIT', 'WARN', `보유시간 경고 리뷰 청산: ${review.reason}`);
+          this.cooldownUntil = Date.now() + 3 * 60_000;
+          this.peakPnlPercent = Number.NEGATIVE_INFINITY;
+          this.setState('COOLDOWN', '보유시간 경고 청산');
+          return;
+        }
+      }
+    }
+
+    if (
+      holdingMs != null &&
+      maxHoldingMs != null &&
+      maxHoldingMs > 0 &&
+      holdingMs >= maxHoldingMs
+    ) {
+      try {
+        this.emitOrderFlow('SELL_REQUESTED', '최대 보유시간 초과 강제청산 요청');
+        await this.deps.stopPosition(this.config.market, '최대 보유시간(120분) 초과 강제청산');
+        this.emitOrderFlow('SELL_FILLED', '최대 보유시간 초과 강제청산 체결');
+        this.emitEvent('POSITION_EXIT', 'WARN', '최대 보유시간 초과 강제청산');
+        this.cooldownUntil = Date.now() + 3 * 60_000;
+        this.peakPnlPercent = Number.NEGATIVE_INFINITY;
+        this.setState('COOLDOWN', '최대 보유시간 강제청산');
+        return;
+      } catch (error) {
+        this.emitEvent(
+          'SUPERVISION',
+          'WARN',
+          `최대 보유시간 강제청산 실패: ${error instanceof Error ? error.message : '알 수 없는 오류'}`
+        );
+        this.deps.onLog(
+          `[${this.config.market}] 최대 보유시간 강제청산 실패: ${error instanceof Error ? error.message : '알 수 없는 오류'}`
+        );
+      }
+    }
 
     if (this.deps.reviewOpenPosition && this.shouldRunEventDrivenReview(pnl, peakDrawdown, position.trailingActive)) {
       this.lastEventReviewAt = Date.now();

@@ -95,6 +95,9 @@ type WorkspacePrefs = {
   rejectCooldownSeconds?: number;
   rejectCooldownMinutes?: number;
   postExitCooldownMinutes?: number;
+  focusedScalpEnabled?: boolean;
+  focusedScalpMarkets?: string[];
+  focusedScalpPollIntervalSec?: number;
 };
 
 type ConnectPlaywrightOptions = {
@@ -140,6 +143,36 @@ function formatPct(value: number): string {
 function formatWinRate(value: number | null | undefined): string {
   if (value == null || !Number.isFinite(value)) return '-';
   return `${value.toFixed(1)}%`;
+}
+
+function normalizeFocusedScalpMarkets(raw: string): { markets: string[]; invalidTokens: string[] } {
+  const tokens = raw
+    .split(/[,\s]+/)
+    .map((token) => token.trim().toUpperCase())
+    .filter((token) => token.length > 0);
+  const markets: string[] = [];
+  const invalidTokens: string[] = [];
+  const seen = new Set<string>();
+  let overflowed = false;
+  for (const token of tokens) {
+    const market = token.startsWith('KRW-') ? token : `KRW-${token}`;
+    const symbol = market.replace('KRW-', '');
+    if (!symbol || !/^[A-Z0-9]+$/.test(symbol)) {
+      invalidTokens.push(token);
+      continue;
+    }
+    if (seen.has(market)) continue;
+    seen.add(market);
+    if (markets.length >= 8) {
+      overflowed = true;
+      continue;
+    }
+    markets.push(market);
+  }
+  if (overflowed) {
+    invalidTokens.push('MAX_8_EXCEEDED');
+  }
+  return { markets, invalidTokens };
 }
 
 function isWinRateSort(sortBy: GuidedMarketSortBy): boolean {
@@ -445,6 +478,17 @@ export default function ManualTraderWorkspace() {
     )
   );
   const [postExitCooldownMinutes, setPostExitCooldownMinutes] = useState<number>(prefs.postExitCooldownMinutes ?? 8);
+  const [focusedScalpEnabled, setFocusedScalpEnabled] = useState<boolean>(prefs.focusedScalpEnabled ?? false);
+  const [focusedScalpMarketsInput, setFocusedScalpMarketsInput] = useState<string>(
+    (prefs.focusedScalpMarkets ?? []).join(', ')
+  );
+  const [focusedScalpPollIntervalSec, setFocusedScalpPollIntervalSec] = useState<number>(
+    Math.min(300, Math.max(5, Math.round(prefs.focusedScalpPollIntervalSec ?? 20)))
+  );
+  const focusedScalpParsed = useMemo(
+    () => normalizeFocusedScalpMarkets(focusedScalpMarketsInput),
+    [focusedScalpMarketsInput]
+  );
   const [autopilotState, setAutopilotState] = useState<AutopilotState>({
     enabled: false,
     blockedByDailyLoss: false,
@@ -465,6 +509,11 @@ export default function ManualTraderWorkspace() {
       dailySoftCap: 240,
       usedToday: 0,
       exceeded: false,
+    },
+    focusedScalp: {
+      enabled: false,
+      markets: [],
+      pollIntervalSec: 20,
     },
     orderFlowLocal: {
       buyRequested: 0,
@@ -799,6 +848,9 @@ export default function ManualTraderWorkspace() {
       minLlmConfidence,
       rejectCooldownSeconds,
       postExitCooldownMinutes,
+      focusedScalpEnabled,
+      focusedScalpMarkets: focusedScalpParsed.markets,
+      focusedScalpPollIntervalSec,
     };
     window.localStorage.setItem(STORAGE_KEY, JSON.stringify(next));
   }, [
@@ -828,6 +880,9 @@ export default function ManualTraderWorkspace() {
     minLlmConfidence,
     rejectCooldownSeconds,
     postExitCooldownMinutes,
+    focusedScalpEnabled,
+    focusedScalpParsed.markets,
+    focusedScalpPollIntervalSec,
   ]);
 
   // 차트 초기화
@@ -1210,6 +1265,12 @@ export default function ManualTraderWorkspace() {
         pendingEntryTimeoutSec,
         marketFallbackAfterCancel,
         llmDailySoftCap: 240,
+        focusedScalpEnabled,
+        focusedScalpMarkets: focusedScalpParsed.markets,
+        focusedScalpPollIntervalMs: focusedScalpPollIntervalSec * 1000,
+        focusedWarnHoldingMs: 90 * 60 * 1000,
+        focusedMaxHoldingMs: 120 * 60 * 1000,
+        focusedEntryGate: 'FAST_ONLY',
       },
       {
         onState: (next) => setAutopilotState(next),
@@ -1244,6 +1305,9 @@ export default function ManualTraderWorkspace() {
     minLlmConfidence,
     rejectCooldownSeconds,
     postExitCooldownMinutes,
+    focusedScalpEnabled,
+    focusedScalpParsed.markets,
+    focusedScalpPollIntervalSec,
   ]);
 
   const positionState: PositionState = derivePositionState(
@@ -1756,10 +1820,10 @@ export default function ManualTraderWorkspace() {
                       type="number"
                       value={dailyLossLimitKrw}
                       step={1000}
-                      onChange={(event) => setDailyLossLimitKrw(Number(event.target.value || -15000))}
+                      onChange={(event) => setDailyLossLimitKrw(Number(event.target.value || -30000))}
                     />
                   </label>
-                  <small>기본 -15,000원</small>
+                  <small>기본 -30,000원</small>
                 </div>
                 <div className="autopilot-grid">
                   <label>
@@ -1781,7 +1845,7 @@ export default function ManualTraderWorkspace() {
                       step={1}
                       value={autopilotMaxConcurrentPositions}
                       onChange={(event) => {
-                        const raw = Number(event.target.value || 2);
+                        const raw = Number(event.target.value || 6);
                         setAutopilotMaxConcurrentPositions(Math.min(10, Math.max(1, raw)));
                       }}
                     />
@@ -1813,6 +1877,53 @@ export default function ManualTraderWorkspace() {
                       <option value="POSITION">POSITION</option>
                     </select>
                   </label>
+                </div>
+                <div className="autopilot-grid">
+                  <label className="autopilot-checkbox inline">
+                    <input
+                      type="checkbox"
+                      checked={focusedScalpEnabled}
+                      onChange={(event) => setFocusedScalpEnabled(event.target.checked)}
+                    />
+                    선택 코인 단타 루프 사용
+                  </label>
+                  <label>
+                    선택 코인 확인 주기(초)
+                    <input
+                      type="number"
+                      min={5}
+                      max={300}
+                      step={1}
+                      value={focusedScalpPollIntervalSec}
+                      onChange={(event) => {
+                        const raw = Number(event.target.value || 20);
+                        setFocusedScalpPollIntervalSec(Math.min(300, Math.max(5, Math.round(raw))));
+                      }}
+                    />
+                  </label>
+                </div>
+                <div className="autopilot-row">
+                  <label>
+                    선택 코인 목록 (최대 8개, 콤마/공백 구분)
+                    <input
+                      type="text"
+                      value={focusedScalpMarketsInput}
+                      onChange={(event) => setFocusedScalpMarketsInput(event.target.value)}
+                      placeholder="KRW-BTC, KRW-ETH, XRP"
+                    />
+                  </label>
+                  <small>
+                    유효 코인 {focusedScalpParsed.markets.length}개: {focusedScalpParsed.markets.join(', ') || '-'}
+                  </small>
+                  {focusedScalpEnabled && focusedScalpParsed.markets.length === 0 && (
+                    <small className="autopilot-warning">선택 코인 단타 루프가 켜져 있지만 유효 코인 목록이 비어 있습니다.</small>
+                  )}
+                  {focusedScalpParsed.invalidTokens.length > 0 && (
+                    <small className="autopilot-warning">
+                      제외된 입력: {focusedScalpParsed.invalidTokens.filter((token) => token !== 'MAX_8_EXCEEDED').join(', ') || '-'}
+                      {focusedScalpParsed.invalidTokens.includes('MAX_8_EXCEEDED') ? ' · 최대 8개까지만 사용됩니다.' : ''}
+                    </small>
+                  )}
                 </div>
                 <div className="autopilot-grid">
                   <label>
@@ -1848,7 +1959,7 @@ export default function ManualTraderWorkspace() {
                       step={1}
                       value={pendingEntryTimeoutSec}
                       onChange={(event) => {
-                        const raw = Number(event.target.value || 90);
+                        const raw = Number(event.target.value || 45);
                         setPendingEntryTimeoutSec(Math.min(900, Math.max(30, Math.round(raw))));
                       }}
                     />
@@ -1922,7 +2033,7 @@ export default function ManualTraderWorkspace() {
                       max={180}
                       step={1}
                       value={postExitCooldownMinutes}
-                      onChange={(event) => setPostExitCooldownMinutes(Number(event.target.value || 30))}
+                      onChange={(event) => setPostExitCooldownMinutes(Number(event.target.value || 8))}
                     />
                   </label>
                 </div>

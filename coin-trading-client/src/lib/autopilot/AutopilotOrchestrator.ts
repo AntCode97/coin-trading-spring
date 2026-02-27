@@ -40,6 +40,12 @@ export interface AutopilotConfig {
   pendingEntryTimeoutSec: number;
   marketFallbackAfterCancel: boolean;
   llmDailySoftCap: number;
+  focusedScalpEnabled: boolean;
+  focusedScalpMarkets: string[];
+  focusedScalpPollIntervalMs: number;
+  focusedWarnHoldingMs: number;
+  focusedMaxHoldingMs: number;
+  focusedEntryGate: 'FAST_ONLY';
 }
 
 export type CandidateStage =
@@ -119,6 +125,11 @@ export interface AutopilotState {
     usedToday: number;
     exceeded: boolean;
   };
+  focusedScalp: {
+    enabled: boolean;
+    markets: string[];
+    pollIntervalSec: number;
+  };
   orderFlowLocal: AutopilotOrderFlowLocal;
   screenshots: AutopilotScreenshot[];
 }
@@ -178,7 +189,11 @@ interface PlannedEntryOrder {
 interface SpawnWorkerOptions {
   skipLlmEntryReview: boolean;
   entryAmountKrw: number;
-  sourceStage: 'AUTO_PASS' | 'BORDERLINE';
+  sourceStage: 'AUTO_PASS' | 'BORDERLINE' | 'FOCUSED_SCALP';
+  updateCandidateView?: boolean;
+  workerTickMs?: number;
+  warnHoldingMs?: number | null;
+  maxHoldingMs?: number | null;
 }
 
 export class AutopilotOrchestrator {
@@ -193,6 +208,7 @@ export class AutopilotOrchestrator {
   private readonly candidateScoreByMarket = new Map<string, CandidateScoreInfo>();
   private readonly screenshots = new Map<string, AutopilotScreenshot>();
   private readonly screenshotOrder: string[] = [];
+  private readonly focusedWorkerMarkets = new Set<string>();
   private orderFlowLocal: AutopilotOrderFlowLocal = createEmptyOrderFlow();
   private loopId: number | null = null;
   private running = false;
@@ -203,6 +219,8 @@ export class AutopilotOrchestrator {
   private llmUsageDateKst = this.kstDateKey();
   private llmUsageToday = 0;
   private llmSoftCapWarned = false;
+  private lastOpenMarketSet = new Set<string>();
+  private focusedEmptyWarned = false;
   private decisionBreakdown = {
     autoPass: 0,
     borderline: 0,
@@ -241,6 +259,9 @@ export class AutopilotOrchestrator {
     }
     this.workers.clear();
     this.workerStates.clear();
+    this.focusedWorkerMarkets.clear();
+    this.lastOpenMarketSet = new Set();
+    this.focusedEmptyWarned = false;
     this.writeLog('오토파일럿 중지');
     this.pushEvent({
       type: 'SYSTEM',
@@ -276,6 +297,7 @@ export class AutopilotOrchestrator {
   }
 
   private emitState(): void {
+    const focusedMarkets = this.normalizeFocusedMarkets();
     const state: AutopilotState = {
       enabled: this.running && this.config.enabled,
       blockedByDailyLoss: this.blockedByDailyLoss,
@@ -292,6 +314,11 @@ export class AutopilotOrchestrator {
         dailySoftCap: this.config.llmDailySoftCap,
         usedToday: this.llmUsageToday,
         exceeded: this.llmUsageToday >= this.config.llmDailySoftCap,
+      },
+      focusedScalp: {
+        enabled: this.config.focusedScalpEnabled,
+        markets: focusedMarkets,
+        pollIntervalSec: Math.max(1, Math.round(this.config.focusedScalpPollIntervalMs / 1000)),
       },
       orderFlowLocal: { ...this.orderFlowLocal },
       screenshots: Array.from(this.screenshots.values()),
@@ -433,7 +460,30 @@ export class AutopilotOrchestrator {
 
       const openPositions = await guidedTradingApi.getOpenPositions();
       this.cleanupExpiredCooldowns();
+      const openMarketSet = new Set(
+        openPositions
+          .filter((position) => position.status === 'OPEN' || position.status === 'PENDING_ENTRY')
+          .map((position) => position.market)
+      );
+      this.lastOpenMarketSet = openMarketSet;
+      const focusedMarkets = this.normalizeFocusedMarkets();
+      const focusedMarketSet = new Set(focusedMarkets);
+      this.syncFocusedWorkers(focusedMarkets);
       this.ensureWorkersForOpenPositions(openPositions);
+      if (this.config.focusedScalpEnabled && focusedMarkets.length === 0) {
+        if (!this.focusedEmptyWarned) {
+          this.focusedEmptyWarned = true;
+          this.pushEvent({
+            type: 'SYSTEM',
+            level: 'WARN',
+            action: 'FOCUSED_SCALP_EMPTY',
+            detail: '선택 코인 단타 루프가 활성화됐지만 코인 목록이 비어 있어 대기 상태입니다.',
+          });
+          this.writeLog('선택 코인 단타 루프: 코인 목록 없음');
+        }
+      } else {
+        this.focusedEmptyWarned = false;
+      }
 
       if (this.blockedByDailyLoss) {
         this.emitState();
@@ -446,17 +496,14 @@ export class AutopilotOrchestrator {
         this.config.tradingMode,
         this.config.candidateLimit
       );
-      const scopedCandidates = opportunities.opportunities.slice(0, this.config.candidateLimit);
+      const scopedCandidates = opportunities.opportunities
+        .filter((candidate) => !focusedMarketSet.has(candidate.market))
+        .slice(0, this.config.candidateLimit);
       this.appliedRecommendedWinRateThreshold = this.resolveOpportunityDisplayThreshold(scopedCandidates);
-      const openMarketSet = new Set(
-        openPositions
-          .filter((position) => position.status === 'OPEN' || position.status === 'PENDING_ENTRY')
-          .map((position) => position.market)
-      );
 
       let availableSlots = Math.max(0, this.config.maxConcurrentPositions - openMarketSet.size);
       const nextCandidates: AutopilotCandidateView[] = [];
-      const activeOpportunityMarkets = new Set<string>();
+      const activeGlobalMarkets = new Set<string>();
       let autoPass = 0;
       let borderline = 0;
       let ruleFail = 0;
@@ -486,7 +533,7 @@ export class AutopilotOrchestrator {
           stage = evaluation.stage;
           reason = evaluation.reason;
         } else if (stage === 'AUTO_PASS' || stage === 'BORDERLINE') {
-          activeOpportunityMarkets.add(candidate.market);
+          activeGlobalMarkets.add(candidate.market);
           const sourceStage = stage === 'AUTO_PASS' ? 'AUTO_PASS' : 'BORDERLINE';
           const entryAmountKrw = this.resolveEntryAmount(sourceStage);
           this.spawnWorker(
@@ -535,7 +582,7 @@ export class AutopilotOrchestrator {
       }
 
       this.decisionBreakdown = { autoPass, borderline, ruleFail };
-      this.pruneIdleWorkers(activeOpportunityMarkets, openMarketSet);
+      this.pruneIdleWorkers(activeGlobalMarkets, openMarketSet, focusedMarketSet);
       this.replaceCandidates(nextCandidates);
       this.emitState();
     } catch (error) {
@@ -626,6 +673,86 @@ export class AutopilotOrchestrator {
     return Math.round(avg * 10) / 10;
   }
 
+  private normalizeFocusedMarket(value: string): string | null {
+    const raw = value.trim().toUpperCase();
+    if (!raw) return null;
+    const withPrefix = raw.startsWith('KRW-') ? raw : `KRW-${raw}`;
+    const symbol = withPrefix.replace('KRW-', '');
+    if (!symbol || !/^[A-Z0-9]+$/.test(symbol)) return null;
+    return withPrefix;
+  }
+
+  private normalizeFocusedMarkets(): string[] {
+    const seen = new Set<string>();
+    const normalized: string[] = [];
+    for (const raw of this.config.focusedScalpMarkets) {
+      const market = this.normalizeFocusedMarket(raw);
+      if (!market || seen.has(market)) continue;
+      seen.add(market);
+      normalized.push(market);
+      if (normalized.length >= 8) break;
+    }
+    return normalized;
+  }
+
+  private syncFocusedWorkers(focusedMarkets: string[]): void {
+    const targetMarkets = this.config.focusedScalpEnabled ? new Set(focusedMarkets) : new Set<string>();
+    for (const market of Array.from(this.focusedWorkerMarkets)) {
+      if (targetMarkets.has(market)) continue;
+      const worker = this.workers.get(market);
+      if (worker) {
+        worker.stop('선택 코인 루프 대상 해제');
+      }
+      this.focusedWorkerMarkets.delete(market);
+      this.pushEvent({
+        type: 'SYSTEM',
+        level: 'INFO',
+        market,
+        action: 'FOCUSED_SCALP_STOP',
+        detail: '선택 코인 단타 루프에서 제거',
+      });
+    }
+
+    if (!this.config.focusedScalpEnabled) return;
+
+    for (const market of focusedMarkets) {
+      const wasFocusedWorker = this.focusedWorkerMarkets.has(market);
+      this.focusedWorkerMarkets.add(market);
+      if (this.workers.has(market) && !wasFocusedWorker) {
+        const existing = this.workers.get(market);
+        existing?.stop('선택 코인 루프로 전환');
+        this.workers.delete(market);
+        this.workerStates.delete(market);
+      }
+      if (this.workers.has(market)) continue;
+      this.spawnWorker(
+        market,
+        {
+          market,
+          koreanName: market,
+          recommendedEntryWinRate: null,
+          marketEntryWinRate: null,
+        },
+        {
+          skipLlmEntryReview: this.config.focusedEntryGate === 'FAST_ONLY',
+          entryAmountKrw: Math.max(5100, Math.min(20_000, this.config.amountKrw)),
+          sourceStage: 'FOCUSED_SCALP',
+          updateCandidateView: false,
+          workerTickMs: this.config.focusedScalpPollIntervalMs,
+          warnHoldingMs: this.config.focusedWarnHoldingMs,
+          maxHoldingMs: this.config.focusedMaxHoldingMs,
+        }
+      );
+      this.pushEvent({
+        type: 'SYSTEM',
+        level: 'INFO',
+        market,
+        action: 'FOCUSED_SCALP_START',
+        detail: `선택 코인 단타 루프 시작 (${Math.max(1, Math.round(this.config.focusedScalpPollIntervalMs / 1000))}초)`,
+      });
+    }
+  }
+
   private ensureWorkersForOpenPositions(openPositions: GuidedTradePosition[]): void {
     for (const position of openPositions) {
       if (position.status !== 'OPEN' && position.status !== 'PENDING_ENTRY') continue;
@@ -641,9 +768,11 @@ export class AutopilotOrchestrator {
 
   private pruneIdleWorkers(
     shortlistMarkets: Set<string>,
-    openMarketSet: Set<string>
+    openMarketSet: Set<string>,
+    focusedMarketSet: Set<string>
   ): void {
     for (const [market, worker] of this.workers.entries()) {
+      if (focusedMarketSet.has(market) || this.focusedWorkerMarkets.has(market)) continue;
       if (openMarketSet.has(market) || shortlistMarkets.has(market)) continue;
       const state = this.workerStates.get(market);
       if (
@@ -677,12 +806,13 @@ export class AutopilotOrchestrator {
       skipLlmEntryReview: false,
       entryAmountKrw: this.resolveEntryAmount('BORDERLINE'),
       sourceStage: 'BORDERLINE',
+      updateCandidateView: true,
     };
 
     const worker = new MarketWorker(
       {
         market: normalized,
-        tickMs: this.config.workerTickMs,
+        tickMs: effectiveOptions.workerTickMs ?? this.config.workerTickMs,
         rejectCooldownMs: this.config.rejectCooldownMs,
         postExitCooldownMs: this.config.postExitCooldownMs,
         llmReviewMs: this.config.llmReviewIntervalMs,
@@ -693,6 +823,8 @@ export class AutopilotOrchestrator {
         pendingEntryTimeoutMs: Math.max(10_000, this.config.pendingEntryTimeoutSec * 1000),
         marketFallbackAfterCancel: this.config.marketFallbackAfterCancel,
         skipLlmEntryReview: effectiveOptions.skipLlmEntryReview,
+        warnHoldingMs: effectiveOptions.warnHoldingMs ?? null,
+        maxHoldingMs: effectiveOptions.maxHoldingMs ?? null,
       },
       {
         fetchContext: async (workerMarket) =>
@@ -723,6 +855,25 @@ export class AutopilotOrchestrator {
           await guidedTradingApi.partialTakeProfit(workerMarket, ratio);
         },
         reviewOpenPosition: async (workerMarket, position) => this.reviewOpenPosition(workerMarket, position),
+        canEnterNewPosition: (workerMarket) => {
+          if (this.blockedByDailyLoss) {
+            return {
+              allow: false,
+              reason: this.blockedReason ?? '일일 손실 제한으로 신규 진입 차단',
+            };
+          }
+          if (this.lastOpenMarketSet.has(workerMarket)) {
+            return { allow: true };
+          }
+          const openCount = this.lastOpenMarketSet.size;
+          if (openCount >= this.config.maxConcurrentPositions) {
+            return {
+              allow: false,
+              reason: `동시 포지션 슬롯 부족 (${openCount}/${this.config.maxConcurrentPositions})`,
+            };
+          }
+          return { allow: true };
+        },
         onState: (snapshot) => {
           this.workerStates.set(snapshot.market, snapshot);
           if (snapshot.status === 'COOLDOWN' && snapshot.cooldownUntil) {
@@ -742,12 +893,14 @@ export class AutopilotOrchestrator {
 
     this.workers.set(normalized, worker);
     const scoreNote = seedCandidate?.score != null ? `score ${seedCandidate.score.toFixed(1)}` : 'score -';
-    this.setCandidateStage(
-      normalized,
-      'ENTERED',
-      `워커 생성 (${effectiveOptions.sourceStage}, ${scoreNote}, ${effectiveOptions.entryAmountKrw.toLocaleString('ko-KR')}원)`,
-      seedCandidate
-    );
+    if (effectiveOptions.updateCandidateView !== false) {
+      this.setCandidateStage(
+        normalized,
+        'ENTERED',
+        `워커 생성 (${effectiveOptions.sourceStage}, ${scoreNote}, ${effectiveOptions.entryAmountKrw.toLocaleString('ko-KR')}원)`,
+        seedCandidate
+      );
+    }
     worker.start();
     this.writeLog(
       `[${normalized}] 워커 생성 (${effectiveOptions.sourceStage}, 진입금 ${effectiveOptions.entryAmountKrw.toLocaleString('ko-KR')}원)`
