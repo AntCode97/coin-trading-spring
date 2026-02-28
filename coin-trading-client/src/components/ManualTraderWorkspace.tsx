@@ -54,6 +54,13 @@ import {
   type AutopilotTimelineEvent,
 } from '../lib/autopilot/AutopilotOrchestrator';
 import { AutopilotLiveDock } from './autopilot/AutopilotLiveDock';
+import {
+  FocusedScalpLiveDock,
+  type FocusedScalpDecisionCardView,
+  type FocusedScalpDecisionSummaryView,
+  type FocusedScalpEntryState,
+  type FocusedScalpManageState,
+} from './autopilot/FocusedScalpLiveDock';
 import './ManualTraderWorkspace.css';
 
 const KRW_FORMATTER = new Intl.NumberFormat('ko-KR');
@@ -99,6 +106,7 @@ type WorkspacePrefs = {
   focusedScalpEnabled?: boolean;
   focusedScalpMarkets?: string[];
   focusedScalpPollIntervalSec?: number;
+  focusedScalpDockCollapsed?: boolean;
 };
 
 type ConnectPlaywrightOptions = {
@@ -191,35 +199,6 @@ type FocusedScalpContextMenu = {
   koreanName: string;
   included: boolean;
 };
-
-type FocusedScalpEntryState = 'ENTERED' | 'PENDING' | 'NO_ENTRY' | 'NONE';
-type FocusedScalpManageState = 'TAKE_PROFIT' | 'STOP_LOSS' | 'HOLD' | 'SUPERVISION' | 'NONE';
-
-type FocusedScalpDecisionCard = {
-  market: string;
-  koreanName: string;
-  workerStatus: string;
-  workerNote: string;
-  positionStatus: string;
-  entryState: FocusedScalpEntryState;
-  entryLabel: string;
-  entryDetail: string;
-  entryAt: number | null;
-  manageState: FocusedScalpManageState;
-  manageLabel: string;
-  manageDetail: string;
-  manageAt: number | null;
-  recentEvents: AutopilotTimelineEvent[];
-};
-
-function formatTimelineAt(epochMillis: number): string {
-  return new Date(epochMillis).toLocaleTimeString('ko-KR', {
-    timeZone: 'Asia/Seoul',
-    hour: '2-digit',
-    minute: '2-digit',
-    second: '2-digit',
-  });
-}
 
 function classifyFocusedEntryEvent(event?: AutopilotTimelineEvent): {
   state: FocusedScalpEntryState;
@@ -588,6 +567,9 @@ export default function ManualTraderWorkspace() {
     prefs.selectedMarket ?? 'KRW-BTC'
   );
   const [focusedScalpContextMenu, setFocusedScalpContextMenu] = useState<FocusedScalpContextMenu | null>(null);
+  const [focusedScalpDockCollapsed, setFocusedScalpDockCollapsed] = useState<boolean>(
+    prefs.focusedScalpDockCollapsed ?? false
+  );
   const [focusedScalpPollIntervalSec, setFocusedScalpPollIntervalSec] = useState<number>(
     Math.min(300, Math.max(5, Math.round(prefs.focusedScalpPollIntervalSec ?? 20)))
   );
@@ -880,7 +862,7 @@ export default function ManualTraderWorkspace() {
     });
   }, [focusedScalpMarketSet]);
 
-  const focusedScalpDecisionCards = useMemo<FocusedScalpDecisionCard[]>(() => {
+  const focusedScalpDecisionCards = useMemo<FocusedScalpDecisionCardView[]>(() => {
     const marketNameMap = new Map((marketsQuery.data ?? []).map((item) => [item.market, item.koreanName]));
     const openPositionMap = new Map(
       (openPositionsQuery.data ?? [])
@@ -923,7 +905,7 @@ export default function ManualTraderWorkspace() {
     });
   }, [autopilotState.events, autopilotState.workers, focusedScalpParsed.markets, marketsQuery.data, openPositionsQuery.data]);
 
-  const focusedScalpDecisionSummary = useMemo(() => {
+  const focusedScalpDecisionSummary = useMemo<FocusedScalpDecisionSummaryView>(() => {
     let entered = 0;
     let pending = 0;
     let noEntry = 0;
@@ -1073,6 +1055,7 @@ export default function ManualTraderWorkspace() {
       focusedScalpEnabled,
       focusedScalpMarkets: focusedScalpParsed.markets,
       focusedScalpPollIntervalSec,
+      focusedScalpDockCollapsed,
     };
     window.localStorage.setItem(STORAGE_KEY, JSON.stringify(next));
   }, [
@@ -1105,6 +1088,7 @@ export default function ManualTraderWorkspace() {
     focusedScalpEnabled,
     focusedScalpParsed.markets,
     focusedScalpPollIntervalSec,
+    focusedScalpDockCollapsed,
   ]);
 
   useEffect(() => {
@@ -2400,76 +2384,6 @@ export default function ManualTraderWorkspace() {
                 </div>
               </div>
 
-              <div className="focused-decision-panel">
-                <div className="focused-decision-header">
-                  <strong>선택 단타 판단 패널</strong>
-                  <span>{focusedScalpDecisionCards.length}개 코인</span>
-                </div>
-                {!focusedScalpEnabled && (
-                  <p className="focused-decision-empty">선택 코인 단타 루프를 켜면 진입/미진입/청산 판단 로그가 여기에 표시됩니다.</p>
-                )}
-                {focusedScalpEnabled && focusedScalpDecisionCards.length === 0 && (
-                  <p className="focused-decision-empty">등록된 선택 코인이 없습니다. 왼쪽 코인 리스트 우클릭으로 추가하세요.</p>
-                )}
-                {focusedScalpEnabled && focusedScalpDecisionCards.length > 0 && (
-                  <>
-                    <div className="focused-decision-summary">
-                      <span className="chip entered">진입 {focusedScalpDecisionSummary.entered}</span>
-                      <span className="chip pending">대기 {focusedScalpDecisionSummary.pending}</span>
-                      <span className="chip no-entry">미진입 {focusedScalpDecisionSummary.noEntry}</span>
-                      <span className="chip tp">익절 {focusedScalpDecisionSummary.takeProfit}</span>
-                      <span className="chip sl">손절/청산 {focusedScalpDecisionSummary.stopLoss}</span>
-                      <span className="chip hold">유지 {focusedScalpDecisionSummary.hold}</span>
-                    </div>
-                    <div className="focused-decision-list">
-                      {focusedScalpDecisionCards.map((card) => (
-                        <div key={card.market} className="focused-decision-card">
-                          <div className="top">
-                            <div className="name">
-                              <strong>{card.koreanName}</strong>
-                              <span>{card.market}</span>
-                            </div>
-                            <div className="status">
-                              <span className="worker">{card.workerStatus}</span>
-                              <span className={`position ${card.positionStatus === 'OPEN' ? 'open' : card.positionStatus === 'PENDING_ENTRY' ? 'pending' : 'none'}`}>
-                                {card.positionStatus}
-                              </span>
-                            </div>
-                          </div>
-                          <div className="focused-decision-line">
-                            <span className="label">진입 판단</span>
-                            <span className={`state ${card.entryState.toLowerCase()}`}>{card.entryLabel}</span>
-                            <span className="detail">{card.entryDetail}</span>
-                            <span className="time">{card.entryAt ? formatTimelineAt(card.entryAt) : '-'}</span>
-                          </div>
-                          <div className="focused-decision-line">
-                            <span className="label">포지션 관리</span>
-                            <span className={`state ${card.manageState.toLowerCase()}`}>{card.manageLabel}</span>
-                            <span className="detail">{card.manageDetail}</span>
-                            <span className="time">{card.manageAt ? formatTimelineAt(card.manageAt) : '-'}</span>
-                          </div>
-                          <div className="focused-decision-note">{card.workerNote}</div>
-                          <div className="focused-decision-events">
-                            {card.recentEvents.length === 0 ? (
-                              <span className="empty">최근 이벤트 없음</span>
-                            ) : (
-                              card.recentEvents.map((event) => (
-                                <div key={event.id} className="event-row">
-                                  <span className="event-time">{formatTimelineAt(event.at)}</span>
-                                  <span className={`event-level ${event.level.toLowerCase()}`}>{event.level}</span>
-                                  <span className="event-action">{event.action}</span>
-                                  <span className="event-detail">{event.detail}</span>
-                                </div>
-                              ))
-                            )}
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-                  </>
-                )}
-              </div>
-
               {/* PlanPanel — 플랜 실행 중이면 주문 패널 대신 표시 */}
               {plan && (
                 <PlanPanel
@@ -2963,6 +2877,15 @@ export default function ManualTraderWorkspace() {
         autopilotState={autopilotState}
         liveData={autopilotLiveQuery.data}
         loading={autopilotLiveQuery.isLoading}
+      />
+      <FocusedScalpLiveDock
+        open={true}
+        collapsed={focusedScalpDockCollapsed}
+        onToggleCollapse={() => setFocusedScalpDockCollapsed((prev) => !prev)}
+        enabled={focusedScalpEnabled}
+        cards={focusedScalpDecisionCards}
+        summary={focusedScalpDecisionSummary}
+        onSelectMarket={(market) => setSelectedMarket(market)}
       />
     </section>
   );
