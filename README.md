@@ -532,6 +532,8 @@ curl -X POST http://localhost:8080/api/settings/regime \
 | POST | `/api/guided-trading/positions/adopt` | MCP 직접 주문 포지션 편입 |
 | GET | `/api/guided-trading/autopilot/live` | 오토파일럿 라이브 도크 데이터(주문 퍼널/이벤트/후보) |
 | GET | `/api/guided-trading/autopilot/opportunities` | 오토파일럿 기회 스코어/기대값 후보 조회 |
+| POST | `/api/guided-trading/autopilot/decisions` | 클라이언트 Fine-Grained Agent 의사결정 로그 저장 |
+| GET | `/api/guided-trading/autopilot/performance` | 오토파일럿 7/30일 성과 및 증액 게이트 상태 조회 |
 
 `/api/guided-trading/autopilot/live` 쿼리 파라미터:
 - `thresholdMode`: `DYNAMIC_P70` 또는 `FIXED`
@@ -549,6 +551,9 @@ curl -X POST http://localhost:8080/api/settings/regime \
 - `opportunities[]`: `market`, `koreanName`, `recommendedEntryWinRate1m/10m`, `marketEntryWinRate1m/10m`, `riskReward1m`, `entryGapPct1m`, `expectancyPct`, `score`, `stage`, `reason`
 - `stage`: `AUTO_PASS` | `BORDERLINE` | `RULE_FAIL`
 
+`/api/guided-trading/agent/context` 응답 확장:
+- `featurePack`: `technical`, `microstructure`, `executionRisk`를 포함한 Fine-Grained 입력 세트
+
 ---
 
 ## 최근 개선사항
@@ -564,6 +569,13 @@ curl -X POST http://localhost:8080/api/settings/regime \
 7. 선택 코인 단타 루프를 추가해 사용자가 지정한 코인(최대 8개)을 전역 후보와 분리해 독립적으로 반복 진입/청산할 수 있습니다.
 8. 선택 코인은 전역 오토파일럿 후보 선별에서 자동 제외되며, 리스크 한도(`maxConcurrentPositions`)는 전역/선택 루프가 공유합니다.
 9. 선택 코인 포지션은 보유시간 기준 `90분 경고 + 120분 강제청산` 규칙으로 2시간 내 정리를 강제합니다.
+
+### Fine-Grained Multi-Agent 판단 파이프라인 (2026-02-27)
+
+1. 클라이언트 오케스트레이터에 `Technical / Microstructure / ExecutionRisk / Synth / PM` 계층형 Agent 파이프라인을 추가했습니다.
+2. `agent/context`에 `featurePack`을 제공해 프롬프트 입력을 고정 구조화했습니다.
+3. 각 후보의 Agent 판단 결과를 `/api/guided-trading/autopilot/decisions`로 저장해 리플레이/감사 추적이 가능해졌습니다.
+4. `/api/guided-trading/autopilot/performance`에서 30일 `Sharpe / MaxDD / WinRate / 순손익` 기반 증액 게이트를 제공합니다.
 
 ### Meme Scalper 진입 Imbalance 유지 필터 추가 (2026-02-25)
 

@@ -13,6 +13,9 @@ import com.ant.cointrading.guided.GuidedPnlReconcileResult
 import com.ant.cointrading.guided.GuidedRealtimeTickerView
 import com.ant.cointrading.guided.GuidedSortDirection
 import com.ant.cointrading.guided.GuidedStartRequest
+import com.ant.cointrading.guided.GuidedAutopilotDecisionLogRequest
+import com.ant.cointrading.guided.GuidedAutopilotDecisionLogResponse
+import com.ant.cointrading.guided.GuidedAutopilotPerformanceResponse
 import com.ant.cointrading.guided.GuidedSyncResult
 import com.ant.cointrading.guided.GuidedTradeView
 import com.ant.cointrading.guided.GuidedTradingService
@@ -206,5 +209,23 @@ class GuidedTradingController(
             mode = TradingMode.fromString(mode),
             universeLimit = universeLimit
         )
+    }
+
+    @PostMapping("/autopilot/decisions")
+    fun logAutopilotDecision(
+        @RequestBody request: GuidedAutopilotDecisionLogRequest
+    ): GuidedAutopilotDecisionLogResponse {
+        return try {
+            guidedTradingService.logAutopilotDecision(request)
+        } catch (e: IllegalArgumentException) {
+            throw ResponseStatusException(HttpStatus.BAD_REQUEST, e.message ?: "요청값 오류")
+        }
+    }
+
+    @GetMapping("/autopilot/performance")
+    fun getAutopilotPerformance(
+        @RequestParam(defaultValue = "30") windowDays: Int
+    ): GuidedAutopilotPerformanceResponse {
+        return guidedTradingService.getAutopilotPerformance(windowDays)
     }
 }

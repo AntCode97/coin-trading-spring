@@ -8,6 +8,9 @@ import com.ant.cointrading.guided.GuidedAutopilotLiveResponse
 import com.ant.cointrading.guided.GuidedAutopilotOpportunitiesResponse
 import com.ant.cointrading.guided.GuidedAutopilotOpportunityView
 import com.ant.cointrading.guided.GuidedAutopilotDecisionStats
+import com.ant.cointrading.guided.GuidedAutopilotDecisionLogRequest
+import com.ant.cointrading.guided.GuidedAutopilotDecisionLogResponse
+import com.ant.cointrading.guided.GuidedAutopilotPerformanceResponse
 import com.ant.cointrading.guided.GuidedStrategyCodeSummary
 import com.ant.cointrading.guided.GuidedPnlReconcileItem
 import com.ant.cointrading.guided.GuidedPnlReconcileResult
@@ -232,6 +235,51 @@ class GuidedTradingControllerTest {
         whenever(guidedTradingService.reconcileClosedTrades(30, true)).thenReturn(expected)
 
         val actual = controller.reconcileClosedTrades(windowDays = 30, dryRun = true)
+
+        kotlin.test.assertEquals(expected, actual)
+    }
+
+    @Test
+    @DisplayName("autopilot/decisions는 서비스 응답을 반환한다")
+    fun logAutopilotDecisionReturnsServicePayload() {
+        val request = GuidedAutopilotDecisionLogRequest(
+            runId = "run-1",
+            market = "KRW-BTC",
+            stage = "AUTO_PASS",
+            approve = true,
+            executed = false
+        )
+        val expected = GuidedAutopilotDecisionLogResponse(
+            accepted = true,
+            decisionId = 42L,
+            createdAt = Instant.parse("2026-02-24T01:00:00Z")
+        )
+        whenever(guidedTradingService.logAutopilotDecision(any())).thenReturn(expected)
+
+        val actual = controller.logAutopilotDecision(request)
+
+        kotlin.test.assertEquals(expected, actual)
+    }
+
+    @Test
+    @DisplayName("autopilot/performance는 서비스 응답을 그대로 반환한다")
+    fun getAutopilotPerformanceReturnsServicePayload() {
+        val expected = GuidedAutopilotPerformanceResponse(
+            windowDays = 30,
+            from = Instant.parse("2026-01-25T00:00:00Z"),
+            to = Instant.parse("2026-02-24T00:00:00Z"),
+            trades = 28,
+            winRate = 57.1,
+            netPnlKrw = 124000.0,
+            netReturnPercent = 3.2,
+            sharpe = 1.34,
+            maxDrawdownPercent = 2.7,
+            gateEligible = true,
+            gateReason = "증액 게이트 통과"
+        )
+        whenever(guidedTradingService.getAutopilotPerformance(30)).thenReturn(expected)
+
+        val actual = controller.getAutopilotPerformance(30)
 
         kotlin.test.assertEquals(expected, actual)
     }

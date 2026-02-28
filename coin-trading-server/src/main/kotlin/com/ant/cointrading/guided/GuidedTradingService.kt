@@ -6,6 +6,8 @@ import com.ant.cointrading.api.bithumb.BithumbApiException
 import com.ant.cointrading.api.bithumb.Balance
 import com.ant.cointrading.api.bithumb.OrderResponse
 import com.ant.cointrading.api.bithumb.TradeResponse
+import com.ant.cointrading.repository.GuidedAutopilotDecisionEntity
+import com.ant.cointrading.repository.GuidedAutopilotDecisionRepository
 import com.ant.cointrading.repository.OrderLifecycleStrategyGroup
 import com.ant.cointrading.repository.GuidedTradeEntity
 import com.ant.cointrading.repository.GuidedTradeEventEntity
@@ -14,6 +16,8 @@ import com.ant.cointrading.repository.GuidedTradeRepository
 import com.ant.cointrading.service.OrderLifecycleEvent
 import com.ant.cointrading.service.OrderLifecycleSummary
 import com.ant.cointrading.service.OrderLifecycleTelemetryService
+import com.ant.cointrading.stats.SharpeRatioCalculator
+import com.fasterxml.jackson.module.kotlin.jacksonObjectMapper
 import jakarta.annotation.PreDestroy
 import org.slf4j.LoggerFactory
 import org.springframework.scheduling.annotation.Scheduled
@@ -40,9 +44,11 @@ class GuidedTradingService(
     private val bithumbPrivateApi: BithumbPrivateApi,
     private val guidedTradeRepository: GuidedTradeRepository,
     private val guidedTradeEventRepository: GuidedTradeEventRepository,
-    private val orderLifecycleTelemetryService: OrderLifecycleTelemetryService
+    private val orderLifecycleTelemetryService: OrderLifecycleTelemetryService,
+    private val guidedAutopilotDecisionRepository: GuidedAutopilotDecisionRepository,
 ) {
     private val log = LoggerFactory.getLogger(javaClass)
+    private val objectMapper = jacksonObjectMapper()
     private val marketWinRateExecutor: ExecutorService = Executors.newFixedThreadPool(WIN_RATE_CALC_CONCURRENCY)
     private val opportunityRecommendationCache = ConcurrentHashMap<OpportunityRecommendationCacheKey, CachedOpportunityRecommendation>()
 
@@ -69,6 +75,9 @@ class GuidedTradingService(
         const val GUIDED_AUTOPILOT_STRATEGY_CODE = "GUIDED_AUTOPILOT"
         const val AUTOPILOT_OPPORTUNITY_UNIVERSE_LIMIT = 15
         const val AUTOPILOT_OPPORTUNITY_CACHE_TTL_MILLIS = 30_000L
+        const val AUTOPILOT_PROMOTION_SHARPE_GATE = 1.2
+        const val AUTOPILOT_PROMOTION_MAX_DD_GATE = 4.0
+        const val AUTOPILOT_PROMOTION_WIN_RATE_GATE = 52.0
         val MIN_EFFECTIVE_HOLDING_KRW: BigDecimal = BigDecimal("5000")
     }
 
@@ -236,7 +245,8 @@ class GuidedTradingService(
                 lossCount = lossCount,
                 winRate = winRate,
                 avgPnlPercent = avgPnlPercent
-            )
+            ),
+            featurePack = buildAgentFeaturePack(chart)
         )
     }
 
@@ -1355,6 +1365,95 @@ class GuidedTradingService(
         )
     }
 
+    private fun buildAgentFeaturePack(chart: GuidedChartResponse): GuidedAgentFeaturePack {
+        val recommendation = chart.recommendation
+        val closes = chart.candles.map { it.close }
+        val current = recommendation.currentPrice
+        val recommended = recommendation.recommendedEntryPrice
+        val entryGapPct = if (recommended > 0.0 && current > 0.0) {
+            ((current - recommended) / recommended * 100.0).coerceIn(-30.0, 30.0)
+        } else {
+            0.0
+        }
+
+        val atr14 = calcAtr(chart.candles.takeLast(20), 14)
+        val atrPercent = if (current > 0.0) (atr14 / current * 100.0).coerceIn(0.0, 20.0) else 0.0
+        val momentum6 = closes.percentChange(6)
+        val momentum24 = closes.percentChange(24)
+        val stopDistancePct = if (recommended > 0.0) {
+            ((recommended - recommendation.stopLossPrice) / recommended * 100.0).coerceIn(0.0, 30.0)
+        } else {
+            0.0
+        }
+        val takeProfitDistancePct = if (recommended > 0.0) {
+            ((recommendation.takeProfitPrice - recommended) / recommended * 100.0).coerceIn(0.0, 50.0)
+        } else {
+            0.0
+        }
+
+        val orderbook = chart.orderbook
+        val spreadPercent = orderbook?.spreadPercent ?: 0.0
+        val totalAsk = orderbook?.totalAskSize ?: 0.0
+        val totalBid = orderbook?.totalBidSize ?: 0.0
+        val imbalance = if (totalAsk + totalBid > 0.0) {
+            ((totalBid - totalAsk) / (totalBid + totalAsk)).coerceIn(-1.0, 1.0)
+        } else {
+            0.0
+        }
+        val top5 = orderbook?.units.orEmpty().take(5)
+        val top5Ask = top5.sumOf { it.askSize }
+        val top5Bid = top5.sumOf { it.bidSize }
+        val top5Imbalance = if (top5Ask + top5Bid > 0.0) {
+            ((top5Bid - top5Ask) / (top5Bid + top5Ask)).coerceIn(-1.0, 1.0)
+        } else {
+            0.0
+        }
+
+        val chasingRiskScore = (entryGapPct / 2.0 + spreadPercent * 5.0).coerceIn(0.0, 100.0)
+        val pendingRiskScore = (spreadPercent * 6.0 + (1.0 - recommendation.confidence).coerceIn(0.0, 1.0) * 40.0).coerceIn(0.0, 100.0)
+
+        return GuidedAgentFeaturePack(
+            generatedAt = Instant.now(),
+            technical = GuidedTechnicalFeaturePack(
+                trendScore = recommendation.winRateBreakdown.trend,
+                pullbackScore = recommendation.winRateBreakdown.pullback,
+                volatilityScore = recommendation.winRateBreakdown.volatility,
+                riskRewardScore = recommendation.winRateBreakdown.riskReward,
+                riskRewardRatio = recommendation.riskRewardRatio,
+                recommendedEntryWinRate = recommendation.recommendedEntryWinRate,
+                marketEntryWinRate = recommendation.marketEntryWinRate,
+                atrPercent = atrPercent,
+                momentum6 = momentum6,
+                momentum24 = momentum24,
+                entryGapPct = entryGapPct
+            ),
+            microstructure = GuidedMicrostructureFeaturePack(
+                spreadPercent = spreadPercent,
+                totalBidSize = totalBid,
+                totalAskSize = totalAsk,
+                bidAskImbalance = imbalance,
+                top5BidAskImbalance = top5Imbalance,
+                orderbookTimestamp = orderbook?.timestamp
+            ),
+            executionRisk = GuidedExecutionRiskFeaturePack(
+                suggestedOrderType = recommendation.suggestedOrderType,
+                chasingRiskScore = chasingRiskScore,
+                pendingFillRiskScore = pendingRiskScore,
+                stopDistancePercent = stopDistancePct,
+                takeProfitDistancePercent = takeProfitDistancePct,
+                confidence = recommendation.confidence
+            )
+        )
+    }
+
+    private fun List<Double>.percentChange(lookback: Int): Double {
+        if (size <= lookback) return 0.0
+        val now = this[size - 1]
+        val prev = this[size - 1 - lookback]
+        if (prev == 0.0) return 0.0
+        return ((now - prev) / prev * 100.0).coerceIn(-30.0, 30.0)
+    }
+
     fun getTodayStats(): GuidedDailyStats {
         val todayStart = java.time.LocalDate.now(java.time.ZoneId.of("Asia/Seoul"))
             .atStartOfDay(java.time.ZoneId.of("Asia/Seoul")).toInstant()
@@ -1691,6 +1790,150 @@ class GuidedTradingService(
             requestedMinRecommendedWinRate = requestedMin,
             decisionStats = decisionStats,
             strategyCodeSummary = strategyCodeSummary,
+        )
+    }
+
+    @Transactional
+    fun logAutopilotDecision(request: GuidedAutopilotDecisionLogRequest): GuidedAutopilotDecisionLogResponse {
+        require(request.runId.isNotBlank()) { "runId는 필수입니다." }
+        require(request.market.startsWith("KRW-")) { "market 형식 오류: KRW-BTC 형태를 사용하세요." }
+        require(request.stage.isNotBlank()) { "stage는 필수입니다." }
+
+        val payloadJson = runCatching {
+            objectMapper.writeValueAsString(
+                mapOf(
+                    "featurePack" to request.featurePack,
+                    "specialistOutputs" to request.specialistOutputs,
+                    "synthOutput" to request.synthOutput,
+                    "pmOutput" to request.pmOutput,
+                    "orderPlan" to request.orderPlan
+                )
+            )
+        }.getOrElse {
+            "{}"
+        }
+
+        val saved = guidedAutopilotDecisionRepository.save(
+            GuidedAutopilotDecisionEntity(
+                runId = request.runId.trim().take(80),
+                market = request.market.trim().uppercase(),
+                intervalValue = request.interval.trim().ifBlank { "minute30" }.take(20),
+                mode = request.mode.trim().ifBlank { "SWING" }.uppercase().take(20),
+                stage = request.stage.trim().uppercase().take(30),
+                approve = request.approve,
+                confidence = request.confidence?.let { BigDecimal.valueOf(it) },
+                score = request.score?.let { BigDecimal.valueOf(it) },
+                entryAmountKrw = request.entryAmountKrw?.let { BigDecimal.valueOf(it) },
+                executed = request.executed,
+                reason = request.reason?.take(600),
+                payloadJson = payloadJson,
+                createdAt = Instant.now()
+            )
+        )
+
+        return GuidedAutopilotDecisionLogResponse(
+            accepted = true,
+            decisionId = saved.id ?: 0L,
+            createdAt = saved.createdAt
+        )
+    }
+
+    fun getAutopilotPerformance(windowDays: Int = 30): GuidedAutopilotPerformanceResponse {
+        val effectiveWindowDays = windowDays.coerceIn(1, 120)
+        val to = Instant.now()
+        val from = to.minus(effectiveWindowDays.toLong(), ChronoUnit.DAYS)
+        val closedTrades = guidedTradeRepository.findByStatusOrderByClosedAtDesc(GuidedTradeEntity.STATUS_CLOSED)
+            .asSequence()
+            .filter { trade -> trade.closedAt != null && trade.closedAt!!.isAfter(from) }
+            .filter { trade ->
+                val source = trade.entrySource?.uppercase().orEmpty()
+                val strategy = trade.strategyCode?.uppercase().orEmpty()
+                source.contains("AUTOPILOT") || source.contains("MCP_DIRECT") || strategy.contains("AUTOPILOT")
+            }
+            .sortedBy { it.closedAt }
+            .toList()
+
+        if (closedTrades.isEmpty()) {
+            return GuidedAutopilotPerformanceResponse(
+                windowDays = effectiveWindowDays,
+                from = from,
+                to = to,
+                trades = 0,
+                winRate = 0.0,
+                netPnlKrw = 0.0,
+                netReturnPercent = 0.0,
+                sharpe = 0.0,
+                maxDrawdownPercent = 0.0,
+                gateEligible = false,
+                gateReason = "평가 구간 내 오토파일럿 청산 거래가 없습니다."
+            )
+        }
+
+        var equity = 1.0
+        var peak = 1.0
+        var maxDrawdown = 0.0
+        val perTradeReturns = mutableListOf<Double>()
+
+        closedTrades.forEach { trade ->
+            val invested = trade.averageEntryPrice.multiply(trade.entryQuantity)
+            val tradeReturn = if (invested > BigDecimal.ZERO) {
+                trade.realizedPnl.divide(invested, 8, RoundingMode.HALF_UP).toDouble()
+            } else {
+                0.0
+            }
+            perTradeReturns += tradeReturn
+            equity *= (1.0 + tradeReturn)
+            if (equity > peak) peak = equity
+            val drawdown = if (peak > 0.0) ((peak - equity) / peak) * 100.0 else 0.0
+            if (drawdown > maxDrawdown) maxDrawdown = drawdown
+        }
+
+        val wins = closedTrades.count { it.realizedPnl > BigDecimal.ZERO }
+        val netPnl = closedTrades.sumOf { it.realizedPnl.toDouble() }
+        val totalInvested = closedTrades.sumOf {
+            it.averageEntryPrice.multiply(it.entryQuantity).toDouble()
+        }
+        val netReturnPercent = if (totalInvested > 0.0) {
+            netPnl / totalInvested * 100.0
+        } else {
+            0.0
+        }
+        val sharpe = SharpeRatioCalculator.calculateTradeBased(perTradeReturns, 1.0)
+        val winRate = wins.toDouble() / closedTrades.size.toDouble() * 100.0
+
+        val gateChecks = buildList {
+            if (sharpe <= AUTOPILOT_PROMOTION_SHARPE_GATE) {
+                add("Sharpe ${String.format("%.2f", sharpe)} <= ${String.format("%.2f", AUTOPILOT_PROMOTION_SHARPE_GATE)}")
+            }
+            if (maxDrawdown >= AUTOPILOT_PROMOTION_MAX_DD_GATE) {
+                add("MaxDD ${String.format("%.2f", maxDrawdown)}% >= ${String.format("%.2f", AUTOPILOT_PROMOTION_MAX_DD_GATE)}%")
+            }
+            if (winRate <= AUTOPILOT_PROMOTION_WIN_RATE_GATE) {
+                add("승률 ${String.format("%.1f", winRate)}% <= ${String.format("%.1f", AUTOPILOT_PROMOTION_WIN_RATE_GATE)}%")
+            }
+            if (netPnl <= 0.0) {
+                add("순손익 ${String.format("%.0f", netPnl)}원 <= 0")
+            }
+        }
+        val gateEligible = gateChecks.isEmpty()
+        val gateReason = if (gateEligible) {
+            "증액 게이트 통과"
+        } else {
+            gateChecks.joinToString(" | ")
+        }
+
+        return GuidedAutopilotPerformanceResponse(
+            windowDays = effectiveWindowDays,
+            from = from,
+            to = to,
+            trades = closedTrades.size,
+            winRate = winRate,
+            netPnlKrw = netPnl,
+            netReturnPercent = netReturnPercent,
+            sharpe = sharpe,
+            maxDrawdownPercent = maxDrawdown,
+            gateEligible = gateEligible,
+            gateReason = gateReason
         )
     }
 
@@ -2595,7 +2838,47 @@ data class GuidedAgentContextResponse(
     val generatedAt: Instant,
     val chart: GuidedChartResponse,
     val recentClosedTrades: List<GuidedClosedTradeView>,
-    val performance: GuidedPerformanceSnapshot
+    val performance: GuidedPerformanceSnapshot,
+    val featurePack: GuidedAgentFeaturePack? = null
+)
+
+data class GuidedAgentFeaturePack(
+    val generatedAt: Instant,
+    val technical: GuidedTechnicalFeaturePack,
+    val microstructure: GuidedMicrostructureFeaturePack,
+    val executionRisk: GuidedExecutionRiskFeaturePack
+)
+
+data class GuidedTechnicalFeaturePack(
+    val trendScore: Double,
+    val pullbackScore: Double,
+    val volatilityScore: Double,
+    val riskRewardScore: Double,
+    val riskRewardRatio: Double,
+    val recommendedEntryWinRate: Double,
+    val marketEntryWinRate: Double,
+    val atrPercent: Double,
+    val momentum6: Double,
+    val momentum24: Double,
+    val entryGapPct: Double
+)
+
+data class GuidedMicrostructureFeaturePack(
+    val spreadPercent: Double,
+    val totalBidSize: Double,
+    val totalAskSize: Double,
+    val bidAskImbalance: Double,
+    val top5BidAskImbalance: Double,
+    val orderbookTimestamp: Long?
+)
+
+data class GuidedExecutionRiskFeaturePack(
+    val suggestedOrderType: String,
+    val chasingRiskScore: Double,
+    val pendingFillRiskScore: Double,
+    val stopDistancePercent: Double,
+    val takeProfitDistancePercent: Double,
+    val confidence: Double
 )
 
 data class GuidedAutopilotLiveResponse(
@@ -2667,6 +2950,45 @@ data class GuidedAutopilotOpportunityView(
     val score: Double,
     val stage: String,
     val reason: String
+)
+
+data class GuidedAutopilotDecisionLogRequest(
+    val runId: String,
+    val market: String,
+    val interval: String = "minute30",
+    val mode: String = "SWING",
+    val stage: String,
+    val approve: Boolean,
+    val confidence: Double? = null,
+    val score: Double? = null,
+    val reason: String? = null,
+    val executed: Boolean = false,
+    val entryAmountKrw: Double? = null,
+    val featurePack: Map<String, Any?>? = null,
+    val specialistOutputs: List<Map<String, Any?>> = emptyList(),
+    val synthOutput: Map<String, Any?>? = null,
+    val pmOutput: Map<String, Any?>? = null,
+    val orderPlan: Map<String, Any?>? = null,
+)
+
+data class GuidedAutopilotDecisionLogResponse(
+    val accepted: Boolean,
+    val decisionId: Long,
+    val createdAt: Instant
+)
+
+data class GuidedAutopilotPerformanceResponse(
+    val windowDays: Int,
+    val from: Instant,
+    val to: Instant,
+    val trades: Int,
+    val winRate: Double,
+    val netPnlKrw: Double,
+    val netReturnPercent: Double,
+    val sharpe: Double,
+    val maxDrawdownPercent: Double,
+    val gateEligible: Boolean,
+    val gateReason: String
 )
 
 data class GuidedClosedTradeView(

@@ -229,8 +229,16 @@ coin-trading-spring/
 - `GET /api/guided-trading/autopilot/opportunities`
   - 응답: `generatedAt`, `primaryInterval`, `confirmInterval`, `mode`, `appliedUniverseLimit`, `opportunities[]`
   - 후보 stage: `AUTO_PASS` | `BORDERLINE` | `RULE_FAIL`
+- `POST /api/guided-trading/autopilot/decisions`
+  - 클라이언트 Fine-Grained Agent 의사결정(`specialists/synth/pm`) 로그 저장
+- `GET /api/guided-trading/autopilot/performance`
+  - 응답: `windowDays`, `trades`, `winRate`, `netPnlKrw`, `netReturnPercent`, `sharpe`, `maxDrawdownPercent`, `gateEligible`, `gateReason`
+- `GET /api/guided-trading/agent/context`
+  - 응답 확장: `featurePack(technical/microstructure/executionRisk)` 추가
 - `GuidedTradingService.getAutopilotLive(interval, mode, thresholdMode, minMarketWinRate)` 추가.
 - `GuidedTradingService.getAutopilotOpportunities(interval, confirmInterval, mode, universeLimit)` 추가.
+- `GuidedTradingService.logAutopilotDecision(request)` 추가.
+- `GuidedTradingService.getAutopilotPerformance(windowDays)` 추가.
 
 ### 4. 텔레메트리 기록 포인트 확장
 

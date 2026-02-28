@@ -718,12 +718,52 @@ export interface GuidedPerformanceSnapshot {
   avgPnlPercent: number;
 }
 
+export interface GuidedTechnicalFeaturePack {
+  trendScore: number;
+  pullbackScore: number;
+  volatilityScore: number;
+  riskRewardScore: number;
+  riskRewardRatio: number;
+  recommendedEntryWinRate: number;
+  marketEntryWinRate: number;
+  atrPercent: number;
+  momentum6: number;
+  momentum24: number;
+  entryGapPct: number;
+}
+
+export interface GuidedMicrostructureFeaturePack {
+  spreadPercent: number;
+  totalBidSize: number;
+  totalAskSize: number;
+  bidAskImbalance: number;
+  top5BidAskImbalance: number;
+  orderbookTimestamp?: number | null;
+}
+
+export interface GuidedExecutionRiskFeaturePack {
+  suggestedOrderType: string;
+  chasingRiskScore: number;
+  pendingFillRiskScore: number;
+  stopDistancePercent: number;
+  takeProfitDistancePercent: number;
+  confidence: number;
+}
+
+export interface GuidedAgentFeaturePack {
+  generatedAt: string;
+  technical: GuidedTechnicalFeaturePack;
+  microstructure: GuidedMicrostructureFeaturePack;
+  executionRisk: GuidedExecutionRiskFeaturePack;
+}
+
 export interface GuidedAgentContextResponse {
   market: string;
   generatedAt: string;
   chart: GuidedChartResponse;
   recentClosedTrades: GuidedClosedTradeView[];
   performance: GuidedPerformanceSnapshot;
+  featurePack?: GuidedAgentFeaturePack | null;
 }
 
 export interface OrderLifecycleGroupSummary {
@@ -819,6 +859,45 @@ export interface AutopilotOpportunitiesResponse {
   mode: string;
   appliedUniverseLimit: number;
   opportunities: AutopilotOpportunityView[];
+}
+
+export interface AutopilotDecisionLogRequest {
+  runId: string;
+  market: string;
+  interval?: string;
+  mode?: string;
+  stage: string;
+  approve: boolean;
+  confidence?: number | null;
+  score?: number | null;
+  reason?: string | null;
+  executed?: boolean;
+  entryAmountKrw?: number | null;
+  featurePack?: Record<string, unknown> | null;
+  specialistOutputs?: Array<Record<string, unknown>>;
+  synthOutput?: Record<string, unknown> | null;
+  pmOutput?: Record<string, unknown> | null;
+  orderPlan?: Record<string, unknown> | null;
+}
+
+export interface AutopilotDecisionLogResponse {
+  accepted: boolean;
+  decisionId: number;
+  createdAt: string;
+}
+
+export interface AutopilotPerformanceResponse {
+  windowDays: number;
+  from: string;
+  to: string;
+  trades: number;
+  winRate: number;
+  netPnlKrw: number;
+  netReturnPercent: number;
+  sharpe: number;
+  maxDrawdownPercent: number;
+  gateEligible: boolean;
+  gateReason: string;
 }
 
 export interface GuidedStartRequest {
@@ -989,6 +1068,12 @@ export const guidedTradingApi = {
         params: { interval, confirmInterval, mode, universeLimit },
       })
       .then((res) => res.data),
+
+  logAutopilotDecision: (payload: AutopilotDecisionLogRequest): Promise<AutopilotDecisionLogResponse> =>
+    api.post('/guided-trading/autopilot/decisions', payload).then((res) => res.data),
+
+  getAutopilotPerformance: (windowDays = 30): Promise<AutopilotPerformanceResponse> =>
+    api.get('/guided-trading/autopilot/performance', { params: { windowDays } }).then((res) => res.data),
 
   getClosedTrades: (limit = 50): Promise<GuidedClosedTradeView[]> =>
     api.get('/guided-trading/trades/closed', { params: { limit } }).then((res) => res.data),

@@ -1,4 +1,5 @@
 import {
+  type AutopilotDecisionLogRequest,
   type AutopilotOpportunityView,
   guidedTradingApi,
   type GuidedAgentContextResponse,
@@ -16,6 +17,10 @@ import {
   type WorkerStateSnapshot,
   type WorkerStatus,
 } from './MarketWorker';
+import {
+  runFineGrainedAgentPipeline,
+  type FineGrainedDecisionResult,
+} from './FineGrainedAgentPipeline';
 
 export interface AutopilotConfig {
   enabled: boolean;
@@ -46,6 +51,9 @@ export interface AutopilotConfig {
   focusedWarnHoldingMs: number;
   focusedMaxHoldingMs: number;
   focusedEntryGate: 'FAST_ONLY';
+  fineAgentEnabled?: boolean;
+  fineAgentMaxPerTick?: number;
+  fineAgentDecisionTtlMs?: number;
 }
 
 export type CandidateStage =
@@ -209,6 +217,8 @@ export class AutopilotOrchestrator {
   private readonly screenshots = new Map<string, AutopilotScreenshot>();
   private readonly screenshotOrder: string[] = [];
   private readonly focusedWorkerMarkets = new Set<string>();
+  private readonly fineDecisionCache = new Map<string, { at: number; decision: FineGrainedDecisionResult }>();
+  private readonly runId = crypto.randomUUID();
   private orderFlowLocal: AutopilotOrderFlowLocal = createEmptyOrderFlow();
   private loopId: number | null = null;
   private running = false;
@@ -504,6 +514,9 @@ export class AutopilotOrchestrator {
       let availableSlots = Math.max(0, this.config.maxConcurrentPositions - openMarketSet.size);
       const nextCandidates: AutopilotCandidateView[] = [];
       const activeGlobalMarkets = new Set<string>();
+      const fineAgentEnabled = this.isFineAgentEnabled();
+      const fineAgentMaxPerTick = this.resolveFineAgentMaxPerTick();
+      let fineAgentUsedInTick = 0;
       let autoPass = 0;
       let borderline = 0;
       let ruleFail = 0;
@@ -517,10 +530,6 @@ export class AutopilotOrchestrator {
           expectancyPct: candidate.expectancyPct,
         });
 
-        if (candidate.stage === 'AUTO_PASS') autoPass += 1;
-        else if (candidate.stage === 'BORDERLINE') borderline += 1;
-        else ruleFail += 1;
-
         const evaluation = this.evaluateOpportunityEligibility(
           candidate,
           openMarketSet,
@@ -528,14 +537,36 @@ export class AutopilotOrchestrator {
         );
         let stage: CandidateStage = candidate.stage as CandidateStage;
         let reason = candidate.reason;
+        let fineDecision: FineGrainedDecisionResult | null = null;
+        let executed = false;
+        let entryAmountKrw: number | null = null;
 
         if (!evaluation.allow) {
           stage = evaluation.stage;
           reason = evaluation.reason;
-        } else if (stage === 'AUTO_PASS' || stage === 'BORDERLINE') {
+        } else if (
+          fineAgentEnabled &&
+          (stage === 'AUTO_PASS' || stage === 'BORDERLINE') &&
+          fineAgentUsedInTick < fineAgentMaxPerTick
+        ) {
+          fineAgentUsedInTick += 1;
+          fineDecision = await this.resolveFineGrainedDecision(candidate);
+          stage = fineDecision.stage;
+          reason = `FineAgent: ${fineDecision.reason}`;
+          this.pushEvent({
+            type: 'CANDIDATE',
+            level: fineDecision.approve ? 'INFO' : 'WARN',
+            market: candidate.market,
+            action: 'FINE_AGENT_REVIEW',
+            detail: `stage=${fineDecision.stage}, score=${fineDecision.score.toFixed(1)}, confidence=${fineDecision.confidence.toFixed(0)} | ${fineDecision.reason}`,
+          });
+        }
+        const stageForStats = stage;
+
+        if (evaluation.allow && (stage === 'AUTO_PASS' || stage === 'BORDERLINE')) {
           activeGlobalMarkets.add(candidate.market);
           const sourceStage = stage === 'AUTO_PASS' ? 'AUTO_PASS' : 'BORDERLINE';
-          const entryAmountKrw = this.resolveEntryAmount(sourceStage);
+          entryAmountKrw = this.resolveEntryAmount(sourceStage);
           this.spawnWorker(
             candidate.market,
             {
@@ -557,6 +588,7 @@ export class AutopilotOrchestrator {
           stage = 'ENTERED';
           reason = `${sourceStage} 워커 생성 (진입금 ${entryAmountKrw.toLocaleString('ko-KR')}원)`;
           availableSlots -= 1;
+          executed = true;
           this.pushEvent({
             type: 'CANDIDATE',
             level: 'INFO',
@@ -564,6 +596,14 @@ export class AutopilotOrchestrator {
             action: 'ENTERED',
             detail: `${candidate.koreanName} ${sourceStage} 후보 진입 파이프라인 시작`,
           });
+        }
+
+        if (stageForStats === 'AUTO_PASS') autoPass += 1;
+        else if (stageForStats === 'BORDERLINE') borderline += 1;
+        else if (stageForStats === 'RULE_FAIL') ruleFail += 1;
+
+        if (fineDecision) {
+          void this.logFineGrainedDecision(candidate, fineDecision, executed, entryAmountKrw);
         }
 
         nextCandidates.push({
@@ -594,6 +634,104 @@ export class AutopilotOrchestrator {
         action: 'ORCHESTRATOR_TICK_ERROR',
         detail: message,
       });
+    }
+  }
+
+  private isFineAgentEnabled(): boolean {
+    return this.config.fineAgentEnabled !== false;
+  }
+
+  private resolveFineAgentMaxPerTick(): number {
+    return Math.min(8, Math.max(1, Math.round(this.config.fineAgentMaxPerTick ?? 3)));
+  }
+
+  private resolveFineAgentDecisionTtlMs(): number {
+    return Math.min(5 * 60_000, Math.max(15_000, Math.round(this.config.fineAgentDecisionTtlMs ?? 60_000)));
+  }
+
+  private async resolveFineGrainedDecision(
+    candidate: AutopilotOpportunityView
+  ): Promise<FineGrainedDecisionResult> {
+    const ttlMs = this.resolveFineAgentDecisionTtlMs();
+    const cached = this.fineDecisionCache.get(candidate.market);
+    const now = Date.now();
+    if (cached && now - cached.at <= ttlMs) {
+      return cached.decision;
+    }
+
+    const context = await guidedTradingApi.getAgentContext(
+      candidate.market,
+      this.config.interval,
+      120,
+      20,
+      this.config.tradingMode
+    );
+    for (let i = 0; i < 5; i += 1) {
+      this.recordLlmUsage('FINE_AGENT_PIPELINE', candidate.market);
+    }
+    const decision = await runFineGrainedAgentPipeline({
+      market: candidate.market,
+      tradingMode: this.config.tradingMode,
+      model: this.config.llmModel,
+      minLlmConfidence: this.config.minLlmConfidence,
+      candidate,
+      context,
+    });
+
+    this.fineDecisionCache.set(candidate.market, {
+      at: now,
+      decision,
+    });
+    for (const [market, item] of this.fineDecisionCache.entries()) {
+      if (now - item.at > ttlMs * 2) {
+        this.fineDecisionCache.delete(market);
+      }
+    }
+    return decision;
+  }
+
+  private async logFineGrainedDecision(
+    candidate: AutopilotOpportunityView,
+    decision: FineGrainedDecisionResult,
+    executed: boolean,
+    entryAmountKrw: number | null
+  ): Promise<void> {
+    const payload: AutopilotDecisionLogRequest = {
+      runId: this.runId,
+      market: candidate.market,
+      interval: this.config.interval,
+      mode: this.config.tradingMode,
+      stage: decision.stage,
+      approve: decision.approve,
+      confidence: decision.confidence,
+      score: decision.score,
+      reason: decision.reason,
+      executed,
+      entryAmountKrw,
+      specialistOutputs: decision.specialists.map((item) => this.toSerializable(item)),
+      synthOutput: this.toSerializable(decision.synth),
+      pmOutput: this.toSerializable(decision.pm),
+      orderPlan: this.toSerializable(decision.pm.orderPlan),
+    };
+    try {
+      await guidedTradingApi.logAutopilotDecision(payload);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : '결정 로그 전송 실패';
+      this.pushEvent({
+        type: 'SYSTEM',
+        level: 'WARN',
+        market: candidate.market,
+        action: 'DECISION_LOG_WARN',
+        detail: message,
+      });
+    }
+  }
+
+  private toSerializable(value: unknown): Record<string, unknown> {
+    try {
+      return JSON.parse(JSON.stringify(value)) as Record<string, unknown>;
+    } catch {
+      return {};
     }
   }
 

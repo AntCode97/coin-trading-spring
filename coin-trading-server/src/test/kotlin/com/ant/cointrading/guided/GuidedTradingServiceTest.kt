@@ -10,6 +10,7 @@ import com.ant.cointrading.api.bithumb.TickerInfo
 import com.ant.cointrading.repository.GuidedTradeEntity
 import com.ant.cointrading.repository.GuidedTradeEventEntity
 import com.ant.cointrading.repository.GuidedTradeEventRepository
+import com.ant.cointrading.repository.GuidedAutopilotDecisionRepository
 import com.ant.cointrading.repository.GuidedTradeRepository
 import com.ant.cointrading.service.OrderLifecycleTelemetryService
 import java.math.BigDecimal
@@ -42,6 +43,7 @@ class GuidedTradingServiceTest {
     private val guidedTradeRepository: GuidedTradeRepository = mock()
     private val guidedTradeEventRepository: GuidedTradeEventRepository = mock()
     private val orderLifecycleTelemetryService: OrderLifecycleTelemetryService = mock()
+    private val guidedAutopilotDecisionRepository: GuidedAutopilotDecisionRepository = mock()
 
     private lateinit var service: GuidedTradingService
     private lateinit var markets: List<MarketInfo>
@@ -54,7 +56,8 @@ class GuidedTradingServiceTest {
             bithumbPrivateApi = bithumbPrivateApi,
             guidedTradeRepository = guidedTradeRepository,
             guidedTradeEventRepository = guidedTradeEventRepository,
-            orderLifecycleTelemetryService = orderLifecycleTelemetryService
+            orderLifecycleTelemetryService = orderLifecycleTelemetryService,
+            guidedAutopilotDecisionRepository = guidedAutopilotDecisionRepository
         )
 
         markets = (1..61).map { index ->
