@@ -250,23 +250,57 @@ class OrderLifecycleTelemetryService(
         }
     }
 
-    fun getLiveSnapshot(limit: Int = 200): OrderLifecycleSnapshot {
+    fun getLiveSnapshot(limit: Int = 200, strategyCodePrefix: String? = null): OrderLifecycleSnapshot {
         val (start, end) = kstDayWindow()
-        val events = orderLifecycleEventRepository
-            .findTop300ByCreatedAtBetweenOrderByCreatedAtDesc(start, end)
-            .map { it.toView() }
-            .take(limit.coerceIn(1, 300))
+        val normalizedPrefix = strategyCodePrefix?.trim()?.uppercase()?.ifBlank { null }
+        val effectiveLimit = limit.coerceIn(1, 300)
 
-        val summary = buildSummary(start, end)
+        if (normalizedPrefix == null) {
+            val events = orderLifecycleEventRepository
+                .findTop300ByCreatedAtBetweenOrderByCreatedAtDesc(start, end)
+                .map { it.toView() }
+                .take(effectiveLimit)
+
+            val summary = buildSummary(start, end)
+            return OrderLifecycleSnapshot(
+                orderSummary = summary,
+                orderEvents = events,
+            )
+        }
+
+        val filteredTelemetryEvents = orderLifecycleEventRepository
+            .findByCreatedAtBetweenOrderByCreatedAtDesc(start, end)
+            .filter { event -> matchesStrategyCodePrefix(event.strategyCode, normalizedPrefix) }
+        val summary = buildSummaryFromTelemetryEvents(
+            telemetryEvents = filteredTelemetryEvents,
+            includeCoreEngine = false,
+            start = start,
+            end = end
+        )
         return OrderLifecycleSnapshot(
             orderSummary = summary,
-            orderEvents = events,
+            orderEvents = filteredTelemetryEvents
+                .take(effectiveLimit)
+                .map { it.toView() },
         )
     }
 
     fun buildSummary(start: Instant, end: Instant): OrderLifecycleSummary {
         val telemetryEvents = orderLifecycleEventRepository.findByCreatedAtBetweenOrderByCreatedAtDesc(start, end)
+        return buildSummaryFromTelemetryEvents(
+            telemetryEvents = telemetryEvents,
+            includeCoreEngine = true,
+            start = start,
+            end = end
+        )
+    }
 
+    private fun buildSummaryFromTelemetryEvents(
+        telemetryEvents: List<OrderLifecycleEventEntity>,
+        includeCoreEngine: Boolean,
+        start: Instant,
+        end: Instant,
+    ): OrderLifecycleSummary {
         val groupCounters = linkedMapOf(
             OrderLifecycleStrategyGroup.MANUAL to MutableCounter(),
             OrderLifecycleStrategyGroup.GUIDED to MutableCounter(),
@@ -279,8 +313,10 @@ class OrderLifecycleTelemetryService(
             applyEvent(counter, event.eventType)
         }
 
-        val coreCounter = groupCounters.getOrPut(OrderLifecycleStrategyGroup.CORE_ENGINE) { MutableCounter() }
-        coreCounter.merge(buildCoreEngineCounter(start, end))
+        if (includeCoreEngine) {
+            val coreCounter = groupCounters.getOrPut(OrderLifecycleStrategyGroup.CORE_ENGINE) { MutableCounter() }
+            coreCounter.merge(buildCoreEngineCounter(start, end))
+        }
 
         groupCounters.values.forEach { it.normalizePending() }
 
@@ -467,6 +503,11 @@ class OrderLifecycleTelemetryService(
     private fun normalizeOrderId(orderId: String?): String? {
         val normalized = orderId?.trim()
         return if (normalized.isNullOrBlank()) null else normalized
+    }
+
+    private fun matchesStrategyCodePrefix(strategyCode: String?, prefix: String): Boolean {
+        val normalized = strategyCode?.trim()?.uppercase() ?: return false
+        return normalized.startsWith(prefix)
     }
 
     private fun isCoreStrategy(strategyCode: String?): Boolean {

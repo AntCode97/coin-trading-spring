@@ -1678,9 +1678,16 @@ class GuidedTradingService(
         mode: TradingMode = TradingMode.SWING,
         thresholdMode: GuidedWinRateThresholdMode = GuidedWinRateThresholdMode.DYNAMIC_P70,
         minMarketWinRate: Double? = null,
-        minRecommendedWinRate: Double? = null
+        minRecommendedWinRate: Double? = null,
+        strategyCodePrefix: String? = null
     ): GuidedAutopilotLiveResponse {
-        val telemetry = orderLifecycleTelemetryService.getLiveSnapshot()
+        val normalizedStrategyCodePrefix = strategyCodePrefix
+            ?.trim()
+            ?.uppercase()
+            ?.ifBlank { null }
+        val telemetry = orderLifecycleTelemetryService.getLiveSnapshot(
+            strategyCodePrefix = normalizedStrategyCodePrefix
+        )
         val sortedMarkets = getMarketBoard(
             sortBy = GuidedMarketSortBy.MARKET_ENTRY_WIN_RATE,
             sortDirection = GuidedSortDirection.DESC,
@@ -1838,8 +1845,15 @@ class GuidedTradingService(
         )
     }
 
-    fun getAutopilotPerformance(windowDays: Int = 30): GuidedAutopilotPerformanceResponse {
+    fun getAutopilotPerformance(
+        windowDays: Int = 30,
+        strategyCodePrefix: String? = null
+    ): GuidedAutopilotPerformanceResponse {
         val effectiveWindowDays = windowDays.coerceIn(1, 120)
+        val normalizedStrategyCodePrefix = strategyCodePrefix
+            ?.trim()
+            ?.uppercase()
+            ?.ifBlank { null }
         val to = Instant.now()
         val from = to.minus(effectiveWindowDays.toLong(), ChronoUnit.DAYS)
         val closedTrades = guidedTradeRepository.findByStatusOrderByClosedAtDesc(GuidedTradeEntity.STATUS_CLOSED)
@@ -1848,7 +1862,11 @@ class GuidedTradingService(
             .filter { trade ->
                 val source = trade.entrySource?.uppercase().orEmpty()
                 val strategy = trade.strategyCode?.uppercase().orEmpty()
-                source.contains("AUTOPILOT") || source.contains("MCP_DIRECT") || strategy.contains("AUTOPILOT")
+                if (normalizedStrategyCodePrefix != null) {
+                    strategy.startsWith(normalizedStrategyCodePrefix)
+                } else {
+                    source.contains("AUTOPILOT") || source.contains("MCP_DIRECT") || strategy.contains("AUTOPILOT")
+                }
             }
             .sortedBy { it.closedAt }
             .toList()
@@ -2611,6 +2629,8 @@ class GuidedTradingService(
             realizedPnlPercent = realizedPnlPercent.toDouble(),
             lastAction = lastAction,
             recommendationReason = recommendationReason,
+            entrySource = entrySource,
+            strategyCode = strategyCode,
             createdAt = createdAt,
             updatedAt = updatedAt,
             closedAt = closedAt,
@@ -2816,6 +2836,8 @@ data class GuidedTradeView(
     val realizedPnlPercent: Double,
     val lastAction: String?,
     val recommendationReason: String?,
+    val entrySource: String?,
+    val strategyCode: String?,
     val createdAt: Instant,
     val updatedAt: Instant,
     val closedAt: Instant?,

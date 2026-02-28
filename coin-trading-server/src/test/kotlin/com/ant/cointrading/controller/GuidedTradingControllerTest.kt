@@ -158,14 +158,61 @@ class GuidedTradingControllerTest {
                 )
             )
         )
-        whenever(guidedTradingService.getAutopilotLive(any(), any(), any(), anyOrNull(), anyOrNull())).thenReturn(expected)
+        whenever(guidedTradingService.getAutopilotLive(any(), any(), any(), anyOrNull(), anyOrNull(), anyOrNull())).thenReturn(expected)
 
         val actual = controller.getAutopilotLive(
             interval = "minute30",
             mode = "SWING",
             thresholdMode = null,
             minMarketWinRate = null,
-            minRecommendedWinRate = null
+            minRecommendedWinRate = null,
+            strategyCodePrefix = null
+        )
+
+        kotlin.test.assertEquals(expected, actual)
+    }
+
+    @Test
+    @DisplayName("autopilot/live는 strategyCodePrefix를 서비스로 전달한다")
+    fun getAutopilotLivePassesStrategyCodePrefix() {
+        val expected = GuidedAutopilotLiveResponse(
+            orderSummary = OrderLifecycleSummary(
+                total = OrderLifecycleGroupSummary(0, 0, 0, 0, 0, 0),
+                groups = emptyMap()
+            ),
+            orderEvents = emptyList(),
+            autopilotEvents = emptyList(),
+            candidates = emptyList(),
+            thresholdMode = "DYNAMIC_P70",
+            appliedRecommendedWinRateThreshold = 0.0,
+            requestedMinRecommendedWinRate = null,
+            decisionStats = GuidedAutopilotDecisionStats(
+                rulePass = 0,
+                ruleFail = 0,
+                llmReject = 0,
+                entered = 0,
+                pendingTimeout = 0
+            ),
+            strategyCodeSummary = emptyMap(),
+        )
+        whenever(
+            guidedTradingService.getAutopilotLive(
+                any(),
+                any(),
+                any(),
+                anyOrNull(),
+                anyOrNull(),
+                org.mockito.kotlin.eq("GUIDED_AUTOPILOT_SCALP")
+            )
+        ).thenReturn(expected)
+
+        val actual = controller.getAutopilotLive(
+            interval = "minute1",
+            mode = "SCALP",
+            thresholdMode = null,
+            minMarketWinRate = null,
+            minRecommendedWinRate = null,
+            strategyCodePrefix = "GUIDED_AUTOPILOT_SCALP"
         )
 
         kotlin.test.assertEquals(expected, actual)
@@ -277,9 +324,32 @@ class GuidedTradingControllerTest {
             gateEligible = true,
             gateReason = "증액 게이트 통과"
         )
-        whenever(guidedTradingService.getAutopilotPerformance(30)).thenReturn(expected)
+        whenever(guidedTradingService.getAutopilotPerformance(30, null)).thenReturn(expected)
 
-        val actual = controller.getAutopilotPerformance(30)
+        val actual = controller.getAutopilotPerformance(30, null)
+
+        kotlin.test.assertEquals(expected, actual)
+    }
+
+    @Test
+    @DisplayName("autopilot/performance는 strategyCodePrefix를 서비스로 전달한다")
+    fun getAutopilotPerformancePassesStrategyCodePrefix() {
+        val expected = GuidedAutopilotPerformanceResponse(
+            windowDays = 30,
+            from = Instant.parse("2026-01-25T00:00:00Z"),
+            to = Instant.parse("2026-02-24T00:00:00Z"),
+            trades = 7,
+            winRate = 57.1,
+            netPnlKrw = 24000.0,
+            netReturnPercent = 1.2,
+            sharpe = 0.8,
+            maxDrawdownPercent = 1.9,
+            gateEligible = false,
+            gateReason = "샘플 부족"
+        )
+        whenever(guidedTradingService.getAutopilotPerformance(30, "GUIDED_AUTOPILOT_SCALP")).thenReturn(expected)
+
+        val actual = controller.getAutopilotPerformance(30, "GUIDED_AUTOPILOT_SCALP")
 
         kotlin.test.assertEquals(expected, actual)
     }

@@ -620,6 +620,8 @@ export interface GuidedTradePosition {
   realizedPnlPercent: number;
   lastAction?: string | null;
   recommendationReason?: string | null;
+  entrySource?: string | null;
+  strategyCode?: string | null;
   createdAt: string;
   updatedAt: string;
   closedAt?: string | null;
@@ -1049,11 +1051,12 @@ export const guidedTradingApi = {
     interval = 'minute30',
     mode?: string,
     thresholdMode?: 'DYNAMIC_P70' | 'FIXED',
-    minMarketWinRate?: number
+    minMarketWinRate?: number,
+    strategyCodePrefix?: string
   ): Promise<AutopilotLiveResponse> =>
     api
       .get('/guided-trading/autopilot/live', {
-        params: { interval, mode, thresholdMode, minMarketWinRate },
+        params: { interval, mode, thresholdMode, minMarketWinRate, strategyCodePrefix },
       })
       .then((res) => res.data),
 
@@ -1072,8 +1075,8 @@ export const guidedTradingApi = {
   logAutopilotDecision: (payload: AutopilotDecisionLogRequest): Promise<AutopilotDecisionLogResponse> =>
     api.post('/guided-trading/autopilot/decisions', payload).then((res) => res.data),
 
-  getAutopilotPerformance: (windowDays = 30): Promise<AutopilotPerformanceResponse> =>
-    api.get('/guided-trading/autopilot/performance', { params: { windowDays } }).then((res) => res.data),
+  getAutopilotPerformance: (windowDays = 30, strategyCodePrefix?: string): Promise<AutopilotPerformanceResponse> =>
+    api.get('/guided-trading/autopilot/performance', { params: { windowDays, strategyCodePrefix } }).then((res) => res.data),
 
   getClosedTrades: (limit = 50): Promise<GuidedClosedTradeView[]> =>
     api.get('/guided-trading/trades/closed', { params: { limit } }).then((res) => res.data),

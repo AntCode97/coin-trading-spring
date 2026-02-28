@@ -185,14 +185,16 @@ class GuidedTradingController(
         @RequestParam(defaultValue = "SWING") mode: String,
         @RequestParam(required = false) thresholdMode: String?,
         @RequestParam(required = false) minMarketWinRate: Double?,
-        @RequestParam(required = false) minRecommendedWinRate: Double?
+        @RequestParam(required = false) minRecommendedWinRate: Double?,
+        @RequestParam(required = false) strategyCodePrefix: String?
     ): GuidedAutopilotLiveResponse {
         return guidedTradingService.getAutopilotLive(
             interval = interval,
             mode = TradingMode.fromString(mode),
             thresholdMode = GuidedWinRateThresholdMode.fromString(thresholdMode),
             minMarketWinRate = minMarketWinRate,
-            minRecommendedWinRate = minRecommendedWinRate
+            minRecommendedWinRate = minRecommendedWinRate,
+            strategyCodePrefix = strategyCodePrefix
         )
     }
 
@@ -224,8 +226,9 @@ class GuidedTradingController(
 
     @GetMapping("/autopilot/performance")
     fun getAutopilotPerformance(
-        @RequestParam(defaultValue = "30") windowDays: Int
+        @RequestParam(defaultValue = "30") windowDays: Int,
+        @RequestParam(required = false) strategyCodePrefix: String?
     ): GuidedAutopilotPerformanceResponse {
-        return guidedTradingService.getAutopilotPerformance(windowDays)
+        return guidedTradingService.getAutopilotPerformance(windowDays, strategyCodePrefix)
     }
 }

@@ -530,15 +530,20 @@ curl -X POST http://localhost:8080/api/settings/regime \
 | POST | `/api/guided-trading/stop` | Guided 포지션 정지/청산 |
 | POST | `/api/guided-trading/partial-take-profit` | Guided 부분 익절 |
 | POST | `/api/guided-trading/positions/adopt` | MCP 직접 주문 포지션 편입 |
-| GET | `/api/guided-trading/autopilot/live` | 오토파일럿 라이브 도크 데이터(주문 퍼널/이벤트/후보) |
+| GET | `/api/guided-trading/autopilot/live` | 오토파일럿 라이브 도크 데이터(주문 퍼널/이벤트/후보, `strategyCodePrefix` 필터 지원) |
 | GET | `/api/guided-trading/autopilot/opportunities` | 오토파일럿 기회 스코어/기대값 후보 조회 |
 | POST | `/api/guided-trading/autopilot/decisions` | 클라이언트 Fine-Grained Agent 의사결정 로그 저장 |
-| GET | `/api/guided-trading/autopilot/performance` | 오토파일럿 7/30일 성과 및 증액 게이트 상태 조회 |
+| GET | `/api/guided-trading/autopilot/performance` | 오토파일럿 7/30일 성과 및 증액 게이트 상태 조회 (`strategyCodePrefix` 필터 지원) |
 
 `/api/guided-trading/autopilot/live` 쿼리 파라미터:
 - `thresholdMode`: `DYNAMIC_P70` 또는 `FIXED`
 - `minMarketWinRate`: 고정 모드(`FIXED`)에서 후보 선별용 최소 **현재가 승률**(%)
 - `minRecommendedWinRate`: 하위 호환 파라미터(신규 호출은 `minMarketWinRate` 권장)
+- `strategyCodePrefix`: 전략 코드 prefix 필터 (예: `GUIDED_AUTOPILOT_SCALP`)
+
+`/api/guided-trading/autopilot/performance` 쿼리 파라미터:
+- `windowDays`: 조회 기간(기본 30일)
+- `strategyCodePrefix`: 전략 코드 prefix 필터 (예: `GUIDED_AUTOPILOT_SWING`)
 
 `/api/guided-trading/autopilot/opportunities` 쿼리 파라미터:
 - `interval`: 기본 `minute1` (진입 축)
@@ -554,9 +559,21 @@ curl -X POST http://localhost:8080/api/settings/regime \
 `/api/guided-trading/agent/context` 응답 확장:
 - `featurePack`: `technical`, `microstructure`, `executionRisk`를 포함한 Fine-Grained 입력 세트
 
+`GuidedTradeView`/`GuidedTradePosition` 확장:
+- `entrySource`: 진입 출처(`MANUAL`, `AUTOPILOT`, `MCP_DIRECT` 등)
+- `strategyCode`: 엔진 분리용 전략 코드(`GUIDED_AUTOPILOT_SCALP/SWING/POSITION` 등)
+
 ---
 
 ## 최근 개선사항
+
+### 멀티 엔진 분리형 데스크 업그레이드 (2026-02-28)
+
+1. 오토파일럿 엔진을 `SCALP`, `SWING`, `POSITION` 3개로 분리하고, 데스크 하단 모니터를 `초단타 시스템`/`투자 시스템` 2개 탭으로 분리했습니다.
+2. SCALP는 기존 유동성 상위 유니버스를 유지하고, SWING/POSITION은 메이저 코인(`KRW-BTC/ETH/SOL/XRP/ADA`) allowlist로 고정했습니다.
+3. 엔진 예산을 `40/35/25`(SCALP/SWING/POSITION) 고정 비율로 분할하고, 엔진별 `strategyCode` 기준 노출(평균진입가 x 잔량)로 진입 예산 가드를 적용했습니다.
+4. `AutopilotOrchestrator`는 엔진별 `strategyCode/strategyCodePrefix`를 주입해 포지션/이벤트/집계를 분리하고, 한 엔진의 차단/실패가 다른 엔진을 중단시키지 않도록 격리했습니다.
+5. 신규 투자 전용 도크(`InvestmentLiveDock`)를 추가해 SWING/POSITION 상태 카드, 통합 타임라인, 통합 주문 피드를 동시에 모니터링할 수 있습니다.
 
 ### 오토파일럿 Expectancy 중심 기회 포착 강화 (2026-02-27)
 

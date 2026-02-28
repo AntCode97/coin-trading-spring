@@ -51,6 +51,10 @@ export interface AutopilotConfig {
   focusedWarnHoldingMs: number;
   focusedMaxHoldingMs: number;
   focusedEntryGate: 'FAST_ONLY';
+  strategyCode?: string;
+  strategyCodePrefix?: string;
+  capitalBudgetKrw?: number;
+  marketAllowlist?: string[];
   fineAgentEnabled?: boolean;
   fineAgentMaxPerTick?: number;
   fineAgentDecisionTtlMs?: number;
@@ -230,6 +234,7 @@ export class AutopilotOrchestrator {
   private llmUsageToday = 0;
   private llmSoftCapWarned = false;
   private lastOpenMarketSet = new Set<string>();
+  private lastOpenPositions: GuidedTradePosition[] = [];
   private focusedEmptyWarned = false;
   private decisionBreakdown = {
     autoPass: 0,
@@ -271,6 +276,7 @@ export class AutopilotOrchestrator {
     this.workerStates.clear();
     this.focusedWorkerMarkets.clear();
     this.lastOpenMarketSet = new Set();
+    this.lastOpenPositions = [];
     this.focusedEmptyWarned = false;
     this.writeLog('오토파일럿 중지');
     this.pushEvent({
@@ -450,10 +456,10 @@ export class AutopilotOrchestrator {
     if (!this.running || !this.config.enabled) return;
     try {
       this.rolloverLlmUsageIfNeeded();
-      const stats = await guidedTradingApi.getTodayStats();
-      const nextBlockedByDailyLoss = stats.totalPnlKrw <= this.config.dailyLossLimitKrw;
+      const dailyPnlKrw = await this.resolveDailyPnlKrw();
+      const nextBlockedByDailyLoss = dailyPnlKrw <= this.config.dailyLossLimitKrw;
       const nextBlockedReason = nextBlockedByDailyLoss
-        ? `일일 손실 제한 도달 (${stats.totalPnlKrw.toLocaleString('ko-KR')}원 <= ${this.config.dailyLossLimitKrw.toLocaleString('ko-KR')}원)`
+        ? `일일 손실 제한 도달 (${dailyPnlKrw.toLocaleString('ko-KR')}원 <= ${this.config.dailyLossLimitKrw.toLocaleString('ko-KR')}원)`
         : null;
 
       if (nextBlockedByDailyLoss && !this.blockedByDailyLoss) {
@@ -469,17 +475,20 @@ export class AutopilotOrchestrator {
       this.blockedReason = nextBlockedReason;
 
       const openPositions = await guidedTradingApi.getOpenPositions();
+      const managedOpenPositions = openPositions.filter((position) =>
+        (position.status === 'OPEN' || position.status === 'PENDING_ENTRY') &&
+        this.shouldManagePositionByStrategy(position)
+      );
       this.cleanupExpiredCooldowns();
       const openMarketSet = new Set(
-        openPositions
-          .filter((position) => position.status === 'OPEN' || position.status === 'PENDING_ENTRY')
-          .map((position) => position.market)
+        managedOpenPositions.map((position) => position.market)
       );
       this.lastOpenMarketSet = openMarketSet;
+      this.lastOpenPositions = managedOpenPositions;
       const focusedMarkets = this.normalizeFocusedMarkets();
       const focusedMarketSet = new Set(focusedMarkets);
       this.syncFocusedWorkers(focusedMarkets);
-      this.ensureWorkersForOpenPositions(openPositions);
+      this.ensureWorkersForOpenPositions(managedOpenPositions);
       if (this.config.focusedScalpEnabled && focusedMarkets.length === 0) {
         if (!this.focusedEmptyWarned) {
           this.focusedEmptyWarned = true;
@@ -506,8 +515,11 @@ export class AutopilotOrchestrator {
         this.config.tradingMode,
         this.config.candidateLimit
       );
+      const allowlist = this.normalizeMarketAllowlist();
+      const allowlistSet = allowlist.length > 0 ? new Set(allowlist) : null;
       const scopedCandidates = opportunities.opportunities
         .filter((candidate) => !focusedMarketSet.has(candidate.market))
+        .filter((candidate) => !allowlistSet || allowlistSet.has(candidate.market))
         .slice(0, this.config.candidateLimit);
       this.appliedRecommendedWinRateThreshold = this.resolveOpportunityDisplayThreshold(scopedCandidates);
 
@@ -811,6 +823,66 @@ export class AutopilotOrchestrator {
     return Math.round(avg * 10) / 10;
   }
 
+  private resolveStrategyCode(): string {
+    const configured = this.config.strategyCode?.trim().toUpperCase();
+    if (configured && configured.length > 0) {
+      return configured;
+    }
+    return 'GUIDED_AUTOPILOT';
+  }
+
+  private resolveStrategyCodePrefix(): string | null {
+    const configured = this.config.strategyCodePrefix?.trim().toUpperCase();
+    if (configured && configured.length > 0) {
+      return configured;
+    }
+    const fallback = this.resolveStrategyCode();
+    return fallback.length > 0 ? fallback : null;
+  }
+
+  private async resolveDailyPnlKrw(): Promise<number> {
+    const strategyCodePrefix = this.resolveStrategyCodePrefix();
+    if (strategyCodePrefix) {
+      try {
+        const performance = await guidedTradingApi.getAutopilotPerformance(1, strategyCodePrefix);
+        if (Number.isFinite(performance.netPnlKrw)) {
+          return performance.netPnlKrw;
+        }
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        this.writeLog(`성과 API 조회 실패(${strategyCodePrefix}), todayStats로 폴백: ${message}`);
+      }
+    }
+    const stats = await guidedTradingApi.getTodayStats();
+    return stats.totalPnlKrw;
+  }
+
+  private shouldManagePositionByStrategy(position: GuidedTradePosition): boolean {
+    const prefix = this.resolveStrategyCodePrefix();
+    if (!prefix) return true;
+    const strategyCode = position.strategyCode?.trim().toUpperCase();
+    if (!strategyCode) return false;
+    return strategyCode.startsWith(prefix);
+  }
+
+  private resolveCapitalBudgetKrw(): number | null {
+    const raw = this.config.capitalBudgetKrw;
+    if (typeof raw !== 'number' || !Number.isFinite(raw) || raw <= 0) {
+      return null;
+    }
+    return Math.max(5_100, Math.round(raw));
+  }
+
+  private calculateOpenPositionExposureKrw(): number {
+    return this.lastOpenPositions
+      .filter((position) => this.shouldManagePositionByStrategy(position))
+      .reduce((acc, position) => {
+        const exposure = position.averageEntryPrice * position.remainingQuantity;
+        if (!Number.isFinite(exposure) || exposure <= 0) return acc;
+        return acc + exposure;
+      }, 0);
+  }
+
   private normalizeFocusedMarket(value: string): string | null {
     const raw = value.trim().toUpperCase();
     if (!raw) return null;
@@ -818,6 +890,20 @@ export class AutopilotOrchestrator {
     const symbol = withPrefix.replace('KRW-', '');
     if (!symbol || !/^[A-Z0-9]+$/.test(symbol)) return null;
     return withPrefix;
+  }
+
+  private normalizeMarketAllowlist(): string[] {
+    const allowlist = this.config.marketAllowlist ?? [];
+    if (allowlist.length === 0) return [];
+    const seen = new Set<string>();
+    const normalized: string[] = [];
+    for (const raw of allowlist) {
+      const market = this.normalizeFocusedMarket(raw);
+      if (!market || seen.has(market)) continue;
+      seen.add(market);
+      normalized.push(market);
+    }
+    return normalized;
   }
 
   private normalizeFocusedMarkets(): string[] {
@@ -979,7 +1065,7 @@ export class AutopilotOrchestrator {
             interval: this.config.interval,
             mode: this.config.tradingMode,
             entrySource: 'AUTOPILOT',
-            strategyCode: 'GUIDED_AUTOPILOT',
+            strategyCode: this.resolveStrategyCode(),
           }).then(() => undefined),
         fallbackEntryByMcp: async (workerMarket) => this.fallbackEntryByMcp(workerMarket),
         cancelPendingEntry: async (workerMarket) => guidedTradingApi.cancelPending(workerMarket).then(() => undefined),
@@ -1009,6 +1095,17 @@ export class AutopilotOrchestrator {
               allow: false,
               reason: `동시 포지션 슬롯 부족 (${openCount}/${this.config.maxConcurrentPositions})`,
             };
+          }
+          const capitalBudgetKrw = this.resolveCapitalBudgetKrw();
+          if (capitalBudgetKrw != null) {
+            const usedExposureKrw = this.calculateOpenPositionExposureKrw();
+            const projectedExposureKrw = usedExposureKrw + effectiveOptions.entryAmountKrw;
+            if (projectedExposureKrw > capitalBudgetKrw) {
+              return {
+                allow: false,
+                reason: `엔진 예산 초과 (${Math.round(projectedExposureKrw).toLocaleString('ko-KR')}원 > ${Math.round(capitalBudgetKrw).toLocaleString('ko-KR')}원)`,
+              };
+            }
           }
           return { allow: true };
         },

@@ -110,6 +110,11 @@ class GuidedTradingServiceTest {
                 eq(GuidedTradeEntity.STATUS_CLOSED)
             )
         ).thenReturn(emptyList())
+        whenever(
+            guidedTradeRepository.findByStatusOrderByClosedAtDesc(
+                eq(GuidedTradeEntity.STATUS_CLOSED)
+            )
+        ).thenReturn(emptyList())
         whenever(guidedTradeRepository.save(any())).thenAnswer { invocation ->
             val entity = invocation.getArgument<GuidedTradeEntity>(0)
             if (entity.id == null) entity.id = 1L
@@ -379,7 +384,7 @@ class GuidedTradingServiceTest {
             )
         )
 
-        service.startAutoTrading(
+        val result = service.startAutoTrading(
             GuidedStartRequest(
                 market = "KRW-BTC",
                 amountKrw = 10000,
@@ -395,6 +400,84 @@ class GuidedTradingServiceTest {
         verify(guidedTradeRepository, times(1)).save(captor.capture())
         assertEquals("AUTOPILOT", captor.firstValue.entrySource)
         assertEquals("GUIDED_AUTOPILOT", captor.firstValue.strategyCode)
+        assertEquals("AUTOPILOT", result.entrySource)
+        assertEquals("GUIDED_AUTOPILOT", result.strategyCode)
+    }
+
+    @Test
+    @DisplayName("autopilot/live는 strategyCodePrefix를 정규화해 텔레메트리 필터로 전달한다")
+    fun getAutopilotLivePassesNormalizedStrategyCodePrefix() {
+        whenever(orderLifecycleTelemetryService.getLiveSnapshot(any(), anyOrNull())).thenReturn(
+            com.ant.cointrading.service.OrderLifecycleSnapshot(
+                orderSummary = com.ant.cointrading.service.OrderLifecycleSummary(
+                    total = com.ant.cointrading.service.OrderLifecycleGroupSummary(
+                        buyRequested = 0,
+                        buyFilled = 0,
+                        sellRequested = 0,
+                        sellFilled = 0,
+                        pending = 0,
+                        cancelled = 0
+                    ),
+                    groups = emptyMap()
+                ),
+                orderEvents = emptyList()
+            )
+        )
+
+        service.getAutopilotLive(
+            interval = "minute1",
+            mode = TradingMode.SCALP,
+            thresholdMode = GuidedWinRateThresholdMode.DYNAMIC_P70,
+            strategyCodePrefix = " guided_autopilot_scalp "
+        )
+
+        verify(orderLifecycleTelemetryService, times(1)).getLiveSnapshot(any(), eq("GUIDED_AUTOPILOT_SCALP"))
+    }
+
+    @Test
+    @DisplayName("autopilot/performance는 strategyCodePrefix 기준으로 청산 거래를 분리 집계한다")
+    fun getAutopilotPerformanceFiltersByStrategyCodePrefix() {
+        val now = Instant.now()
+        whenever(guidedTradeRepository.findByStatusOrderByClosedAtDesc(eq(GuidedTradeEntity.STATUS_CLOSED)))
+            .thenReturn(
+                listOf(
+                    GuidedTradeEntity(
+                        id = 1L,
+                        market = "KRW-BTC",
+                        status = GuidedTradeEntity.STATUS_CLOSED,
+                        averageEntryPrice = BigDecimal("100000"),
+                        entryQuantity = BigDecimal("0.10000000"),
+                        remainingQuantity = BigDecimal.ZERO,
+                        stopLossPrice = BigDecimal("90000"),
+                        takeProfitPrice = BigDecimal("110000"),
+                        realizedPnl = BigDecimal("500"),
+                        closedAt = now.minusSeconds(3600),
+                        strategyCode = "GUIDED_AUTOPILOT_SCALP"
+                    ),
+                    GuidedTradeEntity(
+                        id = 2L,
+                        market = "KRW-ETH",
+                        status = GuidedTradeEntity.STATUS_CLOSED,
+                        averageEntryPrice = BigDecimal("4000000"),
+                        entryQuantity = BigDecimal("0.01000000"),
+                        remainingQuantity = BigDecimal.ZERO,
+                        stopLossPrice = BigDecimal("3800000"),
+                        takeProfitPrice = BigDecimal("4300000"),
+                        realizedPnl = BigDecimal("-300"),
+                        closedAt = now.minusSeconds(5400),
+                        strategyCode = "GUIDED_AUTOPILOT_SWING"
+                    )
+                )
+            )
+
+        val result = service.getAutopilotPerformance(
+            windowDays = 30,
+            strategyCodePrefix = "guided_autopilot_scalp"
+        )
+
+        assertEquals(1, result.trades)
+        assertEquals(100.0, result.winRate, 0.0001)
+        assertEquals(500.0, result.netPnlKrw, 0.0001)
     }
 
     @Test

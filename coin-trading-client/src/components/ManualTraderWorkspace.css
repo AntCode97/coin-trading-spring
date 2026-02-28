@@ -2521,3 +2521,26 @@
   margin-left: 4px;
   animation: plan-pulse 1.2s ease-in-out infinite;
 }
+
+.guided-monitor-tabs {
+  display: flex;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.guided-monitor-tabs button {
+  border: 1px solid #2f3f53;
+  background: #121b25;
+  color: #a8bad0;
+  border-radius: 10px;
+  padding: 8px 12px;
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.guided-monitor-tabs button.active {
+  border-color: #3c88ff;
+  color: #d9ebff;
+  background: linear-gradient(180deg, #14335b, #102742);
+}

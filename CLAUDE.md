@@ -190,6 +190,68 @@ coin-trading-spring/
 
 ---
 
+## 최근 변경사항 (2026-02-28)
+
+### 1. 초단타/투자 분리형 멀티 에이전트 데스크 업그레이드
+
+- 엔진 분리:
+  - `SCALP` (초단타)
+  - `SWING` (중기)
+  - `POSITION` (장기)
+- 화면 분리:
+  - `초단타 시스템` 탭: SCALP 모니터링
+  - `투자 시스템` 탭: SWING/POSITION 동시 모니터링 (`InvestmentLiveDock`)
+- 예산 분리:
+  - 고정 비율 `40/35/25` (SCALP/SWING/POSITION)
+  - 엔진별 `strategyCode` 노출 기준(평균진입가 x 잔량) 예산 가드 적용
+- 종목 정책:
+  - SCALP: 기존 기회탐지 유니버스
+  - SWING/POSITION: `KRW-BTC/ETH/SOL/XRP/ADA` allowlist
+- 엔진 전략 코드 고정:
+  - `GUIDED_AUTOPILOT_SCALP`
+  - `GUIDED_AUTOPILOT_SWING`
+  - `GUIDED_AUTOPILOT_POSITION`
+
+관련 파일:
+- `coin-trading-client/src/components/ManualTraderWorkspace.tsx`
+- `coin-trading-client/src/components/autopilot/InvestmentLiveDock.tsx`
+- `coin-trading-client/src/components/autopilot/InvestmentLiveDock.css`
+- `coin-trading-client/src/lib/autopilot/AutopilotOrchestrator.ts`
+- `coin-trading-client/src/api/index.ts`
+
+### 2. Guided API/DTO 확장
+
+- `GET /api/guided-trading/autopilot/live`
+  - 신규 쿼리: `strategyCodePrefix` (optional)
+  - `orderSummary/orderEvents/autopilotEvents`를 prefix 기준으로 분리 조회 가능
+- `GET /api/guided-trading/autopilot/performance`
+  - 신규 쿼리: `strategyCodePrefix` (optional)
+  - 엔진별 성과 분리 조회 가능
+- `GuidedTradeView`/클라이언트 `GuidedTradePosition` 확장:
+  - `entrySource`
+  - `strategyCode`
+- 서비스 시그니처 확장:
+  - `GuidedTradingService.getAutopilotLive(..., strategyCodePrefix)`
+  - `GuidedTradingService.getAutopilotPerformance(windowDays, strategyCodePrefix)`
+
+관련 파일:
+- `coin-trading-server/src/main/kotlin/com/ant/cointrading/controller/GuidedTradingController.kt`
+- `coin-trading-server/src/main/kotlin/com/ant/cointrading/guided/GuidedTradingService.kt`
+- `coin-trading-server/src/main/kotlin/com/ant/cointrading/service/OrderLifecycleTelemetryService.kt`
+
+### 3. 테스트 보강
+
+- `OrderLifecycleTelemetryServiceTest`
+  - `strategyCodePrefix` 필터 시 이벤트/요약 분리 검증
+- `GuidedTradingServiceTest`
+  - `autopilot/live` prefix 정규화 전달 검증
+  - `autopilot/performance` prefix 분리 집계 검증
+  - `startAutoTrading` 반환 `GuidedTradeView`의 `entrySource/strategyCode` 노출 검증
+- `GuidedTradingControllerTest`
+  - `autopilot/live`, `autopilot/performance`의 prefix 전달 검증
+
+---
+
 ## 최근 변경사항 (2026-02-24)
 
 ### 1. 오토파일럿 라이브 도크 UX 추가 (Desktop)
@@ -225,20 +287,21 @@ coin-trading-spring/
 
 - `GET /api/guided-trading/autopilot/live`
   - 응답: `orderSummary`, `orderEvents`, `autopilotEvents`, `candidates`
-  - 쿼리: `thresholdMode`, `minMarketWinRate`(고정 모드 현재가 승률 기준), `minRecommendedWinRate`(하위 호환)
+  - 쿼리: `thresholdMode`, `minMarketWinRate`(고정 모드 현재가 승률 기준), `minRecommendedWinRate`(하위 호환), `strategyCodePrefix`(optional)
 - `GET /api/guided-trading/autopilot/opportunities`
   - 응답: `generatedAt`, `primaryInterval`, `confirmInterval`, `mode`, `appliedUniverseLimit`, `opportunities[]`
   - 후보 stage: `AUTO_PASS` | `BORDERLINE` | `RULE_FAIL`
 - `POST /api/guided-trading/autopilot/decisions`
   - 클라이언트 Fine-Grained Agent 의사결정(`specialists/synth/pm`) 로그 저장
 - `GET /api/guided-trading/autopilot/performance`
+  - 쿼리: `windowDays`, `strategyCodePrefix`(optional)
   - 응답: `windowDays`, `trades`, `winRate`, `netPnlKrw`, `netReturnPercent`, `sharpe`, `maxDrawdownPercent`, `gateEligible`, `gateReason`
 - `GET /api/guided-trading/agent/context`
   - 응답 확장: `featurePack(technical/microstructure/executionRisk)` 추가
-- `GuidedTradingService.getAutopilotLive(interval, mode, thresholdMode, minMarketWinRate)` 추가.
+- `GuidedTradingService.getAutopilotLive(interval, mode, thresholdMode, minMarketWinRate, minRecommendedWinRate, strategyCodePrefix)` 추가.
 - `GuidedTradingService.getAutopilotOpportunities(interval, confirmInterval, mode, universeLimit)` 추가.
 - `GuidedTradingService.logAutopilotDecision(request)` 추가.
-- `GuidedTradingService.getAutopilotPerformance(windowDays)` 추가.
+- `GuidedTradingService.getAutopilotPerformance(windowDays, strategyCodePrefix)` 추가.
 
 ### 4. 텔레메트리 기록 포인트 확장
 

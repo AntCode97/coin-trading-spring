@@ -61,10 +61,62 @@ import {
   type FocusedScalpEntryState,
   type FocusedScalpManageState,
 } from './autopilot/FocusedScalpLiveDock';
+import { InvestmentLiveDock } from './autopilot/InvestmentLiveDock';
 import './ManualTraderWorkspace.css';
 
 const KRW_FORMATTER = new Intl.NumberFormat('ko-KR');
 const STORAGE_KEY = 'guided-trader.preferences.v1';
+const STRATEGY_CODE_SCALP = 'GUIDED_AUTOPILOT_SCALP';
+const STRATEGY_CODE_SWING = 'GUIDED_AUTOPILOT_SWING';
+const STRATEGY_CODE_POSITION = 'GUIDED_AUTOPILOT_POSITION';
+const INVEST_MAJOR_MARKETS = ['KRW-BTC', 'KRW-ETH', 'KRW-SOL', 'KRW-XRP', 'KRW-ADA'];
+const DEFAULT_AUTOPILOT_CAPITAL_POOL_KRW = 300_000;
+const ENGINE_CAPITAL_RATIOS = {
+  SCALP: 0.4,
+  SWING: 0.35,
+  POSITION: 0.25,
+} as const;
+
+type MonitorTab = 'SCALP' | 'INVEST';
+
+function createInitialAutopilotState(): AutopilotState {
+  return {
+    enabled: false,
+    blockedByDailyLoss: false,
+    blockedReason: null,
+    startedAt: null,
+    thresholdMode: 'DYNAMIC_P70',
+    appliedRecommendedWinRateThreshold: 0,
+    workers: [],
+    logs: [],
+    events: [],
+    candidates: [],
+    decisionBreakdown: {
+      autoPass: 0,
+      borderline: 0,
+      ruleFail: 0,
+    },
+    llmBudget: {
+      dailySoftCap: 240,
+      usedToday: 0,
+      exceeded: false,
+    },
+    focusedScalp: {
+      enabled: false,
+      markets: [],
+      pollIntervalSec: 20,
+    },
+    orderFlowLocal: {
+      buyRequested: 0,
+      buyFilled: 0,
+      sellRequested: 0,
+      sellFilled: 0,
+      pending: 0,
+      cancelled: 0,
+    },
+    screenshots: [],
+  };
+}
 
 function formatVolume(value: number): string {
   if (value >= 1_0000_0000_0000) return `${(value / 1_0000_0000_0000).toFixed(1)}조`;
@@ -82,9 +134,12 @@ type WorkspacePrefs = {
   aiRefreshSec?: number;
   tradingMode?: TradingMode;
   autopilotEnabled?: boolean;
+  swingAutopilotEnabled?: boolean;
+  positionAutopilotEnabled?: boolean;
   dailyLossLimitKrw?: number;
   autopilotMaxConcurrentPositions?: number;
   autopilotAmountKrw?: number;
+  autopilotCapitalPoolKrw?: number;
   autopilotInterval?: string;
   autopilotMode?: TradingMode;
   entryPolicy?: 'BALANCED' | 'AGGRESSIVE' | 'CONSERVATIVE';
@@ -107,6 +162,8 @@ type WorkspacePrefs = {
   focusedScalpMarkets?: string[];
   focusedScalpPollIntervalSec?: number;
   focusedScalpDockCollapsed?: boolean;
+  investmentDockCollapsed?: boolean;
+  monitorTab?: MonitorTab;
 };
 
 type ConnectPlaywrightOptions = {
@@ -118,10 +175,63 @@ function loadPrefs(): WorkspacePrefs {
   try {
     const raw = window.localStorage.getItem(STORAGE_KEY);
     if (!raw) return {};
-    return JSON.parse(raw) as WorkspacePrefs;
+    const parsed = JSON.parse(raw) as WorkspacePrefs;
+    return migrateWorkspacePrefs(parsed);
   } catch {
     return {};
   }
+}
+
+function migrateWorkspacePrefs(prefs: WorkspacePrefs): WorkspacePrefs {
+  const next: WorkspacePrefs = { ...prefs };
+  const hasEngineSplitPrefs =
+    typeof prefs.swingAutopilotEnabled === 'boolean' ||
+    typeof prefs.positionAutopilotEnabled === 'boolean' ||
+    typeof prefs.autopilotCapitalPoolKrw === 'number' ||
+    typeof prefs.monitorTab === 'string';
+
+  if (!hasEngineSplitPrefs) {
+    const legacyEnabled = prefs.autopilotEnabled ?? false;
+    const legacyMode = prefs.autopilotMode ?? 'SCALP';
+    if (legacyEnabled) {
+      if (legacyMode === 'SWING') {
+        next.autopilotEnabled = false;
+        next.swingAutopilotEnabled = true;
+        next.positionAutopilotEnabled = false;
+        next.monitorTab = 'INVEST';
+      } else if (legacyMode === 'POSITION') {
+        next.autopilotEnabled = false;
+        next.swingAutopilotEnabled = false;
+        next.positionAutopilotEnabled = true;
+        next.monitorTab = 'INVEST';
+      } else {
+        next.autopilotEnabled = true;
+        next.swingAutopilotEnabled = false;
+        next.positionAutopilotEnabled = false;
+        next.monitorTab = 'SCALP';
+      }
+    } else {
+      next.swingAutopilotEnabled = false;
+      next.positionAutopilotEnabled = false;
+      next.monitorTab = 'SCALP';
+    }
+
+    const legacyAmountKrw = Math.max(5100, Math.round(prefs.autopilotAmountKrw ?? 10_000));
+    const legacyMaxPositions = Math.min(10, Math.max(1, prefs.autopilotMaxConcurrentPositions ?? 6));
+    next.autopilotCapitalPoolKrw = Math.max(
+      DEFAULT_AUTOPILOT_CAPITAL_POOL_KRW,
+      legacyAmountKrw * legacyMaxPositions
+    );
+  }
+
+  if (!next.monitorTab) {
+    next.monitorTab =
+      (next.swingAutopilotEnabled || next.positionAutopilotEnabled)
+        ? 'INVEST'
+        : 'SCALP';
+  }
+
+  return next;
 }
 
 function asUtc(secondsOrMillis: number): UTCTimestamp {
@@ -509,7 +619,10 @@ export default function ManualTraderWorkspace() {
   );
   const [playwrightStatus, setPlaywrightStatus] = useState<PlaywrightMcpStatus | null>(null);
   const [playwrightAction, setPlaywrightAction] = useState<'idle' | 'starting' | 'stopping'>('idle');
+  const [monitorTab, setMonitorTab] = useState<MonitorTab>(prefs.monitorTab ?? 'SCALP');
   const [autopilotEnabled, setAutopilotEnabled] = useState<boolean>(prefs.autopilotEnabled ?? false);
+  const [swingAutopilotEnabled, setSwingAutopilotEnabled] = useState<boolean>(prefs.swingAutopilotEnabled ?? false);
+  const [positionAutopilotEnabled, setPositionAutopilotEnabled] = useState<boolean>(prefs.positionAutopilotEnabled ?? false);
   const [dailyLossLimitKrw, setDailyLossLimitKrw] = useState<number>(prefs.dailyLossLimitKrw ?? -30000);
   const [autopilotMaxConcurrentPositions, setAutopilotMaxConcurrentPositions] = useState<number>(
     Math.min(10, Math.max(1, prefs.autopilotMaxConcurrentPositions ?? 6))
@@ -517,10 +630,13 @@ export default function ManualTraderWorkspace() {
   const [autopilotAmountKrw, setAutopilotAmountKrw] = useState<number>(
     Math.max(5100, Math.round(prefs.autopilotAmountKrw ?? 10000))
   );
-  const [autopilotInterval, setAutopilotInterval] = useState<string>(
+  const [autopilotCapitalPoolKrw, setAutopilotCapitalPoolKrw] = useState<number>(
+    Math.max(20_000, Math.round(prefs.autopilotCapitalPoolKrw ?? DEFAULT_AUTOPILOT_CAPITAL_POOL_KRW))
+  );
+  const [autopilotInterval] = useState<string>(
     prefs.autopilotInterval ?? 'minute1'
   );
-  const [autopilotMode, setAutopilotMode] = useState<TradingMode>(
+  const [autopilotMode] = useState<TradingMode>(
     prefs.autopilotMode ?? 'SCALP'
   );
   const [entryPolicy, setEntryPolicy] = useState<'BALANCED' | 'AGGRESSIVE' | 'CONSERVATIVE'>(
@@ -570,6 +686,9 @@ export default function ManualTraderWorkspace() {
   const [focusedScalpDockCollapsed, setFocusedScalpDockCollapsed] = useState<boolean>(
     prefs.focusedScalpDockCollapsed ?? false
   );
+  const [investmentDockCollapsed, setInvestmentDockCollapsed] = useState<boolean>(
+    prefs.investmentDockCollapsed ?? false
+  );
   const [focusedScalpPollIntervalSec, setFocusedScalpPollIntervalSec] = useState<number>(
     Math.min(300, Math.max(5, Math.round(prefs.focusedScalpPollIntervalSec ?? 20)))
   );
@@ -577,43 +696,12 @@ export default function ManualTraderWorkspace() {
     () => normalizeFocusedScalpMarkets(focusedScalpMarketsInput),
     [focusedScalpMarketsInput]
   );
-  const [autopilotState, setAutopilotState] = useState<AutopilotState>({
-    enabled: false,
-    blockedByDailyLoss: false,
-    blockedReason: null,
-    startedAt: null,
-    thresholdMode: 'DYNAMIC_P70',
-    appliedRecommendedWinRateThreshold: 0,
-    workers: [],
-    logs: [],
-    events: [],
-    candidates: [],
-    decisionBreakdown: {
-      autoPass: 0,
-      borderline: 0,
-      ruleFail: 0,
-    },
-    llmBudget: {
-      dailySoftCap: 240,
-      usedToday: 0,
-      exceeded: false,
-    },
-    focusedScalp: {
-      enabled: false,
-      markets: [],
-      pollIntervalSec: 20,
-    },
-    orderFlowLocal: {
-      buyRequested: 0,
-      buyFilled: 0,
-      sellRequested: 0,
-      sellFilled: 0,
-      pending: 0,
-      cancelled: 0,
-    },
-    screenshots: [],
-  });
+  const [autopilotState, setAutopilotState] = useState<AutopilotState>(createInitialAutopilotState());
+  const [swingAutopilotState, setSwingAutopilotState] = useState<AutopilotState>(createInitialAutopilotState());
+  const [positionAutopilotState, setPositionAutopilotState] = useState<AutopilotState>(createInitialAutopilotState());
   const autopilotRef = useRef<AutopilotOrchestrator | null>(null);
+  const swingAutopilotRef = useRef<AutopilotOrchestrator | null>(null);
+  const positionAutopilotRef = useRef<AutopilotOrchestrator | null>(null);
   const chatBusyRef = useRef(false);
   const agentContextRef = useRef<GuidedAgentContextResponse | null>(null);
   const mcpToolsRef = useRef<McpTool[]>([]);
@@ -676,20 +764,62 @@ export default function ManualTraderWorkspace() {
     refetchInterval: 30000,
   });
 
-  const autopilotLiveQuery = useQuery<AutopilotLiveResponse>({
+  const scalpAutopilotLiveQuery = useQuery<AutopilotLiveResponse>({
     queryKey: [
       'guided-autopilot-live',
-      autopilotInterval,
-      autopilotMode,
+      'minute1',
+      'SCALP',
       winRateThresholdMode,
       fixedMinMarketWinRate,
+      STRATEGY_CODE_SCALP,
     ],
     queryFn: () =>
       guidedTradingApi.getAutopilotLive(
-        autopilotInterval,
-        autopilotMode,
+        'minute1',
+        'SCALP',
         winRateThresholdMode,
-        fixedMinMarketWinRate
+        fixedMinMarketWinRate,
+        STRATEGY_CODE_SCALP
+      ),
+    refetchInterval: 5000,
+  });
+
+  const swingAutopilotLiveQuery = useQuery<AutopilotLiveResponse>({
+    queryKey: [
+      'guided-autopilot-live',
+      'minute30',
+      'SWING',
+      winRateThresholdMode,
+      fixedMinMarketWinRate,
+      STRATEGY_CODE_SWING,
+    ],
+    queryFn: () =>
+      guidedTradingApi.getAutopilotLive(
+        'minute30',
+        'SWING',
+        winRateThresholdMode,
+        fixedMinMarketWinRate,
+        STRATEGY_CODE_SWING
+      ),
+    refetchInterval: 5000,
+  });
+
+  const positionAutopilotLiveQuery = useQuery<AutopilotLiveResponse>({
+    queryKey: [
+      'guided-autopilot-live',
+      'day',
+      'POSITION',
+      winRateThresholdMode,
+      fixedMinMarketWinRate,
+      STRATEGY_CODE_POSITION,
+    ],
+    queryFn: () =>
+      guidedTradingApi.getAutopilotLive(
+        'day',
+        'POSITION',
+        winRateThresholdMode,
+        fixedMinMarketWinRate,
+        STRATEGY_CODE_POSITION
       ),
     refetchInterval: 5000,
   });
@@ -1032,10 +1162,14 @@ export default function ManualTraderWorkspace() {
       sortDirection,
       aiRefreshSec,
       tradingMode,
+      monitorTab,
       autopilotEnabled,
+      swingAutopilotEnabled,
+      positionAutopilotEnabled,
       dailyLossLimitKrw,
       autopilotMaxConcurrentPositions,
       autopilotAmountKrw,
+      autopilotCapitalPoolKrw,
       autopilotInterval,
       autopilotMode,
       entryPolicy,
@@ -1056,6 +1190,7 @@ export default function ManualTraderWorkspace() {
       focusedScalpMarkets: focusedScalpParsed.markets,
       focusedScalpPollIntervalSec,
       focusedScalpDockCollapsed,
+      investmentDockCollapsed,
     };
     window.localStorage.setItem(STORAGE_KEY, JSON.stringify(next));
   }, [
@@ -1065,10 +1200,14 @@ export default function ManualTraderWorkspace() {
     sortDirection,
     aiRefreshSec,
     tradingMode,
+    monitorTab,
     autopilotEnabled,
+    swingAutopilotEnabled,
+    positionAutopilotEnabled,
     dailyLossLimitKrw,
     autopilotMaxConcurrentPositions,
     autopilotAmountKrw,
+    autopilotCapitalPoolKrw,
     autopilotInterval,
     autopilotMode,
     entryPolicy,
@@ -1089,6 +1228,7 @@ export default function ManualTraderWorkspace() {
     focusedScalpParsed.markets,
     focusedScalpPollIntervalSec,
     focusedScalpDockCollapsed,
+    investmentDockCollapsed,
   ]);
 
   useEffect(() => {
@@ -1415,9 +1555,16 @@ export default function ManualTraderWorkspace() {
   };
 
   const pauseAutopilotForManualMarket = useCallback((reason: string) => {
-    if (!autopilotEnabled) return;
-    autopilotRef.current?.pauseMarket(selectedMarket, 30 * 60 * 1000, reason);
-  }, [autopilotEnabled, selectedMarket]);
+    if (autopilotEnabled) {
+      autopilotRef.current?.pauseMarket(selectedMarket, 30 * 60 * 1000, reason);
+    }
+    if (swingAutopilotEnabled) {
+      swingAutopilotRef.current?.pauseMarket(selectedMarket, 30 * 60 * 1000, reason);
+    }
+    if (positionAutopilotEnabled) {
+      positionAutopilotRef.current?.pauseMarket(selectedMarket, 30 * 60 * 1000, reason);
+    }
+  }, [autopilotEnabled, positionAutopilotEnabled, selectedMarket, swingAutopilotEnabled]);
 
   const handleStart = () => {
     if (!recommendation) return;
@@ -1466,27 +1613,36 @@ export default function ManualTraderWorkspace() {
   };
 
   useEffect(() => {
+    if ((autopilotEnabled || swingAutopilotEnabled || positionAutopilotEnabled) && llmStatus !== 'connected') {
+      setStatusMessage('오토파일럿은 OpenAI 로그인 상태에서만 시작할 수 있습니다.');
+    }
+  }, [autopilotEnabled, llmStatus, positionAutopilotEnabled, swingAutopilotEnabled]);
+
+  const resolveEngineAmount = useCallback((budgetKrw: number, maxPositions: number): number => {
+    const perSlot = Math.floor(budgetKrw / Math.max(1, maxPositions));
+    return Math.max(5100, Math.min(20_000, Math.min(autopilotAmountKrw, perSlot)));
+  }, [autopilotAmountKrw]);
+
+  useEffect(() => {
     if (!autopilotEnabled) {
       autopilotRef.current?.stop();
       autopilotRef.current = null;
       setAutopilotState((prev) => ({ ...prev, enabled: false }));
       return;
     }
+    if (llmStatus !== 'connected') return;
 
-    if (llmStatus !== 'connected') {
-      setStatusMessage('오토파일럿은 OpenAI 로그인 상태에서만 시작할 수 있습니다.');
-      return;
-    }
-
+    const budgetKrw = Math.max(5100, Math.round(autopilotCapitalPoolKrw * ENGINE_CAPITAL_RATIOS.SCALP));
+    const maxConcurrent = Math.max(1, autopilotMaxConcurrentPositions);
     const orchestrator = new AutopilotOrchestrator(
       {
-        enabled: autopilotEnabled,
-        interval: autopilotInterval,
+        enabled: true,
+        interval: 'minute1',
         confirmInterval: 'minute10',
-        tradingMode: autopilotMode,
-        amountKrw: autopilotAmountKrw,
+        tradingMode: 'SCALP',
+        amountKrw: resolveEngineAmount(budgetKrw, maxConcurrent),
         dailyLossLimitKrw,
-        maxConcurrentPositions: autopilotMaxConcurrentPositions,
+        maxConcurrentPositions: maxConcurrent,
         winRateThresholdMode,
         fixedMinMarketWinRate,
         minLlmConfidence,
@@ -1508,6 +1664,9 @@ export default function ManualTraderWorkspace() {
         focusedWarnHoldingMs: 90 * 60 * 1000,
         focusedMaxHoldingMs: 120 * 60 * 1000,
         focusedEntryGate: 'FAST_ONLY',
+        strategyCode: STRATEGY_CODE_SCALP,
+        strategyCodePrefix: STRATEGY_CODE_SCALP,
+        capitalBudgetKrw: budgetKrw,
       },
       {
         onState: (next) => setAutopilotState(next),
@@ -1526,25 +1685,181 @@ export default function ManualTraderWorkspace() {
   }, [
     autopilotEnabled,
     llmStatus,
-    autopilotInterval,
-    autopilotMode,
     autopilotAmountKrw,
-    dailyLossLimitKrw,
+    autopilotCapitalPoolKrw,
     autopilotMaxConcurrentPositions,
     chatModel,
-    playwrightEnabled,
-    entryPolicy,
+    dailyLossLimitKrw,
     entryOrderMode,
-    pendingEntryTimeoutSec,
+    entryPolicy,
+    fixedMinMarketWinRate,
+    focusedScalpEnabled,
+    focusedScalpParsed.markets,
+    focusedScalpPollIntervalSec,
     marketFallbackAfterCancel,
+    minLlmConfidence,
+    pendingEntryTimeoutSec,
+    playwrightEnabled,
+    postExitCooldownMinutes,
+    rejectCooldownSeconds,
+    resolveEngineAmount,
+    winRateThresholdMode,
+  ]);
+
+  useEffect(() => {
+    if (!swingAutopilotEnabled) {
+      swingAutopilotRef.current?.stop();
+      swingAutopilotRef.current = null;
+      setSwingAutopilotState((prev) => ({ ...prev, enabled: false }));
+      return;
+    }
+    if (llmStatus !== 'connected') return;
+
+    const budgetKrw = Math.max(5100, Math.round(autopilotCapitalPoolKrw * ENGINE_CAPITAL_RATIOS.SWING));
+    const maxConcurrent = 2;
+    const orchestrator = new AutopilotOrchestrator(
+      {
+        enabled: true,
+        interval: 'minute30',
+        confirmInterval: 'minute240',
+        tradingMode: 'SWING',
+        amountKrw: resolveEngineAmount(budgetKrw, maxConcurrent),
+        dailyLossLimitKrw,
+        maxConcurrentPositions: maxConcurrent,
+        winRateThresholdMode,
+        fixedMinMarketWinRate,
+        minLlmConfidence,
+        candidateLimit: 10,
+        rejectCooldownMs: rejectCooldownSeconds * 1000,
+        postExitCooldownMs: postExitCooldownMinutes * 60 * 1000,
+        workerTickMs: 12_000,
+        llmReviewIntervalMs: 12_000,
+        llmModel: chatModel,
+        playwrightEnabled: false,
+        entryPolicy,
+        entryOrderMode,
+        pendingEntryTimeoutSec,
+        marketFallbackAfterCancel,
+        llmDailySoftCap: 180,
+        focusedScalpEnabled: false,
+        focusedScalpMarkets: [],
+        focusedScalpPollIntervalMs: 20_000,
+        focusedWarnHoldingMs: 90 * 60 * 1000,
+        focusedMaxHoldingMs: 120 * 60 * 1000,
+        focusedEntryGate: 'FAST_ONLY',
+        strategyCode: STRATEGY_CODE_SWING,
+        strategyCodePrefix: STRATEGY_CODE_SWING,
+        capitalBudgetKrw: budgetKrw,
+        marketAllowlist: INVEST_MAJOR_MARKETS,
+      },
+      {
+        onState: (next) => setSwingAutopilotState(next),
+        onLog: () => undefined,
+      }
+    );
+
+    swingAutopilotRef.current = orchestrator;
+    orchestrator.start();
+    return () => {
+      orchestrator.stop();
+      if (swingAutopilotRef.current === orchestrator) {
+        swingAutopilotRef.current = null;
+      }
+    };
+  }, [
+    swingAutopilotEnabled,
+    llmStatus,
+    autopilotCapitalPoolKrw,
+    dailyLossLimitKrw,
     winRateThresholdMode,
     fixedMinMarketWinRate,
     minLlmConfidence,
     rejectCooldownSeconds,
     postExitCooldownMinutes,
-    focusedScalpEnabled,
-    focusedScalpParsed.markets,
-    focusedScalpPollIntervalSec,
+    chatModel,
+    entryPolicy,
+    entryOrderMode,
+    pendingEntryTimeoutSec,
+    marketFallbackAfterCancel,
+    resolveEngineAmount,
+  ]);
+
+  useEffect(() => {
+    if (!positionAutopilotEnabled) {
+      positionAutopilotRef.current?.stop();
+      positionAutopilotRef.current = null;
+      setPositionAutopilotState((prev) => ({ ...prev, enabled: false }));
+      return;
+    }
+    if (llmStatus !== 'connected') return;
+
+    const budgetKrw = Math.max(5100, Math.round(autopilotCapitalPoolKrw * ENGINE_CAPITAL_RATIOS.POSITION));
+    const maxConcurrent = 1;
+    const orchestrator = new AutopilotOrchestrator(
+      {
+        enabled: true,
+        interval: 'day',
+        confirmInterval: 'day',
+        tradingMode: 'POSITION',
+        amountKrw: resolveEngineAmount(budgetKrw, maxConcurrent),
+        dailyLossLimitKrw,
+        maxConcurrentPositions: maxConcurrent,
+        winRateThresholdMode,
+        fixedMinMarketWinRate,
+        minLlmConfidence,
+        candidateLimit: 8,
+        rejectCooldownMs: rejectCooldownSeconds * 1000,
+        postExitCooldownMs: postExitCooldownMinutes * 60 * 1000,
+        workerTickMs: 20_000,
+        llmReviewIntervalMs: 20_000,
+        llmModel: chatModel,
+        playwrightEnabled: false,
+        entryPolicy,
+        entryOrderMode,
+        pendingEntryTimeoutSec,
+        marketFallbackAfterCancel,
+        llmDailySoftCap: 120,
+        focusedScalpEnabled: false,
+        focusedScalpMarkets: [],
+        focusedScalpPollIntervalMs: 20_000,
+        focusedWarnHoldingMs: 90 * 60 * 1000,
+        focusedMaxHoldingMs: 120 * 60 * 1000,
+        focusedEntryGate: 'FAST_ONLY',
+        strategyCode: STRATEGY_CODE_POSITION,
+        strategyCodePrefix: STRATEGY_CODE_POSITION,
+        capitalBudgetKrw: budgetKrw,
+        marketAllowlist: INVEST_MAJOR_MARKETS,
+      },
+      {
+        onState: (next) => setPositionAutopilotState(next),
+        onLog: () => undefined,
+      }
+    );
+
+    positionAutopilotRef.current = orchestrator;
+    orchestrator.start();
+    return () => {
+      orchestrator.stop();
+      if (positionAutopilotRef.current === orchestrator) {
+        positionAutopilotRef.current = null;
+      }
+    };
+  }, [
+    positionAutopilotEnabled,
+    llmStatus,
+    autopilotCapitalPoolKrw,
+    dailyLossLimitKrw,
+    winRateThresholdMode,
+    fixedMinMarketWinRate,
+    minLlmConfidence,
+    rejectCooldownSeconds,
+    postExitCooldownMinutes,
+    chatModel,
+    entryPolicy,
+    entryOrderMode,
+    pendingEntryTimeoutSec,
+    marketFallbackAfterCancel,
+    resolveEngineAmount,
   ]);
 
   const positionState: PositionState = derivePositionState(
@@ -2044,15 +2359,48 @@ export default function ManualTraderWorkspace() {
 
               <div className="autopilot-panel">
                 <div className="autopilot-header">
-                  <strong>완전 오토파일럿</strong>
+                  <strong>멀티 오토파일럿 엔진</strong>
                   <label className="autopilot-switch">
                     <input
                       type="checkbox"
                       checked={autopilotEnabled}
                       onChange={(event) => setAutopilotEnabled(event.target.checked)}
                     />
-                    <span>{autopilotEnabled ? 'ON' : 'OFF'}</span>
+                    <span>{autopilotEnabled ? 'SCALP ON' : 'SCALP OFF'}</span>
                   </label>
+                </div>
+                <div className="autopilot-grid">
+                  <label className="autopilot-checkbox inline">
+                    <input
+                      type="checkbox"
+                      checked={swingAutopilotEnabled}
+                      onChange={(event) => setSwingAutopilotEnabled(event.target.checked)}
+                    />
+                    SWING 엔진 ON
+                  </label>
+                  <label className="autopilot-checkbox inline">
+                    <input
+                      type="checkbox"
+                      checked={positionAutopilotEnabled}
+                      onChange={(event) => setPositionAutopilotEnabled(event.target.checked)}
+                    />
+                    POSITION 엔진 ON
+                  </label>
+                </div>
+                <div className="autopilot-row">
+                  <label>
+                    엔진 총 예산 풀(원)
+                    <input
+                      type="number"
+                      min={20000}
+                      step={1000}
+                      value={autopilotCapitalPoolKrw}
+                      onChange={(event) => setAutopilotCapitalPoolKrw(Math.max(20_000, Math.round(Number(event.target.value || DEFAULT_AUTOPILOT_CAPITAL_POOL_KRW))))}
+                    />
+                  </label>
+                  <small>
+                    비율: SCALP 40% / SWING 35% / POSITION 25%
+                  </small>
                 </div>
                 <div className="autopilot-row">
                   <label>
@@ -2092,32 +2440,8 @@ export default function ManualTraderWorkspace() {
                     />
                   </label>
                 </div>
-                <div className="autopilot-grid">
-                  <label>
-                    오토파일럿 간격
-                    <select
-                      value={autopilotInterval}
-                      onChange={(event) => setAutopilotInterval(event.target.value)}
-                    >
-                      <option value="tick">틱</option>
-                      <option value="minute1">1분</option>
-                      <option value="minute10">10분</option>
-                      <option value="minute30">30분</option>
-                      <option value="minute60">60분</option>
-                      <option value="day">일봉</option>
-                    </select>
-                  </label>
-                  <label>
-                    오토파일럿 모드
-                    <select
-                      value={autopilotMode}
-                      onChange={(event) => setAutopilotMode(event.target.value as TradingMode)}
-                    >
-                      <option value="SCALP">SCALP</option>
-                      <option value="SWING">SWING</option>
-                      <option value="POSITION">POSITION</option>
-                    </select>
-                  </label>
+                <div className="autopilot-row">
+                  <small>엔진 주기: SCALP(1m/10m), SWING(30m/240m), POSITION(day/day)</small>
                 </div>
                 <div className="autopilot-grid">
                   <label className="autopilot-checkbox inline">
@@ -2869,24 +3193,58 @@ export default function ManualTraderWorkspace() {
         </div>
       )}
 
-      <AutopilotLiveDock
-        open={true}
-        collapsed={autopilotDockCollapsed}
-        onToggleCollapse={() => setAutopilotDockCollapsed((prev) => !prev)}
-        autopilotEnabled={autopilotEnabled}
-        autopilotState={autopilotState}
-        liveData={autopilotLiveQuery.data}
-        loading={autopilotLiveQuery.isLoading}
-      />
-      <FocusedScalpLiveDock
-        open={true}
-        collapsed={focusedScalpDockCollapsed}
-        onToggleCollapse={() => setFocusedScalpDockCollapsed((prev) => !prev)}
-        enabled={focusedScalpEnabled}
-        cards={focusedScalpDecisionCards}
-        summary={focusedScalpDecisionSummary}
-        onSelectMarket={(market) => setSelectedMarket(market)}
-      />
+      <div className="guided-monitor-tabs">
+        <button
+          type="button"
+          className={monitorTab === 'SCALP' ? 'active' : ''}
+          onClick={() => setMonitorTab('SCALP')}
+        >
+          초단타 시스템
+        </button>
+        <button
+          type="button"
+          className={monitorTab === 'INVEST' ? 'active' : ''}
+          onClick={() => setMonitorTab('INVEST')}
+        >
+          투자 시스템
+        </button>
+      </div>
+
+      {monitorTab === 'SCALP' ? (
+        <>
+          <AutopilotLiveDock
+            open={true}
+            collapsed={autopilotDockCollapsed}
+            onToggleCollapse={() => setAutopilotDockCollapsed((prev) => !prev)}
+            autopilotEnabled={autopilotEnabled}
+            autopilotState={autopilotState}
+            liveData={scalpAutopilotLiveQuery.data}
+            loading={scalpAutopilotLiveQuery.isLoading}
+          />
+          <FocusedScalpLiveDock
+            open={true}
+            collapsed={focusedScalpDockCollapsed}
+            onToggleCollapse={() => setFocusedScalpDockCollapsed((prev) => !prev)}
+            enabled={focusedScalpEnabled}
+            cards={focusedScalpDecisionCards}
+            summary={focusedScalpDecisionSummary}
+            onSelectMarket={(market) => setSelectedMarket(market)}
+          />
+        </>
+      ) : (
+        <InvestmentLiveDock
+          open={true}
+          collapsed={investmentDockCollapsed}
+          onToggleCollapse={() => setInvestmentDockCollapsed((prev) => !prev)}
+          swingEnabled={swingAutopilotEnabled}
+          positionEnabled={positionAutopilotEnabled}
+          swingState={swingAutopilotState}
+          positionState={positionAutopilotState}
+          swingLiveData={swingAutopilotLiveQuery.data}
+          positionLiveData={positionAutopilotLiveQuery.data}
+          loading={swingAutopilotLiveQuery.isLoading || positionAutopilotLiveQuery.isLoading}
+        />
+      )}
     </section>
   );
 }

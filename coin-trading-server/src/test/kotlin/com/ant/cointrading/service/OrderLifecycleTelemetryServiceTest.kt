@@ -210,12 +210,69 @@ class OrderLifecycleTelemetryServiceTest {
         }
     }
 
+    @Test
+    @DisplayName("라이브 스냅샷은 strategyCodePrefix 기준으로 이벤트/요약을 분리한다")
+    fun getLiveSnapshotFiltersByStrategyCodePrefix() {
+        whenever(eventRepository.findByCreatedAtBetweenOrderByCreatedAtDesc(any(), any())).thenReturn(
+            listOf(
+                event(
+                    strategyGroup = OrderLifecycleStrategyGroup.GUIDED,
+                    eventType = OrderLifecycleEventType.BUY_REQUESTED,
+                    orderId = "scalp-buy-1",
+                    market = "KRW-BTC",
+                    side = "BUY",
+                    strategyCode = "GUIDED_AUTOPILOT_SCALP"
+                ),
+                event(
+                    strategyGroup = OrderLifecycleStrategyGroup.GUIDED,
+                    eventType = OrderLifecycleEventType.BUY_FILLED,
+                    orderId = "scalp-buy-1",
+                    market = "KRW-BTC",
+                    side = "BUY",
+                    strategyCode = "GUIDED_AUTOPILOT_SCALP"
+                ),
+                event(
+                    strategyGroup = OrderLifecycleStrategyGroup.GUIDED,
+                    eventType = OrderLifecycleEventType.SELL_REQUESTED,
+                    orderId = "scalp-sell-1",
+                    market = "KRW-BTC",
+                    side = "SELL",
+                    strategyCode = "GUIDED_AUTOPILOT_SCALP_V2"
+                ),
+                event(
+                    strategyGroup = OrderLifecycleStrategyGroup.GUIDED,
+                    eventType = OrderLifecycleEventType.BUY_REQUESTED,
+                    orderId = "swing-buy-1",
+                    market = "KRW-ETH",
+                    side = "BUY",
+                    strategyCode = "GUIDED_AUTOPILOT_SWING"
+                )
+            )
+        )
+
+        val snapshot = service.getLiveSnapshot(
+            limit = 200,
+            strategyCodePrefix = "guided_autopilot_scalp"
+        )
+
+        assertEquals(3, snapshot.orderEvents.size)
+        assertTrue(snapshot.orderEvents.all { it.strategyCode?.startsWith("GUIDED_AUTOPILOT_SCALP") == true })
+
+        val guided = snapshot.orderSummary.groups.getValue(OrderLifecycleStrategyGroup.GUIDED.name)
+        assertEquals(1, guided.buyRequested)
+        assertEquals(1, guided.buyFilled)
+        assertEquals(1, guided.sellRequested)
+        assertEquals(0, guided.sellFilled)
+        assertEquals(1, guided.pending)
+    }
+
     private fun event(
         strategyGroup: OrderLifecycleStrategyGroup,
         eventType: OrderLifecycleEventType,
         orderId: String,
         market: String,
         side: String,
+        strategyCode: String = strategyGroup.name,
     ): OrderLifecycleEventEntity {
         return OrderLifecycleEventEntity(
             id = null,
@@ -224,7 +281,7 @@ class OrderLifecycleTelemetryServiceTest {
             side = side,
             eventType = eventType,
             strategyGroup = strategyGroup,
-            strategyCode = strategyGroup.name,
+            strategyCode = strategyCode,
             createdAt = Instant.parse("2026-02-24T01:00:00Z"),
         )
     }
