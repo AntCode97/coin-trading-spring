@@ -68,6 +68,12 @@ function stageLabel(stage: string): string {
       return 'UI경고';
     case 'ENTERED':
       return '진입진행';
+    case 'TOKEN_BUDGET_SKIP':
+      return '토큰스킵';
+    case 'QUANT_FILTERED':
+      return '정량필터';
+    case 'RECHECK_SCHEDULED':
+      return '재검토예약';
     default:
       return stage;
   }
@@ -305,6 +311,9 @@ export function AutopilotLiveDock({
   const thresholdLabel = thresholdMode === 'DYNAMIC_P70' ? '동적 P70(추천가)' : '고정(현재가)';
   const focusedMarkets = autopilotState.focusedScalp.markets;
   const focusedEnabled = autopilotState.focusedScalp.enabled;
+  const tokenBudgetSkipCount = candidates.filter((candidate) => candidate.stage === 'TOKEN_BUDGET_SKIP').length;
+  const quantFilteredCount = candidates.filter((candidate) => candidate.stage === 'QUANT_FILTERED').length;
+  const recheckScheduledCount = candidates.filter((candidate) => candidate.stage === 'RECHECK_SCHEDULED').length;
   const focusedWorkerSummary = useMemo(() => {
     if (focusedMarkets.length === 0) return '-';
     const focusedSet = new Set(focusedMarkets);
@@ -381,10 +390,15 @@ export function AutopilotLiveDock({
             <span>AUTO_PASS {stageBreakdown.autoPass}</span>
             <span>BORDERLINE {stageBreakdown.borderline}</span>
             <span>RULE_FAIL {stageBreakdown.ruleFail}</span>
+            <span>QUANT_FILTERED {quantFilteredCount}</span>
+            <span>TOKEN_BUDGET_SKIP {tokenBudgetSkipCount}</span>
+            <span>RECHECK_SCHEDULED {recheckScheduledCount}</span>
           </div>
-          <div className={`autopilot-llm-budget ${autopilotState.llmBudget.exceeded ? 'warn' : ''}`}>
-            LLM 사용량 {autopilotState.llmBudget.usedToday}/{autopilotState.llmBudget.dailySoftCap}
-            {autopilotState.llmBudget.exceeded ? ' · 소프트 상한 초과(호출 계속 허용)' : ''}
+          <div className={`autopilot-llm-budget ${autopilotState.llmBudget.fallbackMode ? 'warn' : ''}`}>
+            토큰 사용량 {autopilotState.llmBudget.usedTokens.toLocaleString('ko-KR')}/{autopilotState.llmBudget.dailyTokenCap.toLocaleString('ko-KR')}
+            {` · Entry ${autopilotState.llmBudget.entryUsedTokens.toLocaleString('ko-KR')}/${autopilotState.llmBudget.entryBudgetTotal.toLocaleString('ko-KR')}`}
+            {` · Reserve ${autopilotState.llmBudget.riskUsedTokens.toLocaleString('ko-KR')}/${autopilotState.llmBudget.riskReserveTokens.toLocaleString('ko-KR')}`}
+            {autopilotState.llmBudget.fallbackMode ? ' · Quant-only fallback 활성' : ''}
           </div>
           <div className="autopilot-focused-meta">
             <span>선택 코인 루프: {focusedEnabled ? 'ON' : 'OFF'}</span>

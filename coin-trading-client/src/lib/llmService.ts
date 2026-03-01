@@ -470,6 +470,23 @@ export async function requestOneShotText(options: {
   tradingMode?: TradingMode;
   mcpTools?: McpTool[];
 }): Promise<string> {
+  const result = await requestOneShotTextWithMeta(options);
+  return result.text;
+}
+
+export interface OneShotUsageMeta {
+  estimatedInputTokens: number;
+  estimatedOutputTokens: number;
+  totalTokens: number;
+}
+
+export async function requestOneShotTextWithMeta(options: {
+  prompt: string;
+  model?: string;
+  context?: GuidedAgentContextResponse | null;
+  tradingMode?: TradingMode;
+  mcpTools?: McpTool[];
+}): Promise<{ text: string; usage: OneShotUsageMeta }> {
   const token = await getToken();
 
   let userContent = options.prompt;
@@ -492,6 +509,7 @@ export async function requestOneShotText(options: {
     };
     userContent = `${options.prompt}\n\n[차트 컨텍스트]\n${JSON.stringify(contextPayload)}`;
   }
+  const estimatedInputTokens = estimateTextTokens(userContent);
 
   const requestBody: Record<string, unknown> = {
     model: options.model || 'gpt-5.3-codex',
@@ -555,7 +573,21 @@ export async function requestOneShotText(options: {
     }
   }
 
-  return accumulated.trim();
+  const text = accumulated.trim();
+  const estimatedOutputTokens = estimateTextTokens(text);
+  return {
+    text,
+    usage: {
+      estimatedInputTokens,
+      estimatedOutputTokens,
+      totalTokens: estimatedInputTokens + estimatedOutputTokens,
+    },
+  };
+}
+
+function estimateTextTokens(text: string): number {
+  const chars = typeof text === 'string' ? text.length : 0;
+  return Math.max(1, Math.ceil(chars / 4));
 }
 
 // ---------- Action Extraction ----------

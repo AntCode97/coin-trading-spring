@@ -97,9 +97,16 @@ function createInitialAutopilotState(): AutopilotState {
       ruleFail: 0,
     },
     llmBudget: {
-      dailySoftCap: 240,
-      usedToday: 0,
-      exceeded: false,
+      dailyTokenCap: 200_000,
+      usedTokens: 0,
+      remainingTokens: 200_000,
+      entryBudgetTotal: 160_000,
+      entryUsedTokens: 0,
+      entryRemainingTokens: 160_000,
+      riskReserveTokens: 40_000,
+      riskUsedTokens: 0,
+      riskRemainingTokens: 40_000,
+      fallbackMode: false,
     },
     focusedScalp: {
       enabled: false,
@@ -155,6 +162,8 @@ type WorkspacePrefs = {
   fixedMinRecommendedWinRate?: number;
   fixedMinMarketWinRate?: number;
   minLlmConfidence?: number;
+  llmDailyTokenCap?: number;
+  llmRiskReserveTokens?: number;
   rejectCooldownSeconds?: number;
   rejectCooldownMinutes?: number;
   postExitCooldownMinutes?: number;
@@ -661,14 +670,20 @@ export default function ManualTraderWorkspace() {
     prefs.fixedMinMarketWinRate ?? prefs.fixedMinRecommendedWinRate ?? 60
   );
   const [minLlmConfidence, setMinLlmConfidence] = useState<number>(prefs.minLlmConfidence ?? 60);
+  const [llmDailyTokenCap, setLlmDailyTokenCap] = useState<number>(
+    Math.max(20_000, Math.round(prefs.llmDailyTokenCap ?? 200_000))
+  );
+  const [llmRiskReserveTokens, setLlmRiskReserveTokens] = useState<number>(
+    Math.max(0, Math.min(Math.max(20_000, Math.round(prefs.llmDailyTokenCap ?? 200_000)), Math.round(prefs.llmRiskReserveTokens ?? 40_000)))
+  );
   const [rejectCooldownSeconds, setRejectCooldownSeconds] = useState<number>(
     Math.min(
       3600,
       Math.max(
-        1,
+        300,
         Math.round(
           prefs.rejectCooldownSeconds
-            ?? ((prefs.rejectCooldownMinutes ?? 0.75) * 60)
+            ?? ((prefs.rejectCooldownMinutes ?? 5) * 60)
         )
       )
     )
@@ -696,6 +711,9 @@ export default function ManualTraderWorkspace() {
     () => normalizeFocusedScalpMarkets(focusedScalpMarketsInput),
     [focusedScalpMarketsInput]
   );
+  useEffect(() => {
+    setLlmRiskReserveTokens((prev) => Math.min(prev, llmDailyTokenCap));
+  }, [llmDailyTokenCap]);
   const [autopilotState, setAutopilotState] = useState<AutopilotState>(createInitialAutopilotState());
   const [swingAutopilotState, setSwingAutopilotState] = useState<AutopilotState>(createInitialAutopilotState());
   const [positionAutopilotState, setPositionAutopilotState] = useState<AutopilotState>(createInitialAutopilotState());
@@ -1184,6 +1202,8 @@ export default function ManualTraderWorkspace() {
       winRateThresholdMode,
       fixedMinMarketWinRate,
       minLlmConfidence,
+      llmDailyTokenCap,
+      llmRiskReserveTokens,
       rejectCooldownSeconds,
       postExitCooldownMinutes,
       focusedScalpEnabled,
@@ -1222,6 +1242,8 @@ export default function ManualTraderWorkspace() {
     winRateThresholdMode,
     fixedMinMarketWinRate,
     minLlmConfidence,
+    llmDailyTokenCap,
+    llmRiskReserveTokens,
     rejectCooldownSeconds,
     postExitCooldownMinutes,
     focusedScalpEnabled,
@@ -1658,6 +1680,8 @@ export default function ManualTraderWorkspace() {
         pendingEntryTimeoutSec,
         marketFallbackAfterCancel,
         llmDailySoftCap: 240,
+        llmDailyTokenCap,
+        llmRiskReserveTokens,
         focusedScalpEnabled,
         focusedScalpMarkets: focusedScalpParsed.markets,
         focusedScalpPollIntervalMs: focusedScalpPollIntervalSec * 1000,
@@ -1667,6 +1691,9 @@ export default function ManualTraderWorkspace() {
         strategyCode: STRATEGY_CODE_SCALP,
         strategyCodePrefix: STRATEGY_CODE_SCALP,
         capitalBudgetKrw: budgetKrw,
+        fineAgentEnabled: false,
+        fineAgentMode: 'LITE',
+        llmEntryReviewMaxPerTick: 1,
       },
       {
         onState: (next) => setAutopilotState(next),
@@ -1698,6 +1725,8 @@ export default function ManualTraderWorkspace() {
     focusedScalpPollIntervalSec,
     marketFallbackAfterCancel,
     minLlmConfidence,
+    llmDailyTokenCap,
+    llmRiskReserveTokens,
     pendingEntryTimeoutSec,
     playwrightEnabled,
     postExitCooldownMinutes,
@@ -1741,6 +1770,8 @@ export default function ManualTraderWorkspace() {
         pendingEntryTimeoutSec,
         marketFallbackAfterCancel,
         llmDailySoftCap: 180,
+        llmDailyTokenCap,
+        llmRiskReserveTokens,
         focusedScalpEnabled: false,
         focusedScalpMarkets: [],
         focusedScalpPollIntervalMs: 20_000,
@@ -1751,6 +1782,9 @@ export default function ManualTraderWorkspace() {
         strategyCodePrefix: STRATEGY_CODE_SWING,
         capitalBudgetKrw: budgetKrw,
         marketAllowlist: INVEST_MAJOR_MARKETS,
+        fineAgentEnabled: true,
+        fineAgentMode: 'LITE',
+        llmEntryReviewMaxPerTick: 1,
       },
       {
         onState: (next) => setSwingAutopilotState(next),
@@ -1774,6 +1808,8 @@ export default function ManualTraderWorkspace() {
     winRateThresholdMode,
     fixedMinMarketWinRate,
     minLlmConfidence,
+    llmDailyTokenCap,
+    llmRiskReserveTokens,
     rejectCooldownSeconds,
     postExitCooldownMinutes,
     chatModel,
@@ -1819,6 +1855,8 @@ export default function ManualTraderWorkspace() {
         pendingEntryTimeoutSec,
         marketFallbackAfterCancel,
         llmDailySoftCap: 120,
+        llmDailyTokenCap,
+        llmRiskReserveTokens,
         focusedScalpEnabled: false,
         focusedScalpMarkets: [],
         focusedScalpPollIntervalMs: 20_000,
@@ -1829,6 +1867,9 @@ export default function ManualTraderWorkspace() {
         strategyCodePrefix: STRATEGY_CODE_POSITION,
         capitalBudgetKrw: budgetKrw,
         marketAllowlist: INVEST_MAJOR_MARKETS,
+        fineAgentEnabled: true,
+        fineAgentMode: 'LITE',
+        llmEntryReviewMaxPerTick: 1,
       },
       {
         onState: (next) => setPositionAutopilotState(next),
@@ -1852,6 +1893,8 @@ export default function ManualTraderWorkspace() {
     winRateThresholdMode,
     fixedMinMarketWinRate,
     minLlmConfidence,
+    llmDailyTokenCap,
+    llmRiskReserveTokens,
     rejectCooldownSeconds,
     postExitCooldownMinutes,
     chatModel,
@@ -2595,16 +2638,49 @@ export default function ManualTraderWorkspace() {
                     진입 거절/실패 쿨다운(초)
                     <input
                       type="number"
-                      min={1}
+                      min={300}
                       max={3600}
                       step={1}
                       value={rejectCooldownSeconds}
                       onChange={(event) => {
-                        const raw = Number(event.target.value || 120);
-                        setRejectCooldownSeconds(Math.min(3600, Math.max(1, Math.round(raw))));
+                        const raw = Number(event.target.value || 300);
+                        setRejectCooldownSeconds(Math.min(3600, Math.max(300, Math.round(raw))));
                       }}
                     />
                   </label>
+                </div>
+                <div className="autopilot-grid">
+                  <label>
+                    일일 LLM 토큰 상한
+                    <input
+                      type="number"
+                      min={20000}
+                      max={2000000}
+                      step={1000}
+                      value={llmDailyTokenCap}
+                      onChange={(event) => {
+                        const raw = Number(event.target.value || 200000);
+                        setLlmDailyTokenCap(Math.min(2_000_000, Math.max(20_000, Math.round(raw))));
+                      }}
+                    />
+                  </label>
+                  <label>
+                    리스크 리뷰 reserve(토큰)
+                    <input
+                      type="number"
+                      min={0}
+                      max={llmDailyTokenCap}
+                      step={1000}
+                      value={llmRiskReserveTokens}
+                      onChange={(event) => {
+                        const raw = Number(event.target.value || 40000);
+                        setLlmRiskReserveTokens(Math.min(llmDailyTokenCap, Math.max(0, Math.round(raw))));
+                      }}
+                    />
+                  </label>
+                </div>
+                <div className="autopilot-row">
+                  <small>FineAgent 기본 모드: INVEST 전용 · LITE(SYNTH+PM만 LLM)</small>
                 </div>
                 <div className="autopilot-grid">
                   <label>

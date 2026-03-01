@@ -567,6 +567,17 @@ curl -X POST http://localhost:8080/api/settings/regime \
 
 ## 최근 개선사항
 
+### LLM 토큰 절감형 오토파일럿 재설계 (2026-03-02)
+
+1. LLM 예산 기준을 호출 횟수에서 토큰으로 전환하고, KST 자정 리셋 기반 전역 거버너를 도입했습니다.
+2. 일일 총 상한 `200,000 tokens`를 `Entry 160,000 + Risk Reserve 40,000`으로 분리하고, Entry는 엔진별 `64k/56k/40k`(SCALP/SWING/POSITION)로 고정 배분합니다.
+3. 예산 초과 시 오토파일럿 루프를 멈추지 않고 `Quant-only fallback`으로 전환해 `BORDERLINE` LLM 심사를 중단한 채 지속 운영합니다.
+4. LLM 호출 전 Quant 게이트를 선행 적용해 저품질 후보를 `QUANT_FILTERED`로 탈락시키고, tick당 엔진별 LLM 진입 심사를 1건으로 제한합니다.
+5. FineAgent 기본 범위를 `INVEST(SWING/POSITION)`로 축소하고 기본 모드를 `LITE`로 고정해 후보당 LLM 호출을 `SYNTH+PM` 2회 중심으로 절감했습니다.
+6. 진입 실패 쿨다운 기본값을 모든 실패 경로에서 `5분(300초)`으로 통일하고, LLM 제안 재시도/재검토 값도 `300~3600초` 범위로 보정합니다.
+7. 포지션 리뷰 응답에 `nextReviewSec`를 반영해 동적 재분석 스케줄을 적용하고, 급락/긴급 청산 룰은 LLM 스케줄과 무관하게 즉시 실행합니다.
+8. 라이브 도크에 토큰 사용량/잔여량, reserve 사용량, fallback 상태, `TOKEN_BUDGET_SKIP`·`QUANT_FILTERED`·`RECHECK_SCHEDULED` 카운트를 추가했습니다.
+
 ### 멀티 엔진 분리형 데스크 업그레이드 (2026-02-28)
 
 1. 오토파일럿 엔진을 `SCALP`, `SWING`, `POSITION` 3개로 분리하고, 데스크 하단 모니터를 `초단타 시스템`/`투자 시스템` 2개 탭으로 분리했습니다.

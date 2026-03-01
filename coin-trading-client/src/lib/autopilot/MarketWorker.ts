@@ -18,6 +18,8 @@ export interface WorkerStateSnapshot {
   startedAt: number;
   updatedAt: number;
   cooldownUntil: number | null;
+  nextEntryAttemptAt: number | null;
+  nextPositionReviewAt: number | null;
 }
 
 export type WorkerEventType =
@@ -76,6 +78,7 @@ interface WorkerEntryDecision {
   severity: 'LOW' | 'MEDIUM' | 'HIGH';
   riskTags?: string[];
   suggestedCooldownSec?: number | null;
+  nextReviewSec?: number | null;
 }
 
 interface WorkerEntryPlan {
@@ -106,7 +109,7 @@ export interface WorkerDependencies {
   reviewOpenPosition?: (
     market: string,
     position: GuidedTradePosition
-  ) => Promise<{ action: 'HOLD' | 'PARTIAL_TP' | 'FULL_EXIT'; reason: string }>;
+  ) => Promise<{ action: 'HOLD' | 'PARTIAL_TP' | 'FULL_EXIT'; reason: string; nextReviewSec: number | null }>;
   canEnterNewPosition?: (market: string) => { allow: boolean; reason?: string };
   onState: (snapshot: WorkerStateSnapshot) => void;
   onLog: (message: string) => void;
@@ -131,6 +134,8 @@ export class MarketWorker {
   private pendingEntryObservedAt: number | null = null;
   private pendingFallbackTried = false;
   private warnedHoldingTradeIds = new Set<number>();
+  private nextEntryAttemptAt: number | null = null;
+  private nextPositionReviewAt: number | null = null;
 
   constructor(config: WorkerConfig, deps: WorkerDependencies) {
     this.config = config;
@@ -167,6 +172,8 @@ export class MarketWorker {
       startedAt: this.startedAt,
       updatedAt: Date.now(),
       cooldownUntil: this.cooldownUntil,
+      nextEntryAttemptAt: this.nextEntryAttemptAt,
+      nextPositionReviewAt: this.nextPositionReviewAt,
     };
   }
 
@@ -221,6 +228,7 @@ export class MarketWorker {
       const position = await this.deps.getPosition(this.config.market);
       if (position && (position.status === 'OPEN' || position.status === 'PENDING_ENTRY')) {
         this.hadOpenPosition = position.status === 'OPEN';
+        this.nextEntryAttemptAt = null;
         if (position.status === 'PENDING_ENTRY') {
           await this.managePendingEntry();
         } else {
@@ -235,6 +243,7 @@ export class MarketWorker {
         this.hadOpenPosition = false;
         this.peakPnlPercent = Number.NEGATIVE_INFINITY;
         this.warnedHoldingTradeIds.clear();
+        this.nextPositionReviewAt = null;
         this.cooldownUntil = Date.now() + this.config.postExitCooldownMs;
         this.setState('COOLDOWN', '포지션 종료 감지, 재진입 쿨다운');
         return;
@@ -244,12 +253,19 @@ export class MarketWorker {
       this.pendingFallbackTried = false;
       this.peakPnlPercent = Number.NEGATIVE_INFINITY;
       this.warnedHoldingTradeIds.clear();
+      if (this.nextEntryAttemptAt && now < this.nextEntryAttemptAt) {
+        this.setState('COOLDOWN', `재진입 대기 ${Math.ceil((this.nextEntryAttemptAt - now) / 1000)}초`);
+        return;
+      }
+      if (this.nextEntryAttemptAt && now >= this.nextEntryAttemptAt) {
+        this.nextEntryAttemptAt = null;
+      }
       await this.tryEntry();
     } catch (error) {
       const message = error instanceof Error ? error.message : '알 수 없는 오류';
       this.setState('ERROR', message);
       this.deps.onLog(`[${this.config.market}] worker error: ${message}`);
-      this.cooldownUntil = Date.now() + this.config.rejectCooldownMs;
+      this.scheduleEntryCooldown(this.config.rejectCooldownMs);
     } finally {
       this.ticking = false;
     }
@@ -260,19 +276,19 @@ export class MarketWorker {
     const context = await this.deps.fetchContext(this.config.market);
     const deterministic = this.deterministicCheck(context);
     if (!deterministic.allow) {
-      const cooldownMs = 45_000;
+      const cooldownMs = this.config.rejectCooldownMs;
       this.emitEvent('LLM_REJECT', 'WARN', `규칙 거절: ${deterministic.reason}`);
-      this.cooldownUntil = Date.now() + cooldownMs;
+      this.scheduleEntryCooldown(cooldownMs);
       this.setState('COOLDOWN', `규칙 거절(${Math.ceil(cooldownMs / 1000)}초): ${deterministic.reason}`);
       return;
     }
 
     const capacity = this.deps.canEnterNewPosition?.(this.config.market);
     if (capacity && !capacity.allow) {
-      const cooldownMs = 45_000;
+      const cooldownMs = this.config.rejectCooldownMs;
       const reason = capacity.reason || '신규 포지션 진입 제한';
       this.emitEvent('ENTRY_FAILED', 'WARN', `진입 제한: ${reason}`);
-      this.cooldownUntil = Date.now() + cooldownMs;
+      this.scheduleEntryCooldown(cooldownMs);
       this.setState('COOLDOWN', `진입 제한(${Math.ceil(cooldownMs / 1000)}초): ${reason}`);
       return;
     }
@@ -288,7 +304,7 @@ export class MarketWorker {
           entryDecision.severity === 'HIGH' ? 'ERROR' : 'WARN',
           `진입 거절 (${entryDecision.confidence.toFixed(0)}/${entryDecision.severity}) · 쿨다운 ${Math.ceil(cooldownMs / 1000)}초: ${entryDecision.reason}`
         );
-        this.cooldownUntil = Date.now() + cooldownMs;
+        this.scheduleEntryCooldown(cooldownMs);
         this.setState('COOLDOWN', `진입 보류(${Math.ceil(cooldownMs / 1000)}초): ${entryDecision.reason}`);
         return;
       }
@@ -300,7 +316,7 @@ export class MarketWorker {
     const plan = await this.deps.planEntryOrder(this.config.market, context);
     if (!plan.allow) {
       this.emitEvent('LLM_REJECT', 'WARN', `주문 계획 거절: ${plan.reason}`);
-      this.cooldownUntil = Date.now() + 45_000;
+      this.scheduleEntryCooldown(this.config.rejectCooldownMs);
       this.setState('COOLDOWN', `주문 계획 거절: ${plan.reason}`);
       return;
     }
@@ -404,8 +420,8 @@ export class MarketWorker {
       }
     }
 
-    const cooldownMs = 90_000;
-    this.cooldownUntil = Date.now() + cooldownMs;
+    const cooldownMs = this.config.rejectCooldownMs;
+    this.scheduleEntryCooldown(cooldownMs);
     this.pendingEntryObservedAt = null;
     this.setState('COOLDOWN', `pending timeout 후 쿨다운 ${Math.ceil(cooldownMs / 1000)}초`);
   }
@@ -466,30 +482,31 @@ export class MarketWorker {
   }
 
   private resolveRejectCooldownMs(severity: 'LOW' | 'MEDIUM' | 'HIGH', confidence: number): number {
-    if (severity === 'HIGH') return 90_000;
-    if (confidence >= 60) return 45_000;
-    return Math.max(45_000, this.config.rejectCooldownMs);
+    void severity;
+    void confidence;
+    return Math.max(300_000, this.config.rejectCooldownMs);
   }
 
   private resolveLlmRejectCooldownMs(decision: WorkerEntryDecision): number {
     const fallbackMs = this.resolveRejectCooldownMs(decision.severity, decision.confidence);
-    const suggestedSec = this.normalizeSuggestedCooldownSec(decision.suggestedCooldownSec);
+    const suggestedSec = this.normalizeSuggestedCooldownSec(
+      Math.max(
+        Number(decision.suggestedCooldownSec ?? 0),
+        Number(decision.nextReviewSec ?? 0)
+      )
+    );
     if (suggestedSec == null) return fallbackMs;
-
-    const severityFloorSec = decision.severity === 'HIGH' ? 90 : 45;
-    const severityCeilSec = decision.severity === 'HIGH' ? 300 : 120;
-    const boundedSec = Math.min(severityCeilSec, Math.max(severityFloorSec, suggestedSec));
-    return boundedSec * 1000;
+    return suggestedSec * 1000;
   }
 
   private normalizeSuggestedCooldownSec(value: unknown): number | null {
     if (typeof value === 'number' && Number.isFinite(value)) {
-      return Math.min(1200, Math.max(30, Math.round(value)));
+      return Math.min(3600, Math.max(300, Math.round(value)));
     }
     if (typeof value === 'string') {
       const parsed = Number(value);
       if (Number.isFinite(parsed)) {
-        return Math.min(1200, Math.max(30, Math.round(parsed)));
+        return Math.min(3600, Math.max(300, Math.round(parsed)));
       }
     }
     return null;
@@ -506,6 +523,9 @@ export class MarketWorker {
     this.peakPnlPercent = Math.max(this.peakPnlPercent, pnl);
     const peakDrawdown = this.peakPnlPercent - pnl;
     this.setState('MANAGING', `모니터링 (${pnl >= 0 ? '+' : ''}${pnl.toFixed(2)}%)`);
+    if (this.nextPositionReviewAt == null) {
+      this.nextPositionReviewAt = Date.now() + this.resolveNextPositionReviewMs(null);
+    }
 
     const openedAt = Date.parse(position.createdAt);
     const holdingMs = Number.isFinite(openedAt) ? Math.max(0, Date.now() - openedAt) : null;
@@ -528,9 +548,10 @@ export class MarketWorker {
       this.deps.onLog(
         `[${this.config.market}] 보유시간 경고: ${Math.floor(holdingMs / 60000)}분 경과`
       );
-      if (this.deps.reviewOpenPosition) {
+      if (this.deps.reviewOpenPosition && this.canRunPositionReviewNow()) {
         this.lastEventReviewAt = Date.now();
         const review = await this.deps.reviewOpenPosition(this.config.market, position);
+        this.nextPositionReviewAt = Date.now() + this.resolveNextPositionReviewMs(review.nextReviewSec);
         if (review.action === 'FULL_EXIT') {
           this.emitOrderFlow('SELL_REQUESTED', `보유시간 경고 리뷰 청산: ${review.reason}`);
           await this.deps.stopPosition(this.config.market, `보유시간 경고 리뷰 청산: ${review.reason}`);
@@ -574,6 +595,7 @@ export class MarketWorker {
     if (this.deps.reviewOpenPosition && this.shouldRunEventDrivenReview(pnl, peakDrawdown, position.trailingActive)) {
       this.lastEventReviewAt = Date.now();
       const review = await this.deps.reviewOpenPosition(this.config.market, position);
+      this.nextPositionReviewAt = Date.now() + this.resolveNextPositionReviewMs(review.nextReviewSec);
       if (review.action === 'FULL_EXIT') {
         this.emitOrderFlow('SELL_REQUESTED', `LLM 조기청산 요청: ${review.reason}`);
         await this.deps.stopPosition(this.config.market, `LLM 조기청산: ${review.reason}`);
@@ -625,10 +647,31 @@ export class MarketWorker {
   }
 
   private shouldRunEventDrivenReview(pnl: number, peakDrawdown: number, trailingActive: boolean): boolean {
-    if (Date.now() - this.lastEventReviewAt < 30_000) return false;
+    if (!this.canRunPositionReviewNow()) return false;
     if (pnl <= -0.6) return true;
     if (pnl >= 1.6) return true;
     if (trailingActive && peakDrawdown >= 0.7) return true;
     return false;
+  }
+
+  private canRunPositionReviewNow(): boolean {
+    const now = Date.now();
+    if (this.nextPositionReviewAt && now < this.nextPositionReviewAt) return false;
+    if (now - this.lastEventReviewAt < this.config.llmReviewMs) return false;
+    return true;
+  }
+
+  private resolveNextPositionReviewMs(nextReviewSec: number | null | undefined): number {
+    if (typeof nextReviewSec === 'number' && Number.isFinite(nextReviewSec)) {
+      return Math.min(3600_000, Math.max(300_000, Math.round(nextReviewSec * 1000)));
+    }
+    return Math.max(300_000, this.config.llmReviewMs);
+  }
+
+  private scheduleEntryCooldown(cooldownMs: number): void {
+    const normalized = Math.max(300_000, Math.round(cooldownMs));
+    const until = Date.now() + normalized;
+    this.cooldownUntil = until;
+    this.nextEntryAttemptAt = until;
   }
 }

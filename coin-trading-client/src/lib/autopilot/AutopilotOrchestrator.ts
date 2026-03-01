@@ -7,7 +7,7 @@ import {
 } from '../../api';
 import {
   executeMcpTool,
-  requestOneShotText,
+  requestOneShotTextWithMeta,
   type TradingMode,
 } from '../llmService';
 import {
@@ -19,8 +19,14 @@ import {
 } from './MarketWorker';
 import {
   runFineGrainedAgentPipeline,
+  type FineAgentMode,
   type FineGrainedDecisionResult,
 } from './FineGrainedAgentPipeline';
+import {
+  getLlmTokenGovernor,
+  type LlmBudgetAction,
+  type LlmBudgetEngine,
+} from './LlmTokenGovernor';
 
 export interface AutopilotConfig {
   enabled: boolean;
@@ -45,6 +51,8 @@ export interface AutopilotConfig {
   pendingEntryTimeoutSec: number;
   marketFallbackAfterCancel: boolean;
   llmDailySoftCap: number;
+  llmDailyTokenCap?: number;
+  llmRiskReserveTokens?: number;
   focusedScalpEnabled: boolean;
   focusedScalpMarkets: string[];
   focusedScalpPollIntervalMs: number;
@@ -58,6 +66,8 @@ export interface AutopilotConfig {
   fineAgentEnabled?: boolean;
   fineAgentMaxPerTick?: number;
   fineAgentDecisionTtlMs?: number;
+  fineAgentMode?: FineAgentMode;
+  llmEntryReviewMaxPerTick?: number;
 }
 
 export type CandidateStage =
@@ -71,7 +81,10 @@ export type CandidateStage =
   | 'COOLDOWN'
   | 'LLM_REJECT'
   | 'PLAYWRIGHT_WARN'
-  | 'ENTERED';
+  | 'ENTERED'
+  | 'TOKEN_BUDGET_SKIP'
+  | 'QUANT_FILTERED'
+  | 'RECHECK_SCHEDULED';
 
 export interface AutopilotCandidateView {
   market: string;
@@ -133,9 +146,16 @@ export interface AutopilotState {
     ruleFail: number;
   };
   llmBudget: {
-    dailySoftCap: number;
-    usedToday: number;
-    exceeded: boolean;
+    dailyTokenCap: number;
+    usedTokens: number;
+    remainingTokens: number;
+    entryBudgetTotal: number;
+    entryUsedTokens: number;
+    entryRemainingTokens: number;
+    riskReserveTokens: number;
+    riskUsedTokens: number;
+    riskRemainingTokens: number;
+    fallbackMode: boolean;
   };
   focusedScalp: {
     enabled: boolean;
@@ -188,6 +208,7 @@ interface EntryDecision {
   severity: 'LOW' | 'MEDIUM' | 'HIGH';
   riskTags: string[];
   suggestedCooldownSec: number | null;
+  nextReviewSec: number | null;
 }
 
 interface PlannedEntryOrder {
@@ -222,6 +243,7 @@ export class AutopilotOrchestrator {
   private readonly screenshotOrder: string[] = [];
   private readonly focusedWorkerMarkets = new Set<string>();
   private readonly fineDecisionCache = new Map<string, { at: number; decision: FineGrainedDecisionResult }>();
+  private readonly tokenGovernor = getLlmTokenGovernor();
   private readonly runId = crypto.randomUUID();
   private orderFlowLocal: AutopilotOrderFlowLocal = createEmptyOrderFlow();
   private loopId: number | null = null;
@@ -230,9 +252,6 @@ export class AutopilotOrchestrator {
   private blockedByDailyLoss = false;
   private blockedReason: string | null = null;
   private appliedRecommendedWinRateThreshold = 0;
-  private llmUsageDateKst = this.kstDateKey();
-  private llmUsageToday = 0;
-  private llmSoftCapWarned = false;
   private lastOpenMarketSet = new Set<string>();
   private lastOpenPositions: GuidedTradePosition[] = [];
   private focusedEmptyWarned = false;
@@ -245,6 +264,7 @@ export class AutopilotOrchestrator {
   constructor(config: AutopilotConfig, callbacks: OrchestratorCallbacks) {
     this.config = config;
     this.callbacks = callbacks;
+    this.configureTokenGovernor();
   }
 
   start(): void {
@@ -290,6 +310,7 @@ export class AutopilotOrchestrator {
 
   updateConfig(next: AutopilotConfig): void {
     this.config = next;
+    this.configureTokenGovernor();
   }
 
   pauseMarket(market: string, durationMs: number, reason: string): void {
@@ -314,6 +335,10 @@ export class AutopilotOrchestrator {
 
   private emitState(): void {
     const focusedMarkets = this.normalizeFocusedMarkets();
+    const budget = this.tokenGovernor.getSnapshot();
+    const engine = this.resolveBudgetEngine();
+    const quantFallbackActive =
+      budget.remainingTokens <= 0 || budget.entryRemainingByEngine[engine] <= 0;
     const state: AutopilotState = {
       enabled: this.running && this.config.enabled,
       blockedByDailyLoss: this.blockedByDailyLoss,
@@ -327,9 +352,16 @@ export class AutopilotOrchestrator {
       candidates: Array.from(this.candidatesByMarket.values()).sort((a, b) => a.market.localeCompare(b.market)),
       decisionBreakdown: { ...this.decisionBreakdown },
       llmBudget: {
-        dailySoftCap: this.config.llmDailySoftCap,
-        usedToday: this.llmUsageToday,
-        exceeded: this.llmUsageToday >= this.config.llmDailySoftCap,
+        dailyTokenCap: budget.dailyTokenCap,
+        usedTokens: budget.usedTokens,
+        remainingTokens: budget.remainingTokens,
+        entryBudgetTotal: budget.entryBudgetTotal,
+        entryUsedTokens: budget.entryUsedTokens,
+        entryRemainingTokens: budget.entryRemainingTokens,
+        riskReserveTokens: budget.riskReserveTokens,
+        riskUsedTokens: budget.riskUsedTokens,
+        riskRemainingTokens: budget.riskRemainingTokens,
+        fallbackMode: quantFallbackActive,
       },
       focusedScalp: {
         enabled: this.config.focusedScalpEnabled,
@@ -455,7 +487,7 @@ export class AutopilotOrchestrator {
   private async tick(): Promise<void> {
     if (!this.running || !this.config.enabled) return;
     try {
-      this.rolloverLlmUsageIfNeeded();
+      this.configureTokenGovernor();
       const dailyPnlKrw = await this.resolveDailyPnlKrw();
       const nextBlockedByDailyLoss = dailyPnlKrw <= this.config.dailyLossLimitKrw;
       const nextBlockedReason = nextBlockedByDailyLoss
@@ -528,7 +560,10 @@ export class AutopilotOrchestrator {
       const activeGlobalMarkets = new Set<string>();
       const fineAgentEnabled = this.isFineAgentEnabled();
       const fineAgentMaxPerTick = this.resolveFineAgentMaxPerTick();
+      const llmEntryReviewMaxPerTick = this.resolveLlmEntryReviewMaxPerTick();
+      const budgetEngine = this.resolveBudgetEngine();
       let fineAgentUsedInTick = 0;
+      let llmEntryReviewUsedInTick = 0;
       let autoPass = 0;
       let borderline = 0;
       let ruleFail = 0;
@@ -556,58 +591,112 @@ export class AutopilotOrchestrator {
         if (!evaluation.allow) {
           stage = evaluation.stage;
           reason = evaluation.reason;
-        } else if (
-          fineAgentEnabled &&
-          (stage === 'AUTO_PASS' || stage === 'BORDERLINE') &&
-          fineAgentUsedInTick < fineAgentMaxPerTick
-        ) {
-          fineAgentUsedInTick += 1;
-          fineDecision = await this.resolveFineGrainedDecision(candidate);
-          stage = fineDecision.stage;
-          reason = `FineAgent: ${fineDecision.reason}`;
-          this.pushEvent({
-            type: 'CANDIDATE',
-            level: fineDecision.approve ? 'INFO' : 'WARN',
-            market: candidate.market,
-            action: 'FINE_AGENT_REVIEW',
-            detail: `stage=${fineDecision.stage}, score=${fineDecision.score.toFixed(1)}, confidence=${fineDecision.confidence.toFixed(0)} | ${fineDecision.reason}`,
-          });
+        } else {
+          const quantGate = this.evaluateQuantLlmGate(candidate, budgetEngine);
+          if (!quantGate.allow) {
+            stage = 'QUANT_FILTERED';
+            reason = quantGate.reason;
+          } else if (stage === 'BORDERLINE') {
+            const budgetSnapshot = this.tokenGovernor.getSnapshot();
+            const quantOnlyFallback =
+              budgetSnapshot.remainingTokens <= 0 ||
+              budgetSnapshot.entryRemainingByEngine[budgetEngine] <= 0;
+            if (quantOnlyFallback) {
+              stage = 'TOKEN_BUDGET_SKIP';
+              reason = 'Quant-only fallback: BORDERLINE LLM 심사 차단';
+            } else if (llmEntryReviewUsedInTick >= llmEntryReviewMaxPerTick) {
+              stage = 'RECHECK_SCHEDULED';
+              reason = `tick당 LLM 진입심사 상한(${llmEntryReviewMaxPerTick}) 도달`;
+            } else {
+              const entryReviewBudget = this.canSpendLlm(
+                'ENTRY_REVIEW',
+                candidate.market,
+                this.estimateEntryReviewTokens()
+              );
+              if (!entryReviewBudget.allow) {
+                stage = 'TOKEN_BUDGET_SKIP';
+                reason = entryReviewBudget.reason ?? 'ENTRY_REVIEW 예산 부족';
+              }
+              if (
+                stage === 'BORDERLINE' &&
+                fineAgentEnabled &&
+                this.isFineAgentInvestOnly() &&
+                fineAgentUsedInTick < fineAgentMaxPerTick
+              ) {
+                const fineBudget = this.canSpendLlm(
+                  'FINE_AGENT',
+                  candidate.market,
+                  this.estimateFineAgentTokens()
+                );
+                if (!fineBudget.allow) {
+                  stage = 'TOKEN_BUDGET_SKIP';
+                  reason = fineBudget.reason ?? 'FineAgent 토큰 예산 부족';
+                } else {
+                  fineAgentUsedInTick += 1;
+                  const fineResolved = await this.resolveFineGrainedDecision(candidate);
+                  fineDecision = fineResolved.decision;
+                  if (!fineResolved.fromCache && fineDecision.usage.totalTokens > 0) {
+                    this.recordLlmTokenUsage('FINE_AGENT', candidate.market, fineDecision.usage.totalTokens);
+                  }
+                  stage = fineDecision.stage;
+                  reason = `FineAgent: ${fineDecision.reason}`;
+                  this.pushEvent({
+                    type: 'CANDIDATE',
+                    level: fineDecision.approve ? 'INFO' : 'WARN',
+                    market: candidate.market,
+                    action: 'FINE_AGENT_REVIEW',
+                    detail: `stage=${fineDecision.stage}, score=${fineDecision.score.toFixed(1)}, confidence=${fineDecision.confidence.toFixed(0)} | ${fineDecision.reason}`,
+                  });
+                }
+              }
+            }
+          } else if (stage !== 'AUTO_PASS') {
+            reason = candidate.reason;
+          }
         }
         const stageForStats = stage;
 
         if (evaluation.allow && (stage === 'AUTO_PASS' || stage === 'BORDERLINE')) {
-          activeGlobalMarkets.add(candidate.market);
           const sourceStage = stage === 'AUTO_PASS' ? 'AUTO_PASS' : 'BORDERLINE';
-          entryAmountKrw = this.resolveEntryAmount(sourceStage);
-          this.spawnWorker(
-            candidate.market,
-            {
-              market: candidate.market,
-              koreanName: candidate.koreanName,
-              recommendedEntryWinRate: candidate.recommendedEntryWinRate1m ?? null,
-              marketEntryWinRate: candidate.marketEntryWinRate1m ?? null,
-              expectancyPct: candidate.expectancyPct,
-              score: candidate.score,
-              riskRewardRatio: candidate.riskReward1m,
-              entryGapPct: candidate.entryGapPct1m,
-            },
-            {
-              skipLlmEntryReview: sourceStage === 'AUTO_PASS',
-              entryAmountKrw,
-              sourceStage,
+          if (sourceStage === 'BORDERLINE' && llmEntryReviewUsedInTick >= llmEntryReviewMaxPerTick) {
+            stage = 'RECHECK_SCHEDULED';
+            reason = `tick당 LLM 진입심사 상한(${llmEntryReviewMaxPerTick}) 도달`;
+          } else {
+            activeGlobalMarkets.add(candidate.market);
+            if (sourceStage === 'BORDERLINE') {
+              llmEntryReviewUsedInTick += 1;
             }
-          );
-          stage = 'ENTERED';
-          reason = `${sourceStage} 워커 생성 (진입금 ${entryAmountKrw.toLocaleString('ko-KR')}원)`;
-          availableSlots -= 1;
-          executed = true;
-          this.pushEvent({
-            type: 'CANDIDATE',
-            level: 'INFO',
-            market: candidate.market,
-            action: 'ENTERED',
-            detail: `${candidate.koreanName} ${sourceStage} 후보 진입 파이프라인 시작`,
-          });
+            entryAmountKrw = this.resolveEntryAmount(sourceStage);
+            this.spawnWorker(
+              candidate.market,
+              {
+                market: candidate.market,
+                koreanName: candidate.koreanName,
+                recommendedEntryWinRate: candidate.recommendedEntryWinRate1m ?? null,
+                marketEntryWinRate: candidate.marketEntryWinRate1m ?? null,
+                expectancyPct: candidate.expectancyPct,
+                score: candidate.score,
+                riskRewardRatio: candidate.riskReward1m,
+                entryGapPct: candidate.entryGapPct1m,
+              },
+              {
+                skipLlmEntryReview: sourceStage === 'AUTO_PASS',
+                entryAmountKrw,
+                sourceStage,
+              }
+            );
+            stage = 'ENTERED';
+            reason = `${sourceStage} 워커 생성 (진입금 ${entryAmountKrw.toLocaleString('ko-KR')}원)`;
+            availableSlots -= 1;
+            executed = true;
+            this.pushEvent({
+              type: 'CANDIDATE',
+              level: 'INFO',
+              market: candidate.market,
+              action: 'ENTERED',
+              detail: `${candidate.koreanName} ${sourceStage} 후보 진입 파이프라인 시작`,
+            });
+          }
         }
 
         if (stageForStats === 'AUTO_PASS') autoPass += 1;
@@ -650,11 +739,12 @@ export class AutopilotOrchestrator {
   }
 
   private isFineAgentEnabled(): boolean {
-    return this.config.fineAgentEnabled !== false;
+    if (this.config.fineAgentEnabled === false) return false;
+    return this.isFineAgentInvestOnly();
   }
 
   private resolveFineAgentMaxPerTick(): number {
-    return Math.min(8, Math.max(1, Math.round(this.config.fineAgentMaxPerTick ?? 3)));
+    return Math.min(4, Math.max(1, Math.round(this.config.fineAgentMaxPerTick ?? 1)));
   }
 
   private resolveFineAgentDecisionTtlMs(): number {
@@ -663,12 +753,23 @@ export class AutopilotOrchestrator {
 
   private async resolveFineGrainedDecision(
     candidate: AutopilotOpportunityView
-  ): Promise<FineGrainedDecisionResult> {
+  ): Promise<{ decision: FineGrainedDecisionResult; fromCache: boolean }> {
     const ttlMs = this.resolveFineAgentDecisionTtlMs();
     const cached = this.fineDecisionCache.get(candidate.market);
     const now = Date.now();
     if (cached && now - cached.at <= ttlMs) {
-      return cached.decision;
+      return {
+        decision: {
+          ...cached.decision,
+          usage: {
+            calls: 0,
+            estimatedInputTokens: 0,
+            estimatedOutputTokens: 0,
+            totalTokens: 0,
+          },
+        },
+        fromCache: true,
+      };
     }
 
     const context = await guidedTradingApi.getAgentContext(
@@ -678,14 +779,12 @@ export class AutopilotOrchestrator {
       20,
       this.config.tradingMode
     );
-    for (let i = 0; i < 5; i += 1) {
-      this.recordLlmUsage('FINE_AGENT_PIPELINE', candidate.market);
-    }
     const decision = await runFineGrainedAgentPipeline({
       market: candidate.market,
       tradingMode: this.config.tradingMode,
       model: this.config.llmModel,
       minLlmConfidence: this.config.minLlmConfidence,
+      mode: this.resolveFineAgentMode(),
       candidate,
       context,
     });
@@ -699,7 +798,10 @@ export class AutopilotOrchestrator {
         this.fineDecisionCache.delete(market);
       }
     }
-    return decision;
+    return {
+      decision,
+      fromCache: false,
+    };
   }
 
   private async logFineGrainedDecision(
@@ -821,6 +923,118 @@ export class AutopilotOrchestrator {
     if (wins.length === 0) return 0;
     const avg = wins.reduce((acc, value) => acc + value, 0) / wins.length;
     return Math.round(avg * 10) / 10;
+  }
+
+  private configureTokenGovernor(): void {
+    this.tokenGovernor.configure({
+      dailyTokenCap: this.resolveLlmDailyTokenCap(),
+      riskReserveTokens: this.resolveLlmRiskReserveTokens(),
+    });
+  }
+
+  private resolveLlmDailyTokenCap(): number {
+    const raw = this.config.llmDailyTokenCap;
+    if (typeof raw !== 'number' || !Number.isFinite(raw)) return 200_000;
+    return Math.min(2_000_000, Math.max(20_000, Math.round(raw)));
+  }
+
+  private resolveLlmRiskReserveTokens(): number {
+    const cap = this.resolveLlmDailyTokenCap();
+    const raw = this.config.llmRiskReserveTokens;
+    if (typeof raw !== 'number' || !Number.isFinite(raw)) return Math.min(cap, 40_000);
+    return Math.min(cap, Math.max(0, Math.round(raw)));
+  }
+
+  private resolveBudgetEngine(): LlmBudgetEngine {
+    if (this.config.tradingMode === 'SCALP') return 'SCALP';
+    if (this.config.tradingMode === 'POSITION') return 'POSITION';
+    return 'SWING';
+  }
+
+  private resolveLlmEntryReviewMaxPerTick(): number {
+    const raw = this.config.llmEntryReviewMaxPerTick ?? 1;
+    return Math.min(4, Math.max(1, Math.round(raw)));
+  }
+
+  private resolveFineAgentMode(): FineAgentMode {
+    return this.config.fineAgentMode === 'FULL' ? 'FULL' : 'LITE';
+  }
+
+  private isFineAgentInvestOnly(): boolean {
+    return this.resolveBudgetEngine() !== 'SCALP';
+  }
+
+  private estimateEntryReviewTokens(): number {
+    return 2_200;
+  }
+
+  private estimateFineAgentTokens(): number {
+    return this.resolveFineAgentMode() === 'FULL' ? 9_000 : 3_600;
+  }
+
+  private estimatePositionReviewTokens(): number {
+    return 1_600;
+  }
+
+  private evaluateQuantLlmGate(
+    candidate: AutopilotOpportunityView,
+    engine: LlmBudgetEngine
+  ): { allow: boolean; reason: string } {
+    const score = Number.isFinite(candidate.score) ? candidate.score : 0;
+    const expectancyPct = Number.isFinite(candidate.expectancyPct) ? candidate.expectancyPct : 0;
+    const entryGapPct = Number.isFinite(candidate.entryGapPct1m) ? candidate.entryGapPct1m : Number.POSITIVE_INFINITY;
+    const rr = Number.isFinite(candidate.riskReward1m) ? candidate.riskReward1m : 0;
+
+    const rule = engine === 'SCALP'
+      ? { score: 66, expectancyPct: 0.14, entryGapPct: 0.6, rr: 1.15 }
+      : engine === 'SWING'
+        ? { score: 62, expectancyPct: 0.1, entryGapPct: 0.8, rr: 1.12 }
+        : { score: 60, expectancyPct: 0.08, entryGapPct: 1.0, rr: 1.1 };
+
+    if (score < rule.score) {
+      return { allow: false, reason: `score ${score.toFixed(1)} < ${rule.score}` };
+    }
+    if (expectancyPct < rule.expectancyPct) {
+      return { allow: false, reason: `expectancy ${expectancyPct.toFixed(3)} < ${rule.expectancyPct.toFixed(3)}` };
+    }
+    if (entryGapPct > rule.entryGapPct) {
+      return { allow: false, reason: `entryGap ${entryGapPct.toFixed(2)} > ${rule.entryGapPct.toFixed(2)}` };
+    }
+    if (rr < rule.rr) {
+      return { allow: false, reason: `RR ${rr.toFixed(2)} < ${rule.rr.toFixed(2)}` };
+    }
+    return { allow: true, reason: '정량 LLM 게이트 통과' };
+  }
+
+  private canSpendLlm(
+    action: LlmBudgetAction,
+    market: string,
+    estimatedTokens: number
+  ): { allow: boolean; fallbackMode: boolean; reason?: string } {
+    const decision = this.tokenGovernor.canSpend(action, this.resolveBudgetEngine(), estimatedTokens);
+    if (!decision.allow) {
+      this.pushEvent({
+        type: 'LLM',
+        level: 'WARN',
+        market,
+        action: 'TOKEN_BUDGET_SKIP',
+        detail: decision.reason ?? 'LLM 토큰 예산 부족',
+      });
+      this.writeLog(`[${market}] LLM 예산 부족: ${decision.reason ?? 'unknown'}`);
+    }
+    return decision;
+  }
+
+  private recordLlmTokenUsage(action: LlmBudgetAction, market: string, tokens: number): void {
+    this.tokenGovernor.recordUsage(action, this.resolveBudgetEngine(), tokens);
+    const budget = this.tokenGovernor.getSnapshot();
+    this.pushEvent({
+      type: 'LLM',
+      level: 'INFO',
+      market,
+      action: 'TOKEN_SPEND',
+      detail: `${action} ${Math.max(1, Math.round(tokens)).toLocaleString('ko-KR')} tokens · 잔여 ${budget.remainingTokens.toLocaleString('ko-KR')}/${budget.dailyTokenCap.toLocaleString('ko-KR')}`,
+    });
   }
 
   private resolveStrategyCode(): string {
@@ -1151,53 +1365,37 @@ export class AutopilotOrchestrator {
     }
   }
 
-  private kstDateKey(now = new Date()): string {
-    return now.toLocaleDateString('en-CA', { timeZone: 'Asia/Seoul' });
-  }
-
-  private rolloverLlmUsageIfNeeded(): void {
-    const key = this.kstDateKey();
-    if (this.llmUsageDateKst === key) return;
-    this.llmUsageDateKst = key;
-    this.llmUsageToday = 0;
-    this.llmSoftCapWarned = false;
-  }
-
-  private recordLlmUsage(action: string, market?: string): void {
-    this.rolloverLlmUsageIfNeeded();
-    this.llmUsageToday += 1;
-    if (!this.llmSoftCapWarned && this.llmUsageToday >= this.config.llmDailySoftCap) {
-      this.llmSoftCapWarned = true;
-      this.pushEvent({
-        type: 'LLM',
-        level: 'WARN',
-        market,
-        action: 'LLM_SOFT_CAP',
-        detail: `일일 LLM 사용량이 소프트 상한(${this.config.llmDailySoftCap}회)을 초과했습니다. 호출은 계속 허용됩니다. (${action})`,
-      });
-      this.writeLog(`LLM 소프트 상한 초과: ${this.llmUsageToday}/${this.config.llmDailySoftCap}`);
-    }
-  }
-
   private async evaluateEntry(
     market: string,
     context: GuidedAgentContextResponse
   ): Promise<EntryDecision> {
-    this.recordLlmUsage('ENTRY_REVIEW', market);
-    const response = await requestOneShotText({
+    const budget = this.canSpendLlm('ENTRY_REVIEW', market, this.estimateEntryReviewTokens());
+    if (!budget.allow) {
+      return {
+        approve: false,
+        confidence: 0,
+        reason: budget.reason ?? 'LLM entry budget 부족',
+        severity: 'HIGH',
+        riskTags: ['TOKEN_BUDGET'],
+        suggestedCooldownSec: 300,
+        nextReviewSec: 300,
+      };
+    }
+    const response = await requestOneShotTextWithMeta({
       model: this.config.llmModel,
       tradingMode: this.config.tradingMode,
       context,
       prompt: [
         `${market} 진입 승인 여부를 판단해.`,
         '반드시 JSON 한 줄로만 답해.',
-        '형식: {"approve":true|false,"confidence":0-100,"severity":"LOW|MEDIUM|HIGH","riskTags":["..."],"cooldownSec":30-1200,"reason":"..."}',
+        '형식: {"approve":true|false,"confidence":0-100,"severity":"LOW|MEDIUM|HIGH","riskTags":["..."],"cooldownSec":300-3600,"nextReviewSec":300-3600,"reason":"..."}',
         '규칙: 변동성 과다/손절 근접/추세 훼손이면 approve=false.',
         'approve=false면 cooldownSec을 반드시 넣어. 위험 높을수록 길게.',
       ].join('\n'),
     });
+    this.recordLlmTokenUsage('ENTRY_REVIEW', market, response.usage.totalTokens);
 
-    const parsed = this.parseJsonObject(response);
+    const parsed = this.parseJsonObject(response.text);
     const approve = Boolean(parsed?.approve);
     const confidence = this.toSafeNumber(parsed?.confidence, 0);
     const reason = typeof parsed?.reason === 'string' ? parsed.reason : 'LLM 응답 파싱 실패';
@@ -1208,7 +1406,11 @@ export class AutopilotOrchestrator {
       Number.NaN
     );
     const suggestedCooldownSec = Number.isFinite(suggestedCooldownRaw)
-      ? Math.min(1200, Math.max(30, Math.round(suggestedCooldownRaw)))
+      ? Math.min(3600, Math.max(300, Math.round(suggestedCooldownRaw)))
+      : null;
+    const nextReviewRaw = this.toSafeNumber(parsed?.nextReviewSec, Number.NaN);
+    const nextReviewSec = Number.isFinite(nextReviewRaw)
+      ? Math.min(3600, Math.max(300, Math.round(nextReviewRaw)))
       : null;
 
     this.pushEvent({
@@ -1216,10 +1418,10 @@ export class AutopilotOrchestrator {
       level: approve ? 'INFO' : severity === 'HIGH' ? 'ERROR' : 'WARN',
       market,
       action: 'ENTRY_REVIEW',
-      detail: `${approve ? '승인' : '거절'} (${confidence.toFixed(0)}/${severity})${suggestedCooldownSec ? ` · 쿨다운 ${suggestedCooldownSec}초` : ''}: ${reason}`,
+      detail: `${approve ? '승인' : '거절'} (${confidence.toFixed(0)}/${severity})${suggestedCooldownSec ? ` · 쿨다운 ${suggestedCooldownSec}초` : ''}${nextReviewSec ? ` · 재검토 ${nextReviewSec}초` : ''}: ${reason}`,
     });
 
-    return { approve, confidence, reason, severity, riskTags, suggestedCooldownSec };
+    return { approve, confidence, reason, severity, riskTags, suggestedCooldownSec, nextReviewSec };
   }
 
   private async planEntryOrder(
@@ -1421,34 +1623,46 @@ export class AutopilotOrchestrator {
   private async reviewOpenPosition(
     market: string,
     position: GuidedTradePosition
-  ): Promise<{ action: 'HOLD' | 'PARTIAL_TP' | 'FULL_EXIT'; reason: string }> {
-    this.recordLlmUsage('POSITION_REVIEW', market);
-    const response = await requestOneShotText({
+  ): Promise<{ action: 'HOLD' | 'PARTIAL_TP' | 'FULL_EXIT'; reason: string; nextReviewSec: number | null }> {
+    const budget = this.canSpendLlm('POSITION_REVIEW', market, this.estimatePositionReviewTokens());
+    if (!budget.allow) {
+      return {
+        action: 'HOLD',
+        reason: budget.reason ?? 'LLM risk reserve 부족',
+        nextReviewSec: 900,
+      };
+    }
+    const response = await requestOneShotTextWithMeta({
       model: this.config.llmModel,
       tradingMode: this.config.tradingMode,
       prompt: [
         `${market} 포지션 관리 판단.`,
         `현재 미실현손익 ${position.unrealizedPnlPercent.toFixed(2)}%.`,
         '반드시 JSON 한 줄로만 답해.',
-        '형식: {"action":"HOLD|PARTIAL_TP|FULL_EXIT","reason":"..."}',
+        '형식: {"action":"HOLD|PARTIAL_TP|FULL_EXIT","nextReviewSec":300-3600,"reason":"..."}',
       ].join('\n'),
     });
-    const parsed = this.parseJsonObject(response);
+    this.recordLlmTokenUsage('POSITION_REVIEW', market, response.usage.totalTokens);
+    const parsed = this.parseJsonObject(response.text);
     const action = typeof parsed?.action === 'string' ? parsed.action.toUpperCase() : 'HOLD';
     const reason = typeof parsed?.reason === 'string' ? parsed.reason : '검토';
+    const nextReviewRaw = this.toSafeNumber(parsed?.nextReviewSec, Number.NaN);
+    const nextReviewSec = Number.isFinite(nextReviewRaw)
+      ? Math.min(3600, Math.max(300, Math.round(nextReviewRaw)))
+      : null;
 
     this.pushEvent({
       type: 'LLM',
       level: action === 'HOLD' ? 'INFO' : 'WARN',
       market,
       action: 'POSITION_REVIEW',
-      detail: `${action}: ${reason}`,
+      detail: `${action}${nextReviewSec ? ` · 재검토 ${nextReviewSec}초` : ''}: ${reason}`,
     });
 
     if (isValidReviewAction(action)) {
-      return { action, reason };
+      return { action, reason, nextReviewSec };
     }
-    return { action: 'HOLD', reason };
+    return { action: 'HOLD', reason, nextReviewSec };
   }
 
   private parseJsonObject(text: string): Record<string, unknown> | null {

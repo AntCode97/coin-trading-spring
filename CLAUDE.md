@@ -143,6 +143,32 @@ coin-trading-spring/
 
 ## 최근 변경사항 (2026-02-27)
 
+## 최근 변경사항 (2026-03-02)
+
+### 오토파일럿 LLM 토큰 거버너 + Quant-only 폴백
+
+- 클라이언트 오케스트레이터에 KST 일자 기준 토큰 거버너(`LlmTokenGovernor`) 도입.
+  - 일일 상한: `200,000 tokens`
+  - 버킷 분리: `Entry 160,000` + `Risk Reserve 40,000`
+  - 엔진별 Entry 배분: `SCALP 64,000 / SWING 56,000 / POSITION 40,000`
+- 예산 초과 시 정책:
+  - `BORDERLINE` LLM 진입 심사 중단 (`TOKEN_BUDGET_SKIP`)
+  - 오토파일럿은 중단하지 않고 `Quant-only fallback`으로 지속
+- 정량 선행 게이트 추가(`evaluateQuantLlmGate`):
+  - LLM 전달 전 후보를 엔진별 threshold로 필터링 (`QUANT_FILTERED`)
+  - tick당 엔진별 LLM 진입심사 상한 `1`
+- FineAgent 비용 절감:
+  - 기본 범위 `INVEST(SWING/POSITION)`만 활성
+  - 기본 모드 `LITE` (deterministic specialist + LLM `SYNTH/PM` 2회)
+- 쿨다운/재분석 스케줄:
+  - 진입 실패 기본 쿨다운 `300초`로 통일(기존 45/90초 경로 제거)
+  - LLM 제안 쿨다운/재검토는 `300~3600초`로 보정
+  - Entry/Position LLM 응답에 `nextReviewSec` 반영, 워커에서 `nextEntryAttemptAt`/`nextPositionReviewAt`로 실행 제어
+- UI 반영:
+  - 라이브 도크에 토큰 사용/잔여, reserve, fallback 상태, `TOKEN_BUDGET_SKIP`/`QUANT_FILTERED`/`RECHECK_SCHEDULED` 카운트 노출
+
+---
+
 ### 오토파일럿 기회 포착/수익 빈도 강화 (Expectancy 중심)
 
 - 신규 API `GET /api/guided-trading/autopilot/opportunities` 추가.
