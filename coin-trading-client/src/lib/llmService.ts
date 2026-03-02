@@ -66,6 +66,8 @@ interface OneShotOptions {
   tradingMode?: TradingMode;
   mcpTools?: McpTool[];
   zaiEndpointMode?: ZaiEndpointMode;
+  delegationMode?: DelegationMode;
+  zaiDelegateModel?: string;
 }
 
 interface ZaiToolLoopResult {
@@ -927,18 +929,13 @@ async function requestOpenAiOneShotWithMeta(options: OneShotOptions): Promise<{ 
 
   const userContent = buildUserContent(options.prompt, options.context);
   const estimatedInputTokens = estimateTextTokens(userContent);
-
-  const requestBody: Record<string, unknown> = {
-    model: options.model || 'gpt-5.3-codex',
-    instructions: buildSystemPrompt(options.tradingMode || 'SWING'),
-    input: [{ role: 'user', content: userContent }],
-    stream: true,
-    store: false,
-  };
-
+  const input: Array<{ role: string; content: string }> = [{ role: 'user', content: userContent }];
   const openAiTools = options.mcpTools ? mcpToolsToOpenAiFunctions(options.mcpTools) : [];
-  if (openAiTools.length > 0) {
-    requestBody.tools = openAiTools;
+  const autoDelegationEnabled = isAutoDelegationAllowed(options.delegationMode)
+    ? (await checkConnection('zai')) === 'connected'
+    : false;
+  if (autoDelegationEnabled) {
+    openAiTools.push(buildZaiDelegateToolSchema());
   }
 
   const headers: Record<string, string> = {
@@ -950,48 +947,116 @@ async function requestOpenAiOneShotWithMeta(options: OneShotOptions): Promise<{ 
     headers['ChatGPT-Account-Id'] = token.accountId;
   }
 
-  const response = await fetch(CODEX_API_URL, {
-    method: 'POST',
-    headers,
-    body: JSON.stringify(requestBody),
-  });
-  if (!response.ok) {
-    const errorText = await response.text();
-    throw new Error(`Codex API 오류 (${response.status}): ${errorText}`);
-  }
+  let text = '';
+  let loopCount = 0;
+  const maxLoops = 5;
 
-  const reader = response.body?.getReader();
-  if (!reader) throw new Error('응답 스트림을 읽을 수 없습니다.');
+  while (loopCount < maxLoops) {
+    loopCount += 1;
 
-  const decoder = new TextDecoder();
-  let buffer = '';
-  let accumulated = '';
-  while (true) {
-    const { done, value } = await reader.read();
-    if (done) break;
+    const requestBody: Record<string, unknown> = {
+      model: options.model || 'gpt-5.3-codex',
+      instructions: buildSystemPrompt(options.tradingMode || 'SWING'),
+      input,
+      stream: true,
+      store: false,
+    };
+    if (openAiTools.length > 0) {
+      requestBody.tools = openAiTools;
+    }
 
-    buffer += decoder.decode(value, { stream: true });
-    const lines = buffer.split('\n');
-    buffer = lines.pop() || '';
+    const response = await fetch(CODEX_API_URL, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify(requestBody),
+    });
+    if (!response.ok) {
+      const errorText = await response.text();
+      throw new Error(`Codex API 오류 (${response.status}): ${errorText}`);
+    }
 
-    for (const line of lines) {
-      if (!line.startsWith('data: ')) continue;
-      const data = line.slice(6).trim();
-      if (data === '[DONE]') continue;
+    const reader = response.body?.getReader();
+    if (!reader) throw new Error('응답 스트림을 읽을 수 없습니다.');
 
-      let event: CodexResponseEvent;
-      try {
-        event = JSON.parse(data);
-      } catch {
-        continue;
-      }
-      if (event.type === 'response.output_text.delta' && event.delta) {
-        accumulated += event.delta;
+    const decoder = new TextDecoder();
+    let buffer = '';
+    let accumulated = '';
+    const pendingToolCalls: Array<{ callId: string; name: string; args: string }> = [];
+    let hasToolCalls = false;
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split('\n');
+      buffer = lines.pop() || '';
+
+      for (const line of lines) {
+        if (!line.startsWith('data: ')) continue;
+        const data = line.slice(6).trim();
+        if (data === '[DONE]') continue;
+
+        let event: CodexResponseEvent;
+        try {
+          event = JSON.parse(data);
+        } catch {
+          continue;
+        }
+        if (event.type === 'response.output_text.delta' && event.delta) {
+          accumulated += event.delta;
+        }
+        if (event.type === 'response.output_item.done' && event.item?.type === 'function_call') {
+          hasToolCalls = true;
+          pendingToolCalls.push({
+            callId: event.item.call_id || '',
+            name: event.item.name || '',
+            args: event.item.arguments || '{}',
+          });
+        }
       }
     }
+
+    if (hasToolCalls && pendingToolCalls.length > 0) {
+      if (accumulated.trim()) {
+        input.push({ role: 'assistant', content: accumulated });
+      }
+      for (const tc of pendingToolCalls) {
+        let parsedArgs: Record<string, unknown> = {};
+        try {
+          parsedArgs = JSON.parse(tc.args);
+        } catch {
+          // keep empty object
+        }
+
+        let result: string;
+        if (tc.name === ZAI_DELEGATE_TOOL_NAME) {
+          const task = typeof parsedArgs.task === 'string' ? parsedArgs.task : '';
+          const delegatedModel = typeof parsedArgs.model === 'string' && parsedArgs.model.trim()
+            ? parsedArgs.model.trim()
+            : (options.zaiDelegateModel || ZAI_DEFAULT_MODEL);
+          result = await delegateToZaiAgent({
+            task,
+            model: delegatedModel,
+            endpointMode: options.zaiEndpointMode,
+            tradingMode: options.tradingMode,
+          });
+        } else {
+          result = await callMcpTool(tc.name, parsedArgs, options.mcpTools);
+        }
+
+        input.push({
+          role: 'user',
+          content: `[도구 결과: ${tc.name}]\n${result}`,
+        });
+      }
+      continue;
+    }
+
+    text = accumulated.trim();
+    break;
   }
 
-  const text = accumulated.trim();
   const estimatedOutputTokens = estimateTextTokens(text);
   return {
     text,

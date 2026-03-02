@@ -6,10 +6,12 @@ import {
   type GuidedTradePosition,
 } from '../../api';
 import {
+  type DelegationMode,
   executeMcpTool,
   requestOneShotTextWithMeta,
   type LlmProviderId,
   type TradingMode,
+  type ZaiEndpointMode,
 } from '../llmService';
 import {
   MarketWorker,
@@ -47,6 +49,9 @@ export interface AutopilotConfig {
   llmReviewIntervalMs: number;
   llmProvider: LlmProviderId;
   llmModel: string;
+  zaiEndpointMode?: ZaiEndpointMode;
+  zaiDelegateModel?: string;
+  delegationMode?: DelegationMode;
   playwrightEnabled: boolean;
   entryPolicy: 'BALANCED' | 'AGGRESSIVE' | 'CONSERVATIVE';
   entryOrderMode: 'ADAPTIVE' | 'MARKET' | 'LIMIT';
@@ -786,6 +791,9 @@ export class AutopilotOrchestrator {
       tradingMode: this.config.tradingMode,
       provider: this.config.llmProvider,
       model: this.config.llmModel,
+      zaiEndpointMode: this.config.zaiEndpointMode,
+      delegationMode: this.config.delegationMode,
+      zaiDelegateModel: this.config.zaiDelegateModel,
       minLlmConfidence: this.config.minLlmConfidence,
       mode: this.resolveFineAgentMode(),
       candidate,
@@ -1387,6 +1395,9 @@ export class AutopilotOrchestrator {
     const response = await requestOneShotTextWithMeta({
       provider: this.config.llmProvider,
       model: this.config.llmModel,
+      zaiEndpointMode: this.config.zaiEndpointMode,
+      delegationMode: this.config.delegationMode,
+      zaiDelegateModel: this.config.zaiDelegateModel,
       tradingMode: this.config.tradingMode,
       context,
       prompt: [
@@ -1639,6 +1650,9 @@ export class AutopilotOrchestrator {
     const response = await requestOneShotTextWithMeta({
       provider: this.config.llmProvider,
       model: this.config.llmModel,
+      zaiEndpointMode: this.config.zaiEndpointMode,
+      delegationMode: this.config.delegationMode,
+      zaiDelegateModel: this.config.zaiDelegateModel,
       tradingMode: this.config.tradingMode,
       prompt: [
         `${market} 포지션 관리 판단.`,

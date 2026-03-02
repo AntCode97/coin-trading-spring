@@ -4,10 +4,12 @@ import type {
   GuidedAgentFeaturePack,
 } from '../../api';
 import {
+  type DelegationMode,
   type LlmProviderId,
   requestOneShotTextWithMeta,
   type OneShotUsageMeta,
   type TradingMode,
+  type ZaiEndpointMode,
 } from '../llmService';
 
 export type FineGrainedStage = 'AUTO_PASS' | 'BORDERLINE' | 'RULE_FAIL';
@@ -60,6 +62,9 @@ export interface FineGrainedPipelineOptions {
   tradingMode: TradingMode;
   provider: LlmProviderId;
   model: string;
+  zaiEndpointMode?: ZaiEndpointMode;
+  zaiDelegateModel?: string;
+  delegationMode?: DelegationMode;
   minLlmConfidence: number;
   mode?: FineAgentMode;
   candidate: AutopilotOpportunityView;
@@ -321,6 +326,9 @@ async function runSpecialistAgent(
     provider: options.provider,
     prompt,
     model: options.model,
+    zaiEndpointMode: options.zaiEndpointMode,
+    delegationMode: options.delegationMode,
+    zaiDelegateModel: options.zaiDelegateModel,
     context: options.context,
     tradingMode: options.tradingMode,
   });
@@ -354,6 +362,9 @@ async function runSynthAgent(
     provider: options.provider,
     prompt,
     model: options.model,
+    zaiEndpointMode: options.zaiEndpointMode,
+    delegationMode: options.delegationMode,
+    zaiDelegateModel: options.zaiDelegateModel,
     context: options.context,
     tradingMode: options.tradingMode,
   });
@@ -386,6 +397,9 @@ async function runPmAgent(
     provider: options.provider,
     prompt,
     model: options.model,
+    zaiEndpointMode: options.zaiEndpointMode,
+    delegationMode: options.delegationMode,
+    zaiDelegateModel: options.zaiDelegateModel,
     context: options.context,
     tradingMode: options.tradingMode,
   });
