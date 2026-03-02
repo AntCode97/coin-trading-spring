@@ -33,16 +33,27 @@ import {
   checkConnection,
   startLogin,
   logout,
+  setZaiApiKey,
+  clearZaiApiKey,
   sendChatMessage,
   clearConversation,
   connectMcpServers,
+  getZaiConcurrencyStatus,
+  subscribeZaiConcurrency,
+  isManualDelegationAllowed,
   getPlaywrightStatus,
   startPlaywrightMcp,
   stopPlaywrightMcp,
   CODEX_MODELS,
+  ZAI_MODELS,
   type AgentAction,
   type ChatMessage,
   type CodexModelId,
+  type ZaiModelId,
+  type ZaiConcurrencyStatus,
+  type LlmProviderId,
+  type ZaiEndpointMode,
+  type DelegationMode,
   type LlmConnectionStatus,
   type TradingMode,
 } from '../lib/llmService';
@@ -173,6 +184,12 @@ type WorkspacePrefs = {
   focusedScalpDockCollapsed?: boolean;
   investmentDockCollapsed?: boolean;
   monitorTab?: MonitorTab;
+  llmProvider?: LlmProviderId;
+  openAiModel?: CodexModelId;
+  zaiModel?: ZaiModelId;
+  zaiEndpointMode?: ZaiEndpointMode;
+  delegationMode?: DelegationMode;
+  chatModel?: string; // legacy
 };
 
 type ConnectPlaywrightOptions = {
@@ -189,6 +206,32 @@ function loadPrefs(): WorkspacePrefs {
   } catch {
     return {};
   }
+}
+
+const OPENAI_MODEL_SET = new Set<string>(CODEX_MODELS.map((model) => model.id));
+const ZAI_MODEL_SET = new Set<string>(ZAI_MODELS.map((model) => model.id));
+
+function isCodexModelId(value: unknown): value is CodexModelId {
+  return typeof value === 'string' && OPENAI_MODEL_SET.has(value);
+}
+
+function isZaiModelId(value: unknown): value is ZaiModelId {
+  return typeof value === 'string' && ZAI_MODEL_SET.has(value);
+}
+
+function normalizeLlmProvider(value: unknown): LlmProviderId {
+  return value === 'zai' ? 'zai' : 'openai';
+}
+
+function normalizeZaiEndpointMode(value: unknown): ZaiEndpointMode {
+  return value === 'general' ? 'general' : 'coding';
+}
+
+function normalizeDelegationMode(value: unknown): DelegationMode {
+  if (value === 'AUTO_ONLY' || value === 'MANUAL_ONLY' || value === 'AUTO_AND_MANUAL') {
+    return value;
+  }
+  return 'AUTO_AND_MANUAL';
 }
 
 function migrateWorkspacePrefs(prefs: WorkspacePrefs): WorkspacePrefs {
@@ -239,6 +282,13 @@ function migrateWorkspacePrefs(prefs: WorkspacePrefs): WorkspacePrefs {
         ? 'INVEST'
         : 'SCALP';
   }
+
+  next.llmProvider = normalizeLlmProvider(next.llmProvider);
+  const legacyOpenAiModel = isCodexModelId(next.chatModel) ? next.chatModel : undefined;
+  next.openAiModel = isCodexModelId(next.openAiModel) ? next.openAiModel : (legacyOpenAiModel ?? 'gpt-5.3-codex');
+  next.zaiModel = isZaiModelId(next.zaiModel) ? next.zaiModel : 'glm-4.7-flash';
+  next.zaiEndpointMode = normalizeZaiEndpointMode(next.zaiEndpointMode);
+  next.delegationMode = normalizeDelegationMode(next.delegationMode);
 
   return next;
 }
@@ -603,7 +653,16 @@ export default function ManualTraderWorkspace() {
   const [customStopLoss, setCustomStopLoss] = useState<number | ''>('');
   const [customTakeProfit, setCustomTakeProfit] = useState<number | ''>('');
   const [statusMessage, setStatusMessage] = useState<string>('');
-  const [llmStatus, setLlmStatus] = useState<LlmConnectionStatus>('checking');
+  const [openAiStatus, setOpenAiStatus] = useState<LlmConnectionStatus>('checking');
+  const [zaiStatus, setZaiStatus] = useState<LlmConnectionStatus>('checking');
+  const [llmProvider, setLlmProvider] = useState<LlmProviderId>(prefs.llmProvider ?? 'openai');
+  const [openAiModel, setOpenAiModel] = useState<CodexModelId>(prefs.openAiModel ?? 'gpt-5.3-codex');
+  const [zaiModel, setZaiModel] = useState<ZaiModelId>(prefs.zaiModel ?? 'glm-4.7-flash');
+  const [zaiEndpointMode, setZaiEndpointMode] = useState<ZaiEndpointMode>(prefs.zaiEndpointMode ?? 'coding');
+  const [delegationMode, setDelegationMode] = useState<DelegationMode>(prefs.delegationMode ?? 'AUTO_AND_MANUAL');
+  const [zaiApiKeyInput, setZaiApiKeyInput] = useState('');
+  const [zaiApiKeyBusy, setZaiApiKeyBusy] = useState(false);
+  const [zaiConcurrency, setZaiConcurrency] = useState<ZaiConcurrencyStatus>(getZaiConcurrencyStatus());
 
   // 탭 상태
   const [activeTab, setActiveTab] = useState<'order' | 'chat'>('order');
@@ -617,7 +676,6 @@ export default function ManualTraderWorkspace() {
   const [autoContext, setAutoContext] = useState(true);
   const [autoAnalysis, setAutoAnalysis] = useState(false);
   const [showTools, setShowTools] = useState(false);
-  const [chatModel, setChatModel] = useState<CodexModelId>('gpt-5.3-codex');
   const [mcpTools, setMcpTools] = useState<McpTool[]>([]);
   const [mcpConnected, setMcpConnected] = useState(false);
   const [playwrightEnabled, setPlaywrightEnabled] = useState<boolean>(prefs.playwrightEnabled ?? true);
@@ -727,8 +785,10 @@ export default function ManualTraderWorkspace() {
   const chatEndRef = useRef<HTMLDivElement | null>(null);
   const winRateSort = isWinRateSort(sortBy);
 
-  const openAiConnected = llmStatus === 'connected';
-  const providerChecking = llmStatus === 'checking';
+  const activeProviderStatus = llmProvider === 'zai' ? zaiStatus : openAiStatus;
+  const providerConnected = activeProviderStatus === 'connected';
+  const providerChecking = activeProviderStatus === 'checking';
+  const selectedModel = llmProvider === 'zai' ? zaiModel : openAiModel;
 
   const chartContainerRef = useRef<HTMLDivElement | null>(null);
   const chartRef = useRef<IChartApi | null>(null);
@@ -1165,6 +1225,11 @@ export default function ManualTraderWorkspace() {
     };
   }, []);
 
+  useEffect(() => {
+    const unsubscribe = subscribeZaiConcurrency((next) => setZaiConcurrency(next));
+    return unsubscribe;
+  }, []);
+
   // 채팅 스크롤
   useEffect(() => {
     chatEndRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -1211,6 +1276,11 @@ export default function ManualTraderWorkspace() {
       focusedScalpPollIntervalSec,
       focusedScalpDockCollapsed,
       investmentDockCollapsed,
+      llmProvider,
+      openAiModel,
+      zaiModel,
+      zaiEndpointMode,
+      delegationMode,
     };
     window.localStorage.setItem(STORAGE_KEY, JSON.stringify(next));
   }, [
@@ -1251,6 +1321,11 @@ export default function ManualTraderWorkspace() {
     focusedScalpPollIntervalSec,
     focusedScalpDockCollapsed,
     investmentDockCollapsed,
+    llmProvider,
+    openAiModel,
+    zaiModel,
+    zaiEndpointMode,
+    delegationMode,
   ]);
 
   useEffect(() => {
@@ -1511,33 +1586,82 @@ export default function ManualTraderWorkspace() {
   };
 
   const handleCheckStatus = useCallback(async () => {
-    setLlmStatus('checking');
+    const expectedProvider = llmProvider;
+    setOpenAiStatus((prev) => prev === 'connected' ? prev : 'checking');
+    setZaiStatus((prev) => prev === 'connected' ? prev : 'checking');
     try {
-      const status = await checkConnection();
-      setLlmStatus(status);
+      const [openai, zai] = await Promise.all([
+        checkConnection('openai'),
+        checkConnection('zai'),
+      ]);
+      setOpenAiStatus(openai);
+      setZaiStatus(zai);
+      if (expectedProvider === 'openai' && openai === 'error') {
+        setStatusMessage('OpenAI 연결 상태 확인 실패');
+      }
+      if (expectedProvider === 'zai' && zai === 'error') {
+        setStatusMessage('z.ai 연결 상태 확인 실패');
+      }
     } catch {
-      setLlmStatus('error');
+      setOpenAiStatus('error');
+      setZaiStatus('error');
     }
-  }, []);
+  }, [llmProvider]);
 
   const handleLogin = useCallback(async () => {
-    setLlmStatus('checking');
+    setOpenAiStatus('checking');
     try {
-      await startLogin();
-      setLlmStatus('connected');
+      await startLogin('openai');
+      setOpenAiStatus('connected');
       setStatusMessage('OpenAI 로그인 완료.');
     } catch (error) {
-      setLlmStatus('error');
+      setOpenAiStatus('error');
       setStatusMessage(error instanceof Error ? error.message : 'OpenAI 로그인 실패');
     }
   }, []);
 
   const handleLogout = useCallback(async () => {
-    await logout();
-    setLlmStatus('disconnected');
-    clearConversation();
+    await logout('openai');
+    setOpenAiStatus('disconnected');
+    clearConversation('openai');
     setChatMessages([]);
     setStatusMessage('OpenAI 로그아웃 완료.');
+  }, []);
+
+  const handleSaveZaiApiKey = useCallback(async () => {
+    const trimmed = zaiApiKeyInput.trim();
+    if (!trimmed) {
+      setStatusMessage('z.ai API Key를 입력하세요.');
+      return;
+    }
+    setZaiApiKeyBusy(true);
+    try {
+      await setZaiApiKey(trimmed);
+      setZaiApiKeyInput('');
+      const status = await checkConnection('zai');
+      setZaiStatus(status);
+      setStatusMessage('z.ai API Key 저장 완료.');
+    } catch (error) {
+      setZaiStatus('error');
+      setStatusMessage(error instanceof Error ? error.message : 'z.ai API Key 저장 실패');
+    } finally {
+      setZaiApiKeyBusy(false);
+    }
+  }, [zaiApiKeyInput]);
+
+  const handleClearZaiKey = useCallback(async () => {
+    setZaiApiKeyBusy(true);
+    try {
+      await clearZaiApiKey();
+      setZaiStatus('disconnected');
+      setStatusMessage('z.ai API Key 삭제 완료.');
+      clearConversation('zai');
+      setChatMessages([]);
+    } catch (error) {
+      setStatusMessage(error instanceof Error ? error.message : 'z.ai API Key 삭제 실패');
+    } finally {
+      setZaiApiKeyBusy(false);
+    }
   }, []);
 
   // 에이전트 액션 실행
@@ -1635,10 +1759,10 @@ export default function ManualTraderWorkspace() {
   };
 
   useEffect(() => {
-    if ((autopilotEnabled || swingAutopilotEnabled || positionAutopilotEnabled) && llmStatus !== 'connected') {
-      setStatusMessage('오토파일럿은 OpenAI 로그인 상태에서만 시작할 수 있습니다.');
+    if ((autopilotEnabled || swingAutopilotEnabled || positionAutopilotEnabled) && activeProviderStatus !== 'connected') {
+      setStatusMessage(`오토파일럿은 ${llmProvider === 'zai' ? 'z.ai API Key 연결' : 'OpenAI 로그인'} 상태에서만 시작할 수 있습니다.`);
     }
-  }, [autopilotEnabled, llmStatus, positionAutopilotEnabled, swingAutopilotEnabled]);
+  }, [autopilotEnabled, activeProviderStatus, llmProvider, positionAutopilotEnabled, swingAutopilotEnabled]);
 
   const resolveEngineAmount = useCallback((budgetKrw: number, maxPositions: number): number => {
     const perSlot = Math.floor(budgetKrw / Math.max(1, maxPositions));
@@ -1652,7 +1776,7 @@ export default function ManualTraderWorkspace() {
       setAutopilotState((prev) => ({ ...prev, enabled: false }));
       return;
     }
-    if (llmStatus !== 'connected') return;
+    if (activeProviderStatus !== 'connected') return;
 
     const budgetKrw = Math.max(5100, Math.round(autopilotCapitalPoolKrw * ENGINE_CAPITAL_RATIOS.SCALP));
     const maxConcurrent = Math.max(1, autopilotMaxConcurrentPositions);
@@ -1673,7 +1797,8 @@ export default function ManualTraderWorkspace() {
         postExitCooldownMs: postExitCooldownMinutes * 60 * 1000,
         workerTickMs: 8000,
         llmReviewIntervalMs: 8000,
-        llmModel: chatModel,
+        llmProvider,
+        llmModel: selectedModel,
         playwrightEnabled,
         entryPolicy,
         entryOrderMode,
@@ -1711,11 +1836,12 @@ export default function ManualTraderWorkspace() {
     };
   }, [
     autopilotEnabled,
-    llmStatus,
+    activeProviderStatus,
     autopilotAmountKrw,
     autopilotCapitalPoolKrw,
     autopilotMaxConcurrentPositions,
-    chatModel,
+    llmProvider,
+    selectedModel,
     dailyLossLimitKrw,
     entryOrderMode,
     entryPolicy,
@@ -1742,7 +1868,7 @@ export default function ManualTraderWorkspace() {
       setSwingAutopilotState((prev) => ({ ...prev, enabled: false }));
       return;
     }
-    if (llmStatus !== 'connected') return;
+    if (activeProviderStatus !== 'connected') return;
 
     const budgetKrw = Math.max(5100, Math.round(autopilotCapitalPoolKrw * ENGINE_CAPITAL_RATIOS.SWING));
     const maxConcurrent = 2;
@@ -1763,7 +1889,8 @@ export default function ManualTraderWorkspace() {
         postExitCooldownMs: postExitCooldownMinutes * 60 * 1000,
         workerTickMs: 12_000,
         llmReviewIntervalMs: 12_000,
-        llmModel: chatModel,
+        llmProvider,
+        llmModel: selectedModel,
         playwrightEnabled: false,
         entryPolicy,
         entryOrderMode,
@@ -1802,7 +1929,7 @@ export default function ManualTraderWorkspace() {
     };
   }, [
     swingAutopilotEnabled,
-    llmStatus,
+    activeProviderStatus,
     autopilotCapitalPoolKrw,
     dailyLossLimitKrw,
     winRateThresholdMode,
@@ -1812,7 +1939,8 @@ export default function ManualTraderWorkspace() {
     llmRiskReserveTokens,
     rejectCooldownSeconds,
     postExitCooldownMinutes,
-    chatModel,
+    llmProvider,
+    selectedModel,
     entryPolicy,
     entryOrderMode,
     pendingEntryTimeoutSec,
@@ -1827,7 +1955,7 @@ export default function ManualTraderWorkspace() {
       setPositionAutopilotState((prev) => ({ ...prev, enabled: false }));
       return;
     }
-    if (llmStatus !== 'connected') return;
+    if (activeProviderStatus !== 'connected') return;
 
     const budgetKrw = Math.max(5100, Math.round(autopilotCapitalPoolKrw * ENGINE_CAPITAL_RATIOS.POSITION));
     const maxConcurrent = 1;
@@ -1848,7 +1976,8 @@ export default function ManualTraderWorkspace() {
         postExitCooldownMs: postExitCooldownMinutes * 60 * 1000,
         workerTickMs: 20_000,
         llmReviewIntervalMs: 20_000,
-        llmModel: chatModel,
+        llmProvider,
+        llmModel: selectedModel,
         playwrightEnabled: false,
         entryPolicy,
         entryOrderMode,
@@ -1887,7 +2016,7 @@ export default function ManualTraderWorkspace() {
     };
   }, [
     positionAutopilotEnabled,
-    llmStatus,
+    activeProviderStatus,
     autopilotCapitalPoolKrw,
     dailyLossLimitKrw,
     winRateThresholdMode,
@@ -1897,7 +2026,8 @@ export default function ManualTraderWorkspace() {
     llmRiskReserveTokens,
     rejectCooldownSeconds,
     postExitCooldownMinutes,
-    chatModel,
+    llmProvider,
+    selectedModel,
     entryPolicy,
     entryOrderMode,
     pendingEntryTimeoutSec,
@@ -1914,12 +2044,27 @@ export default function ManualTraderWorkspace() {
   // 채팅 메시지 전송
   const handleSendChat = useCallback(async () => {
     if (chatBusy || !chatInput.trim()) return;
-    if (llmStatus !== 'connected') {
-      setStatusMessage('OpenAI 미연결 상태.');
+    const userText = chatInput.trim();
+    const isManualZaiDelegate = /^\/zai\s+/i.test(userText);
+    const manualModeAllowed = isManualDelegationAllowed(delegationMode);
+    const targetProvider: LlmProviderId = isManualZaiDelegate ? 'zai' : llmProvider;
+    const targetModel = targetProvider === 'zai' ? zaiModel : openAiModel;
+    const targetStatus = targetProvider === 'zai' ? zaiStatus : openAiStatus;
+    const messageForModel = isManualZaiDelegate ? userText.replace(/^\/zai\s+/i, '').trim() : userText;
+
+    if (isManualZaiDelegate && !manualModeAllowed) {
+      setStatusMessage('수동 /zai 위임이 비활성화된 모드입니다.');
+      return;
+    }
+    if (targetStatus !== 'connected') {
+      setStatusMessage(targetProvider === 'zai' ? 'z.ai 미연결 상태.' : 'OpenAI 미연결 상태.');
+      return;
+    }
+    if (!messageForModel) {
+      setStatusMessage('/zai 뒤에 위임할 작업을 입력하세요.');
       return;
     }
 
-    const userText = chatInput.trim();
     setChatInput('');
     setChatBusy(true);
     setChatStreamText('');
@@ -1929,11 +2074,15 @@ export default function ManualTraderWorkspace() {
       const llmTools = mcpTools;
 
       const newMessages = await sendChatMessage({
-        userMessage: userText,
-        model: chatModel,
+        userMessage: messageForModel,
+        provider: targetProvider,
+        model: targetModel,
         context,
         mcpTools: llmTools.length > 0 ? llmTools : undefined,
         tradingMode,
+        zaiEndpointMode,
+        delegationMode,
+        zaiDelegateModel: zaiModel,
         onStreamDelta: (text) => setChatStreamText(text),
         onToolCall: (name, args) => {
           setChatMessages((prev) => [
@@ -1980,7 +2129,21 @@ export default function ManualTraderWorkspace() {
     } finally {
       setChatBusy(false);
     }
-  }, [chatBusy, chatInput, chatModel, llmStatus, autoContext, agentContextQuery.data, mcpTools, tradingMode]);
+  }, [
+    chatBusy,
+    chatInput,
+    autoContext,
+    agentContextQuery.data,
+    delegationMode,
+    llmProvider,
+    mcpTools,
+    openAiModel,
+    openAiStatus,
+    tradingMode,
+    zaiEndpointMode,
+    zaiModel,
+    zaiStatus,
+  ]);
 
   // 자동 분석
   useEffect(() => {
@@ -1996,7 +2159,7 @@ export default function ManualTraderWorkspace() {
   }, [mcpTools]);
 
   useEffect(() => {
-    if (!autoAnalysis || llmStatus !== 'connected') return;
+    if (!autoAnalysis || activeProviderStatus !== 'connected') return;
 
     let cancelled = false;
     const runAutoAnalysis = () => {
@@ -2014,10 +2177,14 @@ export default function ManualTraderWorkspace() {
       const llmTools = mcpToolsRef.current;
       sendChatMessage({
         userMessage: '현재 시점 분석과 조언을 부탁합니다.',
-        model: chatModel,
+        provider: llmProvider,
+        model: selectedModel,
         context,
         mcpTools: llmTools.length > 0 ? llmTools : undefined,
         tradingMode,
+        zaiEndpointMode,
+        delegationMode,
+        zaiDelegateModel: zaiModel,
         onStreamDelta: (text) => setChatStreamText(text),
       })
         .then((msgs) => {
@@ -2046,7 +2213,7 @@ export default function ManualTraderWorkspace() {
       cancelled = true;
       window.clearInterval(timer);
     };
-  }, [autoAnalysis, chatModel, llmStatus, tradingMode]);
+  }, [autoAnalysis, activeProviderStatus, delegationMode, llmProvider, selectedModel, tradingMode, zaiEndpointMode, zaiModel]);
 
   useEffect(() => {
     void handleCheckStatus();
@@ -3007,29 +3174,95 @@ export default function ManualTraderWorkspace() {
               {/* 상태바 */}
               <div className="guided-chat-statusbar">
                 <div className="guided-provider-status">
-                  <span className={`guided-status-dot ${openAiConnected ? 'ok' : 'off'}`} />
+                  <span className={`guided-status-dot ${providerConnected ? 'ok' : 'off'}`} />
                   <span>
-                    {llmStatus === 'checking' ? '확인 중' : llmStatus === 'error' ? '오류' : llmStatus === 'expired' ? '만료' : openAiConnected ? 'OpenAI 연결됨' : '미연결'}
+                    {llmProvider === 'zai' ? 'z.ai' : 'OpenAI'} ·
+                    {' '}
+                    {activeProviderStatus === 'checking'
+                      ? '확인 중'
+                      : activeProviderStatus === 'error'
+                        ? '오류'
+                        : activeProviderStatus === 'expired'
+                          ? '만료'
+                          : providerConnected
+                            ? '연결됨'
+                            : '미연결'}
                   </span>
                 </div>
                 <div className="guided-chat-status-actions">
-                  {openAiConnected ? (
-                    <button type="button" onClick={() => void handleLogout()}>로그아웃</button>
+                  {llmProvider === 'openai' ? (
+                    providerConnected ? (
+                      <button type="button" onClick={() => void handleLogout()}>로그아웃</button>
+                    ) : (
+                      <button type="button" onClick={() => void handleLogin()} disabled={providerChecking}>
+                        {providerChecking ? '확인 중...' : '로그인'}
+                      </button>
+                    )
                   ) : (
-                    <button type="button" onClick={() => void handleLogin()} disabled={providerChecking}>
-                      {providerChecking ? '확인 중...' : '로그인'}
+                    <button type="button" onClick={() => void handleClearZaiKey()} disabled={zaiApiKeyBusy || zaiStatus !== 'connected'}>
+                      {zaiApiKeyBusy ? '처리 중...' : '키 삭제'}
                     </button>
                   )}
                 </div>
               </div>
+              <div className="guided-provider-meta">
+                z.ai 슬롯 {zaiConcurrency.active}/{zaiConcurrency.max} · 대기 {zaiConcurrency.queued}
+              </div>
+              <div className="guided-model-selector">
+                <label>프로바이더</label>
+                <select value={llmProvider} onChange={(e) => setLlmProvider(e.target.value as LlmProviderId)}>
+                  <option value="openai">OpenAI</option>
+                  <option value="zai">z.ai</option>
+                </select>
+              </div>
               <div className="guided-model-selector">
                 <label>모델</label>
-                <select value={chatModel} onChange={(e) => setChatModel(e.target.value as CodexModelId)}>
-                  {CODEX_MODELS.map((m) => (
+                <select
+                  value={selectedModel}
+                  onChange={(e) => {
+                    if (llmProvider === 'zai') {
+                      setZaiModel(e.target.value as ZaiModelId);
+                    } else {
+                      setOpenAiModel(e.target.value as CodexModelId);
+                    }
+                  }}
+                >
+                  {(llmProvider === 'zai' ? ZAI_MODELS : CODEX_MODELS).map((m) => (
                     <option key={m.id} value={m.id}>{m.label}</option>
                   ))}
                 </select>
               </div>
+              <div className="guided-model-selector">
+                <label>위임 모드</label>
+                <select value={delegationMode} onChange={(e) => setDelegationMode(e.target.value as DelegationMode)}>
+                  <option value="AUTO_AND_MANUAL">자동+수동</option>
+                  <option value="AUTO_ONLY">자동만</option>
+                  <option value="MANUAL_ONLY">수동만</option>
+                </select>
+              </div>
+              {llmProvider === 'zai' && (
+                <>
+                  <div className="guided-model-selector">
+                    <label>엔드포인트</label>
+                    <select value={zaiEndpointMode} onChange={(e) => setZaiEndpointMode(e.target.value as ZaiEndpointMode)}>
+                      <option value="coding">Coding</option>
+                      <option value="general">General</option>
+                    </select>
+                  </div>
+                  <div className="guided-zai-key-row">
+                    <input
+                      type="password"
+                      value={zaiApiKeyInput}
+                      onChange={(e) => setZaiApiKeyInput(e.target.value)}
+                      placeholder="z.ai API Key"
+                      disabled={zaiApiKeyBusy}
+                    />
+                    <button type="button" onClick={() => void handleSaveZaiApiKey()} disabled={zaiApiKeyBusy || !zaiApiKeyInput.trim()}>
+                      {zaiApiKeyBusy ? '저장 중...' : '키 저장'}
+                    </button>
+                  </div>
+                </>
+              )}
 
               {/* 도구 목록 접이식 */}
               <button
@@ -3134,13 +3367,13 @@ export default function ManualTraderWorkspace() {
                     value={chatInput}
                     onChange={(e) => setChatInput(e.target.value)}
                     onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); void handleSendChat(); } }}
-                    placeholder={`${selectedMarket} 분석 질문...`}
-                    disabled={chatBusy || !openAiConnected}
+                    placeholder={llmProvider === 'openai' ? `${selectedMarket} 분석 질문... (/zai 작업으로 수동 위임 가능)` : `${selectedMarket} 분석 질문...`}
+                    disabled={chatBusy || !providerConnected}
                   />
                   <button
                     type="button"
                     onClick={() => void handleSendChat()}
-                    disabled={chatBusy || !chatInput.trim() || !openAiConnected}
+                    disabled={chatBusy || !chatInput.trim() || !providerConnected}
                   >
                     전송
                   </button>

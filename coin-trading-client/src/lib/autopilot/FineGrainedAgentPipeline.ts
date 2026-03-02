@@ -4,6 +4,7 @@ import type {
   GuidedAgentFeaturePack,
 } from '../../api';
 import {
+  type LlmProviderId,
   requestOneShotTextWithMeta,
   type OneShotUsageMeta,
   type TradingMode,
@@ -57,6 +58,7 @@ export interface FineGrainedDecisionResult {
 export interface FineGrainedPipelineOptions {
   market: string;
   tradingMode: TradingMode;
+  provider: LlmProviderId;
   model: string;
   minLlmConfidence: number;
   mode?: FineAgentMode;
@@ -316,6 +318,7 @@ async function runSpecialistAgent(
   ].join('\n');
 
   const response = await requestOneShotTextWithMeta({
+    provider: options.provider,
     prompt,
     model: options.model,
     context: options.context,
@@ -348,6 +351,7 @@ async function runSynthAgent(
   ].join('\n');
 
   const response = await requestOneShotTextWithMeta({
+    provider: options.provider,
     prompt,
     model: options.model,
     context: options.context,
@@ -379,6 +383,7 @@ async function runPmAgent(
     `Candidate: ${JSON.stringify(options.candidate)}`,
   ].join('\n');
   const response = await requestOneShotTextWithMeta({
+    provider: options.provider,
     prompt,
     model: options.model,
     context: options.context,

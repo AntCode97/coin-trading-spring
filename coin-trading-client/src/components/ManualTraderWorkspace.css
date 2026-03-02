@@ -941,6 +941,12 @@
   cursor: pointer;
 }
 
+.guided-provider-meta {
+  font-size: 10px;
+  color: #7a8ba7;
+  margin-bottom: 4px;
+}
+
 /* ---------- 모델 선택 ---------- */
 
 .guided-model-selector {
@@ -972,6 +978,40 @@
 
 .guided-model-selector select:focus {
   border-color: #4a90d9;
+}
+
+.guided-zai-key-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 0;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+  margin-bottom: 4px;
+}
+
+.guided-zai-key-row input {
+  flex: 1;
+  background: #111722;
+  border: 1px solid #2a3445;
+  color: #dbe5f7;
+  border-radius: 5px;
+  padding: 4px 7px;
+  font-size: 11px;
+}
+
+.guided-zai-key-row button {
+  border: 1px solid #2a3445;
+  background: #111722;
+  color: #dbe5f7;
+  border-radius: 5px;
+  padding: 4px 8px;
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.guided-zai-key-row button:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
 }
 
 /* ---------- 도구 목록 ---------- */

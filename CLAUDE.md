@@ -57,7 +57,8 @@ Bithumb 암호화폐 거래소를 위한 **Spring Boot** 기반 자동화 트레
 ├── ManualTraderWorkspace     - Guided 수동 트레이딩 UI
 ├── AutopilotOrchestrator     - 오토파일럿 의사결정/워커 오케스트레이션
 ├── AutopilotLiveDock         - 실시간 후보/액션/주문 퍼널 도크
-└── electron/mcp              - MCP 허브 + Playwright MCP 프로세스 관리
+├── electron/mcp              - MCP 허브 + Playwright MCP 프로세스 관리
+└── electron/llm              - z.ai API Key 저장소 + 메인 프로세스 LLM IPC
 ```
 
 ---
@@ -122,9 +123,11 @@ coin-trading-spring/
 │   ├── src/components/ManualTraderWorkspace.tsx
 │   ├── src/components/autopilot/AutopilotLiveDock.tsx
 │   ├── src/lib/autopilot/AutopilotOrchestrator.ts
-│   └── electron/mcp/
-│       ├── mcp-hub.cjs
-│       └── playwright-manager.cjs
+│   ├── electron/mcp/
+│   │   ├── mcp-hub.cjs
+│   │   └── playwright-manager.cjs
+│   └── electron/llm/
+│       └── zai-store.cjs
 │
 ├── http/                               # HTTP Client 테스트 파일
 ├── docs/
@@ -144,6 +147,32 @@ coin-trading-spring/
 ## 최근 변경사항 (2026-02-27)
 
 ## 최근 변경사항 (2026-03-02)
+
+### 데스크톱 OpenAI + z.ai 멀티-프로바이더 통합
+
+- 데스크톱 채팅/오토파일럿 LLM 호출을 `openai`와 `zai` 프로바이더 선택형으로 확장.
+- 신규 Electron IPC 브리지:
+  - `window.desktopZai.setApiKey(apiKey)`
+  - `window.desktopZai.clearApiKey()`
+  - `window.desktopZai.checkStatus()`
+  - `window.desktopZai.chatCompletions(payload)`
+- z.ai API Key는 `~/.coin-trading/zai-api-key.json`에 권한 `0600`으로 저장(렌더러 노출 방지).
+- z.ai endpoint mode: `coding`(기본), `general`.
+- z.ai 텍스트 모델 노출:
+  - `glm-5`
+  - `glm-4.7`
+  - `glm-4.7-flash`
+  - `glm-4.7-flashx`
+  - `glm-4.6`
+  - `glm-4.5`
+- 전역 동시성 제한: z.ai 호출 최대 `3`개(채팅/오토파일럿/OpenAI→z.ai 위임 합산).
+- 위임:
+  - 자동: OpenAI tool `delegate_to_zai_agent`
+  - 수동: 채팅 `/zai <task>`
+- 오토파일럿 연동:
+  - `AutopilotConfig.llmProvider`
+  - `FineGrainedPipelineOptions.provider`
+  - 모든 one-shot LLM 호출에 provider 전달
 
 ### 오토파일럿 LLM 토큰 거버너 + Quant-only 폴백
 

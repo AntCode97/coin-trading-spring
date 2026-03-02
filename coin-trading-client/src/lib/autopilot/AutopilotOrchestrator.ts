@@ -8,6 +8,7 @@ import {
 import {
   executeMcpTool,
   requestOneShotTextWithMeta,
+  type LlmProviderId,
   type TradingMode,
 } from '../llmService';
 import {
@@ -44,6 +45,7 @@ export interface AutopilotConfig {
   postExitCooldownMs: number;
   workerTickMs: number;
   llmReviewIntervalMs: number;
+  llmProvider: LlmProviderId;
   llmModel: string;
   playwrightEnabled: boolean;
   entryPolicy: 'BALANCED' | 'AGGRESSIVE' | 'CONSERVATIVE';
@@ -782,6 +784,7 @@ export class AutopilotOrchestrator {
     const decision = await runFineGrainedAgentPipeline({
       market: candidate.market,
       tradingMode: this.config.tradingMode,
+      provider: this.config.llmProvider,
       model: this.config.llmModel,
       minLlmConfidence: this.config.minLlmConfidence,
       mode: this.resolveFineAgentMode(),
@@ -1382,6 +1385,7 @@ export class AutopilotOrchestrator {
       };
     }
     const response = await requestOneShotTextWithMeta({
+      provider: this.config.llmProvider,
       model: this.config.llmModel,
       tradingMode: this.config.tradingMode,
       context,
@@ -1633,6 +1637,7 @@ export class AutopilotOrchestrator {
       };
     }
     const response = await requestOneShotTextWithMeta({
+      provider: this.config.llmProvider,
       model: this.config.llmModel,
       tradingMode: this.config.tradingMode,
       prompt: [

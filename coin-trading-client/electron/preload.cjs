@@ -22,3 +22,10 @@ contextBridge.exposeInMainWorld('desktopMcp', {
   playwrightStop: () => ipcRenderer.invoke('playwright:stop'),
   playwrightStatus: () => ipcRenderer.invoke('playwright:status'),
 });
+
+contextBridge.exposeInMainWorld('desktopZai', {
+  setApiKey: (apiKey) => ipcRenderer.invoke('zai:set-api-key', apiKey),
+  clearApiKey: () => ipcRenderer.invoke('zai:clear-api-key'),
+  checkStatus: () => ipcRenderer.invoke('zai:check-status'),
+  chatCompletions: (payload) => ipcRenderer.invoke('zai:chat-completions', payload),
+});

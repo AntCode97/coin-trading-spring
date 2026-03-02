@@ -535,6 +535,27 @@ curl -X POST http://localhost:8080/api/settings/regime \
 | POST | `/api/guided-trading/autopilot/decisions` | 클라이언트 Fine-Grained Agent 의사결정 로그 저장 |
 | GET | `/api/guided-trading/autopilot/performance` | 오토파일럿 7/30일 성과 및 증액 게이트 상태 조회 (`strategyCodePrefix` 필터 지원) |
 
+데스크톱 LLM 멀티-프로바이더 브리지 (Electron IPC):
+- `window.desktopAuth`(OpenAI) + `window.desktopZai`(z.ai) 동시 지원
+- `window.desktopZai` 메서드:
+  - `setApiKey(apiKey)`
+  - `clearApiKey()`
+  - `checkStatus()`
+  - `chatCompletions(payload)`
+- z.ai API Key 저장 위치: `~/.coin-trading/zai-api-key.json` (권한 `0600`)
+- z.ai endpoint mode: `coding`(기본) | `general`
+- z.ai 텍스트 모델 노출 목록:
+  - `glm-5`
+  - `glm-4.7`
+  - `glm-4.7-flash`
+  - `glm-4.7-flashx`
+  - `glm-4.6`
+  - `glm-4.5`
+- 전역 z.ai 동시 실행 제한: 최대 `3` (채팅/오토파일럿/OpenAI→z.ai 위임 합산)
+- 위임 모드:
+  - 자동 위임: OpenAI tool-call `delegate_to_zai_agent`
+  - 수동 위임: 채팅 입력 `/zai <task>`
+
 `/api/guided-trading/autopilot/live` 쿼리 파라미터:
 - `thresholdMode`: `DYNAMIC_P70` 또는 `FIXED`
 - `minMarketWinRate`: 고정 모드(`FIXED`)에서 후보 선별용 최소 **현재가 승률**(%)
@@ -566,6 +587,15 @@ curl -X POST http://localhost:8080/api/settings/regime \
 ---
 
 ## 최근 개선사항
+
+### 데스크톱 OpenAI + z.ai 멀티-프로바이더 통합 (2026-03-02)
+
+1. ManualTraderWorkspace 채팅/오토파일럿 LLM 경로를 `openai | zai` 프로바이더 선택형으로 확장했습니다.
+2. z.ai는 메인 프로세스 IPC 호출로만 실행하고 API Key는 사용자 홈(`~/.coin-trading`)에 권한 `0600`으로 저장합니다.
+3. 채팅 UI에 Provider/Model 드롭다운과 z.ai key 저장/삭제 UI를 추가하고, z.ai 선택 시 endpoint mode(`coding/general`)를 선택할 수 있습니다.
+4. z.ai 호출에 전역 세마포어를 적용해 동시 실행을 `3`으로 제한하고, 초과 요청은 큐 대기 후 타임아웃 오류를 반환합니다.
+5. OpenAI 경로에 `delegate_to_zai_agent` tool schema를 주입해 자동 위임을 지원하고, `/zai ...` 수동 위임 명령도 함께 지원합니다.
+6. 오토파일럿(`AutopilotOrchestrator`, `FineGrainedAgentPipeline`) 전 경로에 provider/model 전달을 반영해 선택한 공급자를 일관 적용합니다.
 
 ### LLM 토큰 절감형 오토파일럿 재설계 (2026-03-02)
 

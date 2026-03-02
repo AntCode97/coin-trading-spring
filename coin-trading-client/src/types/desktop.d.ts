@@ -1,4 +1,6 @@
 declare global {
+  type ZaiEndpointMode = 'coding' | 'general';
+
   interface DesktopMcpServerConfig {
     serverId: string;
     url: string;
@@ -50,6 +52,42 @@ declare global {
     isError?: boolean;
   }
 
+  interface DesktopZaiTool {
+    type: 'function';
+    function: {
+      name: string;
+      description?: string;
+      parameters?: Record<string, unknown>;
+    };
+  }
+
+  interface DesktopZaiChatPayload {
+    endpointMode?: ZaiEndpointMode;
+    model: string;
+    messages: Array<{
+      role: 'system' | 'user' | 'assistant';
+      content: string;
+    }>;
+    tools?: DesktopZaiTool[];
+    toolChoice?: 'none' | 'auto' | { type: 'function'; function: { name: string } };
+  }
+
+  interface DesktopZaiChatResponse {
+    ok: boolean;
+    text?: string;
+    toolCalls?: Array<{
+      id: string;
+      name: string;
+      args: string;
+    }>;
+    usage?: {
+      promptTokens: number;
+      completionTokens: number;
+      totalTokens: number;
+    };
+    error?: string;
+  }
+
   interface Window {
     desktopEnv?: {
       platform: string;
@@ -72,6 +110,12 @@ declare global {
       playwrightStart: (config?: { port?: number; host?: string; cdpEndpoint?: string }) => Promise<PlaywrightMcpStatus>;
       playwrightStop: () => Promise<PlaywrightMcpStatus>;
       playwrightStatus: () => Promise<PlaywrightMcpStatus>;
+    };
+    desktopZai?: {
+      setApiKey: (apiKey: string) => Promise<{ ok: boolean; error?: string }>;
+      clearApiKey: () => Promise<{ ok: boolean }>;
+      checkStatus: () => Promise<{ status: 'connected' | 'disconnected' | 'error' }>;
+      chatCompletions: (payload: DesktopZaiChatPayload) => Promise<DesktopZaiChatResponse>;
     };
   }
 }
