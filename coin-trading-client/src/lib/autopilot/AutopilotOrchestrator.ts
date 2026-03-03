@@ -98,6 +98,7 @@ export interface AutopilotCandidateView {
   koreanName: string;
   recommendedEntryWinRate: number | null;
   marketEntryWinRate: number | null;
+  confidence?: number | null;
   expectancyPct?: number | null;
   score?: number | null;
   riskRewardRatio?: number | null;

@@ -82,6 +82,8 @@ const STRATEGY_CODE_SWING = 'GUIDED_AUTOPILOT_SWING';
 const STRATEGY_CODE_POSITION = 'GUIDED_AUTOPILOT_POSITION';
 const INVEST_MAJOR_MARKETS = ['KRW-BTC', 'KRW-ETH', 'KRW-SOL', 'KRW-XRP', 'KRW-ADA'];
 const DEFAULT_AUTOPILOT_CAPITAL_POOL_KRW = 300_000;
+const DEFAULT_AMOUNT_PRESETS = [10000, 20000, 50000, 100000];
+const MIN_ORDER_AMOUNT_KRW = 5_100;
 const ENGINE_CAPITAL_RATIOS = {
   SCALP: 0.4,
   SWING: 0.35,
@@ -144,6 +146,70 @@ function formatVolume(value: number): string {
   return KRW_FORMATTER.format(Math.round(value));
 }
 
+function clampAmount(value: unknown, fallback: number): number {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) return fallback;
+  return Math.max(MIN_ORDER_AMOUNT_KRW, Math.round(parsed));
+}
+
+function normalizeAmountPresets(raw: unknown): number[] {
+  const source = Array.isArray(raw)
+    ? raw
+    : typeof raw === 'string'
+      ? raw.split(',')
+      : DEFAULT_AMOUNT_PRESETS;
+  const values = source
+    .map((item) => clampAmount(item, Number.NaN))
+    .filter((value) => Number.isFinite(value) && value >= MIN_ORDER_AMOUNT_KRW)
+    .sort((left, right) => left - right);
+  const deduped = [...new Set(values)];
+  return deduped.length > 0 ? deduped : Array.from(DEFAULT_AMOUNT_PRESETS);
+}
+
+function formatAmountPreset(value: number): string {
+  if (value >= 10_000) {
+    const unit = value / 10_000;
+    return Number.isInteger(unit) ? `${unit.toFixed(0)}만` : `${unit.toFixed(1)}만`;
+  }
+  return KRW_FORMATTER.format(value);
+}
+
+const AMOUNT_PRESET_TOKEN_RE = /\d+(?:\.\d+)?(?:,\d{3})*(?:\s*(?:만원|만|천|천원|백만|억|원))?(?=\s|$|[,;|\n])/g;
+const AMOUNT_PRESET_UNIT_MULTIPLIERS: Record<string, number> = {
+  만: 10_000,
+  만원: 10_000,
+  천: 1_000,
+  천원: 1_000,
+  백만: 1_000_000,
+  억: 100_000_000,
+  원: 1,
+};
+
+function parseAmountPresetToken(rawToken: string): number | null {
+  const trimmed = rawToken.replace(/\s+/g, '');
+  const match = trimmed.match(/^([0-9]+(?:\.[0-9]+)?(?:,\d{3})*)\s*(만|만원|천|천원|백만|억|원)?$/);
+  if (!match) return null;
+
+  const numberPart = Number(match[1].replace(/,/g, ''));
+  if (!Number.isFinite(numberPart)) return null;
+
+  const unit = match[2] ?? '';
+  const multiplier = AMOUNT_PRESET_UNIT_MULTIPLIERS[unit] ?? 1;
+  return clampAmount(numberPart * multiplier, Number.NaN);
+}
+
+function parseAmountPresetInput(raw: string): number[] {
+  const tokenizedValues = raw.match(AMOUNT_PRESET_TOKEN_RE) ?? [];
+  const values = tokenizedValues
+    .map(parseAmountPresetToken)
+    .filter((value): value is number => Number.isFinite(value))
+    .filter((value) => Number.isFinite(value) && value >= MIN_ORDER_AMOUNT_KRW)
+    .sort((left, right) => left - right);
+
+  const deduped = [...new Set(values)];
+  return deduped.length > 0 ? deduped : [DEFAULT_AMOUNT_PRESETS[0]];
+}
+
 type WorkspacePrefs = {
   selectedMarket?: string;
   interval?: string;
@@ -158,6 +224,8 @@ type WorkspacePrefs = {
   autopilotMaxConcurrentPositions?: number;
   autopilotAmountKrw?: number;
   autopilotCapitalPoolKrw?: number;
+  amountPresets?: number[];
+  defaultAmountKrw?: number;
   autopilotInterval?: string;
   autopilotMode?: TradingMode;
   entryPolicy?: 'BALANCED' | 'AGGRESSIVE' | 'CONSERVATIVE';
@@ -268,7 +336,7 @@ function migrateWorkspacePrefs(prefs: WorkspacePrefs): WorkspacePrefs {
       next.monitorTab = 'SCALP';
     }
 
-    const legacyAmountKrw = Math.max(5100, Math.round(prefs.autopilotAmountKrw ?? 10_000));
+    const legacyAmountKrw = Math.max(MIN_ORDER_AMOUNT_KRW, Math.round(prefs.autopilotAmountKrw ?? 10_000));
     const legacyMaxPositions = Math.min(10, Math.max(1, prefs.autopilotMaxConcurrentPositions ?? 6));
     next.autopilotCapitalPoolKrw = Math.max(
       DEFAULT_AUTOPILOT_CAPITAL_POOL_KRW,
@@ -281,6 +349,19 @@ function migrateWorkspacePrefs(prefs: WorkspacePrefs): WorkspacePrefs {
       (next.swingAutopilotEnabled || next.positionAutopilotEnabled)
         ? 'INVEST'
         : 'SCALP';
+  }
+
+  next.amountPresets = normalizeAmountPresets(next.amountPresets);
+  const preferredDefaultAmount = clampAmount(
+    next.defaultAmountKrw ?? next.amountPresets[0],
+    next.amountPresets[0] ?? DEFAULT_AMOUNT_PRESETS[0]
+  );
+  next.defaultAmountKrw = preferredDefaultAmount;
+  if (!next.amountPresets.includes(preferredDefaultAmount)) {
+    next.amountPresets = [
+      preferredDefaultAmount,
+      ...next.amountPresets.filter((preset) => preset !== preferredDefaultAmount),
+    ];
   }
 
   next.llmProvider = normalizeLlmProvider(next.llmProvider);
@@ -647,7 +728,13 @@ export default function ManualTraderWorkspace() {
   const [aiEnabled, setAiEnabled] = useState(true);
   const [aiRefreshSec, setAiRefreshSec] = useState(prefs.aiRefreshSec ?? 7);
   const [tradingMode, setTradingMode] = useState<TradingMode>(prefs.tradingMode ?? 'SWING');
-  const [amountKrw, setAmountKrw] = useState<number>(20000);
+  const [amountPresets, setAmountPresets] = useState<number[]>(() => normalizeAmountPresets(prefs.amountPresets));
+  const [amountPresetInput, setAmountPresetInput] = useState<string>(amountPresets.join(', '));
+  const [defaultAmountKrw, setDefaultAmountKrw] = useState<number>(() => clampAmount(
+    prefs.defaultAmountKrw ?? amountPresets[0],
+    amountPresets[0] ?? DEFAULT_AMOUNT_PRESETS[0]
+  ));
+  const [amountKrw, setAmountKrw] = useState<number>(() => defaultAmountKrw);
   const [orderType, setOrderType] = useState<'MARKET' | 'LIMIT'>('LIMIT');
   const [limitPrice, setLimitPrice] = useState<number | ''>('');
   const [customStopLoss, setCustomStopLoss] = useState<number | ''>('');
@@ -695,7 +782,7 @@ export default function ManualTraderWorkspace() {
     Math.min(10, Math.max(1, prefs.autopilotMaxConcurrentPositions ?? 6))
   );
   const [autopilotAmountKrw, setAutopilotAmountKrw] = useState<number>(
-    Math.max(5100, Math.round(prefs.autopilotAmountKrw ?? 10000))
+    Math.max(MIN_ORDER_AMOUNT_KRW, Math.round(prefs.autopilotAmountKrw ?? 10000))
   );
   const [autopilotCapitalPoolKrw, setAutopilotCapitalPoolKrw] = useState<number>(
     Math.max(20_000, Math.round(prefs.autopilotCapitalPoolKrw ?? DEFAULT_AUTOPILOT_CAPITAL_POOL_KRW))
@@ -1230,6 +1317,10 @@ export default function ManualTraderWorkspace() {
     return unsubscribe;
   }, []);
 
+  useEffect(() => {
+    setAmountPresetInput(amountPresets.join(', '));
+  }, [amountPresets]);
+
   // 채팅 스크롤
   useEffect(() => {
     chatEndRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -1251,6 +1342,8 @@ export default function ManualTraderWorkspace() {
       positionAutopilotEnabled,
       dailyLossLimitKrw,
       autopilotMaxConcurrentPositions,
+      amountPresets,
+      defaultAmountKrw,
       autopilotAmountKrw,
       autopilotCapitalPoolKrw,
       autopilotInterval,
@@ -1296,6 +1389,8 @@ export default function ManualTraderWorkspace() {
     positionAutopilotEnabled,
     dailyLossLimitKrw,
     autopilotMaxConcurrentPositions,
+    amountPresets,
+    defaultAmountKrw,
     autopilotAmountKrw,
     autopilotCapitalPoolKrw,
     autopilotInterval,
@@ -1671,7 +1766,7 @@ export default function ManualTraderWorkspace() {
       setOrderType('LIMIT');
       if (typeof action.targetPrice === 'number' && Number.isFinite(action.targetPrice)) setLimitPrice(action.targetPrice);
       if (typeof action.sizePercent === 'number' && Number.isFinite(action.sizePercent)) {
-        setAmountKrw(Math.max(5100, Math.round((amountKrw * action.sizePercent) / 100)));
+        setAmountKrw(Math.max(MIN_ORDER_AMOUNT_KRW, Math.round((amountKrw * action.sizePercent) / 100)));
       }
       setStatusMessage(`에이전트 액션(${action.title})을 주문 폼에 반영.`);
       setActiveTab('order');
@@ -1711,6 +1806,53 @@ export default function ManualTraderWorkspace() {
       positionAutopilotRef.current?.pauseMarket(selectedMarket, 30 * 60 * 1000, reason);
     }
   }, [autopilotEnabled, positionAutopilotEnabled, selectedMarket, swingAutopilotEnabled]);
+
+  const handleAmountPresetApply = () => {
+    const next = parseAmountPresetInput(amountPresetInput);
+    if (next.length === 0) {
+      setStatusMessage('프리셋 입력값이 유효하지 않습니다. 5,100원 이상 값 또는 만/천/억 단위를 입력하세요.');
+      return;
+    }
+    setAmountPresets(next);
+    setAmountPresetInput(next.join(', '));
+    const nextDefaultAmount = next.includes(defaultAmountKrw) ? defaultAmountKrw : next[0];
+    setDefaultAmountKrw(nextDefaultAmount);
+    if (!next.includes(amountKrw)) {
+      setAmountKrw(nextDefaultAmount);
+    }
+    setStatusMessage('금액 프리셋을 갱신했습니다.');
+  };
+
+  const handleAmountPresetReset = () => {
+    const next = [...DEFAULT_AMOUNT_PRESETS];
+    setAmountPresets(next);
+    setAmountPresetInput(next.join(', '));
+    setDefaultAmountKrw(next[0]);
+    setAmountKrw(next[0]);
+    setStatusMessage('금액 프리셋을 기본값으로 복원했습니다.');
+  };
+
+  const handleAmountPresetRemove = (target: number) => {
+    if (amountPresets.length <= 1) return;
+    const next = amountPresets.filter((preset) => preset !== target);
+    const normalized = next.length > 0 ? next : [MIN_ORDER_AMOUNT_KRW];
+    const nextDefaultAmount = normalized.includes(defaultAmountKrw)
+      ? defaultAmountKrw
+      : normalized[0];
+    setAmountPresets(normalized);
+    setAmountPresetInput(normalized.join(', '));
+    setDefaultAmountKrw(nextDefaultAmount);
+    if (!normalized.includes(amountKrw)) {
+      setAmountKrw(nextDefaultAmount);
+    }
+    setStatusMessage('선택한 금액 프리셋을 삭제했습니다.');
+  };
+
+  const handleAmountPresetSetDefault = (value: number) => {
+    setDefaultAmountKrw(value);
+    setAmountKrw(value);
+    setStatusMessage(`기본 금액을 ${value.toLocaleString('ko-KR')}원으로 설정했습니다.`);
+  };
 
   const handleStart = () => {
     if (!recommendation) return;
@@ -1766,7 +1908,7 @@ export default function ManualTraderWorkspace() {
 
   const resolveEngineAmount = useCallback((budgetKrw: number, maxPositions: number): number => {
     const perSlot = Math.floor(budgetKrw / Math.max(1, maxPositions));
-    return Math.max(5100, Math.min(20_000, Math.min(autopilotAmountKrw, perSlot)));
+    return Math.max(MIN_ORDER_AMOUNT_KRW, Math.min(autopilotAmountKrw, perSlot));
   }, [autopilotAmountKrw]);
 
   useEffect(() => {
@@ -1778,7 +1920,7 @@ export default function ManualTraderWorkspace() {
     }
     if (activeProviderStatus !== 'connected') return;
 
-    const budgetKrw = Math.max(5100, Math.round(autopilotCapitalPoolKrw * ENGINE_CAPITAL_RATIOS.SCALP));
+    const budgetKrw = Math.max(MIN_ORDER_AMOUNT_KRW, Math.round(autopilotCapitalPoolKrw * ENGINE_CAPITAL_RATIOS.SCALP));
     const maxConcurrent = Math.max(1, autopilotMaxConcurrentPositions);
     const orchestrator = new AutopilotOrchestrator(
       {
@@ -1876,7 +2018,7 @@ export default function ManualTraderWorkspace() {
     }
     if (activeProviderStatus !== 'connected') return;
 
-    const budgetKrw = Math.max(5100, Math.round(autopilotCapitalPoolKrw * ENGINE_CAPITAL_RATIOS.SWING));
+    const budgetKrw = Math.max(MIN_ORDER_AMOUNT_KRW, Math.round(autopilotCapitalPoolKrw * ENGINE_CAPITAL_RATIOS.SWING));
     const maxConcurrent = 2;
     const orchestrator = new AutopilotOrchestrator(
       {
@@ -1969,7 +2111,7 @@ export default function ManualTraderWorkspace() {
     }
     if (activeProviderStatus !== 'connected') return;
 
-    const budgetKrw = Math.max(5100, Math.round(autopilotCapitalPoolKrw * ENGINE_CAPITAL_RATIOS.POSITION));
+    const budgetKrw = Math.max(MIN_ORDER_AMOUNT_KRW, Math.round(autopilotCapitalPoolKrw * ENGINE_CAPITAL_RATIOS.POSITION));
     const maxConcurrent = 1;
     const orchestrator = new AutopilotOrchestrator(
       {
@@ -2647,10 +2789,10 @@ export default function ManualTraderWorkspace() {
                     포지션당 투자금(원)
                     <input
                       type="number"
-                      min={5100}
+                      min={MIN_ORDER_AMOUNT_KRW}
                       step={100}
                       value={autopilotAmountKrw}
-                      onChange={(event) => setAutopilotAmountKrw(Math.max(5100, Math.round(Number(event.target.value || 10000))))}
+                      onChange={(event) => setAutopilotAmountKrw(Math.max(MIN_ORDER_AMOUNT_KRW, Math.round(Number(event.target.value || 10000))))}
                     />
                   </label>
                   <label>
@@ -3020,26 +3162,68 @@ export default function ManualTraderWorkspace() {
                   <div className="entry-amount-row">
                     <label className="entry-amount-label">매수 금액</label>
                     <div className="entry-amount-controls">
-                      {[10000, 20000, 50000, 100000].map((v) => (
-                        <button
-                          key={v}
-                          type="button"
-                          className={`amount-chip ${amountKrw === v ? 'active' : ''}`}
-                          onClick={() => setAmountKrw(v)}
-                        >
-                          {v >= 10000 ? `${v / 10000}만` : `${v.toLocaleString()}`}
-                        </button>
+                      {amountPresets.map((preset) => (
+                        <span key={preset} className="amount-chip-wrap">
+                          <button
+                            type="button"
+                            className={`amount-chip ${amountKrw === preset ? 'active' : ''}`}
+                            onClick={() => setAmountKrw(preset)}
+                          >
+                            {formatAmountPreset(preset)}
+                          </button>
+                          <button
+                            type="button"
+                            className="amount-chip-quick amount-chip"
+                            onClick={() => handleAmountPresetSetDefault(preset)}
+                            title="이 금액으로 기본값 설정"
+                          >
+                            기본
+                          </button>
+                          <button
+                            type="button"
+                            className="amount-chip-remove"
+                            onClick={() => handleAmountPresetRemove(preset)}
+                            disabled={amountPresets.length <= 1}
+                            title="프리셋 삭제"
+                          >
+                            ×
+                          </button>
+                        </span>
                       ))}
+                    </div>
+
+                    <div className="amount-preset-composer">
+                      <label htmlFor="amount-preset-input">프리셋 편집</label>
+                      <div className="amount-preset-input-row">
+                        <input
+                          id="amount-preset-input"
+                          value={amountPresetInput}
+                          onChange={(event) => setAmountPresetInput(event.target.value)}
+                          placeholder="10,000, 20000, 50000 / 1만, 2천, 1억"
+                        />
+                        <button type="button" onClick={handleAmountPresetApply}>
+                          반영
+                        </button>
+                        <button type="button" className="ghost" onClick={handleAmountPresetReset}>
+                          기본 복원
+                        </button>
+                      </div>
+                    </div>
+
+                    <div className="entry-amount-input-line">
                       <input
                         type="number"
                         className="entry-amount-input"
-                        min={5100}
+                        min={MIN_ORDER_AMOUNT_KRW}
                         step={1000}
                         value={amountKrw}
-                        onChange={(e) => setAmountKrw(Number(e.target.value || 0))}
+                        onChange={(e) => setAmountKrw(clampAmount(Number(e.target.value || 0), amountKrw))}
                       />
                       <span className="entry-amount-unit">원</span>
                     </div>
+                    <small className="amount-row-helper">
+                      기본값: {defaultAmountKrw.toLocaleString('ko-KR')}원 · 기본값은 금액 칩의 "기본" 버튼으로도 즉시 변경
+                    </small>
                   </div>
 
                   <button
@@ -3056,7 +3240,30 @@ export default function ManualTraderWorkspace() {
                     <div className="advanced-body">
                       <label>
                         금액(KRW)
-                        <input type="number" min={5100} step={1000} value={amountKrw} onChange={(e) => setAmountKrw(Number(e.target.value || 0))} />
+                        <input
+                          type="number"
+                          min={MIN_ORDER_AMOUNT_KRW}
+                          step={1000}
+                          value={amountKrw}
+                          onChange={(e) => setAmountKrw(clampAmount(Number(e.target.value || 0), amountKrw))}
+                        />
+                      </label>
+                      <label>
+                        기본값 금액(KRW)
+                        <input
+                          type="number"
+                          min={MIN_ORDER_AMOUNT_KRW}
+                          step={1000}
+                          value={defaultAmountKrw}
+                          onChange={(e) => {
+                            const nextDefaultAmount = clampAmount(Number(e.target.value || amountPresets[0]), amountPresets[0]);
+                            if (!amountPresets.includes(nextDefaultAmount)) {
+                              setAmountPresets((prev) => normalizeAmountPresets([nextDefaultAmount, ...prev]));
+                            }
+                            setDefaultAmountKrw(nextDefaultAmount);
+                            setAmountKrw(nextDefaultAmount);
+                          }}
+                        />
                       </label>
                       <label>
                         주문 방식

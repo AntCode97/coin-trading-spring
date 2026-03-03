@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import type {
   AutopilotLiveResponse,
+  AutopilotEventView,
   OrderLifecycleGroupSummary,
 } from '../../api';
 import type {
@@ -21,6 +22,7 @@ type TimelineItem = {
   screenshotId?: string;
   source: 'LOCAL' | 'SERVER';
 };
+type TimelineSourceFilter = 'ALL' | 'LOCAL' | 'SERVER';
 
 type OrderFeedFilter = 'ALL' | 'REQUESTED' | 'FILLED' | 'FAILED';
 type StrategyCodeFilter = 'ALL' | 'AUTOPILOT' | 'MANUAL';
@@ -34,6 +36,16 @@ const EMPTY_SUMMARY: OrderLifecycleGroupSummary = {
   pending: 0,
   cancelled: 0,
 };
+
+function clampPercent(value: number): number {
+  if (!Number.isFinite(value)) return 0;
+  return Math.max(0, Math.min(100, Math.round(value)));
+}
+
+function formatScore(value: number | undefined | null): string {
+  if (!Number.isFinite(value as number)) return '-';
+  return `${Math.round(value as number)}점`;
+}
 
 function formatTs(ts: number): string {
   return new Date(ts).toLocaleTimeString('ko-KR', {
@@ -149,6 +161,36 @@ function toTimelineEvent(event: AutopilotTimelineEvent): TimelineItem {
   };
 }
 
+function normalizeTimelineLevel(level: string): TimelineItem['level'] {
+  if (level === 'WARN') return 'WARN';
+  if (level === 'ERROR') return 'ERROR';
+  return 'INFO';
+}
+
+function normalizeServerEventType(eventType: string): string {
+  return eventType
+    .trim()
+    .toUpperCase()
+    .replace(/[_\s]+/g, ' ')
+    .trim() || 'EVENT';
+}
+
+function toServerTimelineEvent(event: AutopilotEventView, index: number): TimelineItem {
+  const parsed = Date.parse(event.createdAt);
+  const at = Number.isFinite(parsed) ? parsed : Date.now();
+  const eventType = normalizeServerEventType(event.eventType);
+  return {
+    id: `server-${at}-${index}`,
+    at,
+    market: event.market,
+    type: eventType,
+    level: normalizeTimelineLevel(event.level),
+    action: eventType,
+    detail: event.message,
+    source: 'SERVER',
+  };
+}
+
 function normalizeServerCandidates(liveData: AutopilotLiveResponse | undefined): AutopilotCandidateView[] {
   if (!liveData) return [];
   const now = Date.now();
@@ -189,17 +231,55 @@ export function AutopilotLiveDock({
   const [orderFeedPageSize, setOrderFeedPageSize] = useState<number>(30);
   const [timelinePage, setTimelinePage] = useState(1);
   const [orderFeedPage, setOrderFeedPage] = useState(1);
+  const [timelineSourceFilter, setTimelineSourceFilter] = useState<TimelineSourceFilter>('ALL');
   const screenshotById = useMemo(
     () => new Map(autopilotState.screenshots.map((shot) => [shot.id, shot])),
     [autopilotState.screenshots]
   );
 
-  const timeline = useMemo(() => {
+  const timelineAll = useMemo(() => {
     const local = autopilotState.events.map(toTimelineEvent);
-    return [...local]
-      .sort((a, b) => b.at - a.at)
+    const server = (liveData?.autopilotEvents ?? []).map((event, index) => toServerTimelineEvent(event, index));
+    return [...local, ...server].sort((a, b) => b.at - a.at);
+  }, [autopilotState.events, liveData?.autopilotEvents]);
+
+  const timeline = useMemo(() => {
+    return timelineAll
+      .filter((item) => {
+        if (timelineSourceFilter === 'ALL') return true;
+        return item.source === timelineSourceFilter;
+      })
       .slice(0, 400);
-  }, [autopilotState.events]);
+  }, [timelineAll, timelineSourceFilter]);
+
+  const actionLayerSummary = useMemo(() => {
+    const summary = {
+      llm: 0,
+      worker: 0,
+      order: 0,
+      playwright: 0,
+      system: 0,
+      other: 0,
+      server: 0,
+      total: 0,
+      localTotal: 0,
+    };
+    for (const item of timelineAll) {
+      summary.total += 1;
+      if (item.source === 'SERVER') {
+        summary.server += 1;
+        continue;
+      }
+      summary.localTotal += 1;
+      if (item.type === 'LLM') summary.llm += 1;
+      else if (item.type === 'WORKER') summary.worker += 1;
+      else if (item.type === 'ORDER') summary.order += 1;
+      else if (item.type === 'PLAYWRIGHT') summary.playwright += 1;
+      else if (item.type === 'SYSTEM') summary.system += 1;
+      else summary.other += 1;
+    }
+    return summary;
+  }, [timelineAll]);
 
   const orderFeed = useMemo(() => {
     const rows = liveData?.orderEvents ?? [];
@@ -231,6 +311,9 @@ export function AutopilotLiveDock({
   useEffect(() => {
     setTimelinePage(1);
   }, [timelinePageSize]);
+  useEffect(() => {
+    setTimelinePage(1);
+  }, [timelineSourceFilter]);
   useEffect(() => {
     setOrderFeedPage(1);
   }, [orderFeedPageSize]);
@@ -323,6 +406,31 @@ export function AutopilotLiveDock({
     return items.length > 0 ? items.join(', ') : '대기';
   }, [autopilotState.workers, focusedMarkets]);
 
+  const lastEvent = timelineAll[0] ?? null;
+  const eventAgeSec = lastEvent ? Math.max(0, Math.floor((Date.now() - lastEvent.at) / 1000)) : null;
+  const tokenUsageRate = autopilotState.llmBudget.dailyTokenCap === 0
+    ? 0
+    : (autopilotState.llmBudget.usedTokens / autopilotState.llmBudget.dailyTokenCap) * 100;
+  const entryTokenHealth = clampPercent(100 - tokenUsageRate);
+  const enterFillRate = clampPercent(
+    summary.buyRequested === 0 ? 100 : (summary.buyFilled / summary.buyRequested) * 100
+  );
+  const exitFillRate = clampPercent(
+    summary.sellRequested === 0 ? 100 : (summary.sellFilled / summary.sellRequested) * 100
+  );
+  const workerActivityRate = autopilotState.workers.length === 0
+    ? 0
+    : Math.min(
+      100,
+      Math.round(
+        (autopilotState.workers.filter((worker) => /running|active|processing/i.test(worker.status)).length
+          / Math.max(1, autopilotState.workers.length)) * 100
+      )
+    );
+  const autopilotHealthScore = clampPercent(
+    enterFillRate * 0.38 + exitFillRate * 0.32 + entryTokenHealth * 0.2 + workerActivityRate * 0.1
+  );
+
   if (!open) return null;
 
   return (
@@ -336,6 +444,53 @@ export function AutopilotLiveDock({
           {collapsed ? '펼치기' : '접기'}
         </button>
       </header>
+
+      {!collapsed && (
+        <div className="autopilot-command-hub">
+          <div className="command-tile">
+            <label>AI 헬스스코어</label>
+            <strong>{autopilotHealthScore} / 100</strong>
+            <div className="command-bar">
+              <div className="command-fill" style={{ width: `${autopilotHealthScore}%` }} />
+            </div>
+          </div>
+          <div className="command-tile">
+            <label>진입 체결율</label>
+            <strong>{formatScore(enterFillRate)}</strong>
+            <small>{summary.buyFilled} / {summary.buyRequested}</small>
+          </div>
+          <div className="command-tile">
+            <label>청산 체결율</label>
+            <strong>{formatScore(exitFillRate)}</strong>
+            <small>{summary.sellFilled} / {summary.sellRequested}</small>
+          </div>
+          <div className="command-tile">
+            <label>워커/이벤트</label>
+            <strong>{autopilotState.workers.length} / {autopilotState.events.length}</strong>
+            <small>{focusedMarkets.length > 0 ? `포커스 ${focusedMarkets.length}개` : '포커스 없음'}</small>
+          </div>
+          <div className="command-tile">
+            <label>마지막 액션</label>
+            <strong>{lastEvent ? lastEvent.action : '대기'}</strong>
+            <small>{eventAgeSec == null ? '이벤트 없음' : `마지막 ${eventAgeSec}초 전`}</small>
+          </div>
+          <div className="command-tile">
+            <label>토큰 잔량</label>
+            <strong>{entryTokenHealth}%</strong>
+            <small>
+              {autopilotState.llmBudget.usedTokens.toLocaleString('ko-KR')}
+              {' / '}
+              {autopilotState.llmBudget.dailyTokenCap.toLocaleString('ko-KR')}
+            </small>
+          </div>
+          <div className="command-tile">
+            <label>액션 레이어</label>
+            <strong>{actionLayerSummary.localTotal + actionLayerSummary.server} 이벤트</strong>
+            <small>LLM {actionLayerSummary.llm} · WORKER {actionLayerSummary.worker} · ORDER {actionLayerSummary.order}</small>
+            <small>Playwright {actionLayerSummary.playwright} · SYSTEM {actionLayerSummary.system + actionLayerSummary.other} · SERVER {actionLayerSummary.server}</small>
+          </div>
+        </div>
+      )}
 
       {!collapsed && (
         <>
@@ -434,11 +589,22 @@ export function AutopilotLiveDock({
                       <strong>{candidate.market}</strong>
                       <span className={`stage stage-${candidate.stage.toLowerCase()}`}>{stageLabel(candidate.stage)}</span>
                     </div>
+                    <div className="candidate-command-strip">
+                      <span>기본점수 {formatScore(candidate.score ?? 0)}</span>
+                      <span>기대값 {(candidate.expectancyPct ?? 0).toFixed(1)}%</span>
+                      <span>신뢰도 {candidate.confidence != null ? `${(candidate.confidence * 100).toFixed(0)}%` : '-'}</span>
+                    </div>
                     <div className="candidate-metrics">
                       추천 {candidate.recommendedEntryWinRate?.toFixed(1) ?? '-'}% · 현재 {candidate.marketEntryWinRate?.toFixed(1) ?? '-'}%
                     </div>
                     <div className="candidate-metrics">
                       기대값 {candidate.expectancyPct?.toFixed(3) ?? '-'}% · score {candidate.score?.toFixed(1) ?? '-'} · RR {candidate.riskRewardRatio?.toFixed(2) ?? '-'}R · 괴리 {candidate.entryGapPct?.toFixed(2) ?? '-'}%
+                    </div>
+                    <div className="candidate-score-meter">
+                      <div
+                        className="candidate-score-fill"
+                        style={{ width: `${clampPercent(Number(candidate.score ?? 0))}%` }}
+                      />
                     </div>
                     <p>{candidate.reason}</p>
                   </div>
@@ -448,35 +614,49 @@ export function AutopilotLiveDock({
             </div>
 
             <div className="dock-column timeline">
-              <div className="column-title with-pagination">
+              <div className="column-title with-pagination timeline-header">
                 <span>실시간 액션 타임라인</span>
-                <div className="timeline-pagination">
-                  <label className="page-size-select">
-                    <span>개수</span>
-                    <select
-                      value={timelinePageSize}
-                      onChange={(event) => setTimelinePageSize(Number(event.target.value))}
+                <div className="timeline-controls">
+                  <div className="timeline-source-filters">
+                    {(['ALL', 'LOCAL', 'SERVER'] as const).map((filter) => (
+                      <button
+                        key={filter}
+                        type="button"
+                        className={timelineSourceFilter === filter ? 'active' : ''}
+                        onClick={() => setTimelineSourceFilter(filter)}
+                      >
+                        {filter === 'ALL' ? '전체' : filter === 'LOCAL' ? '로컬' : '서버'}
+                      </button>
+                    ))}
+                  </div>
+                  <div className="timeline-pagination">
+                    <label className="page-size-select">
+                      <span>개수</span>
+                      <select
+                        value={timelinePageSize}
+                        onChange={(event) => setTimelinePageSize(Number(event.target.value))}
+                      >
+                        {PAGE_SIZE_OPTIONS.map((size) => (
+                          <option key={size} value={size}>{size}</option>
+                        ))}
+                      </select>
+                    </label>
+                    <button
+                      type="button"
+                      onClick={() => setTimelinePage((prev) => Math.max(1, prev - 1))}
+                      disabled={timelinePage <= 1}
                     >
-                      {PAGE_SIZE_OPTIONS.map((size) => (
-                        <option key={size} value={size}>{size}</option>
-                      ))}
-                    </select>
-                  </label>
-                  <button
-                    type="button"
-                    onClick={() => setTimelinePage((prev) => Math.max(1, prev - 1))}
-                    disabled={timelinePage <= 1}
-                  >
-                    이전
-                  </button>
-                  <span>{timelinePage} / {timelinePageCount}</span>
-                  <button
-                    type="button"
-                    onClick={() => setTimelinePage((prev) => Math.min(timelinePageCount, prev + 1))}
-                    disabled={timelinePage >= timelinePageCount}
-                  >
-                    다음
-                  </button>
+                      이전
+                    </button>
+                    <span>{timelinePage} / {timelinePageCount}</span>
+                    <button
+                      type="button"
+                      onClick={() => setTimelinePage((prev) => Math.min(timelinePageCount, prev + 1))}
+                      disabled={timelinePage >= timelinePageCount}
+                    >
+                      다음
+                    </button>
+                  </div>
                 </div>
               </div>
               <div className="timeline-layout">
@@ -485,12 +665,19 @@ export function AutopilotLiveDock({
                     <button
                       key={item.id}
                       type="button"
-                      className={`timeline-item ${selectedTimelineId === item.id ? 'active' : ''}`}
+                      className={`timeline-item ${selectedTimelineId === item.id ? 'active' : ''} timeline-source-${item.source.toLowerCase()}`}
                       onClick={() => setSelectedTimelineId(item.id)}
                     >
                       <div className="timeline-head">
                         <span>{item.market || item.type}</span>
                         <span>{formatTs(item.at)}</span>
+                      </div>
+                      <div className="timeline-meta-line">
+                        <span className={`timeline-badge timeline-source-badge-${item.source.toLowerCase()}`}>{item.source}</span>
+                        <span className="timeline-badge">{normalizeServerEventType(item.type)}</span>
+                        {item.level !== 'INFO' && (
+                          <span className={`timeline-badge timeline-level-${item.level.toLowerCase()}`}>{item.level}</span>
+                        )}
                       </div>
                       <div className="timeline-action">{item.action}</div>
                       <p>{item.detail}</p>
@@ -506,6 +693,11 @@ export function AutopilotLiveDock({
                       <div className="detail-head">
                         <strong>{selectedTimeline.action}</strong>
                         <span>{selectedTimeline.level}</span>
+                      </div>
+                      <div className="detail-subhead">
+                        <span className={`timeline-badge timeline-source-badge-${selectedTimeline.source.toLowerCase()}`}>{selectedTimeline.source}</span>
+                        <span>{normalizeServerEventType(selectedTimeline.type)}</span>
+                        {selectedTimeline.market ? <span>시장: {selectedTimeline.market}</span> : null}
                       </div>
                       <p>{selectedTimeline.detail}</p>
                       {selectedShot ? (

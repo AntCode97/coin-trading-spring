@@ -801,6 +801,7 @@ export interface AutopilotCandidateView {
   koreanName: string;
   recommendedEntryWinRate?: number | null;
   marketEntryWinRate?: number | null;
+  confidence?: number | null;
   stage: string;
   reason: string;
 }
