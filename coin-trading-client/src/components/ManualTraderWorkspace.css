@@ -1316,13 +1316,39 @@
   gap: 12px;
 }
 
-.guided-chat-toggles label {
-  display: flex;
+.guided-chat-toggle-btn {
+  display: inline-flex;
   align-items: center;
-  gap: 4px;
+  justify-content: space-between;
+  gap: 8px;
+  min-width: 122px;
+  border: 1px solid #324567;
+  border-radius: 999px;
+  background: #0f1624;
+  color: #9fb5d8;
   font-size: 11px;
-  color: #9fadbf;
+  padding: 4px 8px;
   cursor: pointer;
+}
+
+.guided-chat-toggle-btn span {
+  border: 1px solid rgba(125, 143, 172, 0.6);
+  border-radius: 999px;
+  padding: 1px 6px;
+  font-size: 9px;
+  font-weight: 700;
+}
+
+.guided-chat-toggle-btn.on {
+  border-color: rgba(78, 196, 255, 0.58);
+  background: rgba(16, 36, 66, 0.88);
+  color: #d0e4ff;
+}
+
+.guided-chat-toggle-btn.on span {
+  border-color: rgba(84, 219, 169, 0.65);
+  background: rgba(31, 92, 72, 0.65);
+  color: #b7f5db;
 }
 
 .focused-scalp-context-menu {
@@ -2024,10 +2050,26 @@
   color: #d7e8ff;
 }
 
-.autopilot-panel.autopilot-panel-tv .autopilot-engine-tile input[type="checkbox"] {
-  width: 14px;
-  height: 14px;
-  accent-color: #4ec4ff;
+.autopilot-panel.autopilot-panel-tv .autopilot-engine-toggle {
+  border: 1px solid rgba(118, 143, 179, 0.45);
+  border-radius: 999px;
+  padding: 4px 10px;
+  font-size: 10px;
+  font-weight: 700;
+  cursor: pointer;
+  min-width: 50px;
+}
+
+.autopilot-panel.autopilot-panel-tv .autopilot-engine-toggle.on {
+  border-color: rgba(82, 216, 167, 0.68);
+  background: rgba(31, 92, 72, 0.65);
+  color: #b6f9dc;
+}
+
+.autopilot-panel.autopilot-panel-tv .autopilot-engine-toggle.off {
+  border-color: rgba(146, 163, 192, 0.5);
+  background: rgba(34, 45, 66, 0.72);
+  color: #b8c9e6;
 }
 
 .autopilot-panel.autopilot-panel-tv .autopilot-command-kpis {
@@ -2247,6 +2289,7 @@
 .autopilot-panel.autopilot-panel-tv .autopilot-toggle-chip {
   display: inline-flex;
   align-items: center;
+  justify-content: space-between;
   gap: 7px;
   border: 1px solid rgba(115, 145, 194, 0.34);
   border-radius: 8px;
@@ -2255,10 +2298,39 @@
   font-size: 11px;
   color: #c7d7f0;
   margin-top: 0;
+  cursor: pointer;
+  width: 100%;
+  text-align: left;
 }
 
-.autopilot-panel.autopilot-panel-tv .autopilot-toggle-chip input[type="checkbox"] {
-  accent-color: #4ec4ff;
+.autopilot-panel.autopilot-panel-tv .autopilot-toggle-chip span {
+  border: 1px solid rgba(136, 157, 192, 0.52);
+  border-radius: 999px;
+  font-size: 9px;
+  font-weight: 700;
+  padding: 2px 7px;
+  min-width: 42px;
+  text-align: center;
+}
+
+.autopilot-panel.autopilot-panel-tv .autopilot-toggle-chip.on {
+  border-color: rgba(78, 196, 255, 0.58);
+  background: rgba(15, 36, 66, 0.86);
+}
+
+.autopilot-panel.autopilot-panel-tv .autopilot-toggle-chip.on span {
+  border-color: rgba(84, 219, 169, 0.65);
+  background: rgba(31, 92, 72, 0.65);
+  color: #b7f5db;
+}
+
+.autopilot-panel.autopilot-panel-tv .autopilot-toggle-chip.off span {
+  background: rgba(34, 45, 66, 0.72);
+  color: #b8c9e6;
+}
+
+.autopilot-panel.autopilot-panel-tv .autopilot-toggle-chip.autoplay {
+  margin-top: 8px;
 }
 
 .autopilot-panel.autopilot-panel-tv .focused-scalp-ux {

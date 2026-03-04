@@ -2884,39 +2884,48 @@ export default function ManualTraderWorkspace() {
                     </button>
                   </div>
                   <div className="autopilot-engine-rail">
-                    <label className={`autopilot-engine-tile ${autopilotEnabled ? 'on' : ''}`}>
+                    <div className={`autopilot-engine-tile ${autopilotEnabled ? 'on' : ''}`}>
                       <div>
                         <span className="engine-name">SCALP</span>
                         <small>{formatCompactKrw(scalpBudgetKrw)}</small>
                       </div>
-                      <input
-                        type="checkbox"
-                        checked={autopilotEnabled}
-                        onChange={(event) => setAutopilotEnabled(event.target.checked)}
-                      />
-                    </label>
-                    <label className={`autopilot-engine-tile ${swingAutopilotEnabled ? 'on' : ''}`}>
+                      <button
+                        type="button"
+                        className={`autopilot-engine-toggle ${autopilotEnabled ? 'on' : 'off'}`}
+                        aria-pressed={autopilotEnabled}
+                        onClick={() => setAutopilotEnabled(!autopilotEnabled)}
+                      >
+                        {autopilotEnabled ? 'ON' : 'OFF'}
+                      </button>
+                    </div>
+                    <div className={`autopilot-engine-tile ${swingAutopilotEnabled ? 'on' : ''}`}>
                       <div>
                         <span className="engine-name">SWING</span>
                         <small>{formatCompactKrw(swingBudgetKrw)}</small>
                       </div>
-                      <input
-                        type="checkbox"
-                        checked={swingAutopilotEnabled}
-                        onChange={(event) => setSwingAutopilotEnabled(event.target.checked)}
-                      />
-                    </label>
-                    <label className={`autopilot-engine-tile ${positionAutopilotEnabled ? 'on' : ''}`}>
+                      <button
+                        type="button"
+                        className={`autopilot-engine-toggle ${swingAutopilotEnabled ? 'on' : 'off'}`}
+                        aria-pressed={swingAutopilotEnabled}
+                        onClick={() => setSwingAutopilotEnabled(!swingAutopilotEnabled)}
+                      >
+                        {swingAutopilotEnabled ? 'ON' : 'OFF'}
+                      </button>
+                    </div>
+                    <div className={`autopilot-engine-tile ${positionAutopilotEnabled ? 'on' : ''}`}>
                       <div>
                         <span className="engine-name">POSITION</span>
                         <small>{formatCompactKrw(positionBudgetKrw)}</small>
                       </div>
-                      <input
-                        type="checkbox"
-                        checked={positionAutopilotEnabled}
-                        onChange={(event) => setPositionAutopilotEnabled(event.target.checked)}
-                      />
-                    </label>
+                      <button
+                        type="button"
+                        className={`autopilot-engine-toggle ${positionAutopilotEnabled ? 'on' : 'off'}`}
+                        aria-pressed={positionAutopilotEnabled}
+                        onClick={() => setPositionAutopilotEnabled(!positionAutopilotEnabled)}
+                      >
+                        {positionAutopilotEnabled ? 'ON' : 'OFF'}
+                      </button>
+                    </div>
                   </div>
                   <div className="autopilot-command-kpis">
                     <article>
@@ -3159,22 +3168,24 @@ export default function ManualTraderWorkspace() {
                 </div>
 
                 <div className="autopilot-toggle-strip">
-                  <label className="autopilot-toggle-chip">
-                    <input
-                      type="checkbox"
-                      checked={marketFallbackAfterCancel}
-                      onChange={(event) => setMarketFallbackAfterCancel(event.target.checked)}
-                    />
+                  <button
+                    type="button"
+                    className={`autopilot-toggle-chip ${marketFallbackAfterCancel ? 'on' : 'off'}`}
+                    aria-pressed={marketFallbackAfterCancel}
+                    onClick={() => setMarketFallbackAfterCancel(!marketFallbackAfterCancel)}
+                  >
                     타임아웃 취소 후 시장가 폴백
-                  </label>
-                  <label className="autopilot-toggle-chip">
-                    <input
-                      type="checkbox"
-                      checked={focusedScalpEnabled}
-                      onChange={(event) => setFocusedScalpEnabled(event.target.checked)}
-                    />
+                    <span>{marketFallbackAfterCancel ? 'ON' : 'OFF'}</span>
+                  </button>
+                  <button
+                    type="button"
+                    className={`autopilot-toggle-chip ${focusedScalpEnabled ? 'on' : 'off'}`}
+                    aria-pressed={focusedScalpEnabled}
+                    onClick={() => setFocusedScalpEnabled(!focusedScalpEnabled)}
+                  >
                     선택 코인 단타 루프 사용
-                  </label>
+                    <span>{focusedScalpEnabled ? 'ON' : 'OFF'}</span>
+                  </button>
                 </div>
 
                 <div className="focused-scalp-ux">
@@ -3268,14 +3279,14 @@ export default function ManualTraderWorkspace() {
                     <div className="autopilot-divider" />
                     <div className="autopilot-header">
                       <strong>Playwright MCP</strong>
-                      <label className="autopilot-switch">
-                        <input
-                          type="checkbox"
-                          checked={playwrightEnabled}
-                          onChange={(event) => setPlaywrightEnabled(event.target.checked)}
-                        />
-                        <span>{playwrightEnabled ? '사용' : '미사용'}</span>
-                      </label>
+                      <button
+                        type="button"
+                        className={`autopilot-engine-toggle ${playwrightEnabled ? 'on' : 'off'}`}
+                        aria-pressed={playwrightEnabled}
+                        onClick={() => setPlaywrightEnabled(!playwrightEnabled)}
+                      >
+                        {playwrightEnabled ? 'ON' : 'OFF'}
+                      </button>
                     </div>
                     <div className="autopilot-control-grid tv-grid-2">
                       <label>
@@ -3301,14 +3312,15 @@ export default function ManualTraderWorkspace() {
                         />
                       </label>
                     </div>
-                    <label className="autopilot-checkbox">
-                      <input
-                        type="checkbox"
-                        checked={playwrightAutoStart}
-                        onChange={(event) => setPlaywrightAutoStart(event.target.checked)}
-                      />
+                    <button
+                      type="button"
+                      className={`autopilot-toggle-chip ${playwrightAutoStart ? 'on' : 'off'} autoplay`}
+                      aria-pressed={playwrightAutoStart}
+                      onClick={() => setPlaywrightAutoStart(!playwrightAutoStart)}
+                    >
                       앱 시작 시 Playwright MCP 자동 실행
-                    </label>
+                      <span>{playwrightAutoStart ? 'ON' : 'OFF'}</span>
+                    </button>
                     <div className="autopilot-actions">
                       <button
                         type="button"
@@ -3864,14 +3876,24 @@ export default function ManualTraderWorkspace() {
                   </button>
                 </div>
                 <div className="guided-chat-toggles">
-                  <label>
-                    <input type="checkbox" checked={autoContext} onChange={(e) => setAutoContext(e.target.checked)} />
+                  <button
+                    type="button"
+                    className={`guided-chat-toggle-btn ${autoContext ? 'on' : 'off'}`}
+                    aria-pressed={autoContext}
+                    onClick={() => setAutoContext(!autoContext)}
+                  >
                     자동 컨텍스트
-                  </label>
-                  <label>
-                    <input type="checkbox" checked={autoAnalysis} onChange={(e) => setAutoAnalysis(e.target.checked)} />
+                    <span>{autoContext ? 'ON' : 'OFF'}</span>
+                  </button>
+                  <button
+                    type="button"
+                    className={`guided-chat-toggle-btn ${autoAnalysis ? 'on' : 'off'}`}
+                    aria-pressed={autoAnalysis}
+                    onClick={() => setAutoAnalysis(!autoAnalysis)}
+                  >
                     15초 자동 분석
-                  </label>
+                    <span>{autoAnalysis ? 'ON' : 'OFF'}</span>
+                  </button>
                 </div>
               </div>
             </div>
