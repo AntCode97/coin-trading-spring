@@ -387,6 +387,24 @@ function formatKrw(value: number): string {
   return `${value.toLocaleString('ko-KR', { maximumFractionDigits: 10 })}원`;
 }
 
+function formatCompactKrw(value: number): string {
+  if (!Number.isFinite(value)) return '-';
+  const abs = Math.abs(value);
+  const sign = value < 0 ? '-' : '';
+  if (abs >= 100_000_000) {
+    return `${sign}${(abs / 100_000_000).toFixed(abs >= 1_000_000_000 ? 0 : 1)}억`;
+  }
+  if (abs >= 10_000) {
+    return `${sign}${(abs / 10_000).toFixed(abs >= 1_000_000 ? 0 : 1)}만`;
+  }
+  return `${sign}${Math.round(abs).toLocaleString('ko-KR')}원`;
+}
+
+function clampPercent(value: number): number {
+  if (!Number.isFinite(value)) return 0;
+  return Math.max(0, Math.min(100, Math.round(value)));
+}
+
 function formatPlain(value: number): string {
   if (!Number.isFinite(value)) return '-';
   if (Math.abs(value) >= 1_000_000) {
@@ -2391,6 +2409,48 @@ export default function ManualTraderWorkspace() {
   const playwrightRunning = playwrightStatus?.running ?? false;
   const playwrightStarting = playwrightAction === 'starting' || playwrightStatus?.status === 'starting';
   const playwrightStopping = playwrightAction === 'stopping';
+  const todayPnlKrw = todayStatsQuery.data?.totalPnlKrw ?? 0;
+  const activeEngineCount = [autopilotEnabled, swingAutopilotEnabled, positionAutopilotEnabled].filter(Boolean).length;
+  const scalpBudgetKrw = Math.round(autopilotCapitalPoolKrw * ENGINE_CAPITAL_RATIOS.SCALP);
+  const swingBudgetKrw = Math.round(autopilotCapitalPoolKrw * ENGINE_CAPITAL_RATIOS.SWING);
+  const positionBudgetKrw = Math.round(autopilotCapitalPoolKrw * ENGINE_CAPITAL_RATIOS.POSITION);
+  const slotNotionalKrw = autopilotAmountKrw * autopilotMaxConcurrentPositions;
+  const exposureRatio = autopilotCapitalPoolKrw > 0 ? slotNotionalKrw / autopilotCapitalPoolKrw : 0;
+  const exposurePercent = clampPercent(exposureRatio * 100);
+  const tokenReservePct = llmDailyTokenCap > 0
+    ? Math.round((llmRiskReserveTokens / llmDailyTokenCap) * 100)
+    : 0;
+  const tokenReservePercent = clampPercent(tokenReservePct);
+  const mergedAutopilotSignalCount = autopilotState.candidates.length + swingAutopilotState.candidates.length + positionAutopilotState.candidates.length;
+  const mergedWorkerCount = autopilotState.workers.length + swingAutopilotState.workers.length + positionAutopilotState.workers.length;
+  const mergedEventCount = autopilotState.events.length + swingAutopilotState.events.length + positionAutopilotState.events.length;
+  const dailyLossCapacity = Math.max(1, Math.abs(dailyLossLimitKrw));
+  const dailyLossUsedPercent = clampPercent(todayPnlKrw < 0 ? (Math.abs(todayPnlKrw) / dailyLossCapacity) * 100 : 0);
+  const dailyLossUsedClass = dailyLossUsedPercent >= 95
+    ? 'critical'
+    : dailyLossUsedPercent >= 70
+      ? 'high'
+      : dailyLossUsedPercent >= 40
+        ? 'medium'
+        : 'low';
+  const exposureRiskTier = autopilotState.blockedByDailyLoss
+    ? 'CRITICAL'
+    : exposureRatio >= 0.7
+      ? 'HIGH'
+      : exposureRatio >= 0.45
+        ? 'MEDIUM'
+        : 'LOW';
+  const exposureRiskClass = exposureRiskTier.toLowerCase();
+  const exposureRiskLabel = exposureRiskTier === 'CRITICAL'
+    ? '자동 방어 발동'
+    : exposureRiskTier === 'HIGH'
+      ? '리스크 고밀도'
+      : exposureRiskTier === 'MEDIUM'
+        ? '주의 모드'
+        : '안정 모드';
+  const displayDailyLoss = Math.abs(dailyLossLimitKrw);
+  const dailyLossDirection = dailyLossLimitKrw <= 0 ? '-' : '+';
+  const fixedModeDisabled = winRateThresholdMode !== 'FIXED';
 
   return (
     <section className="guided-workspace">
@@ -2727,37 +2787,162 @@ export default function ManualTraderWorkspace() {
                 </div>
               </div>
 
-              <div className="autopilot-panel">
-                <div className="autopilot-header">
-                  <strong>멀티 오토파일럿 엔진</strong>
-                  <label className="autopilot-switch">
-                    <input
-                      type="checkbox"
-                      checked={autopilotEnabled}
-                      onChange={(event) => setAutopilotEnabled(event.target.checked)}
-                    />
-                    <span>{autopilotEnabled ? 'SCALP ON' : 'SCALP OFF'}</span>
-                  </label>
+              <div className="autopilot-panel autopilot-panel-tv">
+                <div className="autopilot-command-deck">
+                  <div className="autopilot-command-head">
+                    <div>
+                      <span className="autopilot-kicker">AUTO EXECUTION BOARD</span>
+                      <strong>멀티 오토파일럿 커맨드 센터</strong>
+                    </div>
+                    <span className={`autopilot-risk-badge ${exposureRiskClass}`}>{exposureRiskLabel}</span>
+                  </div>
+                  <p className="autopilot-command-sub">
+                    엔진 주기: SCALP(1m/10m), SWING(30m/240m), POSITION(day/day)
+                  </p>
+                  <div className="autopilot-preset-row">
+                    <button
+                      type="button"
+                      className="autopilot-preset-btn"
+                      onClick={() => {
+                        setEntryPolicy('CONSERVATIVE');
+                        setEntryOrderMode('LIMIT');
+                        setAutopilotMaxConcurrentPositions(3);
+                        setAutopilotAmountKrw(Math.max(MIN_ORDER_AMOUNT_KRW, Math.round(autopilotCapitalPoolKrw * 0.05)));
+                        setPendingEntryTimeoutSec(70);
+                        setRejectCooldownSeconds(900);
+                      }}
+                    >
+                      보수 프리셋
+                    </button>
+                    <button
+                      type="button"
+                      className="autopilot-preset-btn"
+                      onClick={() => {
+                        setEntryPolicy('BALANCED');
+                        setEntryOrderMode('ADAPTIVE');
+                        setAutopilotMaxConcurrentPositions(6);
+                        setAutopilotAmountKrw(Math.max(MIN_ORDER_AMOUNT_KRW, Math.round(autopilotCapitalPoolKrw * 0.08)));
+                        setPendingEntryTimeoutSec(45);
+                        setRejectCooldownSeconds(420);
+                      }}
+                    >
+                      균형 프리셋
+                    </button>
+                    <button
+                      type="button"
+                      className="autopilot-preset-btn"
+                      onClick={() => {
+                        setEntryPolicy('AGGRESSIVE');
+                        setEntryOrderMode('MARKET');
+                        setAutopilotMaxConcurrentPositions(8);
+                        setAutopilotAmountKrw(Math.max(MIN_ORDER_AMOUNT_KRW, Math.round(autopilotCapitalPoolKrw * 0.12)));
+                        setPendingEntryTimeoutSec(35);
+                        setRejectCooldownSeconds(300);
+                      }}
+                    >
+                      공격 프리셋
+                    </button>
+                  </div>
+                  <div className="autopilot-engine-rail">
+                    <label className={`autopilot-engine-tile ${autopilotEnabled ? 'on' : ''}`}>
+                      <div>
+                        <span className="engine-name">SCALP</span>
+                        <small>{formatCompactKrw(scalpBudgetKrw)}</small>
+                      </div>
+                      <input
+                        type="checkbox"
+                        checked={autopilotEnabled}
+                        onChange={(event) => setAutopilotEnabled(event.target.checked)}
+                      />
+                    </label>
+                    <label className={`autopilot-engine-tile ${swingAutopilotEnabled ? 'on' : ''}`}>
+                      <div>
+                        <span className="engine-name">SWING</span>
+                        <small>{formatCompactKrw(swingBudgetKrw)}</small>
+                      </div>
+                      <input
+                        type="checkbox"
+                        checked={swingAutopilotEnabled}
+                        onChange={(event) => setSwingAutopilotEnabled(event.target.checked)}
+                      />
+                    </label>
+                    <label className={`autopilot-engine-tile ${positionAutopilotEnabled ? 'on' : ''}`}>
+                      <div>
+                        <span className="engine-name">POSITION</span>
+                        <small>{formatCompactKrw(positionBudgetKrw)}</small>
+                      </div>
+                      <input
+                        type="checkbox"
+                        checked={positionAutopilotEnabled}
+                        onChange={(event) => setPositionAutopilotEnabled(event.target.checked)}
+                      />
+                    </label>
+                  </div>
+                  <div className="autopilot-command-kpis">
+                    <article>
+                      <span>활성 엔진</span>
+                      <strong>{activeEngineCount}/3</strong>
+                    </article>
+                    <article>
+                      <span>최대 노출</span>
+                      <strong>{formatCompactKrw(slotNotionalKrw)}</strong>
+                    </article>
+                    <article>
+                      <span>손실 스탑</span>
+                      <strong>{dailyLossDirection}{displayDailyLoss.toLocaleString('ko-KR')}원</strong>
+                    </article>
+                    <article>
+                      <span>토큰 리저브</span>
+                      <strong>{tokenReservePct}%</strong>
+                    </article>
+                  </div>
+                  <div className="autopilot-command-kpis compact">
+                    <article>
+                      <span>실행 워커</span>
+                      <strong>{mergedWorkerCount}개</strong>
+                    </article>
+                    <article>
+                      <span>감지 후보</span>
+                      <strong>{mergedAutopilotSignalCount}개</strong>
+                    </article>
+                    <article>
+                      <span>이벤트 스트림</span>
+                      <strong>{mergedEventCount}건</strong>
+                    </article>
+                    <article>
+                      <span>슬롯 점유율</span>
+                      <strong>{exposurePercent}%</strong>
+                    </article>
+                  </div>
+                  <div className="autopilot-health-bars">
+                    <div className="autopilot-health-row">
+                      <span>노출 강도</span>
+                      <div className="autopilot-health-track">
+                        <div className="autopilot-health-fill exposure" style={{ width: `${exposurePercent}%` }} />
+                      </div>
+                      <strong>{exposurePercent}%</strong>
+                    </div>
+                    <div className={`autopilot-health-row ${dailyLossUsedClass}`}>
+                      <span>일손실 사용률</span>
+                      <div className="autopilot-health-track">
+                        <div className="autopilot-health-fill loss" style={{ width: `${dailyLossUsedPercent}%` }} />
+                      </div>
+                      <strong>{dailyLossUsedPercent}%</strong>
+                    </div>
+                    <div className="autopilot-health-row">
+                      <span>토큰 리저브</span>
+                      <div className="autopilot-health-track">
+                        <div className="autopilot-health-fill token" style={{ width: `${tokenReservePercent}%` }} />
+                      </div>
+                      <strong>{tokenReservePercent}%</strong>
+                    </div>
+                  </div>
+                  {autopilotState.blockedByDailyLoss && autopilotState.blockedReason && (
+                    <p className="autopilot-warning command-alert">{autopilotState.blockedReason}</p>
+                  )}
                 </div>
-                <div className="autopilot-grid">
-                  <label className="autopilot-checkbox inline">
-                    <input
-                      type="checkbox"
-                      checked={swingAutopilotEnabled}
-                      onChange={(event) => setSwingAutopilotEnabled(event.target.checked)}
-                    />
-                    SWING 엔진 ON
-                  </label>
-                  <label className="autopilot-checkbox inline">
-                    <input
-                      type="checkbox"
-                      checked={positionAutopilotEnabled}
-                      onChange={(event) => setPositionAutopilotEnabled(event.target.checked)}
-                    />
-                    POSITION 엔진 ON
-                  </label>
-                </div>
-                <div className="autopilot-row">
+
+                <div className="autopilot-control-grid tv-grid-2">
                   <label>
                     엔진 총 예산 풀(원)
                     <input
@@ -2768,23 +2953,6 @@ export default function ManualTraderWorkspace() {
                       onChange={(event) => setAutopilotCapitalPoolKrw(Math.max(20_000, Math.round(Number(event.target.value || DEFAULT_AUTOPILOT_CAPITAL_POOL_KRW))))}
                     />
                   </label>
-                  <small>
-                    비율: SCALP 40% / SWING 35% / POSITION 25%
-                  </small>
-                </div>
-                <div className="autopilot-row">
-                  <label>
-                    일일 손실 제한
-                    <input
-                      type="number"
-                      value={dailyLossLimitKrw}
-                      step={1000}
-                      onChange={(event) => setDailyLossLimitKrw(Number(event.target.value || -30000))}
-                    />
-                  </label>
-                  <small>기본 -30,000원</small>
-                </div>
-                <div className="autopilot-grid">
                   <label>
                     포지션당 투자금(원)
                     <input
@@ -2809,18 +2977,103 @@ export default function ManualTraderWorkspace() {
                       }}
                     />
                   </label>
-                </div>
-                <div className="autopilot-row">
-                  <small>엔진 주기: SCALP(1m/10m), SWING(30m/240m), POSITION(day/day)</small>
-                </div>
-                <div className="autopilot-grid">
-                  <label className="autopilot-checkbox inline">
+                  <label>
+                    일일 손실 제한(원)
                     <input
-                      type="checkbox"
-                      checked={focusedScalpEnabled}
-                      onChange={(event) => setFocusedScalpEnabled(event.target.checked)}
+                      type="number"
+                      value={dailyLossLimitKrw}
+                      step={1000}
+                      onChange={(event) => setDailyLossLimitKrw(Number(event.target.value || -30000))}
                     />
-                    선택 코인 단타 루프 사용
+                  </label>
+                </div>
+
+                <div className="autopilot-control-grid tv-grid-2">
+                  <label>
+                    진입 정책
+                    <select
+                      value={entryPolicy}
+                      onChange={(event) => setEntryPolicy(event.target.value as 'BALANCED' | 'AGGRESSIVE' | 'CONSERVATIVE')}
+                    >
+                      <option value="BALANCED">균형형</option>
+                      <option value="AGGRESSIVE">공격형</option>
+                      <option value="CONSERVATIVE">보수형</option>
+                    </select>
+                  </label>
+                  <label>
+                    주문 정책
+                    <select
+                      value={entryOrderMode}
+                      onChange={(event) => setEntryOrderMode(event.target.value as 'ADAPTIVE' | 'MARKET' | 'LIMIT')}
+                    >
+                      <option value="ADAPTIVE">적응형</option>
+                      <option value="MARKET">시장가</option>
+                      <option value="LIMIT">지정가</option>
+                    </select>
+                  </label>
+                  <label>
+                    승률 임계값 모드
+                    <select
+                      value={winRateThresholdMode}
+                      onChange={(event) => setWinRateThresholdMode(event.target.value as 'DYNAMIC_P70' | 'FIXED')}
+                    >
+                      <option value="DYNAMIC_P70">동적(P70)</option>
+                      <option value="FIXED">고정</option>
+                    </select>
+                  </label>
+                  <label>
+                    고정 최소 현재가 승률(%)
+                    <input
+                      type="number"
+                      min={50}
+                      max={80}
+                      step={0.5}
+                      value={fixedMinMarketWinRate}
+                      onChange={(event) => setFixedMinMarketWinRate(Number(event.target.value || 60))}
+                      disabled={fixedModeDisabled}
+                    />
+                  </label>
+                </div>
+
+                <div className="autopilot-control-grid tv-grid-2">
+                  <label>
+                    PENDING_ENTRY 타임아웃(초)
+                    <input
+                      type="number"
+                      min={30}
+                      max={900}
+                      step={1}
+                      value={pendingEntryTimeoutSec}
+                      onChange={(event) => {
+                        const raw = Number(event.target.value || 45);
+                        setPendingEntryTimeoutSec(Math.min(900, Math.max(30, Math.round(raw))));
+                      }}
+                    />
+                  </label>
+                  <label>
+                    진입 거절/실패 쿨다운(초)
+                    <input
+                      type="number"
+                      min={300}
+                      max={3600}
+                      step={1}
+                      value={rejectCooldownSeconds}
+                      onChange={(event) => {
+                        const raw = Number(event.target.value || 300);
+                        setRejectCooldownSeconds(Math.min(3600, Math.max(300, Math.round(raw))));
+                      }}
+                    />
+                  </label>
+                  <label>
+                    청산 후 쿨다운(분)
+                    <input
+                      type="number"
+                      min={5}
+                      max={180}
+                      step={1}
+                      value={postExitCooldownMinutes}
+                      onChange={(event) => setPostExitCooldownMinutes(Number(event.target.value || 8))}
+                    />
                   </label>
                   <label>
                     선택 코인 확인 주기(초)
@@ -2837,6 +3090,26 @@ export default function ManualTraderWorkspace() {
                     />
                   </label>
                 </div>
+
+                <div className="autopilot-toggle-strip">
+                  <label className="autopilot-toggle-chip">
+                    <input
+                      type="checkbox"
+                      checked={marketFallbackAfterCancel}
+                      onChange={(event) => setMarketFallbackAfterCancel(event.target.checked)}
+                    />
+                    타임아웃 취소 후 시장가 폴백
+                  </label>
+                  <label className="autopilot-toggle-chip">
+                    <input
+                      type="checkbox"
+                      checked={focusedScalpEnabled}
+                      onChange={(event) => setFocusedScalpEnabled(event.target.checked)}
+                    />
+                    선택 코인 단타 루프 사용
+                  </label>
+                </div>
+
                 <div className="focused-scalp-ux">
                   <div className="focused-scalp-ux-head">
                     <strong>선택 코인 단타 주문창</strong>
@@ -2877,236 +3150,136 @@ export default function ManualTraderWorkspace() {
                     <small className="autopilot-warning">선택 코인 단타 루프가 켜져 있지만 등록된 코인이 없습니다.</small>
                   )}
                 </div>
-                <div className="autopilot-grid">
-                  <label>
-                    진입 정책
-                    <select
-                      value={entryPolicy}
-                      onChange={(event) => setEntryPolicy(event.target.value as 'BALANCED' | 'AGGRESSIVE' | 'CONSERVATIVE')}
-                    >
-                      <option value="BALANCED">균형형</option>
-                      <option value="AGGRESSIVE">공격형</option>
-                      <option value="CONSERVATIVE">보수형</option>
-                    </select>
-                  </label>
-                  <label>
-                    주문 정책
-                    <select
-                      value={entryOrderMode}
-                      onChange={(event) => setEntryOrderMode(event.target.value as 'ADAPTIVE' | 'MARKET' | 'LIMIT')}
-                    >
-                      <option value="ADAPTIVE">적응형</option>
-                      <option value="MARKET">시장가</option>
-                      <option value="LIMIT">지정가</option>
-                    </select>
-                  </label>
-                </div>
-                <div className="autopilot-grid">
-                  <label>
-                    PENDING_ENTRY 타임아웃(초)
-                    <input
-                      type="number"
-                      min={30}
-                      max={900}
-                      step={1}
-                      value={pendingEntryTimeoutSec}
-                      onChange={(event) => {
-                        const raw = Number(event.target.value || 45);
-                        setPendingEntryTimeoutSec(Math.min(900, Math.max(30, Math.round(raw))));
-                      }}
-                    />
-                  </label>
-                  <label className="autopilot-checkbox inline">
-                    <input
-                      type="checkbox"
-                      checked={marketFallbackAfterCancel}
-                      onChange={(event) => setMarketFallbackAfterCancel(event.target.checked)}
-                    />
-                    타임아웃 취소 후 시장가 폴백
-                  </label>
-                </div>
-                <div className="autopilot-grid">
-                  <label>
-                    승률 임계값 모드
-                    <select
-                      value={winRateThresholdMode}
-                      onChange={(event) => setWinRateThresholdMode(event.target.value as 'DYNAMIC_P70' | 'FIXED')}
-                    >
-                      <option value="DYNAMIC_P70">동적(P70)</option>
-                      <option value="FIXED">고정</option>
-                    </select>
-                  </label>
-                  <label>
-                    고정 최소 현재가 승률(%)
-                    <input
-                      type="number"
-                      min={50}
-                      max={80}
-                      step={0.5}
-                      value={fixedMinMarketWinRate}
-                      onChange={(event) => setFixedMinMarketWinRate(Number(event.target.value || 60))}
-                      disabled={winRateThresholdMode !== 'FIXED'}
-                    />
-                  </label>
-                </div>
-                <div className="autopilot-grid">
-                  <label>
-                    LLM 최소 신뢰도
-                    <input
-                      type="number"
-                      min={0}
-                      max={100}
-                      step={1}
-                      value={minLlmConfidence}
-                      onChange={(event) => setMinLlmConfidence(Number(event.target.value || 60))}
-                    />
-                  </label>
-                  <label>
-                    진입 거절/실패 쿨다운(초)
-                    <input
-                      type="number"
-                      min={300}
-                      max={3600}
-                      step={1}
-                      value={rejectCooldownSeconds}
-                      onChange={(event) => {
-                        const raw = Number(event.target.value || 300);
-                        setRejectCooldownSeconds(Math.min(3600, Math.max(300, Math.round(raw))));
-                      }}
-                    />
-                  </label>
-                </div>
-                <div className="autopilot-grid">
-                  <label>
-                    일일 LLM 토큰 상한
-                    <input
-                      type="number"
-                      min={20000}
-                      max={2000000}
-                      step={1000}
-                      value={llmDailyTokenCap}
-                      onChange={(event) => {
-                        const raw = Number(event.target.value || 200000);
-                        setLlmDailyTokenCap(Math.min(2_000_000, Math.max(20_000, Math.round(raw))));
-                      }}
-                    />
-                  </label>
-                  <label>
-                    리스크 리뷰 reserve(토큰)
-                    <input
-                      type="number"
-                      min={0}
-                      max={llmDailyTokenCap}
-                      step={1000}
-                      value={llmRiskReserveTokens}
-                      onChange={(event) => {
-                        const raw = Number(event.target.value || 40000);
-                        setLlmRiskReserveTokens(Math.min(llmDailyTokenCap, Math.max(0, Math.round(raw))));
-                      }}
-                    />
-                  </label>
-                </div>
-                <div className="autopilot-row">
-                  <small>FineAgent 기본 모드: INVEST 전용 · LITE(SYNTH+PM만 LLM)</small>
-                </div>
-                <div className="autopilot-grid">
-                  <label>
-                    청산 후 쿨다운(분)
-                    <input
-                      type="number"
-                      min={5}
-                      max={180}
-                      step={1}
-                      value={postExitCooldownMinutes}
-                      onChange={(event) => setPostExitCooldownMinutes(Number(event.target.value || 8))}
-                    />
-                  </label>
-                </div>
-                {autopilotState.blockedByDailyLoss && autopilotState.blockedReason && (
-                  <p className="autopilot-warning">{autopilotState.blockedReason}</p>
-                )}
 
-                <div className="autopilot-divider" />
+                <details className="autopilot-advanced-shell">
+                  <summary>고급 런타임 · LLM · Playwright</summary>
+                  <div className="autopilot-advanced-body">
+                    <div className="autopilot-control-grid tv-grid-2">
+                      <label>
+                        LLM 최소 신뢰도
+                        <input
+                          type="number"
+                          min={0}
+                          max={100}
+                          step={1}
+                          value={minLlmConfidence}
+                          onChange={(event) => setMinLlmConfidence(Number(event.target.value || 60))}
+                        />
+                      </label>
+                      <label>
+                        일일 LLM 토큰 상한
+                        <input
+                          type="number"
+                          min={20000}
+                          max={2000000}
+                          step={1000}
+                          value={llmDailyTokenCap}
+                          onChange={(event) => {
+                            const raw = Number(event.target.value || 200000);
+                            setLlmDailyTokenCap(Math.min(2_000_000, Math.max(20_000, Math.round(raw))));
+                          }}
+                        />
+                      </label>
+                      <label>
+                        리스크 리뷰 reserve(토큰)
+                        <input
+                          type="number"
+                          min={0}
+                          max={llmDailyTokenCap}
+                          step={1000}
+                          value={llmRiskReserveTokens}
+                          onChange={(event) => {
+                            const raw = Number(event.target.value || 40000);
+                            setLlmRiskReserveTokens(Math.min(llmDailyTokenCap, Math.max(0, Math.round(raw))));
+                          }}
+                        />
+                      </label>
+                    </div>
+                    <div className="autopilot-row">
+                      <small>FineAgent 기본 모드: INVEST 전용 · LITE(SYNTH+PM만 LLM)</small>
+                    </div>
+                    <div className="autopilot-divider" />
+                    <div className="autopilot-header">
+                      <strong>Playwright MCP</strong>
+                      <label className="autopilot-switch">
+                        <input
+                          type="checkbox"
+                          checked={playwrightEnabled}
+                          onChange={(event) => setPlaywrightEnabled(event.target.checked)}
+                        />
+                        <span>{playwrightEnabled ? '사용' : '미사용'}</span>
+                      </label>
+                    </div>
+                    <div className="autopilot-control-grid tv-grid-2">
+                      <label>
+                        포트
+                        <input
+                          type="number"
+                          min={1024}
+                          max={65535}
+                          value={playwrightMcpPort}
+                          onChange={(event) => {
+                            const nextPort = Number(event.target.value || 8931);
+                            setPlaywrightMcpPort(nextPort);
+                            setPlaywrightMcpUrl(derivePlaywrightMcpUrl(nextPort));
+                          }}
+                        />
+                      </label>
+                      <label>
+                        URL
+                        <input
+                          type="text"
+                          value={playwrightMcpUrl}
+                          onChange={(event) => setPlaywrightMcpUrl(event.target.value)}
+                        />
+                      </label>
+                    </div>
+                    <label className="autopilot-checkbox">
+                      <input
+                        type="checkbox"
+                        checked={playwrightAutoStart}
+                        onChange={(event) => setPlaywrightAutoStart(event.target.checked)}
+                      />
+                      앱 시작 시 Playwright MCP 자동 실행
+                    </label>
+                    <div className="autopilot-actions">
+                      <button
+                        type="button"
+                        onClick={() => void handlePlaywrightStart()}
+                        disabled={playwrightStarting || playwrightRunning}
+                      >
+                        {playwrightStarting ? '시작 중...' : playwrightRunning ? '실행 중' : 'Playwright 시작'}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => void handlePlaywrightStop()}
+                        className="danger"
+                        disabled={playwrightStopping || !playwrightRunning}
+                      >
+                        {playwrightStopping ? '중지 중...' : playwrightRunning ? 'Playwright 중지' : '중지됨'}
+                      </button>
+                    </div>
+                    <p className={`autopilot-meta ${playwrightRunning ? 'running' : 'stopped'}`}>
+                      상태: {playwrightStatus?.status ?? 'unknown'}
+                      {playwrightStatus?.url ? ` · ${playwrightStatus.url}` : ''}
+                      {playwrightStatus?.lastError ? ` · 오류: ${playwrightStatus.lastError}` : ''}
+                    </p>
+                  </div>
+                </details>
 
-                <div className="autopilot-header">
-                  <strong>Playwright MCP</strong>
-                  <label className="autopilot-switch">
-                    <input
-                      type="checkbox"
-                      checked={playwrightEnabled}
-                      onChange={(event) => setPlaywrightEnabled(event.target.checked)}
-                    />
-                    <span>{playwrightEnabled ? '사용' : '미사용'}</span>
-                  </label>
-                </div>
-                <div className="autopilot-grid">
-                  <label>
-                    포트
-                    <input
-                      type="number"
-                      min={1024}
-                      max={65535}
-                      value={playwrightMcpPort}
-                      onChange={(event) => {
-                        const nextPort = Number(event.target.value || 8931);
-                        setPlaywrightMcpPort(nextPort);
-                        setPlaywrightMcpUrl(derivePlaywrightMcpUrl(nextPort));
-                      }}
-                    />
-                  </label>
-                  <label>
-                    URL
-                    <input
-                      type="text"
-                      value={playwrightMcpUrl}
-                      onChange={(event) => setPlaywrightMcpUrl(event.target.value)}
-                    />
-                  </label>
-                </div>
-                <label className="autopilot-checkbox">
-                  <input
-                    type="checkbox"
-                    checked={playwrightAutoStart}
-                    onChange={(event) => setPlaywrightAutoStart(event.target.checked)}
-                  />
-                  앱 시작 시 Playwright MCP 자동 실행
-                </label>
-                <div className="autopilot-actions">
-                  <button
-                    type="button"
-                    onClick={() => void handlePlaywrightStart()}
-                    disabled={playwrightStarting || playwrightRunning}
-                  >
-                    {playwrightStarting ? '시작 중...' : playwrightRunning ? '실행 중' : 'Playwright 시작'}
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => void handlePlaywrightStop()}
-                    className="danger"
-                    disabled={playwrightStopping || !playwrightRunning}
-                  >
-                    {playwrightStopping ? '중지 중...' : playwrightRunning ? 'Playwright 중지' : '중지됨'}
-                  </button>
-                </div>
-                <p className={`autopilot-meta ${playwrightRunning ? 'running' : 'stopped'}`}>
-                  상태: {playwrightStatus?.status ?? 'unknown'}
-                  {playwrightStatus?.url ? ` · ${playwrightStatus.url}` : ''}
-                  {playwrightStatus?.lastError ? ` · 오류: ${playwrightStatus.lastError}` : ''}
-                </p>
-
-                <div className="autopilot-workers">
-                  <strong>요약</strong>
+                <div className="autopilot-workers autopilot-workers-tv">
+                  <strong>실행 요약</strong>
                   <div className="autopilot-worker-row">
-                    <span>실행 워커</span>
-                    <span>{autopilotState.workers.length}개</span>
+                    <span>SCALP 워커 / 이벤트 / 후보</span>
+                    <span>{autopilotState.workers.length} / {autopilotState.events.length} / {autopilotState.candidates.length}</span>
                   </div>
                   <div className="autopilot-worker-row">
-                    <span>로컬 이벤트</span>
-                    <span>{autopilotState.events.length}건</span>
+                    <span>SWING 워커 / 이벤트 / 후보</span>
+                    <span>{swingAutopilotState.workers.length} / {swingAutopilotState.events.length} / {swingAutopilotState.candidates.length}</span>
                   </div>
                   <div className="autopilot-worker-row">
-                    <span>후보</span>
-                    <span>{autopilotState.candidates.length}개</span>
+                    <span>POSITION 워커 / 이벤트 / 후보</span>
+                    <span>{positionAutopilotState.workers.length} / {positionAutopilotState.events.length} / {positionAutopilotState.candidates.length}</span>
                   </div>
                 </div>
               </div>
