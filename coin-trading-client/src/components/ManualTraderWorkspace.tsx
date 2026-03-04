@@ -2424,6 +2424,14 @@ export default function ManualTraderWorkspace() {
   const mergedAutopilotSignalCount = autopilotState.candidates.length + swingAutopilotState.candidates.length + positionAutopilotState.candidates.length;
   const mergedWorkerCount = autopilotState.workers.length + swingAutopilotState.workers.length + positionAutopilotState.workers.length;
   const mergedEventCount = autopilotState.events.length + swingAutopilotState.events.length + positionAutopilotState.events.length;
+  const scalpWorkerLoadPercent = clampPercent((autopilotState.workers.length / Math.max(1, autopilotMaxConcurrentPositions)) * 100);
+  const swingWorkerLoadPercent = clampPercent((swingAutopilotState.workers.length / 3) * 100);
+  const positionWorkerLoadPercent = clampPercent((positionAutopilotState.workers.length / 3) * 100);
+  const enabledBudgetKrw =
+    (autopilotEnabled ? scalpBudgetKrw : 0) +
+    (swingAutopilotEnabled ? swingBudgetKrw : 0) +
+    (positionAutopilotEnabled ? positionBudgetKrw : 0);
+  const enabledBudgetPercent = clampPercent((enabledBudgetKrw / Math.max(1, autopilotCapitalPoolKrw)) * 100);
   const dailyLossCapacity = Math.max(1, Math.abs(dailyLossLimitKrw));
   const dailyLossUsedPercent = clampPercent(todayPnlKrw < 0 ? (Math.abs(todayPnlKrw) / dailyLossCapacity) * 100 : 0);
   const dailyLossUsedClass = dailyLossUsedPercent >= 95
@@ -2843,6 +2851,38 @@ export default function ManualTraderWorkspace() {
                       공격 프리셋
                     </button>
                   </div>
+                  <div className="autopilot-command-actions">
+                    <button
+                      type="button"
+                      className="ghost"
+                      onClick={() => {
+                        setAutopilotEnabled(false);
+                        setSwingAutopilotEnabled(false);
+                        setPositionAutopilotEnabled(false);
+                        setStatusMessage('긴급 정지: 모든 오토파일럿 엔진을 중지했습니다.');
+                      }}
+                    >
+                      긴급 정지
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setEntryPolicy('BALANCED');
+                        setEntryOrderMode('ADAPTIVE');
+                        setStatusMessage('운용 프로파일을 균형 모드로 복구했습니다.');
+                      }}
+                    >
+                      균형 복구
+                    </button>
+                    <button
+                      type="button"
+                      className="outline"
+                      onClick={() => syncMutation.mutate()}
+                      disabled={syncMutation.isPending}
+                    >
+                      {syncMutation.isPending ? '동기화 중...' : '잔고/포지션 동기화'}
+                    </button>
+                  </div>
                   <div className="autopilot-engine-rail">
                     <label className={`autopilot-engine-tile ${autopilotEnabled ? 'on' : ''}`}>
                       <div>
@@ -2937,6 +2977,10 @@ export default function ManualTraderWorkspace() {
                       <strong>{tokenReservePercent}%</strong>
                     </div>
                   </div>
+                  <div className="autopilot-budget-enabled">
+                    <span>활성 엔진 예산 합계</span>
+                    <strong>{formatCompactKrw(enabledBudgetKrw)} ({enabledBudgetPercent}%)</strong>
+                  </div>
                   {autopilotState.blockedByDailyLoss && autopilotState.blockedReason && (
                     <p className="autopilot-warning command-alert">{autopilotState.blockedReason}</p>
                   )}
@@ -2986,6 +3030,29 @@ export default function ManualTraderWorkspace() {
                       onChange={(event) => setDailyLossLimitKrw(Number(event.target.value || -30000))}
                     />
                   </label>
+                </div>
+                <div className="autopilot-allocation-board">
+                  <div className="allocation-row">
+                    <span>SCALP 배분</span>
+                    <div className="allocation-track">
+                      <div className="allocation-fill scalp" style={{ width: `${Math.round(ENGINE_CAPITAL_RATIOS.SCALP * 100)}%` }} />
+                    </div>
+                    <strong>{formatCompactKrw(scalpBudgetKrw)}</strong>
+                  </div>
+                  <div className="allocation-row">
+                    <span>SWING 배분</span>
+                    <div className="allocation-track">
+                      <div className="allocation-fill swing" style={{ width: `${Math.round(ENGINE_CAPITAL_RATIOS.SWING * 100)}%` }} />
+                    </div>
+                    <strong>{formatCompactKrw(swingBudgetKrw)}</strong>
+                  </div>
+                  <div className="allocation-row">
+                    <span>POSITION 배분</span>
+                    <div className="allocation-track">
+                      <div className="allocation-fill position" style={{ width: `${Math.round(ENGINE_CAPITAL_RATIOS.POSITION * 100)}%` }} />
+                    </div>
+                    <strong>{formatCompactKrw(positionBudgetKrw)}</strong>
+                  </div>
                 </div>
 
                 <div className="autopilot-control-grid tv-grid-2">
@@ -3269,17 +3336,37 @@ export default function ManualTraderWorkspace() {
 
                 <div className="autopilot-workers autopilot-workers-tv">
                   <strong>실행 요약</strong>
-                  <div className="autopilot-worker-row">
-                    <span>SCALP 워커 / 이벤트 / 후보</span>
-                    <span>{autopilotState.workers.length} / {autopilotState.events.length} / {autopilotState.candidates.length}</span>
-                  </div>
-                  <div className="autopilot-worker-row">
-                    <span>SWING 워커 / 이벤트 / 후보</span>
-                    <span>{swingAutopilotState.workers.length} / {swingAutopilotState.events.length} / {swingAutopilotState.candidates.length}</span>
-                  </div>
-                  <div className="autopilot-worker-row">
-                    <span>POSITION 워커 / 이벤트 / 후보</span>
-                    <span>{positionAutopilotState.workers.length} / {positionAutopilotState.events.length} / {positionAutopilotState.candidates.length}</span>
+                  <div className="autopilot-engine-monitor-grid">
+                    <article className={`engine-monitor-card ${autopilotEnabled ? 'on' : ''}`}>
+                      <div className="engine-monitor-head">
+                        <strong>SCALP</strong>
+                        <span>{autopilotEnabled ? 'ON' : 'OFF'}</span>
+                      </div>
+                      <div className="engine-monitor-metrics">{autopilotState.workers.length}W · {autopilotState.events.length}E · {autopilotState.candidates.length}C</div>
+                      <div className="engine-monitor-track">
+                        <div className="engine-monitor-fill" style={{ width: `${scalpWorkerLoadPercent}%` }} />
+                      </div>
+                    </article>
+                    <article className={`engine-monitor-card ${swingAutopilotEnabled ? 'on' : ''}`}>
+                      <div className="engine-monitor-head">
+                        <strong>SWING</strong>
+                        <span>{swingAutopilotEnabled ? 'ON' : 'OFF'}</span>
+                      </div>
+                      <div className="engine-monitor-metrics">{swingAutopilotState.workers.length}W · {swingAutopilotState.events.length}E · {swingAutopilotState.candidates.length}C</div>
+                      <div className="engine-monitor-track">
+                        <div className="engine-monitor-fill" style={{ width: `${swingWorkerLoadPercent}%` }} />
+                      </div>
+                    </article>
+                    <article className={`engine-monitor-card ${positionAutopilotEnabled ? 'on' : ''}`}>
+                      <div className="engine-monitor-head">
+                        <strong>POSITION</strong>
+                        <span>{positionAutopilotEnabled ? 'ON' : 'OFF'}</span>
+                      </div>
+                      <div className="engine-monitor-metrics">{positionAutopilotState.workers.length}W · {positionAutopilotState.events.length}E · {positionAutopilotState.candidates.length}C</div>
+                      <div className="engine-monitor-track">
+                        <div className="engine-monitor-fill" style={{ width: `${positionWorkerLoadPercent}%` }} />
+                      </div>
+                    </article>
                   </div>
                 </div>
               </div>
