@@ -9,14 +9,8 @@ interface CommandBarProps {
   exposurePercent: number;
   activeEngineCount: number;
   warningCount: number;
-  armState: 'DISARMED' | 'ARMED';
-  armCountdownSec: number;
   syncPending: boolean;
   rightPanelOpen: boolean;
-  onArmPointerDown: () => void;
-  onArmPointerUp: () => void;
-  onArmPointerLeave: () => void;
-  onArmClick: () => void;
   onEmergencyStop: () => void;
   onSync: () => void;
   onOpenChat: () => void;
@@ -39,20 +33,20 @@ export function CommandBar({
   exposurePercent,
   activeEngineCount,
   warningCount,
-  armState,
-  armCountdownSec,
   syncPending,
   rightPanelOpen,
-  onArmPointerDown,
-  onArmPointerUp,
-  onArmPointerLeave,
-  onArmClick,
   onEmergencyStop,
   onSync,
   onOpenChat,
   onToggleRightPanel,
   onToggleDensity,
 }: CommandBarProps) {
+  const panelToggleLabel = rightPanelOpen ? '우측 패널 숨기기' : '우측 패널 보기';
+  const panelToggleTitle = rightPanelOpen
+    ? '우측 실행 패널을 숨기고 차트 영역을 넓게 봅니다.'
+    : '우측 실행 패널을 다시 열어 엔진/리스크/후보 제어를 표시합니다.';
+  const commandHelp = '즉시 조작 모드: 엔진 스위치, 프리셋, 주문 액션을 바로 실행할 수 있습니다.';
+
   return (
     <header className="workspace-command-bar">
       <div className="workspace-command-left">
@@ -83,23 +77,19 @@ export function CommandBar({
       <div className="workspace-command-actions">
         <button
           type="button"
-          className={`arm-btn ${armState === 'ARMED' ? 'armed' : 'disarmed'}`}
-          onMouseDown={onArmPointerDown}
-          onMouseUp={onArmPointerUp}
-          onMouseLeave={onArmPointerLeave}
-          onTouchStart={onArmPointerDown}
-          onTouchEnd={onArmPointerUp}
-          onClick={onArmClick}
+          className="emergency-btn"
+          onClick={onEmergencyStop}
+          title="SCALP/SWING/POSITION 엔진을 모두 OFF 하고 신규 진입을 즉시 중단합니다."
         >
-          {armState === 'ARMED' ? `ARMED ${armCountdownSec}s` : 'ARM'}
+          긴급 중지
         </button>
-        <button type="button" className="emergency-btn" onClick={onEmergencyStop}>긴급 정지</button>
         <button type="button" onClick={onSync} disabled={syncPending}>
-          {syncPending ? '동기화...' : 'Sync'}
+          {syncPending ? '동기화...' : '계정 동기화'}
         </button>
         <button type="button" onClick={onOpenChat}>채팅</button>
-        <button type="button" onClick={onToggleRightPanel}>{rightPanelOpen ? '콘솔 닫기' : '콘솔 열기'}</button>
+        <button type="button" onClick={onToggleRightPanel} title={panelToggleTitle}>{panelToggleLabel}</button>
         <button type="button" onClick={onToggleDensity}>{density === 'COMFORT' ? 'Compact' : 'Comfort'}</button>
+        <p className="workspace-command-help">{commandHelp}</p>
       </div>
     </header>
   );

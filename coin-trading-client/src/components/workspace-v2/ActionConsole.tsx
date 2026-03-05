@@ -21,40 +21,40 @@ export function ActionConsole({
     <section className="workspace-action-console">
       <article className="action-console-section">
         <header>
-          <span>Execution Gate</span>
-          <strong>실행 보안</strong>
+          <span>1 / 5</span>
+          <strong>즉시 실행 컨트롤</strong>
         </header>
         {executionGate}
       </article>
 
       <article className="action-console-section">
         <header>
-          <span>Engine Control</span>
-          <strong>엔진 제어</strong>
+          <span>2 / 5</span>
+          <strong>자동매매 엔진 스위치</strong>
         </header>
         {engineControl}
       </article>
 
       <article className="action-console-section">
         <header>
-          <span>Risk Preset</span>
-          <strong>리스크 프리셋</strong>
+          <span>3 / 5</span>
+          <strong>리스크/한도 설정</strong>
         </header>
         {riskPreset}
       </article>
 
       <article className="action-console-section">
         <header>
-          <span>Candidate Queue</span>
-          <strong>후보 큐</strong>
+          <span>4 / 5</span>
+          <strong>실시간 후보·이벤트</strong>
         </header>
         {candidateQueue}
       </article>
 
       <article className="action-console-section advanced">
         <header>
-          <span>Advanced</span>
-          <strong>상세 파라미터</strong>
+          <span>5 / 5</span>
+          <strong>고급 파라미터</strong>
         </header>
         {advanced}
       </article>

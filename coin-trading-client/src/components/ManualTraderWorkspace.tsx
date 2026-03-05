@@ -775,7 +775,7 @@ export default function ManualTraderWorkspace() {
   const [zaiEndpointMode, setZaiEndpointMode] = useState<ZaiEndpointMode>(prefs.zaiEndpointMode ?? 'coding');
   const [delegationMode, setDelegationMode] = useState<DelegationMode>(prefs.delegationMode ?? 'AUTO_AND_MANUAL');
   const [workspaceDensity, setWorkspaceDensity] = useState<WorkspaceDensity>(prefs.workspaceDensity ?? 'COMFORT');
-  const [actionConsoleOpen, setActionConsoleOpen] = useState<boolean>(prefs.actionConsoleOpen ?? false);
+  const [actionConsoleOpen, setActionConsoleOpen] = useState<boolean>(prefs.actionConsoleOpen ?? true);
   const [chatDrawerOpen, setChatDrawerOpen] = useState(false);
   const [zaiApiKeyInput, setZaiApiKeyInput] = useState('');
   const [zaiApiKeyBusy, setZaiApiKeyBusy] = useState(false);
@@ -881,8 +881,6 @@ export default function ManualTraderWorkspace() {
   const [focusedScalpPollIntervalSec, setFocusedScalpPollIntervalSec] = useState<number>(
     Math.min(300, Math.max(5, Math.round(prefs.focusedScalpPollIntervalSec ?? 20)))
   );
-  const [executionArmState, setExecutionArmState] = useState<'DISARMED' | 'ARMED'>('DISARMED');
-  const [executionArmedUntil, setExecutionArmedUntil] = useState<number | null>(null);
   const [undoToast, setUndoToast] = useState<{ message: string; undo: () => void } | null>(null);
   const focusedScalpParsed = useMemo(
     () => normalizeFocusedScalpMarkets(focusedScalpMarketsInput),
@@ -902,8 +900,6 @@ export default function ManualTraderWorkspace() {
   const mcpToolsRef = useRef<McpTool[]>([]);
   const autoAnalysisInFlightRef = useRef(false);
   const chatEndRef = useRef<HTMLDivElement | null>(null);
-  const armHoldTimerRef = useRef<number | null>(null);
-  const armLastTapAtRef = useRef(0);
   const undoToastTimerRef = useRef<number | null>(null);
   const winRateSort = isWinRateSort(sortBy);
 
@@ -1361,20 +1357,6 @@ export default function ManualTraderWorkspace() {
     chatEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [chatMessages, chatStreamText]);
 
-  const disarmExecution = useCallback((message?: string) => {
-    setExecutionArmState('DISARMED');
-    setExecutionArmedUntil(null);
-    if (message) {
-      setStatusMessage(message);
-    }
-  }, []);
-
-  const armExecution = useCallback(() => {
-    setExecutionArmState('ARMED');
-    setExecutionArmedUntil(Date.now() + 60_000);
-    setStatusMessage('실행 Arm 활성화: 60초 동안 실행 액션이 허용됩니다.');
-  }, []);
-
   const registerUndoToast = useCallback((message: string, undo: () => void) => {
     if (undoToastTimerRef.current) {
       window.clearTimeout(undoToastTimerRef.current);
@@ -1386,43 +1368,6 @@ export default function ManualTraderWorkspace() {
     }, 4000);
   }, []);
 
-  const consumeArmOrWarn = useCallback((): boolean => {
-    if (executionArmState === 'ARMED') return true;
-    setStatusMessage('실행 전 Arm 버튼을 길게 누르거나 빠르게 2회 눌러 활성화하세요.');
-    return false;
-  }, [executionArmState]);
-
-  const handleArmPointerDown = useCallback(() => {
-    if (armHoldTimerRef.current) {
-      window.clearTimeout(armHoldTimerRef.current);
-    }
-    armHoldTimerRef.current = window.setTimeout(() => {
-      armExecution();
-      armHoldTimerRef.current = null;
-    }, 700);
-  }, [armExecution]);
-
-  const handleArmPointerUp = useCallback(() => {
-    if (armHoldTimerRef.current) {
-      window.clearTimeout(armHoldTimerRef.current);
-      armHoldTimerRef.current = null;
-    }
-  }, []);
-
-  const handleArmClick = useCallback(() => {
-    const now = Date.now();
-    if (executionArmState === 'ARMED') {
-      disarmExecution('실행 Arm 해제');
-      return;
-    }
-    if (now - armLastTapAtRef.current <= 280) {
-      armExecution();
-      armLastTapAtRef.current = 0;
-      return;
-    }
-    armLastTapAtRef.current = now;
-  }, [armExecution, disarmExecution, executionArmState]);
-
   const handleUndoToast = useCallback(() => {
     if (!undoToast) return;
     undoToast.undo();
@@ -1433,32 +1378,6 @@ export default function ManualTraderWorkspace() {
     }
     setStatusMessage('직전 실행을 되돌렸습니다.');
   }, [undoToast]);
-
-  useEffect(() => {
-    if (executionArmState !== 'ARMED' || executionArmedUntil == null) return;
-    const remaining = executionArmedUntil - Date.now();
-    if (remaining <= 0) {
-      disarmExecution('Arm 시간 만료');
-      return;
-    }
-    const timer = window.setTimeout(() => disarmExecution('Arm 시간 만료'), remaining);
-    return () => window.clearTimeout(timer);
-  }, [disarmExecution, executionArmState, executionArmedUntil]);
-
-  useEffect(() => {
-    const onBlur = () => disarmExecution('앱 포커스 이탈로 Arm 해제');
-    const onVisibility = () => {
-      if (document.visibilityState !== 'visible') {
-        disarmExecution('백그라운드 전환으로 Arm 해제');
-      }
-    };
-    window.addEventListener('blur', onBlur);
-    document.addEventListener('visibilitychange', onVisibility);
-    return () => {
-      window.removeEventListener('blur', onBlur);
-      document.removeEventListener('visibilitychange', onVisibility);
-    };
-  }, [disarmExecution]);
 
   // 저장
   useEffect(() => {
@@ -2579,18 +2498,44 @@ export default function ManualTraderWorkspace() {
   const displayDailyLoss = Math.abs(dailyLossLimitKrw);
   const dailyLossDirection = dailyLossLimitKrw <= 0 ? '-' : '+';
   const fixedModeDisabled = winRateThresholdMode !== 'FIXED';
-  const armCountdownSec = executionArmedUntil == null ? 0 : Math.max(0, Math.ceil((executionArmedUntil - Date.now()) / 1000));
   const warningCount = Number(autopilotState.blockedByDailyLoss) + Number(dailyLossUsedPercent >= 70);
   const sessionLabel = tradingMode === 'SCALP' ? '초단타 세션' : tradingMode === 'SWING' ? '단타 세션' : '포지션 세션';
   const connectionLabel = providerConnected ? '연결됨' : providerChecking ? '연결 확인 중' : '연결 필요';
 
-  const executeWithArm = useCallback((action: () => void, undoMessage?: string, undoAction?: () => void) => {
-    if (!consumeArmOrWarn()) return;
+  const executeAction = useCallback((action: () => void, undoMessage?: string, undoAction?: () => void) => {
     action();
     if (undoMessage && undoAction) {
       registerUndoToast(undoMessage, undoAction);
     }
-  }, [consumeArmOrWarn, registerUndoToast]);
+  }, [registerUndoToast]);
+
+  const openRightPanel = useCallback(() => {
+    setActionConsoleOpen((prev) => {
+      if (prev) return prev;
+      setStatusMessage('우측 패널 표시: 엔진 스위치/리스크/후보 제어가 보입니다.');
+      return true;
+    });
+  }, []);
+
+  const closeRightPanel = useCallback(() => {
+    setActionConsoleOpen((prev) => {
+      if (!prev) return prev;
+      setStatusMessage('우측 패널 숨김: 차트 집중 모드입니다. 상단 버튼으로 다시 열 수 있습니다.');
+      return false;
+    });
+  }, []);
+
+  const toggleRightPanel = useCallback(() => {
+    setActionConsoleOpen((prev) => {
+      const next = !prev;
+      setStatusMessage(
+        next
+          ? '우측 패널 표시: 엔진 스위치/리스크/후보 제어가 보입니다.'
+          : '우측 패널 숨김: 차트 집중 모드입니다. 상단 버튼으로 다시 열 수 있습니다.'
+      );
+      return next;
+    });
+  }, []);
 
   return (
     <section className="guided-workspace workspace-v2">
@@ -2603,30 +2548,35 @@ export default function ManualTraderWorkspace() {
         exposurePercent={exposurePercent}
         activeEngineCount={activeEngineCount}
         warningCount={warningCount}
-        armState={executionArmState}
-        armCountdownSec={armCountdownSec}
         syncPending={syncMutation.isPending}
         rightPanelOpen={actionConsoleOpen}
-        onArmPointerDown={handleArmPointerDown}
-        onArmPointerUp={handleArmPointerUp}
-        onArmPointerLeave={handleArmPointerUp}
-        onArmClick={handleArmClick}
         onEmergencyStop={() => {
           setAutopilotEnabled(false);
           setSwingAutopilotEnabled(false);
           setPositionAutopilotEnabled(false);
-          disarmExecution('긴급 정지: 모든 오토파일럿 엔진 정지');
+          setStatusMessage('긴급 중지 실행: 모든 엔진 OFF, 신규 진입 차단이 적용되었습니다.');
         }}
         onSync={() => syncMutation.mutate()}
         onOpenChat={() => setChatDrawerOpen(true)}
-        onToggleRightPanel={() => setActionConsoleOpen((prev) => !prev)}
+        onToggleRightPanel={toggleRightPanel}
         onToggleDensity={() => setWorkspaceDensity((prev) => (prev === 'COMFORT' ? 'COMPACT' : 'COMFORT'))}
       />
+
+      <div className="workspace-guidance-bar live">
+        <strong>즉시 실행 모드 · 원클릭 제어</strong>
+        <p>사용 순서: 1) 엔진 ON 2) 모니터링 3) 필요 시 긴급 중지</p>
+        {!actionConsoleOpen ? (
+          <button type="button" className="workspace-guidance-cta" onClick={openRightPanel}>
+            우측 패널 열기
+          </button>
+        ) : null}
+        {statusMessage ? <span>{statusMessage}</span> : null}
+      </div>
 
       <WorkspaceShell
         density={workspaceDensity}
         rightOpen={actionConsoleOpen}
-        onCloseRight={() => setActionConsoleOpen(false)}
+        onCloseRight={closeRightPanel}
       >
         {/* 좌측: 마켓 보드 */}
         <aside className="guided-market-board">
@@ -2928,7 +2878,7 @@ export default function ManualTraderWorkspace() {
                 executionGate={(
                   <>
                     <p className="workspace-command-note">
-                      실행 상태: {executionArmState === 'ARMED' ? `ARMED ${armCountdownSec}s` : 'DISARMED'}
+                      즉시 실행 모드입니다. 엔진 ON/OFF, 리스크 반영, 주문 실행을 바로 수행할 수 있습니다.
                     </p>
                     <div className="autopilot-command-actions">
                       <button
@@ -2938,10 +2888,10 @@ export default function ManualTraderWorkspace() {
                           setAutopilotEnabled(false);
                           setSwingAutopilotEnabled(false);
                           setPositionAutopilotEnabled(false);
-                          disarmExecution('긴급 정지: 모든 오토파일럿 엔진 정지');
+                          setStatusMessage('긴급 중지 실행: 모든 엔진 OFF, 신규 진입 차단이 적용되었습니다.');
                         }}
                       >
-                        긴급 정지
+                        긴급 중지
                       </button>
                       <button
                         type="button"
@@ -2951,6 +2901,11 @@ export default function ManualTraderWorkspace() {
                         {syncMutation.isPending ? '동기화 중...' : '잔고/포지션 동기화'}
                       </button>
                     </div>
+                    <ul className="workspace-gate-effects">
+                      <li>긴급 중지 시 SCALP/SWING/POSITION 엔진이 즉시 OFF 됩니다.</li>
+                      <li>긴급 중지 시 신규 진입 요청은 즉시 차단됩니다.</li>
+                      <li>보유 포지션은 기존 청산 규칙으로 계속 관리됩니다.</li>
+                    </ul>
                   </>
                 )}
                 engineControl={(
@@ -2959,10 +2914,9 @@ export default function ManualTraderWorkspace() {
                       label="SCALP 엔진"
                       hint={`${formatCompactKrw(scalpBudgetKrw)} 배분`}
                       checked={autopilotEnabled}
-                      disabled={executionArmState !== 'ARMED'}
                       onToggle={() => {
                         const prev = autopilotEnabled;
-                        executeWithArm(
+                        executeAction(
                           () => setAutopilotEnabled(!prev),
                           `SCALP 엔진 ${!prev ? '활성화' : '비활성화'}`,
                           () => setAutopilotEnabled(prev)
@@ -2973,10 +2927,9 @@ export default function ManualTraderWorkspace() {
                       label="SWING 엔진"
                       hint={`${formatCompactKrw(swingBudgetKrw)} 배분`}
                       checked={swingAutopilotEnabled}
-                      disabled={executionArmState !== 'ARMED'}
                       onToggle={() => {
                         const prev = swingAutopilotEnabled;
-                        executeWithArm(
+                        executeAction(
                           () => setSwingAutopilotEnabled(!prev),
                           `SWING 엔진 ${!prev ? '활성화' : '비활성화'}`,
                           () => setSwingAutopilotEnabled(prev)
@@ -2987,10 +2940,9 @@ export default function ManualTraderWorkspace() {
                       label="POSITION 엔진"
                       hint={`${formatCompactKrw(positionBudgetKrw)} 배분`}
                       checked={positionAutopilotEnabled}
-                      disabled={executionArmState !== 'ARMED'}
                       onToggle={() => {
                         const prev = positionAutopilotEnabled;
-                        executeWithArm(
+                        executeAction(
                           () => setPositionAutopilotEnabled(!prev),
                           `POSITION 엔진 ${!prev ? '활성화' : '비활성화'}`,
                           () => setPositionAutopilotEnabled(prev)
@@ -3001,10 +2953,9 @@ export default function ManualTraderWorkspace() {
                       label="타임아웃 취소 후 시장가 폴백"
                       hint="체결 지연 시 자동 대응"
                       checked={marketFallbackAfterCancel}
-                      disabled={executionArmState !== 'ARMED'}
                       onToggle={() => {
                         const prev = marketFallbackAfterCancel;
-                        executeWithArm(
+                        executeAction(
                           () => setMarketFallbackAfterCancel(!prev),
                           `시장가 폴백 ${!prev ? '활성화' : '비활성화'}`,
                           () => setMarketFallbackAfterCancel(prev)
@@ -3019,8 +2970,7 @@ export default function ManualTraderWorkspace() {
                       <button
                         type="button"
                         className="autopilot-preset-btn"
-                        disabled={executionArmState !== 'ARMED'}
-                        onClick={() => executeWithArm(
+                        onClick={() => executeAction(
                           () => {
                             setEntryPolicy('CONSERVATIVE');
                             setEntryOrderMode('LIMIT');
@@ -3041,8 +2991,7 @@ export default function ManualTraderWorkspace() {
                       <button
                         type="button"
                         className="autopilot-preset-btn"
-                        disabled={executionArmState !== 'ARMED'}
-                        onClick={() => executeWithArm(
+                        onClick={() => executeAction(
                           () => {
                             setEntryPolicy('BALANCED');
                             setEntryOrderMode('ADAPTIVE');
@@ -3059,8 +3008,7 @@ export default function ManualTraderWorkspace() {
                       <button
                         type="button"
                         className="autopilot-preset-btn"
-                        disabled={executionArmState !== 'ARMED'}
-                        onClick={() => executeWithArm(
+                        onClick={() => executeAction(
                           () => {
                             setEntryPolicy('AGGRESSIVE');
                             setEntryOrderMode('MARKET');
@@ -4316,7 +4264,6 @@ export default function ManualTraderWorkspace() {
             </div>
           )}
 
-          {statusMessage && <p className="guided-status">{statusMessage}</p>}
         </aside>
       </WorkspaceShell>
 
