@@ -8,11 +8,12 @@
 
 body {
   margin: 0;
-  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+  font-family: "SF Pro Text", "SF Pro Display", "Pretendard Variable", -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
   background-color: #0d1117;
   color: #e1e1e1;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
+  font-variant-numeric: tabular-nums;
 }
 
 #root {

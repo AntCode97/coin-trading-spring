@@ -23,6 +23,8 @@ type TimelineItem = {
   source: 'LOCAL' | 'SERVER';
 };
 type TimelineSourceFilter = 'ALL' | 'LOCAL' | 'SERVER';
+type TimelineLevelFilter = 'ALL' | 'INFO' | 'WARN' | 'ERROR';
+type TimelineTypeFilter = 'ALL' | 'LLM' | 'WORKER' | 'ORDER' | 'PLAYWRIGHT' | 'SYSTEM';
 
 type OrderFeedFilter = 'ALL' | 'REQUESTED' | 'FILLED' | 'FAILED';
 type StrategyCodeFilter = 'ALL' | 'AUTOPILOT' | 'MANUAL';
@@ -232,6 +234,8 @@ export function AutopilotLiveDock({
   const [timelinePage, setTimelinePage] = useState(1);
   const [orderFeedPage, setOrderFeedPage] = useState(1);
   const [timelineSourceFilter, setTimelineSourceFilter] = useState<TimelineSourceFilter>('ALL');
+  const [timelineLevelFilter, setTimelineLevelFilter] = useState<TimelineLevelFilter>('ALL');
+  const [timelineTypeFilter, setTimelineTypeFilter] = useState<TimelineTypeFilter>('ALL');
   const screenshotById = useMemo(
     () => new Map(autopilotState.screenshots.map((shot) => [shot.id, shot])),
     [autopilotState.screenshots]
@@ -246,11 +250,19 @@ export function AutopilotLiveDock({
   const timeline = useMemo(() => {
     return timelineAll
       .filter((item) => {
-        if (timelineSourceFilter === 'ALL') return true;
-        return item.source === timelineSourceFilter;
+        if (timelineSourceFilter !== 'ALL' && item.source !== timelineSourceFilter) {
+          return false;
+        }
+        if (timelineLevelFilter !== 'ALL' && item.level !== timelineLevelFilter) {
+          return false;
+        }
+        if (timelineTypeFilter !== 'ALL' && item.type !== timelineTypeFilter) {
+          return false;
+        }
+        return true;
       })
       .slice(0, 400);
-  }, [timelineAll, timelineSourceFilter]);
+  }, [timelineAll, timelineSourceFilter, timelineLevelFilter, timelineTypeFilter]);
 
   const actionLayerSummary = useMemo(() => {
     const summary = {
@@ -314,6 +326,9 @@ export function AutopilotLiveDock({
   useEffect(() => {
     setTimelinePage(1);
   }, [timelineSourceFilter]);
+  useEffect(() => {
+    setTimelinePage(1);
+  }, [timelineLevelFilter, timelineTypeFilter]);
   useEffect(() => {
     setOrderFeedPage(1);
   }, [orderFeedPageSize]);
@@ -629,6 +644,32 @@ export function AutopilotLiveDock({
                       </button>
                     ))}
                   </div>
+                  <label className="page-size-select timeline-filter-select">
+                    <span>레벨</span>
+                    <select
+                      value={timelineLevelFilter}
+                      onChange={(event) => setTimelineLevelFilter(event.target.value as TimelineLevelFilter)}
+                    >
+                      <option value="ALL">전체</option>
+                      <option value="INFO">INFO</option>
+                      <option value="WARN">WARN</option>
+                      <option value="ERROR">ERROR</option>
+                    </select>
+                  </label>
+                  <label className="page-size-select timeline-filter-select">
+                    <span>타입</span>
+                    <select
+                      value={timelineTypeFilter}
+                      onChange={(event) => setTimelineTypeFilter(event.target.value as TimelineTypeFilter)}
+                    >
+                      <option value="ALL">전체</option>
+                      <option value="LLM">LLM</option>
+                      <option value="WORKER">WORKER</option>
+                      <option value="ORDER">ORDER</option>
+                      <option value="PLAYWRIGHT">PLAYWRIGHT</option>
+                      <option value="SYSTEM">SYSTEM</option>
+                    </select>
+                  </label>
                   <div className="timeline-pagination">
                     <label className="page-size-select">
                       <span>개수</span>

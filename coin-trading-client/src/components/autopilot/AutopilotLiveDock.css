@@ -70,7 +70,7 @@
   margin: 10px 12px 0;
   display: grid;
   gap: 8px;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(4, minmax(0, 1fr));
 }
 
 .command-tile {
@@ -119,6 +119,7 @@
   grid-template-columns: repeat(6, minmax(0, 1fr));
   gap: 8px;
   padding: 10px 12px;
+  position: relative;
 }
 
 .autopilot-funnel-grid div {
@@ -138,6 +139,11 @@
 .autopilot-funnel-grid strong {
   color: #eaf1ff;
   font-size: 18px;
+}
+
+.autopilot-funnel-grid div:nth-child(-n+4) {
+  border-color: rgba(104, 165, 255, 0.36);
+  background: linear-gradient(180deg, rgba(17, 30, 54, 0.96) 0%, rgba(12, 22, 40, 0.96) 100%);
 }
 
 .autopilot-local-funnel {
@@ -200,18 +206,25 @@
 
 .autopilot-live-body {
   display: grid;
-  grid-template-columns: 300px 1fr 260px;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 10px;
   padding: 0 12px 12px;
+  align-items: stretch;
 }
 
 .dock-column {
   border: 1px solid rgba(255, 255, 255, 0.08);
   border-radius: 10px;
   background: rgba(10, 18, 32, 0.82);
-  min-height: 300px;
+  min-height: 360px;
   display: flex;
   flex-direction: column;
+}
+
+.dock-column.candidates,
+.dock-column.timeline,
+.dock-column.workers {
+  max-height: 520px;
 }
 
 .column-title {
@@ -253,6 +266,23 @@
   display: inline-flex;
   align-items: center;
   gap: 5px;
+}
+
+.timeline-filter-select {
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 999px;
+  padding: 3px 8px;
+  background: rgba(16, 28, 53, 0.58);
+}
+
+.timeline-filter-select span {
+  min-width: 26px;
+}
+
+.timeline-filter-select select {
+  border: 0;
+  background: transparent;
+  color: #d2e3ff;
 }
 
 .timeline-source-filters button,
@@ -460,10 +490,11 @@
 
 .timeline-layout {
   display: grid;
-  grid-template-columns: 1fr 300px;
+  grid-template-columns: minmax(0, 1fr) minmax(220px, 0.85fr);
   gap: 8px;
   flex: 1;
   padding: 8px;
+  min-height: 0;
 }
 
 .timeline-list {

@@ -73,7 +73,14 @@ import {
   type FocusedScalpManageState,
 } from './autopilot/FocusedScalpLiveDock';
 import { InvestmentLiveDock } from './autopilot/InvestmentLiveDock';
+import { WorkspaceShell } from './workspace-v2/WorkspaceShell';
+import { CommandBar } from './workspace-v2/CommandBar';
+import { ActionConsole } from './workspace-v2/ActionConsole';
+import { ChatDrawer } from './workspace-v2/ChatDrawer';
+import { SwitchButton } from './workspace-v2/SwitchButton';
+import type { WorkspaceDensity } from './workspace-v2/types';
 import './ManualTraderWorkspace.css';
+import './workspace-v2/workspace-tokens.css';
 
 const KRW_FORMATTER = new Intl.NumberFormat('ko-KR');
 const STORAGE_KEY = 'guided-trader.preferences.v1';
@@ -257,6 +264,8 @@ type WorkspacePrefs = {
   zaiModel?: ZaiModelId;
   zaiEndpointMode?: ZaiEndpointMode;
   delegationMode?: DelegationMode;
+  workspaceDensity?: WorkspaceDensity;
+  actionConsoleOpen?: boolean;
   chatModel?: string; // legacy
 };
 
@@ -765,11 +774,13 @@ export default function ManualTraderWorkspace() {
   const [zaiModel, setZaiModel] = useState<ZaiModelId>(prefs.zaiModel ?? 'glm-4.7-flash');
   const [zaiEndpointMode, setZaiEndpointMode] = useState<ZaiEndpointMode>(prefs.zaiEndpointMode ?? 'coding');
   const [delegationMode, setDelegationMode] = useState<DelegationMode>(prefs.delegationMode ?? 'AUTO_AND_MANUAL');
+  const [workspaceDensity, setWorkspaceDensity] = useState<WorkspaceDensity>(prefs.workspaceDensity ?? 'COMFORT');
+  const [actionConsoleOpen, setActionConsoleOpen] = useState<boolean>(prefs.actionConsoleOpen ?? false);
+  const [chatDrawerOpen, setChatDrawerOpen] = useState(false);
   const [zaiApiKeyInput, setZaiApiKeyInput] = useState('');
   const [zaiApiKeyBusy, setZaiApiKeyBusy] = useState(false);
   const [zaiConcurrency, setZaiConcurrency] = useState<ZaiConcurrencyStatus>(getZaiConcurrencyStatus());
 
-  // 탭 상태
   const [activeTab, setActiveTab] = useState<'order' | 'chat'>('order');
   const [showAdvanced, setShowAdvanced] = useState(false);
 
@@ -870,6 +881,9 @@ export default function ManualTraderWorkspace() {
   const [focusedScalpPollIntervalSec, setFocusedScalpPollIntervalSec] = useState<number>(
     Math.min(300, Math.max(5, Math.round(prefs.focusedScalpPollIntervalSec ?? 20)))
   );
+  const [executionArmState, setExecutionArmState] = useState<'DISARMED' | 'ARMED'>('DISARMED');
+  const [executionArmedUntil, setExecutionArmedUntil] = useState<number | null>(null);
+  const [undoToast, setUndoToast] = useState<{ message: string; undo: () => void } | null>(null);
   const focusedScalpParsed = useMemo(
     () => normalizeFocusedScalpMarkets(focusedScalpMarketsInput),
     [focusedScalpMarketsInput]
@@ -888,6 +902,9 @@ export default function ManualTraderWorkspace() {
   const mcpToolsRef = useRef<McpTool[]>([]);
   const autoAnalysisInFlightRef = useRef(false);
   const chatEndRef = useRef<HTMLDivElement | null>(null);
+  const armHoldTimerRef = useRef<number | null>(null);
+  const armLastTapAtRef = useRef(0);
+  const undoToastTimerRef = useRef<number | null>(null);
   const winRateSort = isWinRateSort(sortBy);
 
   const activeProviderStatus = llmProvider === 'zai' ? zaiStatus : openAiStatus;
@@ -913,7 +930,7 @@ export default function ManualTraderWorkspace() {
         winRateSort ? interval : undefined,
         winRateSort ? tradingMode : undefined
       ),
-    refetchInterval: 15000,
+    refetchInterval: 5000,
   });
 
   const chartQuery = useQuery<GuidedChartResponse>({
@@ -1344,6 +1361,105 @@ export default function ManualTraderWorkspace() {
     chatEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [chatMessages, chatStreamText]);
 
+  const disarmExecution = useCallback((message?: string) => {
+    setExecutionArmState('DISARMED');
+    setExecutionArmedUntil(null);
+    if (message) {
+      setStatusMessage(message);
+    }
+  }, []);
+
+  const armExecution = useCallback(() => {
+    setExecutionArmState('ARMED');
+    setExecutionArmedUntil(Date.now() + 60_000);
+    setStatusMessage('실행 Arm 활성화: 60초 동안 실행 액션이 허용됩니다.');
+  }, []);
+
+  const registerUndoToast = useCallback((message: string, undo: () => void) => {
+    if (undoToastTimerRef.current) {
+      window.clearTimeout(undoToastTimerRef.current);
+    }
+    setUndoToast({ message, undo });
+    undoToastTimerRef.current = window.setTimeout(() => {
+      setUndoToast(null);
+      undoToastTimerRef.current = null;
+    }, 4000);
+  }, []);
+
+  const consumeArmOrWarn = useCallback((): boolean => {
+    if (executionArmState === 'ARMED') return true;
+    setStatusMessage('실행 전 Arm 버튼을 길게 누르거나 빠르게 2회 눌러 활성화하세요.');
+    return false;
+  }, [executionArmState]);
+
+  const handleArmPointerDown = useCallback(() => {
+    if (armHoldTimerRef.current) {
+      window.clearTimeout(armHoldTimerRef.current);
+    }
+    armHoldTimerRef.current = window.setTimeout(() => {
+      armExecution();
+      armHoldTimerRef.current = null;
+    }, 700);
+  }, [armExecution]);
+
+  const handleArmPointerUp = useCallback(() => {
+    if (armHoldTimerRef.current) {
+      window.clearTimeout(armHoldTimerRef.current);
+      armHoldTimerRef.current = null;
+    }
+  }, []);
+
+  const handleArmClick = useCallback(() => {
+    const now = Date.now();
+    if (executionArmState === 'ARMED') {
+      disarmExecution('실행 Arm 해제');
+      return;
+    }
+    if (now - armLastTapAtRef.current <= 280) {
+      armExecution();
+      armLastTapAtRef.current = 0;
+      return;
+    }
+    armLastTapAtRef.current = now;
+  }, [armExecution, disarmExecution, executionArmState]);
+
+  const handleUndoToast = useCallback(() => {
+    if (!undoToast) return;
+    undoToast.undo();
+    setUndoToast(null);
+    if (undoToastTimerRef.current) {
+      window.clearTimeout(undoToastTimerRef.current);
+      undoToastTimerRef.current = null;
+    }
+    setStatusMessage('직전 실행을 되돌렸습니다.');
+  }, [undoToast]);
+
+  useEffect(() => {
+    if (executionArmState !== 'ARMED' || executionArmedUntil == null) return;
+    const remaining = executionArmedUntil - Date.now();
+    if (remaining <= 0) {
+      disarmExecution('Arm 시간 만료');
+      return;
+    }
+    const timer = window.setTimeout(() => disarmExecution('Arm 시간 만료'), remaining);
+    return () => window.clearTimeout(timer);
+  }, [disarmExecution, executionArmState, executionArmedUntil]);
+
+  useEffect(() => {
+    const onBlur = () => disarmExecution('앱 포커스 이탈로 Arm 해제');
+    const onVisibility = () => {
+      if (document.visibilityState !== 'visible') {
+        disarmExecution('백그라운드 전환으로 Arm 해제');
+      }
+    };
+    window.addEventListener('blur', onBlur);
+    document.addEventListener('visibilitychange', onVisibility);
+    return () => {
+      window.removeEventListener('blur', onBlur);
+      document.removeEventListener('visibilitychange', onVisibility);
+    };
+  }, [disarmExecution]);
+
   // 저장
   useEffect(() => {
     if (typeof window === 'undefined') return;
@@ -1392,6 +1508,8 @@ export default function ManualTraderWorkspace() {
       zaiModel,
       zaiEndpointMode,
       delegationMode,
+      workspaceDensity,
+      actionConsoleOpen,
     };
     window.localStorage.setItem(STORAGE_KEY, JSON.stringify(next));
   }, [
@@ -1439,6 +1557,8 @@ export default function ManualTraderWorkspace() {
     zaiModel,
     zaiEndpointMode,
     delegationMode,
+    workspaceDensity,
+    actionConsoleOpen,
   ]);
 
   useEffect(() => {
@@ -2459,42 +2579,55 @@ export default function ManualTraderWorkspace() {
   const displayDailyLoss = Math.abs(dailyLossLimitKrw);
   const dailyLossDirection = dailyLossLimitKrw <= 0 ? '-' : '+';
   const fixedModeDisabled = winRateThresholdMode !== 'FIXED';
+  const armCountdownSec = executionArmedUntil == null ? 0 : Math.max(0, Math.ceil((executionArmedUntil - Date.now()) / 1000));
+  const warningCount = Number(autopilotState.blockedByDailyLoss) + Number(dailyLossUsedPercent >= 70);
+  const sessionLabel = tradingMode === 'SCALP' ? '초단타 세션' : tradingMode === 'SWING' ? '단타 세션' : '포지션 세션';
+  const connectionLabel = providerConnected ? '연결됨' : providerChecking ? '연결 확인 중' : '연결 필요';
+
+  const executeWithArm = useCallback((action: () => void, undoMessage?: string, undoAction?: () => void) => {
+    if (!consumeArmOrWarn()) return;
+    action();
+    if (undoMessage && undoAction) {
+      registerUndoToast(undoMessage, undoAction);
+    }
+  }, [consumeArmOrWarn, registerUndoToast]);
 
   return (
-    <section className="guided-workspace">
-      <header className="guided-header">
-        <div>
-          <h2>수동 코인 트레이딩 워크스페이스</h2>
-          <p>코인 선택 → 차트 확인 → 추천 매수가/직접 가격으로 진입 → 자동 익절/손절/물타기 관리</p>
-        </div>
-        {todayStatsQuery.data && (
-          <div className="today-stats-bar">
-            <span className="today-stats-label">오늘 수익</span>
-            <span className={`today-stats-pnl ${todayStatsQuery.data.totalPnlKrw >= 0 ? 'positive' : 'negative'}`}>
-              {todayStatsQuery.data.totalPnlKrw >= 0 ? '+' : ''}{todayStatsQuery.data.totalPnlKrw.toLocaleString('ko-KR', { maximumFractionDigits: 0 })}원
-            </span>
-            <span className="today-stats-detail">
-              {todayStatsQuery.data.totalTrades}건 ({todayStatsQuery.data.wins}승 {todayStatsQuery.data.losses}패)
-              {todayStatsQuery.data.totalTrades > 0 && ` · 승률 ${todayStatsQuery.data.winRate.toFixed(0)}%`}
-            </span>
-            {todayStatsQuery.data.openPositionCount > 0 && (
-              <span className="today-stats-invested">
-                투자중 {todayStatsQuery.data.totalInvestedKrw.toLocaleString('ko-KR', { maximumFractionDigits: 0 })}원
-              </span>
-            )}
-            <button
-              className="today-stats-sync-btn"
-              onClick={() => syncMutation.mutate()}
-              disabled={syncMutation.isPending}
-              title="DB와 실제 빗썸 잔고를 동기화합니다"
-            >
-              {syncMutation.isPending ? '...' : 'Sync'}
-            </button>
-          </div>
-        )}
-      </header>
+    <section className="guided-workspace workspace-v2">
+      <CommandBar
+        selectedMarket={selectedMarket}
+        sessionLabel={sessionLabel}
+        connectionLabel={connectionLabel}
+        density={workspaceDensity}
+        todayPnlKrw={todayStatsQuery.data?.totalPnlKrw ?? 0}
+        exposurePercent={exposurePercent}
+        activeEngineCount={activeEngineCount}
+        warningCount={warningCount}
+        armState={executionArmState}
+        armCountdownSec={armCountdownSec}
+        syncPending={syncMutation.isPending}
+        rightPanelOpen={actionConsoleOpen}
+        onArmPointerDown={handleArmPointerDown}
+        onArmPointerUp={handleArmPointerUp}
+        onArmPointerLeave={handleArmPointerUp}
+        onArmClick={handleArmClick}
+        onEmergencyStop={() => {
+          setAutopilotEnabled(false);
+          setSwingAutopilotEnabled(false);
+          setPositionAutopilotEnabled(false);
+          disarmExecution('긴급 정지: 모든 오토파일럿 엔진 정지');
+        }}
+        onSync={() => syncMutation.mutate()}
+        onOpenChat={() => setChatDrawerOpen(true)}
+        onToggleRightPanel={() => setActionConsoleOpen((prev) => !prev)}
+        onToggleDensity={() => setWorkspaceDensity((prev) => (prev === 'COMFORT' ? 'COMPACT' : 'COMFORT'))}
+      />
 
-      <div className="guided-grid">
+      <WorkspaceShell
+        density={workspaceDensity}
+        rightOpen={actionConsoleOpen}
+        onCloseRight={() => setActionConsoleOpen(false)}
+      >
         {/* 좌측: 마켓 보드 */}
         <aside className="guided-market-board">
           <div className="guided-board-toolbar">
@@ -2538,15 +2671,11 @@ export default function ManualTraderWorkspace() {
                 <div className="price-wrap">
                   <strong>{formatKrw(item.tradePrice)}</strong>
                   <span className={item.changeRate >= 0 ? 'up' : 'down'}>{formatPct(item.changeRate)}</span>
-                  {winRateSort ? (
-                    <>
-                      <small className="winrate-line">
-                        {`추천 ${formatWinRate(item.recommendedEntryWinRate)} · 현재 ${formatWinRate(item.marketEntryWinRate)}`}
-                      </small>
-                      <small className="turnover-line">{`거래대금 ${formatVolume(item.accTradePrice)}`}</small>
-                    </>
-                  ) : (
-                    <small>{`거래대금 ${formatVolume(item.accTradePrice)}`}</small>
+                  <small className="turnover-line">{`거래대금 ${formatVolume(item.accTradePrice)}`}</small>
+                  {winRateSort && (
+                    <small className="winrate-line">
+                      {`추천 ${formatWinRate(item.recommendedEntryWinRate)} · 현재 ${formatWinRate(item.marketEntryWinRate)}`}
+                    </small>
                   )}
                 </div>
               </button>
@@ -2739,8 +2868,8 @@ export default function ManualTraderWorkspace() {
             </button>
             <button
               type="button"
-              className={activeTab === 'chat' ? 'active' : ''}
-              onClick={() => setActiveTab('chat')}
+              className={chatDrawerOpen ? 'active' : ''}
+              onClick={() => setChatDrawerOpen(true)}
             >
               AI 채팅 (고급)
             </button>
@@ -2795,7 +2924,295 @@ export default function ManualTraderWorkspace() {
                 </div>
               </div>
 
-              <div className="autopilot-panel autopilot-panel-tv">
+              <ActionConsole
+                executionGate={(
+                  <>
+                    <p className="workspace-command-note">
+                      실행 상태: {executionArmState === 'ARMED' ? `ARMED ${armCountdownSec}s` : 'DISARMED'}
+                    </p>
+                    <div className="autopilot-command-actions">
+                      <button
+                        type="button"
+                        className="ghost"
+                        onClick={() => {
+                          setAutopilotEnabled(false);
+                          setSwingAutopilotEnabled(false);
+                          setPositionAutopilotEnabled(false);
+                          disarmExecution('긴급 정지: 모든 오토파일럿 엔진 정지');
+                        }}
+                      >
+                        긴급 정지
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => syncMutation.mutate()}
+                        disabled={syncMutation.isPending}
+                      >
+                        {syncMutation.isPending ? '동기화 중...' : '잔고/포지션 동기화'}
+                      </button>
+                    </div>
+                  </>
+                )}
+                engineControl={(
+                  <div className="autopilot-toggle-strip">
+                    <SwitchButton
+                      label="SCALP 엔진"
+                      hint={`${formatCompactKrw(scalpBudgetKrw)} 배분`}
+                      checked={autopilotEnabled}
+                      disabled={executionArmState !== 'ARMED'}
+                      onToggle={() => {
+                        const prev = autopilotEnabled;
+                        executeWithArm(
+                          () => setAutopilotEnabled(!prev),
+                          `SCALP 엔진 ${!prev ? '활성화' : '비활성화'}`,
+                          () => setAutopilotEnabled(prev)
+                        );
+                      }}
+                    />
+                    <SwitchButton
+                      label="SWING 엔진"
+                      hint={`${formatCompactKrw(swingBudgetKrw)} 배분`}
+                      checked={swingAutopilotEnabled}
+                      disabled={executionArmState !== 'ARMED'}
+                      onToggle={() => {
+                        const prev = swingAutopilotEnabled;
+                        executeWithArm(
+                          () => setSwingAutopilotEnabled(!prev),
+                          `SWING 엔진 ${!prev ? '활성화' : '비활성화'}`,
+                          () => setSwingAutopilotEnabled(prev)
+                        );
+                      }}
+                    />
+                    <SwitchButton
+                      label="POSITION 엔진"
+                      hint={`${formatCompactKrw(positionBudgetKrw)} 배분`}
+                      checked={positionAutopilotEnabled}
+                      disabled={executionArmState !== 'ARMED'}
+                      onToggle={() => {
+                        const prev = positionAutopilotEnabled;
+                        executeWithArm(
+                          () => setPositionAutopilotEnabled(!prev),
+                          `POSITION 엔진 ${!prev ? '활성화' : '비활성화'}`,
+                          () => setPositionAutopilotEnabled(prev)
+                        );
+                      }}
+                    />
+                    <SwitchButton
+                      label="타임아웃 취소 후 시장가 폴백"
+                      hint="체결 지연 시 자동 대응"
+                      checked={marketFallbackAfterCancel}
+                      disabled={executionArmState !== 'ARMED'}
+                      onToggle={() => {
+                        const prev = marketFallbackAfterCancel;
+                        executeWithArm(
+                          () => setMarketFallbackAfterCancel(!prev),
+                          `시장가 폴백 ${!prev ? '활성화' : '비활성화'}`,
+                          () => setMarketFallbackAfterCancel(prev)
+                        );
+                      }}
+                    />
+                  </div>
+                )}
+                riskPreset={(
+                  <>
+                    <div className="autopilot-preset-row">
+                      <button
+                        type="button"
+                        className="autopilot-preset-btn"
+                        disabled={executionArmState !== 'ARMED'}
+                        onClick={() => executeWithArm(
+                          () => {
+                            setEntryPolicy('CONSERVATIVE');
+                            setEntryOrderMode('LIMIT');
+                            setAutopilotMaxConcurrentPositions(3);
+                            setAutopilotAmountKrw(Math.max(MIN_ORDER_AMOUNT_KRW, Math.round(autopilotCapitalPoolKrw * 0.05)));
+                            setPendingEntryTimeoutSec(70);
+                            setRejectCooldownSeconds(900);
+                          },
+                          '보수 프리셋 적용',
+                          () => {
+                            setEntryPolicy(entryPolicy);
+                            setEntryOrderMode(entryOrderMode);
+                          }
+                        )}
+                      >
+                        보수
+                      </button>
+                      <button
+                        type="button"
+                        className="autopilot-preset-btn"
+                        disabled={executionArmState !== 'ARMED'}
+                        onClick={() => executeWithArm(
+                          () => {
+                            setEntryPolicy('BALANCED');
+                            setEntryOrderMode('ADAPTIVE');
+                            setAutopilotMaxConcurrentPositions(6);
+                            setAutopilotAmountKrw(Math.max(MIN_ORDER_AMOUNT_KRW, Math.round(autopilotCapitalPoolKrw * 0.08)));
+                            setPendingEntryTimeoutSec(45);
+                            setRejectCooldownSeconds(420);
+                          },
+                          '균형 프리셋 적용'
+                        )}
+                      >
+                        균형
+                      </button>
+                      <button
+                        type="button"
+                        className="autopilot-preset-btn"
+                        disabled={executionArmState !== 'ARMED'}
+                        onClick={() => executeWithArm(
+                          () => {
+                            setEntryPolicy('AGGRESSIVE');
+                            setEntryOrderMode('MARKET');
+                            setAutopilotMaxConcurrentPositions(8);
+                            setAutopilotAmountKrw(Math.max(MIN_ORDER_AMOUNT_KRW, Math.round(autopilotCapitalPoolKrw * 0.12)));
+                            setPendingEntryTimeoutSec(35);
+                            setRejectCooldownSeconds(300);
+                          },
+                          '공격 프리셋 적용'
+                        )}
+                      >
+                        공격
+                      </button>
+                    </div>
+                    <div className="autopilot-control-grid tv-grid-2">
+                      <label>
+                        포지션당 투자금(원)
+                        <input
+                          type="number"
+                          min={MIN_ORDER_AMOUNT_KRW}
+                          step={100}
+                          value={autopilotAmountKrw}
+                          onChange={(event) => setAutopilotAmountKrw(Math.max(MIN_ORDER_AMOUNT_KRW, Math.round(Number(event.target.value || 10000))))}
+                        />
+                      </label>
+                      <label>
+                        동시 포지션(종목)
+                        <input
+                          type="number"
+                          min={1}
+                          max={10}
+                          step={1}
+                          value={autopilotMaxConcurrentPositions}
+                          onChange={(event) => setAutopilotMaxConcurrentPositions(Math.min(10, Math.max(1, Number(event.target.value || 6))))}
+                        />
+                      </label>
+                    </div>
+                  </>
+                )}
+                candidateQueue={(
+                  <div className="workspace-summary-grid">
+                    <article>
+                      <span>감지 후보</span>
+                      <strong>{mergedAutopilotSignalCount}개</strong>
+                    </article>
+                    <article>
+                      <span>실행 워커</span>
+                      <strong>{mergedWorkerCount}개</strong>
+                    </article>
+                    <article>
+                      <span>실시간 이벤트</span>
+                      <strong>{mergedEventCount}건</strong>
+                    </article>
+                    <article>
+                      <span>자동 방어</span>
+                      <strong>{autopilotState.blockedByDailyLoss ? '발동' : '정상'}</strong>
+                    </article>
+                  </div>
+                )}
+                advanced={(
+                  <details className="autopilot-advanced-shell" open={showAdvanced}>
+                    <summary onClick={(event) => {
+                      event.preventDefault();
+                      setShowAdvanced((prev) => !prev);
+                    }}
+                    >
+                      고급 런타임 · LLM · Playwright ({showAdvanced ? '열림' : '닫힘'})
+                    </summary>
+                    {showAdvanced && (
+                      <div className="autopilot-advanced-body">
+                        <div className="autopilot-control-grid tv-grid-2">
+                          <label>
+                            엔진 총 예산 풀(원)
+                            <input
+                              type="number"
+                              min={20000}
+                              step={1000}
+                              value={autopilotCapitalPoolKrw}
+                              onChange={(event) => setAutopilotCapitalPoolKrw(Math.max(20_000, Math.round(Number(event.target.value || DEFAULT_AUTOPILOT_CAPITAL_POOL_KRW))))}
+                            />
+                          </label>
+                          <label>
+                            일일 손실 제한(원)
+                            <input
+                              type="number"
+                              value={dailyLossLimitKrw}
+                              step={1000}
+                              onChange={(event) => setDailyLossLimitKrw(Number(event.target.value || -30000))}
+                            />
+                          </label>
+                        </div>
+                        <div className="autopilot-control-grid tv-grid-2">
+                          <label>
+                            진입 정책
+                            <select
+                              value={entryPolicy}
+                              onChange={(event) => setEntryPolicy(event.target.value as 'BALANCED' | 'AGGRESSIVE' | 'CONSERVATIVE')}
+                            >
+                              <option value="BALANCED">균형형</option>
+                              <option value="AGGRESSIVE">공격형</option>
+                              <option value="CONSERVATIVE">보수형</option>
+                            </select>
+                          </label>
+                          <label>
+                            주문 정책
+                            <select
+                              value={entryOrderMode}
+                              onChange={(event) => setEntryOrderMode(event.target.value as 'ADAPTIVE' | 'MARKET' | 'LIMIT')}
+                            >
+                              <option value="ADAPTIVE">적응형</option>
+                              <option value="MARKET">시장가</option>
+                              <option value="LIMIT">지정가</option>
+                            </select>
+                          </label>
+                        </div>
+                        <div className="autopilot-toggle-strip">
+                          <SwitchButton
+                            label="선택 코인 단타 루프"
+                            hint={`대상 ${focusedScalpParsed.markets.length}개`}
+                            checked={focusedScalpEnabled}
+                            onToggle={() => setFocusedScalpEnabled((prev) => !prev)}
+                          />
+                          <SwitchButton
+                            label="Playwright 검증"
+                            hint={playwrightRunning ? '실행 중' : '중지됨'}
+                            checked={playwrightEnabled}
+                            onToggle={() => setPlaywrightEnabled((prev) => !prev)}
+                          />
+                        </div>
+                        <div className="autopilot-actions">
+                          <button type="button" onClick={() => openFocusedScalpWindow()}>
+                            선택 코인 단타 주문창
+                          </button>
+                          <button
+                            type="button"
+                            className="ghost"
+                            onClick={clearFocusedScalpMarkets}
+                            disabled={focusedScalpParsed.markets.length === 0}
+                          >
+                            선택 코인 목록 비우기
+                          </button>
+                        </div>
+                      </div>
+                    )}
+                  </details>
+                )}
+                footer={autopilotState.blockedByDailyLoss && autopilotState.blockedReason
+                  ? <p className="autopilot-warning command-alert">{autopilotState.blockedReason}</p>
+                  : <p className="workspace-command-note">입장→실행→체결→청산 흐름을 라이브 도크에서 추적하세요.</p>}
+              />
+
+              <div className="autopilot-panel autopilot-panel-tv legacy-console-hidden">
                 <div className="autopilot-command-deck">
                   <div className="autopilot-command-head">
                     <div>
@@ -3901,7 +4318,103 @@ export default function ManualTraderWorkspace() {
 
           {statusMessage && <p className="guided-status">{statusMessage}</p>}
         </aside>
-      </div>
+      </WorkspaceShell>
+
+      <ChatDrawer
+        open={chatDrawerOpen}
+        title="AI 채팅 (고급)"
+        onClose={() => setChatDrawerOpen(false)}
+      >
+        <div className="guided-chat-panel">
+          <div className="guided-chat-statusbar">
+            <div className="guided-provider-status">
+              <span className={`guided-status-dot ${providerConnected ? 'ok' : 'off'}`} />
+              <span>
+                {llmProvider === 'zai' ? 'z.ai' : 'OpenAI'} ·
+                {' '}
+                {activeProviderStatus === 'checking'
+                  ? '확인 중'
+                  : activeProviderStatus === 'error'
+                    ? '오류'
+                    : activeProviderStatus === 'expired'
+                      ? '만료'
+                      : providerConnected
+                        ? '연결됨'
+                        : '미연결'}
+              </span>
+            </div>
+            <div className="guided-chat-status-actions">
+              {llmProvider === 'openai' ? (
+                providerConnected ? (
+                  <button type="button" onClick={() => void handleLogout()}>로그아웃</button>
+                ) : (
+                  <button type="button" onClick={() => void handleLogin()} disabled={providerChecking}>
+                    {providerChecking ? '확인 중...' : '로그인'}
+                  </button>
+                )
+              ) : (
+                <button type="button" onClick={() => void handleClearZaiKey()} disabled={zaiApiKeyBusy || zaiStatus !== 'connected'}>
+                  {zaiApiKeyBusy ? '처리 중...' : '키 삭제'}
+                </button>
+              )}
+            </div>
+          </div>
+          <div className="guided-provider-meta">
+            z.ai 슬롯 {zaiConcurrency.active}/{zaiConcurrency.max} · 대기 {zaiConcurrency.queued}
+          </div>
+          <div className="guided-chat-messages">
+            {chatMessages.length === 0 && !chatBusy && (
+              <div className="guided-chat-empty">
+                <p>AI 트레이딩 코파일럿</p>
+                <small>"{selectedMarket} 지금 어때?" 같은 질문을 입력하세요.</small>
+              </div>
+            )}
+            {chatMessages.map((msg) => (
+              <div key={msg.id} className={`guided-chat-message ${msg.role}`}>
+                <div className="guided-chat-role">
+                  {msg.role === 'user' ? '나' : msg.role === 'assistant' ? 'AI' : '시스템'}
+                </div>
+                <div className="guided-chat-content">{msg.content}</div>
+                <small className="guided-chat-time">
+                  {new Date(msg.timestamp).toLocaleTimeString('ko-KR', { timeZone: 'Asia/Seoul' })}
+                </small>
+              </div>
+            ))}
+            {chatBusy && (
+              <div className="guided-chat-message assistant streaming">
+                <div className="guided-chat-role">AI</div>
+                <div className="guided-chat-content">{chatStreamText || '분석 중...'}</div>
+              </div>
+            )}
+            <div ref={chatEndRef} />
+          </div>
+          <div className="guided-chat-input-area">
+            <div className="guided-chat-input-row">
+              <input
+                value={chatInput}
+                onChange={(e) => setChatInput(e.target.value)}
+                onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); void handleSendChat(); } }}
+                placeholder={`${selectedMarket} 분석 질문...`}
+                disabled={chatBusy || !providerConnected}
+              />
+              <button
+                type="button"
+                onClick={() => void handleSendChat()}
+                disabled={chatBusy || !chatInput.trim() || !providerConnected}
+              >
+                전송
+              </button>
+            </div>
+          </div>
+        </div>
+      </ChatDrawer>
+
+      {undoToast && (
+        <div className="workspace-undo-toast">
+          <span>{undoToast.message}</span>
+          <button type="button" onClick={handleUndoToast}>Undo</button>
+        </div>
+      )}
 
       {focusedScalpContextMenu && (
         <div
