@@ -590,6 +590,8 @@ curl -X POST http://localhost:8080/api/settings/regime \
 - `generatedAt`, `interval`, `universeLimit`, `strategyCodePrefix`
 - `positions[]`: `strategyCodePrefix`로 필터된 현재 AI 초단타 포지션
 - `markets[]`: `market`, `koreanName`, `tradePrice`, `changeRate`, `turnover`, `liquidityRank`, `recommendation`, `featurePack`, optional `crowd`
+- `recommendation.expectancyPct`, `positions[].unrealizedPnlPercent`, `/stats/today.trades[].realizedPnl(Percent)`는 모두 빗썸 편도 0.04%, 왕복 0.08% 수수료를 반영한 순손익 기준입니다.
+- AI 초단타 포지션의 저장된 `averageEntryPrice`가 현재가와 비정상적으로 벌어져 있으면, 서버는 잔고 `avgBuyPrice`를 사용해 진입가를 자동 보정합니다.
 - 데스크톱 `AiDayTraderEngine`는 이 응답을 받아 `36 -> 12 -> 4` LLM 초단타 루프를 수행합니다.
 
 `/api/guided-trading/stats/today` 쿼리 파라미터:
@@ -617,6 +619,8 @@ curl -X POST http://localhost:8080/api/settings/regime \
 6. 설정 패널에서 `스캔 주기`와 `포지션 점검`을 최대 `3분`까지 선택할 수 있고, `1회 금액` 입력은 `5,000원` 단위로 조정됩니다.
 7. `중지`는 신규 진입만 끊고 기존 포지션 관리는 계속 유지합니다. 포지션이 모두 정리되면 엔진이 완전히 멈춥니다.
 8. 하단 `오늘 거래내역` 패널에서 금일 거래를 전체/코인별로 필터링해 볼 수 있습니다.
+9. 초단타 수익률/PnL은 빗썸 왕복 수수료 0.08%를 항상 반영하며, 시장가 매수 금액이 진입단가로 잘못 저장된 경우 현재가/잔고 평균단가 기준으로 자동 교정합니다.
+10. AI 초단타 엔진은 순기대값/승률/RR/스프레드/진입괴리 기반 리스크 게이트를 먼저 통과한 후보만 진입 분석하며, 기본 보호폭은 손절 최소 `0.55%`, 익절 최소 `0.95%`, 손절 후 재진입 쿨다운 `8분`으로 넓혀 과도한 손절 반복을 줄였습니다.
 
 ### CROWD_PRESSURE 초단타 프로필 추가 (2026-03-06)
 

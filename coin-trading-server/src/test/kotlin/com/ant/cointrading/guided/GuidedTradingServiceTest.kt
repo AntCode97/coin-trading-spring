@@ -9,6 +9,7 @@ import com.ant.cointrading.api.bithumb.MarketInfo
 import com.ant.cointrading.api.bithumb.OrderResponse
 import com.ant.cointrading.api.bithumb.RealtimeMarketPulse
 import com.ant.cointrading.api.bithumb.TickerInfo
+import com.ant.cointrading.config.TradingConstants
 import com.ant.cointrading.repository.GuidedTradeEntity
 import com.ant.cointrading.repository.GuidedTradeEventEntity
 import com.ant.cointrading.repository.GuidedTradeEventRepository
@@ -321,7 +322,19 @@ class GuidedTradingServiceTest {
         assertTrue(result.positions.all { it.strategyCode?.startsWith("AI_SCALP_TRADER") == true })
         assertEquals("KRW-C001", result.markets.first().market)
         assertTrue(result.markets.first().recommendation.rationale.isNotEmpty())
-        assertTrue(result.markets.first().recommendation.expectancyPct.isFinite())
+        val recommendation = result.markets.first().recommendation
+        val grossProfitPct = (recommendation.takeProfitPrice - recommendation.recommendedEntryPrice) / recommendation.recommendedEntryPrice * 100.0
+        val grossLossPct = ((recommendation.recommendedEntryPrice - recommendation.stopLossPrice) / recommendation.recommendedEntryPrice * 100.0).coerceAtLeast(0.0)
+        val feeAdjustedProfitPct = ((recommendation.takeProfitPrice - recommendation.recommendedEntryPrice) / recommendation.recommendedEntryPrice -
+            TradingConstants.BITHUMB_FEE_RATE.toDouble() * (1.0 + recommendation.takeProfitPrice / recommendation.recommendedEntryPrice)) * 100.0
+        val feeAdjustedLossPct = -(((recommendation.stopLossPrice - recommendation.recommendedEntryPrice) / recommendation.recommendedEntryPrice) -
+            TradingConstants.BITHUMB_FEE_RATE.toDouble() * (1.0 + recommendation.stopLossPrice / recommendation.recommendedEntryPrice)) * 100.0
+        val expectedExpectancy = (recommendation.recommendedEntryWinRate / 100.0) * feeAdjustedProfitPct -
+            (1.0 - recommendation.recommendedEntryWinRate / 100.0) * feeAdjustedLossPct
+        val grossExpectancy = (recommendation.recommendedEntryWinRate / 100.0) * grossProfitPct -
+            (1.0 - recommendation.recommendedEntryWinRate / 100.0) * grossLossPct
+        assertEquals(expectedExpectancy, recommendation.expectancyPct, 1e-6)
+        assertTrue(recommendation.expectancyPct < grossExpectancy)
         assertTrue(result.markets.first().crowd != null)
     }
 
@@ -334,7 +347,9 @@ class GuidedTradingServiceTest {
             market = "KRW-BTC",
             status = GuidedTradeEntity.STATUS_CLOSED,
             averageEntryPrice = BigDecimal("100000000"),
-            entryQuantity = BigDecimal("0.00010000"),
+            averageExitPrice = BigDecimal("101500000"),
+            entryQuantity = BigDecimal("0.00100000"),
+            cumulativeExitQuantity = BigDecimal("0.00100000"),
             remainingQuantity = BigDecimal.ZERO,
             stopLossPrice = BigDecimal("99000000"),
             takeProfitPrice = BigDecimal("101000000"),
@@ -392,7 +407,7 @@ class GuidedTradingServiceTest {
             listOf(
                 Balance(
                     currency = "BTC",
-                    balance = BigDecimal("0.00010000"),
+                    balance = BigDecimal("0.00100000"),
                     locked = BigDecimal.ZERO,
                     avgBuyPrice = null,
                     avgBuyPriceModified = null,
@@ -432,14 +447,74 @@ class GuidedTradingServiceTest {
         )
 
         val result = service.getTodayStats(" ai_scalp_trader ")
+        val expectedFeeAdjustedPnl = 101500.0 - 100000.0 - (100000.0 * 0.0004) - (101500.0 * 0.0004)
 
         assertEquals(1, result.totalTrades)
         assertEquals(1, result.wins)
         assertEquals(0, result.losses)
-        assertEquals(1500.0, result.totalPnlKrw, 0.0001)
+        assertEquals(expectedFeeAdjustedPnl, result.totalPnlKrw, 0.0001)
         assertEquals(1, result.openPositionCount)
         assertEquals(1, result.trades.size)
         assertEquals("KRW-BTC", result.trades.first().market)
+        assertEquals(expectedFeeAdjustedPnl, result.trades.first().realizedPnl, 0.0001)
+    }
+
+    @Test
+    @DisplayName("오픈 포지션 뷰는 빗썸 수수료를 반영한 미실현 손익률을 반환한다")
+    fun openPositionViewUsesFeeAdjustedUnrealizedPnlPercent() {
+        val trade = GuidedTradeEntity(
+            id = 301L,
+            market = "KRW-BTC",
+            status = GuidedTradeEntity.STATUS_OPEN,
+            entryOrderType = GuidedTradeEntity.ORDER_TYPE_MARKET,
+            averageEntryPrice = BigDecimal("20000"),
+            entryQuantity = BigDecimal("1"),
+            remainingQuantity = BigDecimal("1"),
+            stopLossPrice = BigDecimal("9900"),
+            takeProfitPrice = BigDecimal("10100"),
+            strategyCode = "AI_SCALP_TRADER_MAIN"
+        )
+        whenever(guidedTradeRepository.findByStatusIn(any())).thenReturn(listOf(trade))
+        whenever(bithumbPrivateApi.getBalances()).thenReturn(
+            listOf(
+                Balance(
+                    currency = "BTC",
+                    balance = BigDecimal("1"),
+                    locked = BigDecimal.ZERO,
+                    avgBuyPrice = BigDecimal("10000"),
+                    avgBuyPriceModified = null,
+                    unitCurrency = "KRW"
+                )
+            )
+        )
+        whenever(bithumbPublicApi.getCurrentPrice(eq("KRW-BTC"))).thenReturn(
+            listOf(
+                TickerInfo(
+                    market = "KRW-BTC",
+                    tradePrice = BigDecimal("10000"),
+                    openingPrice = BigDecimal("10000"),
+                    highPrice = BigDecimal("10000"),
+                    lowPrice = BigDecimal("10000"),
+                    prevClosingPrice = BigDecimal("10000"),
+                    change = "EVEN",
+                    changePrice = BigDecimal.ZERO,
+                    changeRate = BigDecimal.ZERO,
+                    tradeVolume = BigDecimal.ONE,
+                    accTradeVolume = BigDecimal.ONE,
+                    accTradePrice = BigDecimal("10000"),
+                    accTradePrice24h = BigDecimal("10000"),
+                    accTradeVolume24h = BigDecimal.ONE,
+                    timestamp = 1_700_000_000_000L,
+                    tradeDate = "2026-03-07"
+                )
+            )
+        )
+
+        val result = service.getAllOpenPositions()
+
+        assertEquals(1, result.size)
+        assertEquals(10000.0, result.first().averageEntryPrice, 0.0001)
+        assertEquals(-0.08, result.first().unrealizedPnlPercent, 0.0001)
     }
 
     @Test
@@ -522,8 +597,8 @@ class GuidedTradingServiceTest {
         ) as GuidedAutopilotOpportunityView
 
         val p = 0.6 * (62.0 / 100.0) + 0.4 * (58.0 / 100.0)
-        val profitPct = (101.7 - 99.5) / 99.5 * 100.0
-        val lossPct = (99.5 - 98.9) / 99.5 * 100.0
+        val profitPct = ((101.7 - 99.5) / 99.5 - TradingConstants.BITHUMB_FEE_RATE.toDouble() * (1.0 + 101.7 / 99.5)) * 100.0
+        val lossPct = -(((98.9 - 99.5) / 99.5) - TradingConstants.BITHUMB_FEE_RATE.toDouble() * (1.0 + 98.9 / 99.5)) * 100.0
         val expectancy = p * profitPct - (1 - p) * lossPct
         val entryGapPct = max(0.0, (100.0 - 99.5) / 99.5 * 100.0)
         val rawScore =
@@ -676,7 +751,7 @@ class GuidedTradingServiceTest {
     }
 
     @Test
-    @DisplayName("MARKET 진입가 계산은 locked보다 investedAmount를 우선 사용한다")
+    @DisplayName("MARKET 진입가 계산은 plausibility 검증 후 investedAmount 기반 단가를 사용한다")
     fun resolveEntryPricePrefersInvestedAmount() {
         val method = GuidedTradingService::class.java.getDeclaredMethod(
             "resolveEntryPrice",
@@ -692,9 +767,10 @@ class GuidedTradingServiceTest {
             uuid = "entry-1",
             side = "bid",
             market = "KRW-BTC",
-            price = BigDecimal("93000000"),
+            ordType = "price",
+            price = BigDecimal("10000"),
             executedVolume = BigDecimal("0.00100000"),
-            locked = BigDecimal("20000")
+            locked = BigDecimal("10000")
         )
 
         val resolved = method.invoke(
@@ -703,10 +779,45 @@ class GuidedTradingServiceTest {
             GuidedTradeEntity.ORDER_TYPE_MARKET,
             BigDecimal("10000"),
             null,
-            BigDecimal("92000000")
+            BigDecimal("10000000")
         ) as BigDecimal
 
         assertEquals(0, resolved.compareTo(BigDecimal("10000000.00000000")))
+    }
+
+    @Test
+    @DisplayName("MARKET 진입가 계산은 비현실적 후보를 버리고 현재가 fallback을 사용한다")
+    fun resolveEntryPriceRejectsImplausibleMarketCandidates() {
+        val method = GuidedTradingService::class.java.getDeclaredMethod(
+            "resolveEntryPrice",
+            OrderResponse::class.java,
+            String::class.java,
+            BigDecimal::class.java,
+            BigDecimal::class.java,
+            BigDecimal::class.java
+        )
+        method.isAccessible = true
+
+        val order = orderResponse(
+            uuid = "entry-bad",
+            side = "bid",
+            market = "KRW-ETH",
+            ordType = "price",
+            price = BigDecimal("20000"),
+            executedVolume = BigDecimal("1.00000000"),
+            locked = BigDecimal("20000")
+        )
+
+        val resolved = method.invoke(
+            service,
+            order,
+            GuidedTradeEntity.ORDER_TYPE_MARKET,
+            BigDecimal("20000"),
+            null,
+            BigDecimal("2918000")
+        ) as BigDecimal
+
+        assertEquals(0, resolved.compareTo(BigDecimal("2918000")))
     }
 
     @Test
@@ -979,7 +1090,7 @@ class GuidedTradingServiceTest {
         assertEquals(1, result.highConfidenceTrades)
         assertEquals(0, result.lowConfidenceTrades)
         assertEquals(GuidedTradeEntity.PNL_CONFIDENCE_HIGH, trade.pnlConfidence)
-        assertEquals(BigDecimal("200.00"), trade.realizedPnl)
+        assertEquals(BigDecimal("191.92"), trade.realizedPnl)
     }
 
     @Test
@@ -1106,6 +1217,7 @@ class GuidedTradingServiceTest {
         side: String,
         market: String,
         state: String? = "done",
+        ordType: String = "market",
         price: BigDecimal? = BigDecimal("93000000"),
         volume: BigDecimal? = BigDecimal("0.01000000"),
         executedVolume: BigDecimal? = BigDecimal("0.01000000"),
@@ -1114,7 +1226,7 @@ class GuidedTradingServiceTest {
         return OrderResponse(
             uuid = uuid,
             side = side,
-            ordType = "market",
+            ordType = ordType,
             price = price,
             state = state,
             market = market,

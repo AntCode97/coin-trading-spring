@@ -8,6 +8,7 @@ import com.ant.cointrading.api.bithumb.BithumbMarketWebSocketFeed
 import com.ant.cointrading.api.bithumb.OrderResponse
 import com.ant.cointrading.api.bithumb.RealtimeMarketPulse
 import com.ant.cointrading.api.bithumb.TradeResponse
+import com.ant.cointrading.config.TradingConstants
 import com.ant.cointrading.repository.GuidedAutopilotDecisionEntity
 import com.ant.cointrading.repository.GuidedAutopilotDecisionRepository
 import com.ant.cointrading.repository.OrderLifecycleStrategyGroup
@@ -39,6 +40,73 @@ import kotlin.math.abs
 import kotlin.math.ln
 import kotlin.math.max
 import kotlin.math.min
+
+private val GUIDED_BITHUMB_FEE_RATE: BigDecimal = TradingConstants.BITHUMB_FEE_RATE
+
+private data class FeeAdjustedTradePnl(
+    val pnlAmount: BigDecimal,
+    val pnlPercent: BigDecimal
+)
+
+private fun calculateFeeAdjustedReturnPercent(entryPrice: Double, exitPrice: Double): Double {
+    if (entryPrice <= 0.0 || exitPrice <= 0.0) return 0.0
+    val grossReturn = (exitPrice - entryPrice) / entryPrice
+    val feeReturn = GUIDED_BITHUMB_FEE_RATE.toDouble() * (1.0 + exitPrice / entryPrice)
+    return (grossReturn - feeReturn) * 100.0
+}
+
+private fun calculateFeeAdjustedRewardPercent(entryPrice: Double, takeProfitPrice: Double): Double {
+    return max(0.0, calculateFeeAdjustedReturnPercent(entryPrice, takeProfitPrice))
+}
+
+private fun calculateFeeAdjustedLossPercent(entryPrice: Double, stopLossPrice: Double): Double {
+    return max(0.0, -calculateFeeAdjustedReturnPercent(entryPrice, stopLossPrice))
+}
+
+private fun calculateFeeAdjustedRiskRewardRatio(
+    entryPrice: Double,
+    stopLossPrice: Double,
+    takeProfitPrice: Double
+): Double {
+    val rewardPercent = calculateFeeAdjustedRewardPercent(entryPrice, takeProfitPrice)
+    val lossPercent = calculateFeeAdjustedLossPercent(entryPrice, stopLossPrice)
+    if (lossPercent <= 0.0) return 0.0
+    return (rewardPercent / lossPercent).coerceIn(0.0, 3.0)
+}
+
+private fun calculateFeeAdjustedPnl(
+    entryPrice: BigDecimal,
+    exitPrice: BigDecimal,
+    quantity: BigDecimal
+): FeeAdjustedTradePnl {
+    if (entryPrice <= BigDecimal.ZERO || exitPrice <= BigDecimal.ZERO || quantity <= BigDecimal.ZERO) {
+        return FeeAdjustedTradePnl(
+            pnlAmount = BigDecimal.ZERO.setScale(2, RoundingMode.HALF_UP),
+            pnlPercent = BigDecimal.ZERO.setScale(4, RoundingMode.HALF_UP)
+        )
+    }
+
+    val entryValue = entryPrice.multiply(quantity)
+    val exitValue = exitPrice.multiply(quantity)
+    val totalFees = entryValue.add(exitValue)
+        .multiply(GUIDED_BITHUMB_FEE_RATE)
+        .setScale(8, RoundingMode.HALF_UP)
+    val pnlAmount = exitValue.subtract(entryValue)
+        .subtract(totalFees)
+        .setScale(2, RoundingMode.HALF_UP)
+    val pnlPercent = if (entryValue > BigDecimal.ZERO) {
+        pnlAmount.divide(entryValue, 8, RoundingMode.HALF_UP)
+            .multiply(BigDecimal("100"))
+            .setScale(4, RoundingMode.HALF_UP)
+    } else {
+        BigDecimal.ZERO.setScale(4, RoundingMode.HALF_UP)
+    }
+
+    return FeeAdjustedTradePnl(
+        pnlAmount = pnlAmount,
+        pnlPercent = pnlPercent
+    )
+}
 
 @Service
 class GuidedTradingService(
@@ -318,14 +386,16 @@ class GuidedTradingService(
     fun getActivePosition(market: String): GuidedTradeView? {
         val trade = getActiveTrade(market) ?: return null
         val currentPrice = bithumbPublicApi.getCurrentPrice(market)?.firstOrNull()?.tradePrice
+        val balancesByCurrency = fetchBalancesByCurrency()
         if (
             trade.status == GuidedTradeEntity.STATUS_OPEN &&
-            getActualHoldingQuantity(market, currentPrice) <= BigDecimal.ZERO
+            getActualHoldingQuantity(market, currentPrice, balancesByCurrency) <= BigDecimal.ZERO
         ) {
             return null
         }
         val current = currentPrice?.toDouble()
-        return trade.toView(current)
+        val effectiveEntryPrice = resolveEffectiveEntryPrice(trade, currentPrice, balancesByCurrency)
+        return trade.toView(current, effectiveEntryPrice.toDouble())
     }
 
     fun getAllOpenPositions(): List<GuidedTradeView> {
@@ -342,7 +412,8 @@ class GuidedTradingService(
             ) {
                 return@mapNotNull null
             }
-            trade.toView(marketPrice?.toDouble())
+            val effectiveEntryPrice = resolveEffectiveEntryPrice(trade, marketPrice, balancesByCurrency)
+            trade.toView(marketPrice?.toDouble(), effectiveEntryPrice.toDouble())
         }
     }
 
@@ -896,8 +967,10 @@ class GuidedTradingService(
 
     private fun manageOpenTrade(trade: GuidedTradeEntity) {
         val currentPrice = bithumbPublicApi.getCurrentPrice(trade.market)?.firstOrNull()?.tradePrice ?: return
+        val balancesByCurrency = fetchBalancesByCurrency()
+        reconcileAverageEntryPriceWithBalance(trade, currentPrice, balancesByCurrency)
 
-        val actualHolding = getActualHoldingQuantity(trade.market, currentPrice)
+        val actualHolding = getActualHoldingQuantity(trade.market, currentPrice, balancesByCurrency)
         if (actualHolding <= BigDecimal.ZERO && trade.remainingQuantity > BigDecimal.ZERO) {
             applyExitFill(trade, trade.remainingQuantity, currentPrice, "NO_EFFECTIVE_BALANCE")
             trade.remainingQuantity = BigDecimal.ZERO
@@ -1268,8 +1341,12 @@ class GuidedTradingService(
         trade.cumulativeExitQuantity = newQty
         trade.remainingQuantity = trade.remainingQuantity.subtract(effectiveQty).max(BigDecimal.ZERO)
 
-        val pnl = price.subtract(trade.averageEntryPrice).multiply(effectiveQty)
-        trade.realizedPnl = trade.realizedPnl.add(pnl)
+        val pnl = calculateFeeAdjustedPnl(
+            entryPrice = trade.averageEntryPrice,
+            exitPrice = price,
+            quantity = effectiveQty
+        )
+        trade.realizedPnl = trade.realizedPnl.add(pnl.pnlAmount)
 
         val invested = trade.averageEntryPrice.multiply(newQty)
         trade.realizedPnlPercent = if (invested > BigDecimal.ZERO) {
@@ -1347,7 +1424,11 @@ class GuidedTradingService(
         val stopLoss = recommended - max(recommended * mode.slPercent, atr14 * mode.atrMultiplier)
         val rawTakeProfit = recommended + (recommended - stopLoss) * mode.rrRatio
         val takeProfit = minOf(rawTakeProfit, recommended * (1.0 + mode.tpCapPercent))
-        val riskRewardRatio = ((takeProfit - recommended) / max(recommended - stopLoss, 1.0)).coerceIn(0.5, 3.0)
+        val riskRewardRatio = calculateFeeAdjustedRiskRewardRatio(
+            entryPrice = recommended,
+            stopLossPrice = stopLoss,
+            takeProfitPrice = takeProfit
+        )
         val diffPct = kotlin.math.abs(current - recommended) / current
         val orderType = if (diffPct < 0.0005) "MARKET" else "LIMIT" // 0.05% 미만일 때만 시장가
 
@@ -1369,7 +1450,11 @@ class GuidedTradingService(
         val marketStopLoss = current - max(current * mode.slPercent, atr14 * mode.atrMultiplier)
         val rawMarketTakeProfit = current + (current - marketStopLoss) * mode.rrRatio
         val marketTakeProfit = minOf(rawMarketTakeProfit, current * (1.0 + mode.tpCapPercent))
-        val marketRiskRewardRatio = ((marketTakeProfit - current) / max(current - marketStopLoss, 1.0)).coerceIn(0.5, 3.0)
+        val marketRiskRewardRatio = calculateFeeAdjustedRiskRewardRatio(
+            entryPrice = current,
+            stopLossPrice = marketStopLoss,
+            takeProfitPrice = marketTakeProfit
+        )
         val marketPullbackScore = 0.46
         val marketRrScore = ((marketRiskRewardRatio - 0.8) / 1.2).coerceIn(0.0, 1.0) * 0.6 + 0.35
         val marketWeighted = trendScore * 0.34 + marketPullbackScore * 0.24 + volatilityScore * 0.20 + marketRrScore * 0.22
@@ -1386,7 +1471,7 @@ class GuidedTradingService(
             add("SMA20=${formatPrice(sma20)}, SMA60=${formatPrice(sma60)}")
             add("지지선(20봉 저점)=${formatPrice(support20)}")
             add("ATR14=${formatPrice(atr14)} 기반 손절 폭 적용")
-            add("RR 2.2 기준 익절/손절 자동 설정")
+            add("빗썸 왕복 수수료 0.08% 반영 RR 기준 익절/손절 자동 설정")
             calibration.note?.let { add(it) }
         }
 
@@ -1531,11 +1616,12 @@ class GuidedTradingService(
                     ?.uppercase()
                     ?.startsWith(normalizedStrategyCodePrefix) == true
         }
-        val wins = closedToday.count { it.realizedPnl > BigDecimal.ZERO }
-        val losses = closedToday.size - wins
-        val totalPnl = closedToday.sumOf { it.realizedPnl.toDouble() }
-        val avgPnlPercent = if (closedToday.isNotEmpty())
-            closedToday.map { it.realizedPnlPercent.toDouble() }.average() else 0.0
+        val closedTradeViews = closedToday.map { it.toClosedTradeView() }
+        val wins = closedTradeViews.count { it.realizedPnl > 0.0 }
+        val losses = closedTradeViews.size - wins
+        val totalPnl = closedTradeViews.sumOf { it.realizedPnl }
+        val avgPnlPercent = if (closedTradeViews.isNotEmpty())
+            closedTradeViews.map { it.realizedPnlPercent }.average() else 0.0
         val openPositions = guidedTradeRepository.findByStatusIn(OPEN_STATUSES).filter { trade ->
             normalizedStrategyCodePrefix == null ||
                 trade.strategyCode
@@ -1554,15 +1640,15 @@ class GuidedTradingService(
             it.averageEntryPrice.multiply(it.remainingQuantity).toDouble()
         }
         return GuidedDailyStats(
-            totalTrades = closedToday.size,
+            totalTrades = closedTradeViews.size,
             wins = wins,
             losses = losses,
             totalPnlKrw = totalPnl,
             avgPnlPercent = avgPnlPercent,
-            winRate = if (closedToday.isNotEmpty()) wins.toDouble() / closedToday.size * 100.0 else 0.0,
+            winRate = if (closedTradeViews.isNotEmpty()) wins.toDouble() / closedTradeViews.size * 100.0 else 0.0,
             openPositionCount = effectiveOpenPositions.size,
             totalInvestedKrw = totalInvested,
-            trades = closedToday.map { it.toClosedTradeView() }
+            trades = closedTradeViews
         )
     }
 
@@ -2209,16 +2295,8 @@ class GuidedTradingService(
             )
         }
 
-        val profitPct = if (entryPrice > 0.0 && takeProfit > 0.0) {
-            (takeProfit - entryPrice) / entryPrice * 100.0
-        } else {
-            0.0
-        }
-        val lossPct = if (entryPrice > 0.0 && stopLoss > 0.0) {
-            max(0.0, (entryPrice - stopLoss) / entryPrice * 100.0)
-        } else {
-            0.0
-        }
+        val profitPct = calculateFeeAdjustedRewardPercent(entryPrice, takeProfit)
+        val lossPct = calculateFeeAdjustedLossPercent(entryPrice, stopLoss)
         val p = 0.6 * (recWin1m / 100.0) + 0.4 * (recWin10m / 100.0)
         val expectancyPct = p * profitPct - (1.0 - p) * lossPct
         val rawScore =
@@ -2301,16 +2379,8 @@ class GuidedTradingService(
             )
         }
 
-        val profitPct = if (entryPrice > 0.0 && takeProfit > 0.0) {
-            (takeProfit - entryPrice) / entryPrice * 100.0
-        } else {
-            0.0
-        }
-        val lossPct = if (entryPrice > 0.0 && stopLoss > 0.0) {
-            max(0.0, (entryPrice - stopLoss) / entryPrice * 100.0)
-        } else {
-            0.0
-        }
+        val profitPct = calculateFeeAdjustedRewardPercent(entryPrice, takeProfit)
+        val lossPct = calculateFeeAdjustedLossPercent(entryPrice, stopLoss)
         val expectancyPct = recWin1m / 100.0 * profitPct - (1.0 - recWin1m / 100.0) * lossPct
 
         val gateFailure = resolveCrowdPressureGateFailure(
@@ -2442,23 +2512,15 @@ class GuidedTradingService(
     ): GuidedAiScalpScanMarketView {
         val currentPrice = recommendation?.currentPrice?.takeIf { it > 0.0 } ?: marketItem.tradePrice
         val recommendedEntryPrice = recommendation?.recommendedEntryPrice?.takeIf { it > 0.0 } ?: currentPrice
-        val stopLossPrice = recommendation?.stopLossPrice?.takeIf { it > 0.0 } ?: (currentPrice * 0.996)
-        val takeProfitPrice = recommendation?.takeProfitPrice?.takeIf { it > 0.0 } ?: (currentPrice * 1.006)
+        val stopLossPrice = recommendation?.stopLossPrice?.takeIf { it > 0.0 } ?: (currentPrice * 0.9945)
+        val takeProfitPrice = recommendation?.takeProfitPrice?.takeIf { it > 0.0 } ?: (currentPrice * 1.0105)
         val entryGapPct = if (recommendedEntryPrice > 0.0 && currentPrice > 0.0) {
             ((currentPrice - recommendedEntryPrice) / recommendedEntryPrice * 100.0).coerceIn(-30.0, 30.0)
         } else {
             0.0
         }
-        val profitPct = if (recommendedEntryPrice > 0.0 && takeProfitPrice > 0.0) {
-            (takeProfitPrice - recommendedEntryPrice) / recommendedEntryPrice * 100.0
-        } else {
-            0.0
-        }
-        val lossPct = if (recommendedEntryPrice > 0.0 && stopLossPrice > 0.0) {
-            max(0.0, (recommendedEntryPrice - stopLossPrice) / recommendedEntryPrice * 100.0)
-        } else {
-            0.0
-        }
+        val profitPct = calculateFeeAdjustedRewardPercent(recommendedEntryPrice, takeProfitPrice)
+        val lossPct = calculateFeeAdjustedLossPercent(recommendedEntryPrice, stopLossPrice)
         val recommendationWinRate = recommendation?.recommendedEntryWinRate?.takeIf { it.isFinite() } ?: 0.0
         val expectancyPct = (recommendationWinRate / 100.0) * profitPct - (1.0 - recommendationWinRate / 100.0) * lossPct
         val crowd = pulse?.toCrowdFeaturePack()
@@ -2645,14 +2707,13 @@ class GuidedTradingService(
         val averageEntryPrice = entryValue.divide(normalizedEntryQty, 8, RoundingMode.HALF_UP)
         val averageExitPrice = exitValue.divide(normalizedExitQty, 8, RoundingMode.HALF_UP)
         val invested = averageEntryPrice.multiply(effectiveClosedQty)
-        val realizedPnl = averageExitPrice.subtract(averageEntryPrice)
-            .multiply(effectiveClosedQty)
-            .setScale(2, RoundingMode.HALF_UP)
-        val realizedPnlPercent = if (invested > BigDecimal.ZERO) {
-            realizedPnl.divide(invested, 8, RoundingMode.HALF_UP).multiply(BigDecimal("100")).setScale(4, RoundingMode.HALF_UP)
-        } else {
-            BigDecimal.ZERO.setScale(4, RoundingMode.HALF_UP)
-        }
+        val feeAdjustedPnl = calculateFeeAdjustedPnl(
+            entryPrice = averageEntryPrice,
+            exitPrice = averageExitPrice,
+            quantity = effectiveClosedQty
+        )
+        val realizedPnl = feeAdjustedPnl.pnlAmount
+        val realizedPnlPercent = feeAdjustedPnl.pnlPercent
 
         val sourceReason = if (confidence == GuidedTradeEntity.PNL_CONFIDENCE_HIGH) {
             "events 기반"
@@ -2699,10 +2760,11 @@ class GuidedTradingService(
             return WinRateCalibration(baseWinRate.coerceIn(30.0, 86.0), null)
         }
 
-        val winRate = samples.count {
-            it.realizedPnl > BigDecimal.ZERO || it.realizedPnlPercent > BigDecimal.ZERO
-        }.toDouble() / samples.size.toDouble() * 100.0
-        val avgPnlPercent = samples.map { it.realizedPnlPercent.toDouble() }.average().takeIf { !it.isNaN() } ?: 0.0
+        val sampleViews = samples.map { it.toClosedTradeView() }
+        val winRate = sampleViews.count {
+            it.realizedPnl > 0.0 || it.realizedPnlPercent > 0.0
+        }.toDouble() / sampleViews.size.toDouble() * 100.0
+        val avgPnlPercent = sampleViews.map { it.realizedPnlPercent }.average().takeIf { !it.isNaN() } ?: 0.0
 
         val sampleWeight = (samples.size / 40.0).coerceIn(0.25, 1.0)
         val adjustByWinRate = ((winRate - 50.0) * 0.35).coerceIn(-11.0, 11.0)
@@ -2933,11 +2995,73 @@ class GuidedTradingService(
     }
 
     private fun calculatePnlPercent(entry: BigDecimal, current: BigDecimal): Double {
-        if (entry <= BigDecimal.ZERO) return 0.0
-        return current.subtract(entry)
-            .divide(entry, 8, RoundingMode.HALF_UP)
-            .multiply(BigDecimal(100))
-            .toDouble()
+        return calculateFeeAdjustedReturnPercent(entry.toDouble(), current.toDouble())
+    }
+
+    private fun resolveBalanceAverageEntryPrice(
+        market: String,
+        balancesByCurrency: Map<String, Balance>? = null
+    ): BigDecimal? {
+        val currency = market.substringAfter("KRW-").uppercase()
+        return balancesByCurrency?.get(currency)?.avgBuyPrice?.takeIf { it > BigDecimal.ZERO }
+            ?: bithumbPrivateApi.getBalances()
+                ?.firstOrNull { it.currency.equals(currency, ignoreCase = true) }
+                ?.avgBuyPrice
+                ?.takeIf { it > BigDecimal.ZERO }
+    }
+
+    private fun isPlausibleEntryPrice(candidate: BigDecimal, referencePrice: BigDecimal): Boolean {
+        if (candidate <= BigDecimal.ZERO || referencePrice <= BigDecimal.ZERO) return false
+        // AI_SCALP_TRADER positions are managed on a 5~30 minute horizon, so a stored
+        // unit price that is more than 50% away from the live reference is almost
+        // certainly a corrupted market-buy amount rather than a real fill price.
+        val lowerBound = referencePrice.multiply(BigDecimal("0.5"))
+        val upperBound = referencePrice.multiply(BigDecimal("1.5"))
+        return candidate >= lowerBound && candidate <= upperBound
+    }
+
+    private fun resolveEffectiveEntryPrice(
+        trade: GuidedTradeEntity,
+        marketPrice: BigDecimal?,
+        balancesByCurrency: Map<String, Balance>? = null
+    ): BigDecimal {
+        val currentEntryPrice = trade.averageEntryPrice.takeIf { it > BigDecimal.ZERO }
+        val referencePrice = marketPrice?.takeIf { it > BigDecimal.ZERO }
+
+        if (referencePrice == null) {
+            return currentEntryPrice ?: BigDecimal.ZERO
+        }
+        if (currentEntryPrice != null && isPlausibleEntryPrice(currentEntryPrice, referencePrice)) {
+            return currentEntryPrice
+        }
+
+        val balanceEntryPrice = resolveBalanceAverageEntryPrice(trade.market, balancesByCurrency)
+        if (balanceEntryPrice != null && isPlausibleEntryPrice(balanceEntryPrice, referencePrice)) {
+            return balanceEntryPrice
+        }
+
+        return currentEntryPrice ?: referencePrice
+    }
+
+    private fun reconcileAverageEntryPriceWithBalance(
+        trade: GuidedTradeEntity,
+        marketPrice: BigDecimal,
+        balancesByCurrency: Map<String, Balance>? = null
+    ) {
+        val correctedEntryPrice = resolveEffectiveEntryPrice(trade, marketPrice, balancesByCurrency)
+        if (correctedEntryPrice <= BigDecimal.ZERO || correctedEntryPrice == trade.averageEntryPrice) return
+
+        val previousEntryPrice = trade.averageEntryPrice
+        trade.averageEntryPrice = correctedEntryPrice
+        trade.lastAction = "ENTRY_PRICE_RECONCILED"
+        guidedTradeRepository.save(trade)
+        appendEvent(
+            trade.id ?: return,
+            "ENTRY_PRICE_RECONCILED",
+            correctedEntryPrice,
+            trade.remainingQuantity.takeIf { it > BigDecimal.ZERO },
+            "진입가 보정 ${previousEntryPrice.toPlainString()} -> ${correctedEntryPrice.toPlainString()}"
+        )
     }
 
     private fun formatPrice(price: Double): String = String.format("%.0f", price)
@@ -2978,19 +3102,30 @@ class GuidedTradingService(
         }
 
         val executedQty = order.executedVolume ?: BigDecimal.ZERO
-        if (executedQty > BigDecimal.ZERO) {
-            val invested = when {
-                investedAmount > BigDecimal.ZERO -> investedAmount
-                order.price != null && order.price > BigDecimal.ZERO -> order.price.multiply(executedQty)
-                else -> BigDecimal.ZERO
+        val marketCandidates = buildList {
+            if (executedQty > BigDecimal.ZERO) {
+                if (investedAmount > BigDecimal.ZERO) {
+                    add(investedAmount.divide(executedQty, 8, RoundingMode.HALF_UP))
+                }
+                if (order.locked != null && order.locked > BigDecimal.ZERO) {
+                    add(order.locked.divide(executedQty, 8, RoundingMode.HALF_UP))
+                }
+                if (order.price != null && order.price > BigDecimal.ZERO && order.side == "bid" && order.ordType == "price") {
+                    add(order.price.divide(executedQty, 8, RoundingMode.HALF_UP))
+                }
             }
-            if (invested > BigDecimal.ZERO) {
-                return invested.divide(executedQty, 8, RoundingMode.HALF_UP)
+            if (order.price != null && order.price > BigDecimal.ZERO && !(order.side == "bid" && order.ordType == "price")) {
+                add(order.price)
             }
+        }
+        val plausibleCandidate = marketCandidates
+            .filter { isPlausibleEntryPrice(it, fallbackPrice) }
+            .minByOrNull { abs(it.subtract(fallbackPrice).toDouble()) }
+        if (plausibleCandidate != null) {
+            return plausibleCandidate
         }
 
         return when {
-            order.price != null && order.price > BigDecimal.ZERO -> order.price
             selectedLimitPrice != null && selectedLimitPrice > BigDecimal.ZERO -> selectedLimitPrice
             else -> fallbackPrice
         }
@@ -3023,15 +3158,10 @@ class GuidedTradingService(
         return if (this < other) this else other
     }
 
-    private fun GuidedTradeEntity.toView(currentPrice: Double?): GuidedTradeView {
-        val nowPrice = currentPrice ?: this.averageEntryPrice.toDouble()
-        val pnlPercent = if (averageEntryPrice > BigDecimal.ZERO) {
-            BigDecimal.valueOf(nowPrice)
-                .subtract(averageEntryPrice)
-                .divide(averageEntryPrice, 8, RoundingMode.HALF_UP)
-                .multiply(BigDecimal(100))
-                .toDouble()
-        } else 0.0
+    private fun GuidedTradeEntity.toView(currentPrice: Double?, entryPriceOverride: Double? = null): GuidedTradeView {
+        val effectiveEntryPrice = entryPriceOverride?.takeIf { it > 0.0 } ?: this.averageEntryPrice.toDouble()
+        val nowPrice = currentPrice ?: effectiveEntryPrice
+        val pnlPercent = calculateFeeAdjustedReturnPercent(effectiveEntryPrice, nowPrice)
 
         return GuidedTradeView(
             tradeId = id ?: 0,
@@ -3039,7 +3169,7 @@ class GuidedTradingService(
             status = status,
             entryOrderType = entryOrderType,
             entryOrderId = entryOrderId,
-            averageEntryPrice = averageEntryPrice.toDouble(),
+            averageEntryPrice = effectiveEntryPrice,
             currentPrice = nowPrice,
             entryQuantity = entryQuantity.toDouble(),
             remainingQuantity = remainingQuantity.toDouble(),
@@ -3689,14 +3819,36 @@ data class GuidedPnlReconcileItem(
 )
 
 private fun GuidedTradeEntity.toClosedTradeView(): GuidedClosedTradeView {
+    val effectiveClosedQty = when {
+        cumulativeExitQuantity > BigDecimal.ZERO -> cumulativeExitQuantity
+        remainingQuantity <= BigDecimal.ZERO && entryQuantity > BigDecimal.ZERO -> entryQuantity
+        else -> BigDecimal.ZERO
+    }
+    val feeAdjustedPnl = if (
+        averageEntryPrice > BigDecimal.ZERO &&
+        averageExitPrice > BigDecimal.ZERO &&
+        effectiveClosedQty > BigDecimal.ZERO
+    ) {
+        calculateFeeAdjustedPnl(
+            entryPrice = averageEntryPrice,
+            exitPrice = averageExitPrice,
+            quantity = effectiveClosedQty
+        )
+    } else {
+        FeeAdjustedTradePnl(
+            pnlAmount = realizedPnl.setScale(2, RoundingMode.HALF_UP),
+            pnlPercent = realizedPnlPercent.setScale(4, RoundingMode.HALF_UP)
+        )
+    }
+
     return GuidedClosedTradeView(
         tradeId = id ?: 0L,
         market = market,
         averageEntryPrice = averageEntryPrice.toDouble(),
         averageExitPrice = averageExitPrice.toDouble(),
         entryQuantity = entryQuantity.toDouble(),
-        realizedPnl = realizedPnl.toDouble(),
-        realizedPnlPercent = realizedPnlPercent.toDouble(),
+        realizedPnl = feeAdjustedPnl.pnlAmount.toDouble(),
+        realizedPnlPercent = feeAdjustedPnl.pnlPercent.toDouble(),
         dcaCount = dcaCount,
         halfTakeProfitDone = halfTakeProfitDone,
         createdAt = createdAt,

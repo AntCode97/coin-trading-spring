@@ -114,15 +114,30 @@ const SHORTLIST_LIMIT = 12;
 const FINALIST_LIMIT = 4;
 const EVENT_HISTORY_LIMIT = 240;
 const CLOSED_TRADE_LIMIT = 200;
-const SHORT_COOLDOWN_MS = 60_000;
-const LONG_COOLDOWN_MS = 120_000;
+const TAKE_PROFIT_COOLDOWN_MS = 120_000;
+const LLM_EXIT_COOLDOWN_MS = 240_000;
+const FORCED_EXIT_COOLDOWN_MS = 300_000;
+const STOP_LOSS_COOLDOWN_MS = 480_000;
 const CONTEXT_FAILURE_EXIT_THRESHOLD = 3;
+const MIN_ENTRY_EXPECTANCY_PCT = 0.10;
+const MIN_ENTRY_WIN_RATE = 55;
+const MIN_ENTRY_RISK_REWARD = 1.35;
+const MAX_ENTRY_GAP_PCT = 0.35;
+const MAX_ENTRY_SPREAD_PCT = 0.12;
+const MIN_ENTRY_CROWD_FLOW = 42;
+const MIN_EARLY_HOLD_MINUTES = 2;
+const EARLY_EXIT_PNL_FLOOR = -0.45;
+const MIN_ENTRY_STOP_DISTANCE_PCT = 0.55;
+const MAX_ENTRY_STOP_DISTANCE_PCT = 1.10;
+const MIN_ENTRY_TAKE_DISTANCE_PCT = 0.95;
+const MAX_ENTRY_TAKE_DISTANCE_PCT = 2.20;
+const MIN_ENTRY_RISK_REWARD_TARGET = 1.55;
 
 const SHORTLIST_SYSTEM_PROMPT = [
   '너는 빗썸 KRW 현물 시장만 보는 전업 초단타 트레이더다.',
   '목표는 5~30분 안에 끝낼 수 있는 유동성 높은 기회를 많이 잡는 것이다.',
-  '과도하게 WAIT만 반복하지 말고, 유동성/스프레드/모멘텀/기대값이 괜찮으면 여러 종목을 shortlist에 올려라.',
-  '평가 기준: 체결대금, 즉시성 있는 모멘텀, crowd pressure, 기대값, 스프레드, 진입 괴리.',
+  '과도하게 WAIT만 반복하지는 말되, 얇은 호가나 잡음성 급등처럼 손절이 쉬운 종목은 shortlist에서 낮춰라.',
+  '평가 기준: 체결대금, 즉시성 있는 모멘텀, crowd pressure, 순기대값, 스프레드, 진입 괴리, follow-through 가능성.',
   'JSON만 반환한다.',
   '형식: {"shortlist":[{"market":"KRW-BTC","score":82,"reason":"짧은 근거"}]}',
   '최대 12개까지만 반환한다.',
@@ -131,7 +146,8 @@ const SHORTLIST_SYSTEM_PROMPT = [
 const ENTRY_SYSTEM_PROMPT = [
   '너는 공격적이지만 규율 있는 KRW 현물 초단타 트레이더다.',
   '보유시간 목표는 5~30분이다.',
-  '조금만 괜찮아도 무조건 WAIT 하지 말고, 유동성과 payoff가 충분하면 BUY를 선택하라.',
+  '순기대값이 수수료를 넘지 못하거나, 스프레드가 넓거나, 추격 진입이면 WAIT를 선택하라.',
+  '깨끗한 추세 지속이나 눌림 재가속만 BUY하고, 잡음성 급등/급락 반대매매는 피하라.',
   'JSON만 반환한다.',
   '형식: {"action":"BUY|WAIT","confidence":0.0,"reasoning":"짧은 근거","stopLoss":0,"takeProfit":0,"urgency":"LOW|MEDIUM|HIGH"}',
   'stopLoss는 현재가보다 낮아야 하고 takeProfit은 현재가보다 높아야 한다.',
@@ -140,6 +156,7 @@ const ENTRY_SYSTEM_PROMPT = [
 const MANAGE_SYSTEM_PROMPT = [
   '너는 이미 보유한 KRW 현물 초단타 포지션을 관리하는 트레이더다.',
   '보유시간 목표는 5~30분이며, 모멘텀이 약해지거나 downside가 커지면 SELL을 선택한다.',
+  '진입 직후 1~2분의 작은 흔들림에는 과민반응하지 말고, 구조 훼손/유동성 붕괴/손절 근접에서만 강하게 SELL 하라.',
   'JSON만 반환한다.',
   '형식: {"action":"HOLD|SELL","confidence":0.0,"reasoning":"짧은 근거","urgency":"LOW|MEDIUM|HIGH"}',
 ].join('\n');
@@ -500,6 +517,19 @@ export class AiDayTraderEngine {
         const scanMarket = candidates.find((candidate) => candidate.market === finalist.market);
         if (!scanMarket) continue;
 
+        const entryGateFailure = this.evaluateEntryGate(scanMarket);
+        if (entryGateFailure) {
+          this.pushEvent(
+            'BUY_DECISION',
+            `${finalist.market} WAIT`,
+            `리스크 필터: ${entryGateFailure}`,
+            finalist.market,
+            0.99,
+            'LOW'
+          );
+          continue;
+        }
+
         this.state.finalistsReviewed += 1;
         this.emit();
 
@@ -530,7 +560,7 @@ export class AiDayTraderEngine {
           decision.urgency
         );
 
-        if (decision.action !== 'BUY' || decision.confidence < 0.55) {
+        if (decision.action !== 'BUY' || decision.confidence < 0.62) {
           continue;
         }
 
@@ -636,7 +666,19 @@ export class AiDayTraderEngine {
           decision.urgency
         );
 
-        if (decision.action === 'SELL' && decision.confidence >= 0.5) {
+        if (decision.action === 'SELL' && this.shouldDeferEarlySell(position, holdingMinutes, decision)) {
+          this.pushEvent(
+            'STATUS',
+            `${position.market} 초기 흔들림으로 HOLD 유지`,
+            `보유 ${holdingMinutes.toFixed(1)}분 · 미실현 ${this.formatPercent(position.unrealizedPnlPercent)} · ${decision.reasoning}`,
+            position.market,
+            decision.confidence,
+            decision.urgency
+          );
+          continue;
+        }
+
+        if (decision.action === 'SELL' && decision.confidence >= 0.58) {
           await this.executeSell(position, decision.reasoning, undefined, decision);
         }
       }
@@ -841,15 +883,33 @@ export class AiDayTraderEngine {
 
   private resolveProtectivePrices(scanMarket: AiScalpScanMarket, decision: AiEntryDecision) {
     const currentPrice = scanMarket.tradePrice > 0 ? scanMarket.tradePrice : scanMarket.recommendation.currentPrice;
-    let stopLoss = Number.isFinite(decision.stopLoss) ? (decision.stopLoss as number) : scanMarket.recommendation.stopLossPrice;
-    let takeProfit = Number.isFinite(decision.takeProfit) ? (decision.takeProfit as number) : scanMarket.recommendation.takeProfitPrice;
+    const spreadPercent = scanMarket.crowd?.spreadPercent ?? scanMarket.featurePack.spreadPercent ?? 0;
+    const entryGapPct = Math.max(0, scanMarket.featurePack.entryGapPct ?? 0);
+    const recommendationStopDistance = this.calculateDownsideDistancePercent(currentPrice, scanMarket.recommendation.stopLossPrice);
+    const llmStopDistance = this.calculateDownsideDistancePercent(currentPrice, decision.stopLoss);
+    const rawStopDistance = Math.max(
+      recommendationStopDistance,
+      llmStopDistance,
+      MIN_ENTRY_STOP_DISTANCE_PCT,
+      spreadPercent * 4.5,
+      Math.min(entryGapPct, 0.35) * 1.2
+    );
+    const stopDistancePercent = clamp(rawStopDistance, MIN_ENTRY_STOP_DISTANCE_PCT, MAX_ENTRY_STOP_DISTANCE_PCT);
 
-    if (!Number.isFinite(stopLoss) || stopLoss <= 0 || stopLoss >= currentPrice) {
-      stopLoss = currentPrice * 0.996;
-    }
-    if (!Number.isFinite(takeProfit) || takeProfit <= currentPrice) {
-      takeProfit = currentPrice * 1.006;
-    }
+    const recommendationTakeDistance = this.calculateUpsideDistancePercent(currentPrice, scanMarket.recommendation.takeProfitPrice);
+    const llmTakeDistance = this.calculateUpsideDistancePercent(currentPrice, decision.takeProfit);
+    const rawTakeDistance = Math.max(
+      recommendationTakeDistance,
+      llmTakeDistance,
+      MIN_ENTRY_TAKE_DISTANCE_PCT,
+      spreadPercent * 8,
+      stopDistancePercent * Math.max(scanMarket.recommendation.riskRewardRatio || 0, MIN_ENTRY_RISK_REWARD_TARGET)
+    );
+    const minTakeDistance = Math.max(MIN_ENTRY_TAKE_DISTANCE_PCT, stopDistancePercent * MIN_ENTRY_RISK_REWARD_TARGET);
+    const takeDistancePercent = clamp(rawTakeDistance, minTakeDistance, MAX_ENTRY_TAKE_DISTANCE_PCT);
+
+    const stopLoss = currentPrice * (1 - stopDistancePercent / 100);
+    const takeProfit = currentPrice * (1 + takeDistancePercent / 100);
 
     return {
       stopLoss,
@@ -943,7 +1003,7 @@ export class AiDayTraderEngine {
           exitCategory,
           closedAt: result.closedAt ?? new Date().toISOString(),
         });
-        const cooldownMs = exitCategory === 'TAKE_PROFIT' ? SHORT_COOLDOWN_MS : LONG_COOLDOWN_MS;
+        const cooldownMs = this.resolveCooldownMs(exitCategory);
         this.cooldownUntilByMarket.set(position.market, Date.now() + cooldownMs);
         this.contextFailureCountByMarket.delete(position.market);
       } else {
@@ -965,6 +1025,86 @@ export class AiDayTraderEngine {
     if (pnlKrw > 0 || pnlPercent > 0) return 'TAKE_PROFIT';
     if (pnlKrw < 0 || pnlPercent < 0) return 'STOP_LOSS';
     return 'LLM_EXIT';
+  }
+
+  private resolveCooldownMs(exitCategory: AiExitCategory): number {
+    switch (exitCategory) {
+      case 'TAKE_PROFIT':
+        return TAKE_PROFIT_COOLDOWN_MS;
+      case 'LLM_EXIT':
+        return LLM_EXIT_COOLDOWN_MS;
+      case 'FORCED_EXIT':
+        return FORCED_EXIT_COOLDOWN_MS;
+      case 'STOP_LOSS':
+      default:
+        return STOP_LOSS_COOLDOWN_MS;
+    }
+  }
+
+  private evaluateEntryGate(scanMarket: AiScalpScanMarket): string | null {
+    const expectancyPct = scanMarket.recommendation.expectancyPct;
+    if (expectancyPct < MIN_ENTRY_EXPECTANCY_PCT) {
+      return `순기대값 ${expectancyPct.toFixed(2)}% 부족`;
+    }
+
+    const recommendedWinRate = scanMarket.recommendation.recommendedEntryWinRate;
+    if (recommendedWinRate < MIN_ENTRY_WIN_RATE) {
+      return `추천 승률 ${recommendedWinRate.toFixed(1)}% 부족`;
+    }
+
+    const riskRewardRatio = scanMarket.recommendation.riskRewardRatio;
+    if (riskRewardRatio < MIN_ENTRY_RISK_REWARD) {
+      return `RR ${riskRewardRatio.toFixed(2)} 부족`;
+    }
+
+    const spreadPercent = scanMarket.crowd?.spreadPercent ?? scanMarket.featurePack.spreadPercent ?? 0;
+    if (spreadPercent > MAX_ENTRY_SPREAD_PCT) {
+      return `스프레드 ${spreadPercent.toFixed(2)}% 과다`;
+    }
+
+    const entryGapPct = Math.max(0, scanMarket.featurePack.entryGapPct ?? 0);
+    if (entryGapPct > MAX_ENTRY_GAP_PCT) {
+      return `진입 괴리 ${entryGapPct.toFixed(2)}% 과다`;
+    }
+
+    const crowdFlow = scanMarket.crowd?.flowScore ?? scanMarket.featurePack.crowdFlowScore ?? 0;
+    if (crowdFlow > 0 && crowdFlow < MIN_ENTRY_CROWD_FLOW) {
+      return `crowd flow ${crowdFlow.toFixed(0)} 부족`;
+    }
+
+    const priceChange = scanMarket.changeRate;
+    if (priceChange >= 4.0 && entryGapPct >= 0.18) {
+      return `급등 추격 구간 ${priceChange.toFixed(2)}%`;
+    }
+
+    return null;
+  }
+
+  private shouldDeferEarlySell(
+    position: GuidedTradePosition,
+    holdingMinutes: number,
+    decision: AiManageDecision
+  ): boolean {
+    return (
+      holdingMinutes < MIN_EARLY_HOLD_MINUTES &&
+      decision.confidence < 0.72 &&
+      decision.urgency !== 'HIGH' &&
+      position.unrealizedPnlPercent > EARLY_EXIT_PNL_FLOOR
+    );
+  }
+
+  private calculateDownsideDistancePercent(referencePrice: number, candidatePrice?: number): number {
+    if (!Number.isFinite(referencePrice) || referencePrice <= 0 || !Number.isFinite(candidatePrice) || (candidatePrice as number) <= 0) {
+      return 0;
+    }
+    return Math.max(0, ((referencePrice - (candidatePrice as number)) / referencePrice) * 100);
+  }
+
+  private calculateUpsideDistancePercent(referencePrice: number, candidatePrice?: number): number {
+    if (!Number.isFinite(referencePrice) || referencePrice <= 0 || !Number.isFinite(candidatePrice) || (candidatePrice as number) <= 0) {
+      return 0;
+    }
+    return Math.max(0, (((candidatePrice as number) - referencePrice) / referencePrice) * 100);
   }
 
   private registerClosedTrade(trade: AiClosedTrade) {

@@ -300,9 +300,14 @@ coin-trading-spring/
   - 쿼리: `interval`(default `minute1`), `universeLimit`(default `36`), `strategyCodePrefix`(default `AI_SCALP_TRADER`)
   - 응답: `generatedAt`, `interval`, `universeLimit`, `strategyCodePrefix`, `positions[]`, `markets[]`
   - `markets[]` 필드: `market`, `koreanName`, `tradePrice`, `changeRate`, `turnover`, `liquidityRank`, `recommendation`, `featurePack`, optional `crowd`
+  - `recommendation.expectancyPct`는 빗썸 왕복 수수료 0.08%를 반영한 순기대값
+  - `positions[].averageEntryPrice`는 저장값이 비정상적이면 잔고 `avgBuyPrice`로 자동 보정
+  - AI 초단타 엔진은 `expectancyPct`, `recommendedEntryWinRate`, `riskRewardRatio`, `spreadPercent`, `entryGapPct` 기반 리스크 게이트를 먼저 통과한 finalist만 진입 분석
+  - 엔진 보호폭 기본값: 손절 최소 `0.55%`, 익절 최소 `0.95%`, 손절 후 재진입 쿨다운 `8분`
 - `GET /api/guided-trading/stats/today`
   - 신규 쿼리: `strategyCodePrefix` (optional)
   - 금일 거래 요약과 `trades[]`를 전략 prefix 기준으로 분리 조회 가능
+  - `totalPnlKrw`, `avgPnlPercent`, `trades[].realizedPnl(Percent)`는 빗썸 수수료 반영 순손익 기준
 - `GET /api/guided-trading/autopilot/live`
   - 신규 쿼리: `strategyCodePrefix` (optional)
   - `orderSummary/orderEvents/autopilotEvents`를 prefix 기준으로 분리 조회 가능
