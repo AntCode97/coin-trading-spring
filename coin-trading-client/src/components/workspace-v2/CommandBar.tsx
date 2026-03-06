@@ -1,3 +1,4 @@
+import { useCallback, useRef, useState } from 'react';
 import type { WorkspaceDensity } from './types';
 
 interface CommandBarProps {
@@ -41,55 +42,58 @@ export function CommandBar({
   onToggleRightPanel,
   onToggleDensity,
 }: CommandBarProps) {
-  const panelToggleLabel = rightPanelOpen ? '우측 패널 숨기기' : '우측 패널 보기';
-  const panelToggleTitle = rightPanelOpen
-    ? '우측 실행 패널을 숨기고 차트 영역을 넓게 봅니다.'
-    : '우측 실행 패널을 다시 열어 엔진/리스크/후보 제어를 표시합니다.';
-  const commandHelp = '즉시 조작 모드: 엔진 스위치, 프리셋, 주문 액션을 바로 실행할 수 있습니다.';
+  const [menuOpen, setMenuOpen] = useState(false);
+  const menuRef = useRef<HTMLDivElement>(null);
+
+  const toggleMenu = useCallback(() => setMenuOpen((prev) => !prev), []);
+  const closeMenu = useCallback(() => setMenuOpen(false), []);
 
   return (
     <header className="workspace-command-bar">
       <div className="workspace-command-left">
         <strong>{selectedMarket}</strong>
-        <span>{sessionLabel}</span>
-        <span className={`connection ${connectionLabel === '연결됨' ? 'ok' : 'warn'}`}>{connectionLabel}</span>
+        <span className={`connection-dot ${connectionLabel === '연결됨' ? 'ok' : 'warn'}`} />
+        <span className="cb-session">{sessionLabel}</span>
       </div>
 
-      <div className="workspace-command-kpis">
-        <article className={todayPnlKrw >= 0 ? 'up' : 'down'}>
-          <span>오늘 손익</span>
-          <strong>{todayPnlKrw >= 0 ? '+' : ''}{formatCompactKrw(todayPnlKrw)}</strong>
-        </article>
-        <article>
-          <span>총 노출</span>
-          <strong>{exposurePercent}%</strong>
-        </article>
-        <article>
-          <span>활성 엔진</span>
-          <strong>{activeEngineCount}/3</strong>
-        </article>
-        <article className={warningCount > 0 ? 'warn' : ''}>
-          <span>경고</span>
-          <strong>{warningCount}</strong>
-        </article>
+      <div className="workspace-command-pills">
+        <span className={`cb-pill ${todayPnlKrw >= 0 ? 'up' : 'down'}`}>
+          PnL {todayPnlKrw >= 0 ? '+' : ''}{formatCompactKrw(todayPnlKrw)}
+        </span>
+        <span className="cb-pill">
+          엔진 {activeEngineCount}/3
+        </span>
+        <span className="cb-pill">
+          노출 {exposurePercent}%
+        </span>
+        <span className={`cb-pill ${warningCount > 0 ? 'warn' : ''}`}>
+          경고 {warningCount}
+        </span>
       </div>
 
-      <div className="workspace-command-actions">
-        <button
-          type="button"
-          className="emergency-btn"
-          onClick={onEmergencyStop}
-          title="SCALP/SWING/POSITION 엔진을 모두 OFF 하고 신규 진입을 즉시 중단합니다."
-        >
+      <div className="workspace-command-right">
+        <button type="button" className="emergency-btn" onClick={onEmergencyStop}>
           긴급 중지
         </button>
-        <button type="button" onClick={onSync} disabled={syncPending}>
-          {syncPending ? '동기화...' : '계정 동기화'}
-        </button>
-        <button type="button" onClick={onOpenChat}>채팅</button>
-        <button type="button" onClick={onToggleRightPanel} title={panelToggleTitle}>{panelToggleLabel}</button>
-        <button type="button" onClick={onToggleDensity}>{density === 'COMFORT' ? 'Compact' : 'Comfort'}</button>
-        <p className="workspace-command-help">{commandHelp}</p>
+        <div className="cb-overflow-wrap" ref={menuRef}>
+          <button type="button" className="cb-overflow-btn" onClick={toggleMenu}>
+            ···
+          </button>
+          {menuOpen && (
+            <div className="cb-overflow-menu" onClick={closeMenu}>
+              <button type="button" onClick={onSync} disabled={syncPending}>
+                {syncPending ? '동기화...' : '계정 동기화'}
+              </button>
+              <button type="button" onClick={onToggleDensity}>
+                {density === 'COMFORT' ? 'Compact 보기' : 'Comfort 보기'}
+              </button>
+              <button type="button" onClick={onOpenChat}>채팅</button>
+              <button type="button" onClick={onToggleRightPanel}>
+                {rightPanelOpen ? '우측 패널 숨기기' : '우측 패널 보기'}
+              </button>
+            </div>
+          )}
+        </div>
       </div>
     </header>
   );

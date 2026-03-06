@@ -78,6 +78,9 @@ import { CommandBar } from './workspace-v2/CommandBar';
 import { ActionConsole } from './workspace-v2/ActionConsole';
 import { ChatDrawer } from './workspace-v2/ChatDrawer';
 import { SwitchButton } from './workspace-v2/SwitchButton';
+import { LiveStrip } from './workspace-v2/LiveStrip';
+import { DeepDiveDrawer } from './workspace-v2/DeepDiveDrawer';
+import { EmptyState } from './workspace-v2/EmptyState';
 import type { WorkspaceDensity } from './workspace-v2/types';
 import './ManualTraderWorkspace.css';
 import './workspace-v2/workspace-tokens.css';
@@ -803,6 +806,7 @@ export default function ManualTraderWorkspace() {
   const [playwrightStatus, setPlaywrightStatus] = useState<PlaywrightMcpStatus | null>(null);
   const [playwrightAction, setPlaywrightAction] = useState<'idle' | 'starting' | 'stopping'>('idle');
   const [monitorTab, setMonitorTab] = useState<MonitorTab>(prefs.monitorTab ?? 'SCALP');
+  const [deepDiveOpen, setDeepDiveOpen] = useState(false);
   const [autopilotEnabled, setAutopilotEnabled] = useState<boolean>(prefs.autopilotEnabled ?? false);
   const [swingAutopilotEnabled, setSwingAutopilotEnabled] = useState<boolean>(prefs.swingAutopilotEnabled ?? false);
   const [positionAutopilotEnabled, setPositionAutopilotEnabled] = useState<boolean>(prefs.positionAutopilotEnabled ?? false);
@@ -2502,6 +2506,42 @@ export default function ManualTraderWorkspace() {
   const sessionLabel = tradingMode === 'SCALP' ? '초단타 세션' : tradingMode === 'SWING' ? '단타 세션' : '포지션 세션';
   const connectionLabel = providerConnected ? '연결됨' : providerChecking ? '연결 확인 중' : '연결 필요';
 
+  const liveStripCandidates = useMemo(() => {
+    return autopilotState.candidates.length > 0
+      ? autopilotState.candidates
+      : (scalpAutopilotLiveQuery.data?.candidates ?? []).map((c) => ({
+          market: c.market,
+          koreanName: c.koreanName,
+          recommendedEntryWinRate: c.recommendedEntryWinRate ?? null,
+          marketEntryWinRate: c.marketEntryWinRate ?? null,
+          stage: c.stage as any,
+          reason: c.reason,
+          updatedAt: Date.now(),
+        }));
+  }, [autopilotState.candidates, scalpAutopilotLiveQuery.data?.candidates]);
+
+  const liveStripHealthScore = useMemo(() => {
+    const scalpSummary = scalpAutopilotLiveQuery.data?.orderSummary?.total;
+    const enterRate = clampPercent(
+      !scalpSummary || scalpSummary.buyRequested === 0 ? 100 : (scalpSummary.buyFilled / scalpSummary.buyRequested) * 100
+    );
+    const exitRate = clampPercent(
+      !scalpSummary || scalpSummary.sellRequested === 0 ? 100 : (scalpSummary.sellFilled / scalpSummary.sellRequested) * 100
+    );
+    const tokenPct = clampPercent(
+      autopilotState.llmBudget.dailyTokenCap === 0
+        ? 100
+        : ((autopilotState.llmBudget.dailyTokenCap - autopilotState.llmBudget.usedTokens) / autopilotState.llmBudget.dailyTokenCap) * 100
+    );
+    const workerPct = autopilotState.workers.length === 0
+      ? 0
+      : Math.min(100, Math.round(
+          (autopilotState.workers.filter((w) => /running|active|processing/i.test(w.status)).length
+            / Math.max(1, autopilotState.workers.length)) * 100
+        ));
+    return clampPercent(enterRate * 0.38 + exitRate * 0.32 + tokenPct * 0.2 + workerPct * 0.1);
+  }, [scalpAutopilotLiveQuery.data?.orderSummary?.total, autopilotState.llmBudget, autopilotState.workers]);
+
   const executeAction = useCallback((action: () => void, undoMessage?: string, undoAction?: () => void) => {
     action();
     if (undoMessage && undoAction) {
@@ -2562,21 +2602,22 @@ export default function ManualTraderWorkspace() {
         onToggleDensity={() => setWorkspaceDensity((prev) => (prev === 'COMFORT' ? 'COMPACT' : 'COMFORT'))}
       />
 
-      <div className="workspace-guidance-bar live">
-        <strong>즉시 실행 모드 · 원클릭 제어</strong>
-        <p>사용 순서: 1) 엔진 ON 2) 모니터링 3) 필요 시 긴급 중지</p>
-        {!actionConsoleOpen ? (
-          <button type="button" className="workspace-guidance-cta" onClick={openRightPanel}>
-            우측 패널 열기
-          </button>
-        ) : null}
-        {statusMessage ? <span>{statusMessage}</span> : null}
-      </div>
-
       <WorkspaceShell
         density={workspaceDensity}
         rightOpen={actionConsoleOpen}
         onCloseRight={closeRightPanel}
+        liveStrip={
+          <LiveStrip
+            autopilotEnabled={autopilotEnabled}
+            swingEnabled={swingAutopilotEnabled}
+            positionEnabled={positionAutopilotEnabled}
+            autopilotState={autopilotState}
+            liveData={scalpAutopilotLiveQuery.data}
+            candidates={liveStripCandidates}
+            healthScore={liveStripHealthScore}
+            onOpenDrawer={() => setDeepDiveOpen(true)}
+          />
+        }
       >
         {/* 좌측: 마켓 보드 */}
         <aside className="guided-market-board">
@@ -2679,7 +2720,19 @@ export default function ManualTraderWorkspace() {
             </div>
           </div>
           <div className="guided-chart-shell">
-            <div className="guided-chart" ref={chartContainerRef} />
+            <div className="guided-chart" ref={chartContainerRef}>
+              {!chartQuery.data && (
+                <div className="chart-fallback">
+                  {chartQuery.isLoading ? (
+                    <EmptyState variant="loading" message="차트 데이터 로딩 중" />
+                  ) : chartQuery.isError ? (
+                    <EmptyState variant="error" message="차트 연결 실패" />
+                  ) : (
+                    <EmptyState variant="empty" message="연결 대기 중" />
+                  )}
+                </div>
+              )}
+            </div>
             {recommendation && (
               <div className="guided-winrate-overlay">
                 <div className="winrate-header">
@@ -4469,58 +4522,25 @@ export default function ManualTraderWorkspace() {
         </div>
       )}
 
-      <div className="guided-monitor-tabs">
-        <button
-          type="button"
-          className={monitorTab === 'SCALP' ? 'active' : ''}
-          onClick={() => setMonitorTab('SCALP')}
-        >
-          초단타 시스템
-        </button>
-        <button
-          type="button"
-          className={monitorTab === 'INVEST' ? 'active' : ''}
-          onClick={() => setMonitorTab('INVEST')}
-        >
-          투자 시스템
-        </button>
-      </div>
-
-      {monitorTab === 'SCALP' ? (
-        <>
-          <AutopilotLiveDock
-            open={true}
-            collapsed={autopilotDockCollapsed}
-            onToggleCollapse={() => setAutopilotDockCollapsed((prev) => !prev)}
-            autopilotEnabled={autopilotEnabled}
-            autopilotState={autopilotState}
-            liveData={scalpAutopilotLiveQuery.data}
-            loading={scalpAutopilotLiveQuery.isLoading}
-          />
-          <FocusedScalpLiveDock
-            open={true}
-            collapsed={focusedScalpDockCollapsed}
-            onToggleCollapse={() => setFocusedScalpDockCollapsed((prev) => !prev)}
-            enabled={focusedScalpEnabled}
-            cards={focusedScalpDecisionCards}
-            summary={focusedScalpDecisionSummary}
-            onSelectMarket={(market) => setSelectedMarket(market)}
-          />
-        </>
-      ) : (
-        <InvestmentLiveDock
-          open={true}
-          collapsed={investmentDockCollapsed}
-          onToggleCollapse={() => setInvestmentDockCollapsed((prev) => !prev)}
-          swingEnabled={swingAutopilotEnabled}
-          positionEnabled={positionAutopilotEnabled}
-          swingState={swingAutopilotState}
-          positionState={positionAutopilotState}
-          swingLiveData={swingAutopilotLiveQuery.data}
-          positionLiveData={positionAutopilotLiveQuery.data}
-          loading={swingAutopilotLiveQuery.isLoading || positionAutopilotLiveQuery.isLoading}
-        />
-      )}
+      <DeepDiveDrawer
+        open={deepDiveOpen}
+        onClose={() => setDeepDiveOpen(false)}
+        autopilotEnabled={autopilotEnabled}
+        autopilotState={autopilotState}
+        scalpLiveData={scalpAutopilotLiveQuery.data}
+        scalpLoading={scalpAutopilotLiveQuery.isLoading}
+        swingEnabled={swingAutopilotEnabled}
+        positionEnabled={positionAutopilotEnabled}
+        swingState={swingAutopilotState}
+        positionState={positionAutopilotState}
+        swingLiveData={swingAutopilotLiveQuery.data}
+        positionLiveData={positionAutopilotLiveQuery.data}
+        investLoading={swingAutopilotLiveQuery.isLoading || positionAutopilotLiveQuery.isLoading}
+        focusedScalpEnabled={focusedScalpEnabled}
+        focusedScalpCards={focusedScalpDecisionCards}
+        focusedScalpSummary={focusedScalpDecisionSummary}
+        onSelectMarket={(market) => setSelectedMarket(market)}
+      />
     </section>
   );
 }
