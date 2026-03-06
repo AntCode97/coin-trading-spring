@@ -73,7 +73,7 @@ class GuidedTradingService(
         const val WIN_RATE_CALC_TIMEOUT_MILLIS = 2500L
         const val GUIDED_STRATEGY_CODE = "GUIDED_TRADING"
         const val GUIDED_AUTOPILOT_STRATEGY_CODE = "GUIDED_AUTOPILOT"
-        const val AUTOPILOT_OPPORTUNITY_UNIVERSE_LIMIT = 15
+        const val AUTOPILOT_OPPORTUNITY_UNIVERSE_LIMIT = 25
         const val AUTOPILOT_OPPORTUNITY_CACHE_TTL_MILLIS = 30_000L
         const val AUTOPILOT_PROMOTION_SHARPE_GATE = 1.2
         const val AUTOPILOT_PROMOTION_MAX_DD_GATE = 4.0
@@ -2087,11 +2087,11 @@ class GuidedTradingService(
                 8.0 * max(0.0, entryGapPct - 0.35)
         val score = rawScore.coerceIn(0.0, 100.0)
 
-        val isRuleFail = rr1m < 1.02 || rr10m < 1.08 || entryGapPct > 1.4
+        val isRuleFail = rr1m < 0.98 || rr10m < 1.0 || entryGapPct > 2.5
         val stage = when {
             isRuleFail -> "RULE_FAIL"
-            score >= 64.0 && expectancyPct >= 0.12 -> "AUTO_PASS"
-            score >= 56.0 && expectancyPct >= 0.02 -> "BORDERLINE"
+            score >= 48.0 && expectancyPct >= 0.02 -> "AUTO_PASS"
+            score >= 38.0 && expectancyPct >= -0.05 -> "BORDERLINE"
             else -> "RULE_FAIL"
         }
         val reason = when (stage) {

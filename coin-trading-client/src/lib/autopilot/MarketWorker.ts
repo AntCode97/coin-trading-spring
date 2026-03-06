@@ -69,6 +69,7 @@ export interface WorkerConfig {
   skipLlmEntryReview: boolean;
   warnHoldingMs?: number | null;
   maxHoldingMs?: number | null;
+  engineType?: 'SCALP' | 'SWING' | 'POSITION';
 }
 
 interface WorkerEntryDecision {
@@ -140,6 +141,10 @@ export class MarketWorker {
   constructor(config: WorkerConfig, deps: WorkerDependencies) {
     this.config = config;
     this.deps = deps;
+  }
+
+  private get isScalp(): boolean {
+    return this.config.engineType === 'SCALP';
   }
 
   start(): void {
@@ -529,8 +534,12 @@ export class MarketWorker {
 
     const openedAt = Date.parse(position.createdAt);
     const holdingMs = Number.isFinite(openedAt) ? Math.max(0, Date.now() - openedAt) : null;
-    const warnHoldingMs = this.config.warnHoldingMs ?? null;
-    const maxHoldingMs = this.config.maxHoldingMs ?? null;
+    const warnHoldingMs = this.isScalp
+      ? Math.min(this.config.warnHoldingMs ?? 10 * 60_000, 10 * 60_000)
+      : (this.config.warnHoldingMs ?? null);
+    const maxHoldingMs = this.isScalp
+      ? Math.min(this.config.maxHoldingMs ?? 15 * 60_000, 15 * 60_000)
+      : (this.config.maxHoldingMs ?? null);
 
     if (
       holdingMs != null &&
@@ -548,7 +557,7 @@ export class MarketWorker {
       this.deps.onLog(
         `[${this.config.market}] 보유시간 경고: ${Math.floor(holdingMs / 60000)}분 경과`
       );
-      if (this.deps.reviewOpenPosition && this.canRunPositionReviewNow()) {
+      if (!this.isScalp && this.deps.reviewOpenPosition && this.canRunPositionReviewNow()) {
         this.lastEventReviewAt = Date.now();
         const review = await this.deps.reviewOpenPosition(this.config.market, position);
         this.nextPositionReviewAt = Date.now() + this.resolveNextPositionReviewMs(review.nextReviewSec);
@@ -573,10 +582,10 @@ export class MarketWorker {
     ) {
       try {
         this.emitOrderFlow('SELL_REQUESTED', '최대 보유시간 초과 강제청산 요청');
-        await this.deps.stopPosition(this.config.market, '최대 보유시간(120분) 초과 강제청산');
+        await this.deps.stopPosition(this.config.market, `최대 보유시간(${maxHoldingMs != null ? Math.floor(maxHoldingMs / 60000) : '?'}분) 초과 강제청산`);
         this.emitOrderFlow('SELL_FILLED', '최대 보유시간 초과 강제청산 체결');
         this.emitEvent('POSITION_EXIT', 'WARN', '최대 보유시간 초과 강제청산');
-        this.cooldownUntil = Date.now() + 3 * 60_000;
+        this.cooldownUntil = Date.now() + (this.isScalp ? 30_000 : 3 * 60_000);
         this.peakPnlPercent = Number.NEGATIVE_INFINITY;
         this.setState('COOLDOWN', '최대 보유시간 강제청산');
         return;
@@ -592,7 +601,7 @@ export class MarketWorker {
       }
     }
 
-    if (this.deps.reviewOpenPosition && this.shouldRunEventDrivenReview(pnl, peakDrawdown, position.trailingActive)) {
+    if (!this.isScalp && this.deps.reviewOpenPosition && this.shouldRunEventDrivenReview(pnl, peakDrawdown, position.trailingActive)) {
       this.lastEventReviewAt = Date.now();
       const review = await this.deps.reviewOpenPosition(this.config.market, position);
       this.nextPositionReviewAt = Date.now() + this.resolveNextPositionReviewMs(review.nextReviewSec);
@@ -615,31 +624,48 @@ export class MarketWorker {
       }
     }
 
-    if (pnl <= -0.8) {
+    // SCALP: trailing stop drawdown deterministic exit (-0.25% from peak)
+    if (this.isScalp && this.peakPnlPercent > 0.15 && peakDrawdown >= 0.25) {
+      this.emitOrderFlow('SELL_REQUESTED', 'SCALP 트레일링 스탑 요청');
+      await this.deps.stopPosition(this.config.market, `SCALP 트레일링 스탑 (peak ${this.peakPnlPercent.toFixed(2)}%, drawdown -${peakDrawdown.toFixed(2)}%)`);
+      this.emitOrderFlow('SELL_FILLED', 'SCALP 트레일링 스탑 체결');
+      this.emitEvent('POSITION_EXIT', 'INFO', `SCALP 트레일링 스탑 (peak ${this.peakPnlPercent.toFixed(2)}%)`);
+      this.cooldownUntil = Date.now() + 30_000;
+      this.peakPnlPercent = Number.NEGATIVE_INFINITY;
+      this.setState('COOLDOWN', 'SCALP 트레일링 스탑 후 쿨다운');
+      return;
+    }
+
+    const stopLossThreshold = this.isScalp ? -0.35 : -0.8;
+    const stopLossCooldownMs = this.isScalp ? 60_000 : 8 * 60_000;
+    if (pnl <= stopLossThreshold) {
       this.emitOrderFlow('SELL_REQUESTED', '빠른 손절 요청');
       await this.deps.stopPosition(this.config.market, '빠른 손절');
       this.emitOrderFlow('SELL_FILLED', '빠른 손절 체결');
-      this.emitEvent('POSITION_EXIT', 'WARN', '빠른 손절 실행');
-      this.cooldownUntil = Date.now() + 8 * 60_000;
+      this.emitEvent('POSITION_EXIT', 'WARN', `빠른 손절 실행 (${stopLossThreshold}%)`);
+      this.cooldownUntil = Date.now() + stopLossCooldownMs;
       this.peakPnlPercent = Number.NEGATIVE_INFINITY;
       this.setState('COOLDOWN', '손절 후 쿨다운');
       return;
     }
 
-    if (!position.halfTakeProfitDone && pnl >= 1.2) {
+    const partialTpThreshold = this.isScalp ? 0.5 : 1.2;
+    if (!position.halfTakeProfitDone && pnl >= partialTpThreshold) {
       this.emitOrderFlow('SELL_REQUESTED', '부분익절 50% 요청');
       await this.deps.partialTakeProfit(this.config.market, 0.5, '1차 부분익절');
       this.emitOrderFlow('SELL_FILLED', '부분익절 50% 실행');
-      this.emitEvent('PARTIAL_TP', 'INFO', '부분익절 50% 실행');
+      this.emitEvent('PARTIAL_TP', 'INFO', `부분익절 50% 실행 (+${partialTpThreshold}%)`);
       this.deps.onLog(`[${this.config.market}] 부분익절 50% 실행`);
     }
 
-    if (pnl >= 2.2) {
+    const fullTpThreshold = this.isScalp ? 0.9 : 2.2;
+    const profitCooldownMs = this.isScalp ? 30_000 : 3 * 60_000;
+    if (pnl >= fullTpThreshold) {
       this.emitOrderFlow('SELL_REQUESTED', '목표 수익 청산 요청');
       await this.deps.stopPosition(this.config.market, '목표 수익 청산');
       this.emitOrderFlow('SELL_FILLED', '목표 수익 청산 체결');
-      this.emitEvent('POSITION_EXIT', 'INFO', '목표 수익 청산');
-      this.cooldownUntil = Date.now() + 3 * 60_000;
+      this.emitEvent('POSITION_EXIT', 'INFO', `목표 수익 청산 (+${fullTpThreshold}%)`);
+      this.cooldownUntil = Date.now() + profitCooldownMs;
       this.peakPnlPercent = Number.NEGATIVE_INFINITY;
       this.setState('COOLDOWN', '익절 후 쿨다운');
       return;

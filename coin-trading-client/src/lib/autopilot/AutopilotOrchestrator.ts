@@ -287,7 +287,8 @@ export class AutopilotOrchestrator {
       detail: '오토파일럿을 시작했습니다.',
     });
     void this.tick();
-    this.loopId = window.setInterval(() => void this.tick(), 10000);
+    const tickIntervalMs = this.isScalpEngine() ? 5000 : 10000;
+    this.loopId = window.setInterval(() => void this.tick(), tickIntervalMs);
     this.emitState();
   }
 
@@ -604,6 +605,10 @@ export class AutopilotOrchestrator {
           if (!quantGate.allow) {
             stage = 'QUANT_FILTERED';
             reason = quantGate.reason;
+          } else if (stage === 'BORDERLINE' && this.isScalpEngine()) {
+            // SCALP 엔진: BORDERLINE을 AUTO_PASS처럼 즉시 진입 (LLM 심사 생략)
+            stage = 'AUTO_PASS';
+            reason = 'SCALP 즉시진입: BORDERLINE → AUTO_PASS 승격';
           } else if (stage === 'BORDERLINE') {
             const budgetSnapshot = this.tokenGovernor.getSnapshot();
             const quantOnlyFallback =
@@ -666,12 +671,13 @@ export class AutopilotOrchestrator {
 
         if (evaluation.allow && (stage === 'AUTO_PASS' || stage === 'BORDERLINE')) {
           const sourceStage = stage === 'AUTO_PASS' ? 'AUTO_PASS' : 'BORDERLINE';
-          if (sourceStage === 'BORDERLINE' && llmEntryReviewUsedInTick >= llmEntryReviewMaxPerTick) {
+          const scalpSkipLlm = this.isScalpEngine();
+          if (sourceStage === 'BORDERLINE' && !scalpSkipLlm && llmEntryReviewUsedInTick >= llmEntryReviewMaxPerTick) {
             stage = 'RECHECK_SCHEDULED';
             reason = `tick당 LLM 진입심사 상한(${llmEntryReviewMaxPerTick}) 도달`;
           } else {
             activeGlobalMarkets.add(candidate.market);
-            if (sourceStage === 'BORDERLINE') {
+            if (sourceStage === 'BORDERLINE' && !scalpSkipLlm) {
               llmEntryReviewUsedInTick += 1;
             }
             entryAmountKrw = this.resolveEntryAmount(sourceStage);
@@ -688,13 +694,13 @@ export class AutopilotOrchestrator {
                 entryGapPct: candidate.entryGapPct1m,
               },
               {
-                skipLlmEntryReview: sourceStage === 'AUTO_PASS',
+                skipLlmEntryReview: sourceStage === 'AUTO_PASS' || scalpSkipLlm,
                 entryAmountKrw,
                 sourceStage,
               }
             );
             stage = 'ENTERED';
-            reason = `${sourceStage} 워커 생성 (진입금 ${entryAmountKrw.toLocaleString('ko-KR')}원)`;
+            reason = `${sourceStage} 워커 생성 (진입금 ${entryAmountKrw.toLocaleString('ko-KR')}원)${scalpSkipLlm ? ' [SCALP 즉시진입]' : ''}`;
             availableSlots -= 1;
             executed = true;
             this.pushEvent({
@@ -702,7 +708,7 @@ export class AutopilotOrchestrator {
               level: 'INFO',
               market: candidate.market,
               action: 'ENTERED',
-              detail: `${candidate.koreanName} ${sourceStage} 후보 진입 파이프라인 시작`,
+              detail: `${candidate.koreanName} ${sourceStage} 후보 진입 파이프라인 시작${scalpSkipLlm ? ' (SCALP LLM 생략)' : ''}`,
             });
           }
         }
@@ -963,6 +969,10 @@ export class AutopilotOrchestrator {
     return 'SWING';
   }
 
+  private isScalpEngine(): boolean {
+    return this.resolveBudgetEngine() === 'SCALP';
+  }
+
   private resolveLlmEntryReviewMaxPerTick(): number {
     const raw = this.config.llmEntryReviewMaxPerTick ?? 1;
     return Math.min(4, Math.max(1, Math.round(raw)));
@@ -998,7 +1008,7 @@ export class AutopilotOrchestrator {
     const rr = Number.isFinite(candidate.riskReward1m) ? candidate.riskReward1m : 0;
 
     const rule = engine === 'SCALP'
-      ? { score: 66, expectancyPct: 0.14, entryGapPct: 0.6, rr: 1.15 }
+      ? { score: 56, expectancyPct: 0.02, entryGapPct: 1.0, rr: 1.0 }
       : engine === 'SWING'
         ? { score: 62, expectancyPct: 0.1, entryGapPct: 0.8, rr: 1.12 }
         : { score: 60, expectancyPct: 0.08, entryGapPct: 1.0, rr: 1.1 };
@@ -1259,12 +1269,13 @@ export class AutopilotOrchestrator {
       updateCandidateView: true,
     };
 
+    const scalpCooldown = this.isScalpEngine();
     const worker = new MarketWorker(
       {
         market: normalized,
         tickMs: effectiveOptions.workerTickMs ?? this.config.workerTickMs,
-        rejectCooldownMs: this.config.rejectCooldownMs,
-        postExitCooldownMs: this.config.postExitCooldownMs,
+        rejectCooldownMs: scalpCooldown ? Math.min(this.config.rejectCooldownMs, 30_000) : this.config.rejectCooldownMs,
+        postExitCooldownMs: scalpCooldown ? Math.min(this.config.postExitCooldownMs, 60_000) : this.config.postExitCooldownMs,
         llmReviewMs: this.config.llmReviewIntervalMs,
         minLlmConfidence: this.config.minLlmConfidence,
         enablePlaywrightCheck: this.config.playwrightEnabled,
@@ -1275,6 +1286,7 @@ export class AutopilotOrchestrator {
         skipLlmEntryReview: effectiveOptions.skipLlmEntryReview,
         warnHoldingMs: effectiveOptions.warnHoldingMs ?? null,
         maxHoldingMs: effectiveOptions.maxHoldingMs ?? null,
+        engineType: this.resolveBudgetEngine(),
       },
       {
         fetchContext: async (workerMarket) =>
