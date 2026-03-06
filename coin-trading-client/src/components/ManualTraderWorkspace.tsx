@@ -1338,289 +1338,140 @@ export default function ManualTraderWorkspace() {
     return Math.max(MIN_ORDER_AMOUNT_KRW, Math.min(autopilotAmountKrw, perSlot));
   }, [autopilotAmountKrw]);
 
-  useEffect(() => {
-    if (!autopilotEnabled) {
-      autopilotRef.current?.stop();
-      autopilotRef.current = null;
-      setAutopilotState((prev) => ({ ...prev, enabled: false }));
-      return;
-    }
-    if (activeProviderStatus !== 'connected') return;
+  const sharedEngineConfig = useMemo(() => ({
+    dailyLossLimitKrw,
+    winRateThresholdMode,
+    fixedMinMarketWinRate,
+    minLlmConfidence,
+    rejectCooldownMs: rejectCooldownSeconds * 1000,
+    postExitCooldownMs: postExitCooldownMinutes * 60 * 1000,
+    llmProvider,
+    llmModel: selectedModel,
+    zaiEndpointMode,
+    delegationMode,
+    zaiDelegateModel: zaiModel,
+    entryPolicy,
+    entryOrderMode,
+    pendingEntryTimeoutSec,
+    marketFallbackAfterCancel,
+    llmDailyTokenCap,
+    llmRiskReserveTokens,
+    focusedWarnHoldingMs: 90 * 60 * 1000,
+    focusedMaxHoldingMs: 120 * 60 * 1000,
+    focusedEntryGate: 'FAST_ONLY' as const,
+    fineAgentMode: 'LITE' as const,
+    llmEntryReviewMaxPerTick: 1,
+  }), [
+    dailyLossLimitKrw, winRateThresholdMode, fixedMinMarketWinRate, minLlmConfidence,
+    rejectCooldownSeconds, postExitCooldownMinutes, llmProvider, selectedModel,
+    zaiEndpointMode, delegationMode, zaiModel, entryPolicy, entryOrderMode,
+    pendingEntryTimeoutSec, marketFallbackAfterCancel, llmDailyTokenCap, llmRiskReserveTokens,
+  ]);
 
+  const startEngine = useCallback((
+    enabled: boolean,
+    ref: React.MutableRefObject<AutopilotOrchestrator | null>,
+    setState: React.Dispatch<React.SetStateAction<AutopilotState>>,
+    engineConfig: Record<string, unknown>,
+  ) => {
+    if (!enabled) {
+      ref.current?.stop();
+      ref.current = null;
+      setState((prev) => ({ ...prev, enabled: false }));
+      return undefined;
+    }
+    if (activeProviderStatus !== 'connected') return undefined;
+
+    const orchestrator = new AutopilotOrchestrator(
+      { enabled: true, ...sharedEngineConfig, ...engineConfig } as never,
+      { onState: (next: AutopilotState) => setState(next), onLog: () => undefined }
+    );
+    ref.current = orchestrator;
+    orchestrator.start();
+    return () => {
+      orchestrator.stop();
+      if (ref.current === orchestrator) ref.current = null;
+    };
+  }, [activeProviderStatus, sharedEngineConfig]);
+
+  useEffect(() => {
     const budgetKrw = Math.max(MIN_ORDER_AMOUNT_KRW, Math.round(autopilotCapitalPoolKrw * ENGINE_CAPITAL_RATIOS.SCALP));
     const maxConcurrent = Math.max(1, autopilotMaxConcurrentPositions);
-    const orchestrator = new AutopilotOrchestrator(
-      {
-        enabled: true,
-        interval: 'minute1',
-        confirmInterval: 'minute10',
-        tradingMode: 'SCALP',
-        amountKrw: resolveEngineAmount(budgetKrw, maxConcurrent),
-        dailyLossLimitKrw,
-        maxConcurrentPositions: maxConcurrent,
-        winRateThresholdMode,
-        fixedMinMarketWinRate,
-        minLlmConfidence,
-        candidateLimit: 15,
-        rejectCooldownMs: rejectCooldownSeconds * 1000,
-        postExitCooldownMs: postExitCooldownMinutes * 60 * 1000,
-        workerTickMs: 8000,
-        llmReviewIntervalMs: 8000,
-        llmProvider,
-        llmModel: selectedModel,
-        zaiEndpointMode,
-        delegationMode,
-        zaiDelegateModel: zaiModel,
-        playwrightEnabled,
-        entryPolicy,
-        entryOrderMode,
-        pendingEntryTimeoutSec,
-        marketFallbackAfterCancel,
-        llmDailySoftCap: 240,
-        llmDailyTokenCap,
-        llmRiskReserveTokens,
-        focusedScalpEnabled,
-        focusedScalpMarkets: focusedScalpParsed.markets,
-        focusedScalpPollIntervalMs: focusedScalpPollIntervalSec * 1000,
-        focusedWarnHoldingMs: 90 * 60 * 1000,
-        focusedMaxHoldingMs: 120 * 60 * 1000,
-        focusedEntryGate: 'FAST_ONLY',
-        strategyCode: STRATEGY_CODE_SCALP,
-        strategyCodePrefix: STRATEGY_CODE_SCALP,
-        capitalBudgetKrw: budgetKrw,
-        fineAgentEnabled: false,
-        fineAgentMode: 'LITE',
-        llmEntryReviewMaxPerTick: 1,
-      },
-      {
-        onState: (next) => setAutopilotState(next),
-        onLog: () => undefined,
-      }
-    );
-
-    autopilotRef.current = orchestrator;
-    orchestrator.start();
-    return () => {
-      orchestrator.stop();
-      if (autopilotRef.current === orchestrator) {
-        autopilotRef.current = null;
-      }
-    };
+    return startEngine(autopilotEnabled, autopilotRef, setAutopilotState, {
+      interval: 'minute1',
+      confirmInterval: 'minute10',
+      tradingMode: 'SCALP',
+      amountKrw: resolveEngineAmount(budgetKrw, maxConcurrent),
+      maxConcurrentPositions: maxConcurrent,
+      candidateLimit: 15,
+      workerTickMs: 8000,
+      llmReviewIntervalMs: 8000,
+      llmDailySoftCap: 240,
+      playwrightEnabled,
+      focusedScalpEnabled,
+      focusedScalpMarkets: focusedScalpParsed.markets,
+      focusedScalpPollIntervalMs: focusedScalpPollIntervalSec * 1000,
+      strategyCode: STRATEGY_CODE_SCALP,
+      strategyCodePrefix: STRATEGY_CODE_SCALP,
+      capitalBudgetKrw: budgetKrw,
+      fineAgentEnabled: false,
+    });
   }, [
-    autopilotEnabled,
-    activeProviderStatus,
-    autopilotAmountKrw,
-    autopilotCapitalPoolKrw,
-    autopilotMaxConcurrentPositions,
-    llmProvider,
-    selectedModel,
-    zaiEndpointMode,
-    delegationMode,
-    zaiModel,
-    dailyLossLimitKrw,
-    entryOrderMode,
-    entryPolicy,
-    fixedMinMarketWinRate,
-    focusedScalpEnabled,
-    focusedScalpParsed.markets,
-    focusedScalpPollIntervalSec,
-    marketFallbackAfterCancel,
-    minLlmConfidence,
-    llmDailyTokenCap,
-    llmRiskReserveTokens,
-    pendingEntryTimeoutSec,
-    playwrightEnabled,
-    postExitCooldownMinutes,
-    rejectCooldownSeconds,
-    resolveEngineAmount,
-    winRateThresholdMode,
+    autopilotEnabled, autopilotCapitalPoolKrw, autopilotMaxConcurrentPositions,
+    autopilotAmountKrw, playwrightEnabled, focusedScalpEnabled,
+    focusedScalpParsed.markets, focusedScalpPollIntervalSec,
+    resolveEngineAmount, startEngine,
   ]);
 
   useEffect(() => {
-    if (!swingAutopilotEnabled) {
-      swingAutopilotRef.current?.stop();
-      swingAutopilotRef.current = null;
-      setSwingAutopilotState((prev) => ({ ...prev, enabled: false }));
-      return;
-    }
-    if (activeProviderStatus !== 'connected') return;
-
     const budgetKrw = Math.max(MIN_ORDER_AMOUNT_KRW, Math.round(autopilotCapitalPoolKrw * ENGINE_CAPITAL_RATIOS.SWING));
     const maxConcurrent = 2;
-    const orchestrator = new AutopilotOrchestrator(
-      {
-        enabled: true,
-        interval: 'minute30',
-        confirmInterval: 'minute240',
-        tradingMode: 'SWING',
-        amountKrw: resolveEngineAmount(budgetKrw, maxConcurrent),
-        dailyLossLimitKrw,
-        maxConcurrentPositions: maxConcurrent,
-        winRateThresholdMode,
-        fixedMinMarketWinRate,
-        minLlmConfidence,
-        candidateLimit: 10,
-        rejectCooldownMs: rejectCooldownSeconds * 1000,
-        postExitCooldownMs: postExitCooldownMinutes * 60 * 1000,
-        workerTickMs: 12_000,
-        llmReviewIntervalMs: 12_000,
-        llmProvider,
-        llmModel: selectedModel,
-        zaiEndpointMode,
-        delegationMode,
-        zaiDelegateModel: zaiModel,
-        playwrightEnabled: false,
-        entryPolicy,
-        entryOrderMode,
-        pendingEntryTimeoutSec,
-        marketFallbackAfterCancel,
-        llmDailySoftCap: 180,
-        llmDailyTokenCap,
-        llmRiskReserveTokens,
-        focusedScalpEnabled: false,
-        focusedScalpMarkets: [],
-        focusedScalpPollIntervalMs: 20_000,
-        focusedWarnHoldingMs: 90 * 60 * 1000,
-        focusedMaxHoldingMs: 120 * 60 * 1000,
-        focusedEntryGate: 'FAST_ONLY',
-        strategyCode: STRATEGY_CODE_SWING,
-        strategyCodePrefix: STRATEGY_CODE_SWING,
-        capitalBudgetKrw: budgetKrw,
-        marketAllowlist: INVEST_MAJOR_MARKETS,
-        fineAgentEnabled: true,
-        fineAgentMode: 'LITE',
-        llmEntryReviewMaxPerTick: 1,
-      },
-      {
-        onState: (next) => setSwingAutopilotState(next),
-        onLog: () => undefined,
-      }
-    );
-
-    swingAutopilotRef.current = orchestrator;
-    orchestrator.start();
-    return () => {
-      orchestrator.stop();
-      if (swingAutopilotRef.current === orchestrator) {
-        swingAutopilotRef.current = null;
-      }
-    };
-  }, [
-    swingAutopilotEnabled,
-    activeProviderStatus,
-    autopilotCapitalPoolKrw,
-    dailyLossLimitKrw,
-    winRateThresholdMode,
-    fixedMinMarketWinRate,
-    minLlmConfidence,
-    llmDailyTokenCap,
-    llmRiskReserveTokens,
-    rejectCooldownSeconds,
-    postExitCooldownMinutes,
-    llmProvider,
-    selectedModel,
-    zaiEndpointMode,
-    delegationMode,
-    zaiModel,
-    entryPolicy,
-    entryOrderMode,
-    pendingEntryTimeoutSec,
-    marketFallbackAfterCancel,
-    resolveEngineAmount,
-  ]);
+    return startEngine(swingAutopilotEnabled, swingAutopilotRef, setSwingAutopilotState, {
+      interval: 'minute30',
+      confirmInterval: 'minute240',
+      tradingMode: 'SWING',
+      amountKrw: resolveEngineAmount(budgetKrw, maxConcurrent),
+      maxConcurrentPositions: maxConcurrent,
+      candidateLimit: 10,
+      workerTickMs: 12_000,
+      llmReviewIntervalMs: 12_000,
+      llmDailySoftCap: 180,
+      playwrightEnabled: false,
+      focusedScalpEnabled: false,
+      focusedScalpMarkets: [],
+      focusedScalpPollIntervalMs: 20_000,
+      strategyCode: STRATEGY_CODE_SWING,
+      strategyCodePrefix: STRATEGY_CODE_SWING,
+      capitalBudgetKrw: budgetKrw,
+      marketAllowlist: INVEST_MAJOR_MARKETS,
+      fineAgentEnabled: true,
+    });
+  }, [swingAutopilotEnabled, autopilotCapitalPoolKrw, resolveEngineAmount, startEngine]);
 
   useEffect(() => {
-    if (!positionAutopilotEnabled) {
-      positionAutopilotRef.current?.stop();
-      positionAutopilotRef.current = null;
-      setPositionAutopilotState((prev) => ({ ...prev, enabled: false }));
-      return;
-    }
-    if (activeProviderStatus !== 'connected') return;
-
     const budgetKrw = Math.max(MIN_ORDER_AMOUNT_KRW, Math.round(autopilotCapitalPoolKrw * ENGINE_CAPITAL_RATIOS.POSITION));
     const maxConcurrent = 1;
-    const orchestrator = new AutopilotOrchestrator(
-      {
-        enabled: true,
-        interval: 'day',
-        confirmInterval: 'day',
-        tradingMode: 'POSITION',
-        amountKrw: resolveEngineAmount(budgetKrw, maxConcurrent),
-        dailyLossLimitKrw,
-        maxConcurrentPositions: maxConcurrent,
-        winRateThresholdMode,
-        fixedMinMarketWinRate,
-        minLlmConfidence,
-        candidateLimit: 8,
-        rejectCooldownMs: rejectCooldownSeconds * 1000,
-        postExitCooldownMs: postExitCooldownMinutes * 60 * 1000,
-        workerTickMs: 20_000,
-        llmReviewIntervalMs: 20_000,
-        llmProvider,
-        llmModel: selectedModel,
-        zaiEndpointMode,
-        delegationMode,
-        zaiDelegateModel: zaiModel,
-        playwrightEnabled: false,
-        entryPolicy,
-        entryOrderMode,
-        pendingEntryTimeoutSec,
-        marketFallbackAfterCancel,
-        llmDailySoftCap: 120,
-        llmDailyTokenCap,
-        llmRiskReserveTokens,
-        focusedScalpEnabled: false,
-        focusedScalpMarkets: [],
-        focusedScalpPollIntervalMs: 20_000,
-        focusedWarnHoldingMs: 90 * 60 * 1000,
-        focusedMaxHoldingMs: 120 * 60 * 1000,
-        focusedEntryGate: 'FAST_ONLY',
-        strategyCode: STRATEGY_CODE_POSITION,
-        strategyCodePrefix: STRATEGY_CODE_POSITION,
-        capitalBudgetKrw: budgetKrw,
-        marketAllowlist: INVEST_MAJOR_MARKETS,
-        fineAgentEnabled: true,
-        fineAgentMode: 'LITE',
-        llmEntryReviewMaxPerTick: 1,
-      },
-      {
-        onState: (next) => setPositionAutopilotState(next),
-        onLog: () => undefined,
-      }
-    );
-
-    positionAutopilotRef.current = orchestrator;
-    orchestrator.start();
-    return () => {
-      orchestrator.stop();
-      if (positionAutopilotRef.current === orchestrator) {
-        positionAutopilotRef.current = null;
-      }
-    };
-  }, [
-    positionAutopilotEnabled,
-    activeProviderStatus,
-    autopilotCapitalPoolKrw,
-    dailyLossLimitKrw,
-    winRateThresholdMode,
-    fixedMinMarketWinRate,
-    minLlmConfidence,
-    llmDailyTokenCap,
-    llmRiskReserveTokens,
-    rejectCooldownSeconds,
-    postExitCooldownMinutes,
-    llmProvider,
-    selectedModel,
-    zaiEndpointMode,
-    delegationMode,
-    zaiModel,
-    entryPolicy,
-    entryOrderMode,
-    pendingEntryTimeoutSec,
-    marketFallbackAfterCancel,
-    resolveEngineAmount,
-  ]);
+    return startEngine(positionAutopilotEnabled, positionAutopilotRef, setPositionAutopilotState, {
+      interval: 'day',
+      confirmInterval: 'day',
+      tradingMode: 'POSITION',
+      amountKrw: resolveEngineAmount(budgetKrw, maxConcurrent),
+      maxConcurrentPositions: maxConcurrent,
+      candidateLimit: 8,
+      workerTickMs: 20_000,
+      llmReviewIntervalMs: 20_000,
+      llmDailySoftCap: 120,
+      playwrightEnabled: false,
+      focusedScalpEnabled: false,
+      focusedScalpMarkets: [],
+      focusedScalpPollIntervalMs: 20_000,
+      strategyCode: STRATEGY_CODE_POSITION,
+      strategyCodePrefix: STRATEGY_CODE_POSITION,
+      capitalBudgetKrw: budgetKrw,
+      marketAllowlist: INVEST_MAJOR_MARKETS,
+      fineAgentEnabled: true,
+    });
+  }, [positionAutopilotEnabled, autopilotCapitalPoolKrw, resolveEngineAmount, startEngine]);
 
   const positionState: PositionState = derivePositionState(
     activePosition,
