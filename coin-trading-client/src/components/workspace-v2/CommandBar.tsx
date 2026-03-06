@@ -17,6 +17,7 @@ interface CommandBarProps {
   onOpenChat: () => void;
   onToggleRightPanel: () => void;
   onToggleDensity: () => void;
+  onNavigateAiTrader?: () => void;
 }
 
 function formatCompactKrw(value: number): string {
@@ -41,6 +42,7 @@ export function CommandBar({
   onOpenChat,
   onToggleRightPanel,
   onToggleDensity,
+  onNavigateAiTrader,
 }: CommandBarProps) {
   const [menuOpen, setMenuOpen] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
@@ -91,6 +93,9 @@ export function CommandBar({
               <button type="button" onClick={onToggleRightPanel}>
                 {rightPanelOpen ? '우측 패널 숨기기' : '우측 패널 보기'}
               </button>
+              {onNavigateAiTrader && (
+                <button type="button" onClick={onNavigateAiTrader}>AI Day Trader</button>
+              )}
             </div>
           )}
         </div>

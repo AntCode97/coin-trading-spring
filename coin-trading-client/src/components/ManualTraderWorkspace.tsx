@@ -162,7 +162,11 @@ function Tip({ label, children }: { label: string; children?: React.ReactNode })
   );
 }
 
-export default function ManualTraderWorkspace() {
+interface ManualTraderWorkspaceProps {
+  onNavigateAiTrader?: () => void;
+}
+
+export default function ManualTraderWorkspace({ onNavigateAiTrader }: ManualTraderWorkspaceProps = {}) {
   const prefs = useMemo(() => loadPrefs(), []);
   const [selectedMarket, setSelectedMarket] = useState<string>(prefs.selectedMarket ?? 'KRW-BTC');
   const [interval, setIntervalValue] = useState<string>(prefs.interval ?? 'minute30');
@@ -1847,6 +1851,7 @@ export default function ManualTraderWorkspace() {
         onOpenChat={() => setChatDrawerOpen(true)}
         onToggleRightPanel={toggleRightPanel}
         onToggleDensity={() => setWorkspaceDensity((prev) => (prev === 'COMFORT' ? 'COMPACT' : 'COMFORT'))}
+        onNavigateAiTrader={onNavigateAiTrader}
       />
 
       <WorkspaceShell
