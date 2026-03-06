@@ -18,6 +18,7 @@ import type {
 import type { AutopilotState } from '../lib/autopilot/AutopilotOrchestrator';
 import {
   CODEX_MODELS,
+  DEFAULT_OPENAI_MODEL,
   ZAI_MODELS,
   type CodexModelId,
   type ZaiModelId,
@@ -387,7 +388,10 @@ export function migrateWorkspacePrefs(prefs: WorkspacePrefs): WorkspacePrefs {
 
   next.llmProvider = normalizeLlmProvider(next.llmProvider);
   const legacyOpenAiModel = isCodexModelId(next.chatModel) ? next.chatModel : undefined;
-  next.openAiModel = isCodexModelId(next.openAiModel) ? next.openAiModel : (legacyOpenAiModel ?? 'gpt-4');
+  const resolvedOpenAiModel = isCodexModelId(next.openAiModel)
+    ? next.openAiModel
+    : (legacyOpenAiModel ?? DEFAULT_OPENAI_MODEL);
+  next.openAiModel = resolvedOpenAiModel === 'gpt-4' ? DEFAULT_OPENAI_MODEL : resolvedOpenAiModel;
   next.zaiModel = isZaiModelId(next.zaiModel) ? next.zaiModel : 'glm-4.7-flash';
   next.zaiEndpointMode = normalizeZaiEndpointMode(next.zaiEndpointMode);
   next.delegationMode = normalizeDelegationMode(next.delegationMode);

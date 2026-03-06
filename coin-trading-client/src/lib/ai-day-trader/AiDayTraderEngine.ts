@@ -6,6 +6,7 @@ import {
   type GuidedTradePosition,
 } from '../../api';
 import {
+  DEFAULT_OPENAI_MODEL,
   requestOneShotTextWithMeta,
   type DelegationMode,
   type LlmProviderId,
@@ -218,7 +219,7 @@ export function createInitialAiTraderState(): AiTraderState {
 export const DEFAULT_AI_DAY_TRADER_CONFIG: AiDayTraderConfig = {
   enabled: false,
   provider: 'openai',
-  model: 'gpt-5.3-codex',
+  model: DEFAULT_OPENAI_MODEL,
   zaiEndpointMode: 'coding',
   delegationMode: 'AUTO_AND_MANUAL',
   zaiDelegateModel: 'glm-5',

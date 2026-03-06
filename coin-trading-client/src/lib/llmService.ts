@@ -83,12 +83,14 @@ interface ZaiToolLoopResult {
 // ---------- Provider Constants ----------
 
 const CODEX_API_URL = 'https://chatgpt.com/backend-api/codex/responses';
+export const DEFAULT_OPENAI_MODEL = 'gpt-5.4' as const;
 const ZAI_DEFAULT_MODEL = 'glm-4.7-flash';
 const ZAI_QUEUE_TIMEOUT_MS = 30_000;
 const ZAI_MAX_CONCURRENCY = 3;
 const ZAI_DELEGATE_TOOL_NAME = 'delegate_to_zai_agent';
 
 export const CODEX_MODELS = [
+  { id: DEFAULT_OPENAI_MODEL, label: 'GPT-5.4' },
   { id: 'gpt-4', label: 'GPT-4' },
   { id: 'gpt-5.3-codex', label: 'GPT-5.3 Codex' },
   { id: 'o3', label: 'o3' },
@@ -714,7 +716,7 @@ async function sendOpenAiChatMessage(options: SendChatMessageOptions): Promise<C
     loopCount += 1;
 
     const requestBody: Record<string, unknown> = {
-      model: options.model || 'gpt-4',
+      model: options.model || DEFAULT_OPENAI_MODEL,
       instructions: buildSystemPrompt(options.tradingMode || 'SWING'),
       input,
       stream: true,
@@ -956,7 +958,7 @@ async function requestOpenAiOneShotWithMeta(options: OneShotOptions): Promise<{ 
     loopCount += 1;
 
     const requestBody: Record<string, unknown> = {
-      model: options.model || 'gpt-4',
+      model: options.model || DEFAULT_OPENAI_MODEL,
       instructions: buildSystemPrompt(options.tradingMode || 'SWING'),
       input,
       stream: true,

@@ -44,6 +44,7 @@ import {
   startPlaywrightMcp,
   stopPlaywrightMcp,
   CODEX_MODELS,
+  DEFAULT_OPENAI_MODEL,
   ZAI_MODELS,
   type AgentAction,
   type ChatMessage,
@@ -186,7 +187,7 @@ export default function ManualTraderWorkspace({ onNavigateAiTrader }: ManualTrad
   const [openAiStatus, setOpenAiStatus] = useState<LlmConnectionStatus>('checking');
   const [zaiStatus, setZaiStatus] = useState<LlmConnectionStatus>('checking');
   const [llmProvider, setLlmProvider] = useState<LlmProviderId>(prefs.llmProvider ?? 'openai');
-  const [openAiModel, setOpenAiModel] = useState<CodexModelId>(prefs.openAiModel ?? 'gpt-5.3-codex');
+  const [openAiModel, setOpenAiModel] = useState<CodexModelId>(prefs.openAiModel ?? DEFAULT_OPENAI_MODEL);
   const [zaiModel, setZaiModel] = useState<ZaiModelId>(prefs.zaiModel ?? 'glm-4.7-flash');
   const [zaiEndpointMode, setZaiEndpointMode] = useState<ZaiEndpointMode>(prefs.zaiEndpointMode ?? 'coding');
   const [delegationMode, setDelegationMode] = useState<DelegationMode>(prefs.delegationMode ?? 'AUTO_AND_MANUAL');

@@ -15,6 +15,7 @@ import {
 } from '../../lib/ai-day-trader/AiDayTraderEngine';
 import {
   CODEX_MODELS,
+  DEFAULT_OPENAI_MODEL,
   ZAI_MODELS,
   checkConnection,
   clearConversation,
@@ -36,6 +37,9 @@ const OPENAI_TRADER_MODELS = CODEX_MODELS.filter((model) => model.id !== 'gpt-4'
 function normalizePreferredModel(provider: LlmProviderId, model?: string): string {
   const catalog = provider === 'zai' ? ZAI_MODELS : OPENAI_TRADER_MODELS;
   const normalized = model?.trim();
+  if (provider === 'openai' && normalized === 'gpt-4') {
+    return DEFAULT_OPENAI_MODEL;
+  }
   return catalog.some((item) => item.id === normalized)
     ? normalized!
     : catalog[0]?.id ?? DEFAULT_AI_DAY_TRADER_CONFIG.model;
@@ -484,7 +488,7 @@ export default function AiDayTraderScreen() {
                 )}
                 {config.provider === 'openai' && (
                   <div className="ai-scalp-provider-card__hint danger">
-                    저장된 구버전 `gpt-4` 선택은 자동으로 `gpt-5.3-codex`로 교체됩니다.
+                    저장된 구버전 `gpt-4` 선택은 자동으로 `gpt-5.4`로 교체됩니다.
                   </div>
                 )}
               </div>
