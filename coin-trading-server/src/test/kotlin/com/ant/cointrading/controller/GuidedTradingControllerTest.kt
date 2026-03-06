@@ -17,6 +17,8 @@ import com.ant.cointrading.guided.GuidedAutopilotDecisionLogRequest
 import com.ant.cointrading.guided.GuidedAutopilotDecisionLogResponse
 import com.ant.cointrading.guided.GuidedAutopilotPerformanceResponse
 import com.ant.cointrading.guided.GuidedStrategyCodeSummary
+import com.ant.cointrading.guided.GuidedClosedTradeView
+import com.ant.cointrading.guided.GuidedDailyStats
 import com.ant.cointrading.guided.GuidedPnlReconcileItem
 import com.ant.cointrading.guided.GuidedPnlReconcileResult
 import com.ant.cointrading.guided.GuidedTradingService
@@ -139,6 +141,42 @@ class GuidedTradingControllerTest {
             universeLimit = 36,
             strategyCodePrefix = "AI_SCALP_TRADER"
         )
+
+        kotlin.test.assertEquals(expected, actual)
+    }
+
+    @Test
+    @DisplayName("stats/today는 strategyCodePrefix를 서비스로 전달한다")
+    fun getTodayStatsPassesStrategyCodePrefix() {
+        val expected = GuidedDailyStats(
+            totalTrades = 2,
+            wins = 1,
+            losses = 1,
+            totalPnlKrw = 1200.0,
+            avgPnlPercent = 0.45,
+            winRate = 50.0,
+            openPositionCount = 1,
+            totalInvestedKrw = 10000.0,
+            trades = listOf(
+                GuidedClosedTradeView(
+                    tradeId = 11L,
+                    market = "KRW-BTC",
+                    averageEntryPrice = 100000000.0,
+                    averageExitPrice = 100800000.0,
+                    entryQuantity = 0.0001,
+                    realizedPnl = 800.0,
+                    realizedPnlPercent = 0.8,
+                    dcaCount = 0,
+                    halfTakeProfitDone = false,
+                    createdAt = Instant.parse("2026-03-07T00:10:00Z"),
+                    closedAt = Instant.parse("2026-03-07T00:15:00Z"),
+                    exitReason = "AI_EXIT"
+                )
+            )
+        )
+        whenever(guidedTradingService.getTodayStats(org.mockito.kotlin.eq("AI_SCALP_TRADER"))).thenReturn(expected)
+
+        val actual = controller.getTodayStats("AI_SCALP_TRADER")
 
         kotlin.test.assertEquals(expected, actual)
     }

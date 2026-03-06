@@ -75,6 +75,7 @@ export interface AiClosedTrade {
 
 export interface AiTraderState {
   running: boolean;
+  entryEnabled: boolean;
   status: AiTraderStatus;
   events: AiTraderEvent[];
   positions: GuidedTradePosition[];
@@ -197,6 +198,7 @@ function cloneState(state: AiTraderState): AiTraderState {
 export function createInitialAiTraderState(): AiTraderState {
   return {
     running: false,
+    entryEnabled: false,
     status: 'IDLE',
     events: [],
     positions: [],
@@ -265,8 +267,29 @@ export class AiDayTraderEngine {
   }
 
   start() {
-    if (this.state.running) return;
+    if (this.state.running) {
+      if (!this.state.entryEnabled) {
+        this.state.entryEnabled = true;
+        this.setBlockedReason(null);
+        this.setStatus('IDLE');
+        this.emit();
+        this.pushEvent('STATUS', '신규 진입 재개');
+        if (this.scanTimer === null) {
+          this.scanTimer = window.setInterval(() => {
+            void this.runScanCycle();
+          }, this.config.scanIntervalMs);
+        }
+        if (this.manageTimer === null) {
+          this.manageTimer = window.setInterval(() => {
+            void this.runPositionManagement();
+          }, this.config.positionCheckMs);
+        }
+        void this.runScanCycle();
+      }
+      return;
+    }
     this.state.running = true;
+    this.state.entryEnabled = true;
     this.state.status = 'IDLE';
     this.emit();
     this.pushEvent('STATUS', 'LLM 초단타 터미널 시작');
@@ -282,18 +305,29 @@ export class AiDayTraderEngine {
   }
 
   stop() {
+    if (!this.state.running) return;
     if (this.scanTimer !== null) {
       window.clearInterval(this.scanTimer);
       this.scanTimer = null;
     }
-    if (this.manageTimer !== null) {
-      window.clearInterval(this.manageTimer);
-      this.manageTimer = null;
+    this.state.entryEnabled = false;
+    this.state.queue = [];
+    if (this.state.positions.length === 0) {
+      if (this.manageTimer !== null) {
+        window.clearInterval(this.manageTimer);
+        this.manageTimer = null;
+      }
+      this.state.running = false;
+      this.state.status = 'IDLE';
+      this.setBlockedReason(null);
+      this.emit();
+      this.pushEvent('STATUS', 'LLM 초단타 터미널 중지');
+      return;
     }
-    this.state.running = false;
-    this.state.status = 'IDLE';
+    this.setBlockedReason('신규 진입 중지 · 보유 포지션만 자동 관리');
+    this.setStatus('PAUSED');
     this.emit();
-    this.pushEvent('STATUS', 'LLM 초단타 터미널 중지');
+    this.pushEvent('STATUS', '신규 진입 중지 · 보유 포지션 관리 계속');
   }
 
   private emit() {
@@ -348,6 +382,10 @@ export class AiDayTraderEngine {
   private setIdleIfReady() {
     if (!this.state.running) return;
     if (this.scanInFlight || this.manageInFlight) return;
+    if (!this.state.entryEnabled) {
+      this.setStatus('PAUSED');
+      return;
+    }
     if (this.state.blockedReason) {
       this.setStatus('PAUSED');
       return;
@@ -389,13 +427,13 @@ export class AiDayTraderEngine {
   }
 
   private async runScanCycle() {
-    if (!this.state.running || this.scanInFlight) return;
+    if (!this.state.running || !this.state.entryEnabled || this.scanInFlight) return;
     this.scanInFlight = true;
     this.pruneTransientState();
 
     try {
       const positions = await this.syncOpenPositions();
-      if (!this.state.running) return;
+      if (!this.state.running || !this.state.entryEnabled) return;
 
       if (this.state.dailyPnl <= this.config.dailyLossLimitKrw) {
         this.setBlockedReason(
@@ -456,7 +494,7 @@ export class AiDayTraderEngine {
       let activePositionCount = this.state.positions.length;
 
       for (const finalist of finalists) {
-        if (!this.state.running || activePositionCount >= this.config.maxConcurrentPositions) break;
+        if (!this.state.running || !this.state.entryEnabled || activePositionCount >= this.config.maxConcurrentPositions) break;
         if (activeMarkets.has(finalist.market)) continue;
         const scanMarket = candidates.find((candidate) => candidate.market === finalist.market);
         if (!scanMarket) continue;
@@ -544,7 +582,11 @@ export class AiDayTraderEngine {
 
     try {
       const positions = await this.syncOpenPositions();
-      if (!this.state.running || positions.length === 0) return;
+      if (!this.state.running) return;
+      if (positions.length === 0) {
+        this.completeStopWhenFlat();
+        return;
+      }
 
       for (const position of positions) {
         if (!this.state.running) break;
@@ -599,6 +641,7 @@ export class AiDayTraderEngine {
       }
 
       await this.syncOpenPositions();
+      this.completeStopWhenFlat();
     } catch (error) {
       this.pushEvent('ERROR', '포지션 관리 루프 실패', this.toErrorText(error));
     } finally {
@@ -950,6 +993,26 @@ export class AiDayTraderEngine {
   private removePosition(market: string) {
     this.state.positions = this.state.positions.filter((position) => position.market !== market);
     this.emit();
+  }
+
+  private completeStopWhenFlat(): boolean {
+    if (!this.state.running || this.state.entryEnabled || this.state.positions.length > 0) {
+      return false;
+    }
+    if (this.scanTimer !== null) {
+      window.clearInterval(this.scanTimer);
+      this.scanTimer = null;
+    }
+    if (this.manageTimer !== null) {
+      window.clearInterval(this.manageTimer);
+      this.manageTimer = null;
+    }
+    this.state.running = false;
+    this.state.status = 'IDLE';
+    this.state.blockedReason = null;
+    this.emit();
+    this.pushEvent('STATUS', '보유 포지션 정리 완료 · 엔진 완전 중지');
+    return true;
   }
 
   private isCoolingDown(market: string): boolean {

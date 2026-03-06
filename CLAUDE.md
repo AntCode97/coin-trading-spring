@@ -163,8 +163,10 @@ coin-trading-spring/
   - 진입 결정: `BUY | WAIT`
   - 보유 관리: `HOLD | SELL`
   - 기본값: `scan 10초`, `manage 5초`, `max 5 positions`, `max holding 30분`, `reentry cooldown 60~120초`, `maxDcaCount=0`
+  - `stop()`은 신규 진입만 중지하고, 기존 포지션 관리는 계속 유지한 뒤 flat 상태에서 완전 종료
 - 데스크톱은 `AI_SCALP_TRADER` prefix 포지션만 관리하고 `/autopilot/opportunities` stage를 하드 게이트로 사용하지 않음.
 - 새 UI는 상단 세션 바, 좌측 기회 큐, 중앙 결정 저널, 우측 포지션/설정의 3열 터미널 구조.
+- 설정은 `스캔 주기/포지션 점검 최대 3분`, `1회 금액 5,000원 단위`, `오늘 거래내역 전체/코인별 필터`를 제공.
 
 ### 데스크톱 OpenAI + z.ai 멀티-프로바이더 통합
 
@@ -298,6 +300,9 @@ coin-trading-spring/
   - 쿼리: `interval`(default `minute1`), `universeLimit`(default `36`), `strategyCodePrefix`(default `AI_SCALP_TRADER`)
   - 응답: `generatedAt`, `interval`, `universeLimit`, `strategyCodePrefix`, `positions[]`, `markets[]`
   - `markets[]` 필드: `market`, `koreanName`, `tradePrice`, `changeRate`, `turnover`, `liquidityRank`, `recommendation`, `featurePack`, optional `crowd`
+- `GET /api/guided-trading/stats/today`
+  - 신규 쿼리: `strategyCodePrefix` (optional)
+  - 금일 거래 요약과 `trades[]`를 전략 prefix 기준으로 분리 조회 가능
 - `GET /api/guided-trading/autopilot/live`
   - 신규 쿼리: `strategyCodePrefix` (optional)
   - `orderSummary/orderEvents/autopilotEvents`를 prefix 기준으로 분리 조회 가능

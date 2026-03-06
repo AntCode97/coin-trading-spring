@@ -1515,18 +1515,34 @@ class GuidedTradingService(
         return ((now - prev) / prev * 100.0).coerceIn(-30.0, 30.0)
     }
 
-    fun getTodayStats(): GuidedDailyStats {
+    fun getTodayStats(strategyCodePrefix: String? = null): GuidedDailyStats {
         val todayStart = java.time.LocalDate.now(java.time.ZoneId.of("Asia/Seoul"))
             .atStartOfDay(java.time.ZoneId.of("Asia/Seoul")).toInstant()
+        val normalizedStrategyCodePrefix = strategyCodePrefix
+            ?.trim()
+            ?.uppercase()
+            ?.ifBlank { null }
         val closedToday = guidedTradeRepository.findByStatusAndClosedAtAfter(
             GuidedTradeEntity.STATUS_CLOSED, todayStart
-        )
+        ).filter { trade ->
+            normalizedStrategyCodePrefix == null ||
+                trade.strategyCode
+                    ?.trim()
+                    ?.uppercase()
+                    ?.startsWith(normalizedStrategyCodePrefix) == true
+        }
         val wins = closedToday.count { it.realizedPnl > BigDecimal.ZERO }
         val losses = closedToday.size - wins
         val totalPnl = closedToday.sumOf { it.realizedPnl.toDouble() }
         val avgPnlPercent = if (closedToday.isNotEmpty())
             closedToday.map { it.realizedPnlPercent.toDouble() }.average() else 0.0
-        val openPositions = guidedTradeRepository.findByStatusIn(OPEN_STATUSES)
+        val openPositions = guidedTradeRepository.findByStatusIn(OPEN_STATUSES).filter { trade ->
+            normalizedStrategyCodePrefix == null ||
+                trade.strategyCode
+                    ?.trim()
+                    ?.uppercase()
+                    ?.startsWith(normalizedStrategyCodePrefix) == true
+        }
         val tickerMap = fetchTickerMap(openPositions.map { it.market }.distinct())
         val balancesByCurrency = fetchBalancesByCurrency()
         val effectiveOpenPositions = openPositions.filter { trade ->

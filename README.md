@@ -527,6 +527,7 @@ curl -X POST http://localhost:8080/api/settings/regime \
 | GET | `/api/guided-trading/chart` | 차트/포지션/이벤트/호가 스냅샷 조회 |
 | GET | `/api/guided-trading/recommendation` | 추천 진입/손절/익절/승률 조회 |
 | GET | `/api/guided-trading/ai-scalp/scan` | 데스크톱 LLM 초단타 엔진용 대량 후보 스캔 |
+| GET | `/api/guided-trading/stats/today` | 금일 거래/손익 요약 (`strategyCodePrefix` 필터 지원) |
 | POST | `/api/guided-trading/start` | Guided 진입 시작 |
 | POST | `/api/guided-trading/stop` | Guided 포지션 정지/청산 |
 | POST | `/api/guided-trading/partial-take-profit` | Guided 부분 익절 |
@@ -591,6 +592,10 @@ curl -X POST http://localhost:8080/api/settings/regime \
 - `markets[]`: `market`, `koreanName`, `tradePrice`, `changeRate`, `turnover`, `liquidityRank`, `recommendation`, `featurePack`, optional `crowd`
 - 데스크톱 `AiDayTraderEngine`는 이 응답을 받아 `36 -> 12 -> 4` LLM 초단타 루프를 수행합니다.
 
+`/api/guided-trading/stats/today` 쿼리 파라미터:
+- `strategyCodePrefix`: optional. 예: `AI_SCALP_TRADER`
+- 응답 `trades[]`와 `openPositionCount`도 같은 prefix 기준으로 필터됩니다.
+
 `/api/guided-trading/agent/context` 응답 확장:
 - `featurePack`: `technical`, `microstructure`, `executionRisk`, optional `crowd(flowScore/spike/notionalSpike/imbalance/spread/pulseAgeMs)`를 포함한 Fine-Grained 입력 세트
 
@@ -609,6 +614,9 @@ curl -X POST http://localhost:8080/api/settings/regime \
 3. `AiDayTraderEngine`는 더 이상 `/autopilot/opportunities`의 `AUTO_PASS/BORDERLINE`를 하드 게이트로 쓰지 않고 `scan -> shortlist 12 -> finalist 4 -> BUY|WAIT`, `HOLD|SELL`의 LLM-first 루프로 동작합니다.
 4. 데스크톱 앱은 `AI_SCALP_TRADER` prefix 포지션만 관리하며, `10초 스캔`, `5초 포지션 점검`, `최대 5포지션`, `최대 30분 보유`, `60~120초 재진입 쿨다운`, `물타기 금지` 기본값을 사용합니다.
 5. 새 터미널 UI는 상단 세션 바, 좌측 기회 큐, 중앙 결정 저널, 우측 포지션/설정의 3열 구조로 재정렬해 “지금 단타가 잘 돌고 있는지”를 한 화면에서 확인할 수 있게 했습니다.
+6. 설정 패널에서 `스캔 주기`와 `포지션 점검`을 최대 `3분`까지 선택할 수 있고, `1회 금액` 입력은 `5,000원` 단위로 조정됩니다.
+7. `중지`는 신규 진입만 끊고 기존 포지션 관리는 계속 유지합니다. 포지션이 모두 정리되면 엔진이 완전히 멈춥니다.
+8. 하단 `오늘 거래내역` 패널에서 금일 거래를 전체/코인별로 필터링해 볼 수 있습니다.
 
 ### CROWD_PRESSURE 초단타 프로필 추가 (2026-03-06)
 

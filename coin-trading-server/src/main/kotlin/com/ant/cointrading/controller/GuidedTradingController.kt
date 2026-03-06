@@ -146,8 +146,10 @@ class GuidedTradingController(
     }
 
     @GetMapping("/stats/today")
-    fun getTodayStats(): GuidedDailyStats {
-        return guidedTradingService.getTodayStats()
+    fun getTodayStats(
+        @RequestParam(required = false) strategyCodePrefix: String?
+    ): GuidedDailyStats {
+        return guidedTradingService.getTodayStats(strategyCodePrefix)
     }
 
     @GetMapping("/trades/closed")

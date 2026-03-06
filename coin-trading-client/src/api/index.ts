@@ -1132,8 +1132,8 @@ export const guidedTradingApi = {
   getOpenPositions: (): Promise<GuidedTradePosition[]> =>
     api.get('/guided-trading/positions/open').then((res) => res.data),
 
-  getTodayStats: (): Promise<GuidedDailyStats> =>
-    api.get('/guided-trading/stats/today').then((res) => res.data),
+  getTodayStats: (strategyCodePrefix?: string): Promise<GuidedDailyStats> =>
+    api.get('/guided-trading/stats/today', { params: { strategyCodePrefix } }).then((res) => res.data),
 
   getAutopilotLive: (
     interval = 'minute30',

@@ -120,6 +120,12 @@ class GuidedTradingServiceTest {
                 eq(GuidedTradeEntity.STATUS_CLOSED)
             )
         ).thenReturn(emptyList())
+        whenever(
+            guidedTradeRepository.findByStatusAndClosedAtAfter(
+                eq(GuidedTradeEntity.STATUS_CLOSED),
+                any()
+            )
+        ).thenReturn(emptyList())
         whenever(bithumbPrivateApi.getBalances()).thenReturn(emptyList())
         whenever(guidedTradeRepository.save(any())).thenAnswer { invocation ->
             val entity = invocation.getArgument<GuidedTradeEntity>(0)
@@ -317,6 +323,123 @@ class GuidedTradingServiceTest {
         assertTrue(result.markets.first().recommendation.rationale.isNotEmpty())
         assertTrue(result.markets.first().recommendation.expectancyPct.isFinite())
         assertTrue(result.markets.first().crowd != null)
+    }
+
+    @Test
+    @DisplayName("today stats는 strategyCodePrefix 기준으로 금일 거래/포지션을 분리 집계한다")
+    fun todayStatsFilterByStrategyCodePrefix() {
+        val now = Instant.now()
+        val aiClosed = GuidedTradeEntity(
+            id = 201L,
+            market = "KRW-BTC",
+            status = GuidedTradeEntity.STATUS_CLOSED,
+            averageEntryPrice = BigDecimal("100000000"),
+            entryQuantity = BigDecimal("0.00010000"),
+            remainingQuantity = BigDecimal.ZERO,
+            stopLossPrice = BigDecimal("99000000"),
+            takeProfitPrice = BigDecimal("101000000"),
+            realizedPnl = BigDecimal("1500"),
+            realizedPnlPercent = BigDecimal("1.50"),
+            closedAt = now.minusSeconds(300),
+            strategyCode = "AI_SCALP_TRADER_MAIN"
+        )
+        val guidedClosed = GuidedTradeEntity(
+            id = 202L,
+            market = "KRW-ETH",
+            status = GuidedTradeEntity.STATUS_CLOSED,
+            averageEntryPrice = BigDecimal("4000000"),
+            entryQuantity = BigDecimal("0.00250000"),
+            remainingQuantity = BigDecimal.ZERO,
+            stopLossPrice = BigDecimal("3950000"),
+            takeProfitPrice = BigDecimal("4050000"),
+            realizedPnl = BigDecimal("-500"),
+            realizedPnlPercent = BigDecimal("-0.50"),
+            closedAt = now.minusSeconds(120),
+            strategyCode = "GUIDED_TRADING"
+        )
+        val aiOpen = GuidedTradeEntity(
+            id = 203L,
+            market = "KRW-BTC",
+            status = GuidedTradeEntity.STATUS_OPEN,
+            entryOrderType = GuidedTradeEntity.ORDER_TYPE_MARKET,
+            averageEntryPrice = BigDecimal("100000000"),
+            entryQuantity = BigDecimal("0.00010000"),
+            remainingQuantity = BigDecimal("0.00010000"),
+            stopLossPrice = BigDecimal("99000000"),
+            takeProfitPrice = BigDecimal("101000000"),
+            strategyCode = "AI_SCALP_TRADER_MAIN"
+        )
+        val guidedOpen = GuidedTradeEntity(
+            id = 204L,
+            market = "KRW-ETH",
+            status = GuidedTradeEntity.STATUS_OPEN,
+            entryOrderType = GuidedTradeEntity.ORDER_TYPE_MARKET,
+            averageEntryPrice = BigDecimal("4000000"),
+            entryQuantity = BigDecimal("0.00250000"),
+            remainingQuantity = BigDecimal("0.00250000"),
+            stopLossPrice = BigDecimal("3950000"),
+            takeProfitPrice = BigDecimal("4050000"),
+            strategyCode = "GUIDED_TRADING"
+        )
+        whenever(
+            guidedTradeRepository.findByStatusAndClosedAtAfter(
+                eq(GuidedTradeEntity.STATUS_CLOSED),
+                any()
+            )
+        ).thenReturn(listOf(aiClosed, guidedClosed))
+        whenever(guidedTradeRepository.findByStatusIn(any())).thenReturn(listOf(aiOpen, guidedOpen))
+        whenever(bithumbPrivateApi.getBalances()).thenReturn(
+            listOf(
+                Balance(
+                    currency = "BTC",
+                    balance = BigDecimal("0.00010000"),
+                    locked = BigDecimal.ZERO,
+                    avgBuyPrice = null,
+                    avgBuyPriceModified = null,
+                    unitCurrency = "KRW"
+                ),
+                Balance(
+                    currency = "ETH",
+                    balance = BigDecimal("0.00250000"),
+                    locked = BigDecimal.ZERO,
+                    avgBuyPrice = null,
+                    avgBuyPriceModified = null,
+                    unitCurrency = "KRW"
+                )
+            )
+        )
+        whenever(bithumbPublicApi.getCurrentPrice(eq("KRW-BTC"))).thenReturn(
+            listOf(
+                TickerInfo(
+                    market = "KRW-BTC",
+                    tradePrice = BigDecimal("100000000"),
+                    openingPrice = BigDecimal("99500000"),
+                    highPrice = BigDecimal("101000000"),
+                    lowPrice = BigDecimal("99000000"),
+                    prevClosingPrice = BigDecimal("99400000"),
+                    change = "RISE",
+                    changePrice = BigDecimal("600000"),
+                    changeRate = BigDecimal("0.006"),
+                    tradeVolume = BigDecimal("10"),
+                    accTradeVolume = BigDecimal("1000"),
+                    accTradePrice = BigDecimal("1000000000"),
+                    accTradePrice24h = BigDecimal("1000000000"),
+                    accTradeVolume24h = BigDecimal("1000"),
+                    timestamp = 1_700_000_000_000L,
+                    tradeDate = "2026-03-07"
+                )
+            )
+        )
+
+        val result = service.getTodayStats(" ai_scalp_trader ")
+
+        assertEquals(1, result.totalTrades)
+        assertEquals(1, result.wins)
+        assertEquals(0, result.losses)
+        assertEquals(1500.0, result.totalPnlKrw, 0.0001)
+        assertEquals(1, result.openPositionCount)
+        assertEquals(1, result.trades.size)
+        assertEquals("KRW-BTC", result.trades.first().market)
     }
 
     @Test
