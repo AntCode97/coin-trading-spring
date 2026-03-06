@@ -132,6 +132,36 @@ import {
 import './ManualTraderWorkspace.css';
 import './workspace-v2/workspace-tokens.css';
 
+const GLOSSARY: Record<string, string> = {
+  'SL': '손절가(Stop Loss). 손실을 제한하기 위해 자동으로 매도하는 가격.',
+  '손절': '손실을 제한하기 위해 미리 정한 가격에서 자동 매도하는 것.',
+  '익절': '이익 실현(Take Profit). 목표 수익에 도달하면 자동 매도하는 것.',
+  'R/R': '위험 대비 보상 비율(Risk/Reward). 예: 2.2R은 손절 1만큼 감수하면 2.2만큼 수익 가능.',
+  'Risk/Reward': '위험 대비 보상 비율. 높을수록 수익 잠재력이 큼. 2R 이상이 양호.',
+  '신뢰도': 'AI가 현재 시장 상황을 분석한 매수 추천 확신도. 높을수록 유리한 진입 타이밍.',
+  '승률': '과거 거래에서 수익을 낸 비율. AI가 현재 조건 기반으로 예측한 값.',
+  '추세': '가격이 이동평균선 위에 있는지 판단하는 지표. 높을수록 상승 추세.',
+  '눌림': '상승 추세에서 일시적으로 하락한 정도. 적당히 눌린 곳이 좋은 매수 시점.',
+  '변동성': '가격 변동 폭. 낮을수록 안정적이고 예측이 쉬움.',
+  'RR': '위험 대비 보상 비율(Risk/Reward). 높을수록 유리한 거래.',
+  '물타기': '가격이 떨어졌을 때 추가 매수하여 평균 매수가를 낮추는 전략.',
+  '절반익절': '보유 수량의 절반을 먼저 매도하여 이익을 확보하는 전략.',
+  '트레일링': '가격이 오를 때 손절가도 함께 올려서 수익을 보호하는 방식.',
+  '미실현 손익': '아직 매도하지 않은 상태에서의 현재 수익/손실률.',
+  '추천가 승률': 'AI 추천 매수가로 진입했을 때의 예상 승률.',
+  '현재가 승률': '지금 시장가로 바로 매수했을 때의 예상 승률.',
+};
+
+function Tip({ label, children }: { label: string; children?: React.ReactNode }) {
+  const tip = GLOSSARY[label];
+  if (!tip) return <>{children ?? label}</>;
+  return (
+    <span className="term-tip" data-tooltip={tip}>
+      {children ?? label}
+    </span>
+  );
+}
+
 export default function ManualTraderWorkspace() {
   const prefs = useMemo(() => loadPrefs(), []);
   const [selectedMarket, setSelectedMarket] = useState<string>(prefs.selectedMarket ?? 'KRW-BTC');

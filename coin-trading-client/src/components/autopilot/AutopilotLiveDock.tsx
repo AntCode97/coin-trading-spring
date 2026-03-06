@@ -493,7 +493,6 @@ export function AutopilotLiveDock({
             <small>Playwright {actionLayerSummary.playwright} · SYSTEM {actionLayerSummary.system + actionLayerSummary.other} · SERVER {actionLayerSummary.server}</small>
           </div>
         </div>
-      )}
 
           <div className="autopilot-funnel-tabs">
             {groupTabs.map((group) => (
