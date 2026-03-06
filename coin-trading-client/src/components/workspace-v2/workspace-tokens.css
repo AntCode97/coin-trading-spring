@@ -674,22 +674,6 @@
   font-size: 17px;
 }
 
-.workspace-command-note {
-  color: var(--wp-text-sub);
-  font-size: 13px;
-}
-
-.workspace-gate-effects {
-  margin: 10px 0 0;
-  padding-left: 18px;
-  color: #b6c5de;
-  font-size: 12px;
-  line-height: 1.45;
-}
-
-.workspace-gate-effects li + li {
-  margin-top: 4px;
-}
 
 .workspace-v2 .autopilot-control-grid label {
   font-size: 12px;
@@ -878,6 +862,38 @@
   color: var(--wp-text-main);
 }
 
+/* EmptyState global styles */
+.wp-empty-state {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 16px 12px;
+  color: var(--wp-text-sub, rgba(141, 160, 191, 0.7));
+  font-size: 12px;
+}
+
+.wp-empty-indicator {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: rgba(141, 160, 191, 0.3);
+}
+
+.wp-empty-loading .wp-empty-indicator {
+  animation: wp-pulse 1.2s infinite ease-in-out;
+  background: var(--wp-accent, #5b8def);
+}
+
+.wp-empty-error .wp-empty-indicator {
+  background: var(--wp-danger, #e5484d);
+}
+
+@keyframes wp-pulse {
+  0%, 100% { opacity: 0.3; transform: scale(0.8); }
+  50% { opacity: 1; transform: scale(1.2); }
+}
+
 @media (max-width: 1512px) {
   .workspace-command-pills {
     gap: 4px;
@@ -896,7 +912,8 @@
 
 @media (max-width: 1366px) {
   .workspace-shell {
-    grid-template-columns: var(--market-rail-width, 292px) minmax(0, 1fr);
+    grid-template-columns: var(--market-rail-width, 272px) minmax(0, 1fr);
+    --market-rail-width: 272px;
   }
 
   .workspace-shell > .guided-order-panel {
@@ -939,6 +956,13 @@
 }
 
 @media (max-width: 1280px) {
+  .workspace-shell {
+    grid-template-columns: var(--market-rail-width, 240px) minmax(0, 1fr);
+    --market-rail-width: 240px;
+  }
+}
+
+@media (max-width: 900px) {
   .workspace-shell {
     grid-template-columns: 1fr;
   }

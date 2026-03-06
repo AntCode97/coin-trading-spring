@@ -5,6 +5,7 @@ type ConsoleTab = 'CONTROL' | 'RISK' | 'MONITOR' | 'ADVANCED';
 interface ActionConsoleProps {
   executionGate: ReactNode;
   engineControl: ReactNode;
+  engineExtra?: ReactNode;
   riskPreset: ReactNode;
   candidateQueue: ReactNode;
   advanced: ReactNode;
@@ -21,6 +22,7 @@ const TABS: { key: ConsoleTab; label: string }[] = [
 export function ActionConsole({
   executionGate,
   engineControl,
+  engineExtra,
   riskPreset,
   candidateQueue,
   advanced,
@@ -47,13 +49,19 @@ export function ActionConsole({
         {activeTab === 'CONTROL' && (
           <>
             <article className="action-console-section">
-              <header><strong>즉시 실행 컨트롤</strong></header>
+              <header><strong>액션</strong></header>
               {executionGate}
             </article>
             <article className="action-console-section">
-              <header><strong>자동매매 엔진 스위치</strong></header>
+              <header><strong>엔진</strong></header>
               {engineControl}
             </article>
+            {engineExtra && (
+              <article className="action-console-section ac-section-compact">
+                <header><strong>주문 옵션</strong></header>
+                <div className="autopilot-toggle-strip">{engineExtra}</div>
+              </article>
+            )}
           </>
         )}
 

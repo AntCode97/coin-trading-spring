@@ -141,37 +141,6 @@
 }
 
 /* Empty state */
-.wp-empty-state {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 8px;
-  padding: 16px 12px;
-  color: var(--wp-text-sub);
-  font-size: 12px;
-}
-
-.wp-empty-indicator {
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  background: rgba(141, 160, 191, 0.3);
-}
-
-.wp-empty-loading .wp-empty-indicator {
-  animation: wp-pulse 1.2s infinite ease-in-out;
-  background: var(--wp-accent);
-}
-
-.wp-empty-error .wp-empty-indicator {
-  background: var(--wp-danger);
-}
-
-@keyframes wp-pulse {
-  0%, 100% { opacity: 0.3; transform: scale(0.8); }
-  50% { opacity: 1; transform: scale(1.2); }
-}
-
 /* Override dock styles inside drawer: remove standalone container */
 .dd-body .autopilot-live-dock,
 .dd-body .focused-live-dock,
@@ -193,9 +162,5 @@
   .dd-backdrop,
   .dd-panel {
     transition: none !important;
-  }
-
-  .wp-empty-loading .wp-empty-indicator {
-    animation: none;
   }
 }

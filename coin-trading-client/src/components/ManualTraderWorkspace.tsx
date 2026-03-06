@@ -1891,6 +1891,9 @@ export default function ManualTraderWorkspace() {
             </div>
           </div>
           <div className="guided-market-list">
+            {filteredMarkets.length === 0 && (
+              <EmptyState variant="loading" message="마켓 데이터 로딩 중" />
+            )}
             {filteredMarkets.map((item) => (
               <button
                 key={item.market}
@@ -2176,37 +2179,27 @@ export default function ManualTraderWorkspace() {
 
               <ActionConsole
                 executionGate={(
-                  <>
-                    <p className="workspace-command-note">
-                      즉시 실행 모드입니다. 엔진 ON/OFF, 리스크 반영, 주문 실행을 바로 수행할 수 있습니다.
-                    </p>
-                    <div className="autopilot-command-actions">
-                      <button
-                        type="button"
-                        className="ghost"
-                        onClick={() => {
-                          setAutopilotEnabled(false);
-                          setSwingAutopilotEnabled(false);
-                          setPositionAutopilotEnabled(false);
-                          setStatusMessage('긴급 중지 실행: 모든 엔진 OFF, 신규 진입 차단이 적용되었습니다.');
-                        }}
-                      >
-                        긴급 중지
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => syncMutation.mutate()}
-                        disabled={syncMutation.isPending}
-                      >
-                        {syncMutation.isPending ? '동기화 중...' : '잔고/포지션 동기화'}
-                      </button>
-                    </div>
-                    <ul className="workspace-gate-effects">
-                      <li>긴급 중지 시 SCALP/SWING/POSITION 엔진이 즉시 OFF 됩니다.</li>
-                      <li>긴급 중지 시 신규 진입 요청은 즉시 차단됩니다.</li>
-                      <li>보유 포지션은 기존 청산 규칙으로 계속 관리됩니다.</li>
-                    </ul>
-                  </>
+                  <div className="autopilot-command-actions">
+                    <button
+                      type="button"
+                      className="ghost"
+                      onClick={() => {
+                        setAutopilotEnabled(false);
+                        setSwingAutopilotEnabled(false);
+                        setPositionAutopilotEnabled(false);
+                        setStatusMessage('긴급 중지 실행: 모든 엔진 OFF, 신규 진입 차단이 적용되었습니다.');
+                      }}
+                    >
+                      긴급 중지
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => syncMutation.mutate()}
+                      disabled={syncMutation.isPending}
+                    >
+                      {syncMutation.isPending ? '동기화 중...' : '잔고/포지션 동기화'}
+                    </button>
+                  </div>
                 )}
                 engineControl={(
                   <div className="autopilot-toggle-strip">
@@ -2249,20 +2242,22 @@ export default function ManualTraderWorkspace() {
                         );
                       }}
                     />
-                    <SwitchButton
-                      label="타임아웃 취소 후 시장가 폴백"
-                      hint="체결 지연 시 자동 대응"
-                      checked={marketFallbackAfterCancel}
-                      onToggle={() => {
-                        const prev = marketFallbackAfterCancel;
-                        executeAction(
-                          () => setMarketFallbackAfterCancel(!prev),
-                          `시장가 폴백 ${!prev ? '활성화' : '비활성화'}`,
-                          () => setMarketFallbackAfterCancel(prev)
-                        );
-                      }}
-                    />
                   </div>
+                )}
+                engineExtra={(
+                  <SwitchButton
+                    label="시장가 폴백"
+                    hint="타임아웃 시 시장가 전환"
+                    checked={marketFallbackAfterCancel}
+                    onToggle={() => {
+                      const prev = marketFallbackAfterCancel;
+                      executeAction(
+                        () => setMarketFallbackAfterCancel(!prev),
+                        `시장가 폴백 ${!prev ? '활성화' : '비활성화'}`,
+                        () => setMarketFallbackAfterCancel(prev)
+                      );
+                    }}
+                  />
                 )}
                 riskPreset={(
                   <>
@@ -2457,7 +2452,7 @@ export default function ManualTraderWorkspace() {
                 )}
                 footer={autopilotState.blockedByDailyLoss && autopilotState.blockedReason
                   ? <p className="autopilot-warning command-alert">{autopilotState.blockedReason}</p>
-                  : <p className="workspace-command-note">입장→실행→체결→청산 흐름을 라이브 도크에서 추적하세요.</p>}
+                  : undefined}
               />
 
               <div className="autopilot-panel autopilot-panel-tv legacy-console-hidden">
@@ -3224,12 +3219,12 @@ export default function ManualTraderWorkspace() {
 
               {positionState === 'NONE' && !recommendation && aiEnabled && (
                 <div className="state-panel state-none">
-                  <div className="guided-ai-loading">데이터 로딩 중...</div>
+                  <EmptyState variant="loading" message="데이터 로딩 중" />
                 </div>
               )}
               {positionState === 'NONE' && !aiEnabled && (
                 <div className="state-panel state-none">
-                  <div className="guided-ai-loading">AI 분석 비활성화</div>
+                  <EmptyState variant="empty" message="AI 분석 비활성화" />
                 </div>
               )}
 
