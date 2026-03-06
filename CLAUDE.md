@@ -304,6 +304,8 @@ coin-trading-spring/
   - `positions[].averageEntryPrice`는 저장값이 비정상적이면 잔고 `avgBuyPrice`로 자동 보정
   - AI 초단타 엔진은 `expectancyPct`, `recommendedEntryWinRate`, `riskRewardRatio`, `spreadPercent`, `entryGapPct` 기반 리스크 게이트를 먼저 통과한 finalist만 진입 분석
   - 엔진 보호폭 기본값: 손절 최소 `0.55%`, 익절 최소 `0.95%`, 손절 후 재진입 쿨다운 `8분`
+  - `KRW-USDT` 같은 달러 추종 자산은 `DOLLAR_PEG` 템포 프로필로 분기해 초기 보유 유예, 더 낮은 목표폭, 최대 보유시간 추가치를 적용
+  - 서버가 비정상 진입가를 내려주면 데스크톱 엔진은 현재가/손절/익절 midpoint 기준 sanity fallback을 적용해 미실현 PnL 과장을 억제
 - `GET /api/guided-trading/stats/today`
   - 신규 쿼리: `strategyCodePrefix` (optional)
   - 금일 거래 요약과 `trades[]`를 전략 prefix 기준으로 분리 조회 가능

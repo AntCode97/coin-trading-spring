@@ -108,6 +108,28 @@ interface AiManageDecision {
   urgency: AiUrgency;
 }
 
+type AiTempoProfileKey = 'DEFAULT' | 'DOLLAR_PEG';
+
+interface AiTempoProfile {
+  key: AiTempoProfileKey;
+  label: string;
+  minEntryExpectancyPct: number;
+  minEntryWinRate: number;
+  minEntryRiskReward: number;
+  maxEntryGapPct: number;
+  maxEntrySpreadPct: number;
+  minEntryCrowdFlow: number;
+  earlyHoldMinutes: number;
+  earlyExitPnlFloor: number;
+  minStopDistancePct: number;
+  maxStopDistancePct: number;
+  minTakeDistancePct: number;
+  maxTakeDistancePct: number;
+  minTargetRiskReward: number;
+  maxHoldingExtraMinutes: number;
+  manageNote: string;
+}
+
 type StateListener = (state: AiTraderState) => void;
 
 const SHORTLIST_LIMIT = 12;
@@ -119,19 +141,56 @@ const LLM_EXIT_COOLDOWN_MS = 240_000;
 const FORCED_EXIT_COOLDOWN_MS = 300_000;
 const STOP_LOSS_COOLDOWN_MS = 480_000;
 const CONTEXT_FAILURE_EXIT_THRESHOLD = 3;
-const MIN_ENTRY_EXPECTANCY_PCT = 0.10;
-const MIN_ENTRY_WIN_RATE = 55;
-const MIN_ENTRY_RISK_REWARD = 1.35;
-const MAX_ENTRY_GAP_PCT = 0.35;
-const MAX_ENTRY_SPREAD_PCT = 0.12;
-const MIN_ENTRY_CROWD_FLOW = 42;
-const MIN_EARLY_HOLD_MINUTES = 2;
-const EARLY_EXIT_PNL_FLOOR = -0.45;
-const MIN_ENTRY_STOP_DISTANCE_PCT = 0.55;
-const MAX_ENTRY_STOP_DISTANCE_PCT = 1.10;
-const MIN_ENTRY_TAKE_DISTANCE_PCT = 0.95;
-const MAX_ENTRY_TAKE_DISTANCE_PCT = 2.20;
-const MIN_ENTRY_RISK_REWARD_TARGET = 1.55;
+const DEFAULT_TEMPO_PROFILE: AiTempoProfile = {
+  key: 'DEFAULT',
+  label: '기본',
+  minEntryExpectancyPct: 0.10,
+  minEntryWinRate: 55,
+  minEntryRiskReward: 1.35,
+  maxEntryGapPct: 0.35,
+  maxEntrySpreadPct: 0.12,
+  minEntryCrowdFlow: 42,
+  earlyHoldMinutes: 2,
+  earlyExitPnlFloor: -0.45,
+  minStopDistancePct: 0.55,
+  maxStopDistancePct: 1.10,
+  minTakeDistancePct: 0.95,
+  maxTakeDistancePct: 2.20,
+  minTargetRiskReward: 1.55,
+  maxHoldingExtraMinutes: 0,
+  manageNote: '일반 알트 템포다. 5~30분 안에 방향성이 선명해야 한다.',
+};
+
+const DOLLAR_PEG_TEMPO_PROFILE: AiTempoProfile = {
+  key: 'DOLLAR_PEG',
+  label: '달러 추종',
+  minEntryExpectancyPct: 0.04,
+  minEntryWinRate: 56.5,
+  minEntryRiskReward: 1.15,
+  maxEntryGapPct: 0.18,
+  maxEntrySpreadPct: 0.08,
+  minEntryCrowdFlow: 18,
+  earlyHoldMinutes: 4,
+  earlyExitPnlFloor: -0.30,
+  minStopDistancePct: 0.32,
+  maxStopDistancePct: 0.72,
+  minTakeDistancePct: 0.42,
+  maxTakeDistancePct: 1.20,
+  minTargetRiskReward: 1.28,
+  maxHoldingExtraMinutes: 10,
+  manageNote: '테더 같은 달러 추종 자산은 다른 코인보다 전개와 체결이 느리다. 작은 흔들림에 과민하게 청산하지 말고 10~40분 템포로 보라.',
+};
+
+const DOLLAR_PEG_SYMBOLS = new Set([
+  'USDT',
+  'USDC',
+  'FDUSD',
+  'TUSD',
+  'USDP',
+  'DAI',
+  'BUSD',
+]);
+const BITHUMB_FEE_RATE = 0.0004;
 
 const SHORTLIST_SYSTEM_PROMPT = [
   '너는 빗썸 KRW 현물 시장만 보는 전업 초단타 트레이더다.',
@@ -413,9 +472,9 @@ export class AiDayTraderEngine {
 
   private async syncOpenPositions(): Promise<GuidedTradePosition[]> {
     const positions = await guidedTradingApi.getOpenPositions();
-    const filtered = this.filterAiPositions(positions).sort(
-      (left, right) => new Date(right.createdAt).getTime() - new Date(left.createdAt).getTime()
-    );
+    const filtered = this.filterAiPositions(positions)
+      .map((position) => this.normalizePosition(position))
+      .sort((left, right) => new Date(right.createdAt).getTime() - new Date(left.createdAt).getTime());
     this.state.positions = filtered;
     this.emit();
     return filtered;
@@ -479,7 +538,7 @@ export class AiDayTraderEngine {
 
       this.state.scanCycles += 1;
       this.state.lastScanAt = Date.now();
-      this.state.positions = this.filterAiPositions(scan.positions);
+      this.state.positions = this.filterAiPositions(scan.positions).map((position) => this.normalizePosition(position));
       this.emit();
 
       const openMarkets = new Set(this.state.positions.map((position) => position.market));
@@ -516,13 +575,14 @@ export class AiDayTraderEngine {
         if (activeMarkets.has(finalist.market)) continue;
         const scanMarket = candidates.find((candidate) => candidate.market === finalist.market);
         if (!scanMarket) continue;
+        const tempoProfile = this.getTempoProfile(scanMarket.market, scanMarket.koreanName);
 
-        const entryGateFailure = this.evaluateEntryGate(scanMarket);
+        const entryGateFailure = this.evaluateEntryGate(scanMarket, tempoProfile);
         if (entryGateFailure) {
           this.pushEvent(
             'BUY_DECISION',
             `${finalist.market} WAIT`,
-            `리스크 필터: ${entryGateFailure}`,
+            `${tempoProfile.label} 템포 · 리스크 필터: ${entryGateFailure}`,
             finalist.market,
             0.99,
             'LOW'
@@ -548,7 +608,7 @@ export class AiDayTraderEngine {
           continue;
         }
 
-        const decision = await this.requestEntryDecision(scanMarket, finalist, context);
+        const decision = await this.requestEntryDecision(scanMarket, finalist, context, tempoProfile);
         if (!decision) continue;
 
         this.pushEvent(
@@ -564,7 +624,7 @@ export class AiDayTraderEngine {
           continue;
         }
 
-        const protectivePrices = this.resolveProtectivePrices(scanMarket, decision);
+        const protectivePrices = this.resolveProtectivePrices(scanMarket, decision, tempoProfile);
 
         try {
           this.setStatus('EXECUTING');
@@ -621,10 +681,12 @@ export class AiDayTraderEngine {
 
       for (const position of positions) {
         if (!this.state.running) break;
+        const tempoProfile = this.getTempoProfile(position.market);
 
         const holdingMinutes = this.getHoldingMinutes(position);
-        if (holdingMinutes >= this.config.maxHoldingMinutes) {
-          await this.executeSell(position, `최대 보유시간 ${this.config.maxHoldingMinutes}분 도달`, 'FORCED_EXIT');
+        const effectiveMaxHoldingMinutes = this.getEffectiveMaxHoldingMinutes(tempoProfile);
+        if (holdingMinutes >= effectiveMaxHoldingMinutes) {
+          await this.executeSell(position, `최대 보유시간 ${effectiveMaxHoldingMinutes}분 도달`, 'FORCED_EXIT');
           continue;
         }
 
@@ -654,7 +716,7 @@ export class AiDayTraderEngine {
           continue;
         }
 
-        const decision = await this.requestManageDecision(position, context);
+        const decision = await this.requestManageDecision(position, context, tempoProfile, effectiveMaxHoldingMinutes);
         if (!decision) continue;
 
         this.pushEvent(
@@ -666,7 +728,7 @@ export class AiDayTraderEngine {
           decision.urgency
         );
 
-        if (decision.action === 'SELL' && this.shouldDeferEarlySell(position, holdingMinutes, decision)) {
+        if (decision.action === 'SELL' && this.shouldDeferEarlySell(position, holdingMinutes, decision, tempoProfile)) {
           this.pushEvent(
             'STATUS',
             `${position.market} 초기 흔들림으로 HOLD 유지`,
@@ -776,13 +838,15 @@ export class AiDayTraderEngine {
   private async requestEntryDecision(
     scanMarket: AiScalpScanMarket,
     finalist: AiRankedOpportunity,
-    context: GuidedAgentContextResponse
+    context: GuidedAgentContextResponse,
+    tempoProfile: AiTempoProfile
   ): Promise<AiEntryDecision | null> {
     try {
       const response = await requestOneShotTextWithMeta({
         prompt: [
           ENTRY_SYSTEM_PROMPT,
           '',
+          `템포 프로필: ${tempoProfile.label}. ${tempoProfile.manageNote}`,
           `후보 요약: ${JSON.stringify({
             market: scanMarket.market,
             koreanName: scanMarket.koreanName,
@@ -832,13 +896,16 @@ export class AiDayTraderEngine {
 
   private async requestManageDecision(
     position: GuidedTradePosition,
-    context: GuidedAgentContextResponse
+    context: GuidedAgentContextResponse,
+    tempoProfile: AiTempoProfile,
+    effectiveMaxHoldingMinutes: number
   ): Promise<AiManageDecision | null> {
     try {
       const response = await requestOneShotTextWithMeta({
         prompt: [
           MANAGE_SYSTEM_PROMPT,
           '',
+          `템포 프로필: ${tempoProfile.label}. ${tempoProfile.manageNote}`,
           `포지션 요약: ${JSON.stringify({
             market: position.market,
             averageEntryPrice: position.averageEntryPrice,
@@ -848,6 +915,7 @@ export class AiDayTraderEngine {
             unrealizedPnlPercent: position.unrealizedPnlPercent,
             createdAt: position.createdAt,
             strategyCode: position.strategyCode,
+            effectiveMaxHoldingMinutes,
           })}`,
         ].join('\n'),
         provider: this.config.provider,
@@ -881,7 +949,11 @@ export class AiDayTraderEngine {
     }
   }
 
-  private resolveProtectivePrices(scanMarket: AiScalpScanMarket, decision: AiEntryDecision) {
+  private resolveProtectivePrices(
+    scanMarket: AiScalpScanMarket,
+    decision: AiEntryDecision,
+    tempoProfile: AiTempoProfile
+  ) {
     const currentPrice = scanMarket.tradePrice > 0 ? scanMarket.tradePrice : scanMarket.recommendation.currentPrice;
     const spreadPercent = scanMarket.crowd?.spreadPercent ?? scanMarket.featurePack.spreadPercent ?? 0;
     const entryGapPct = Math.max(0, scanMarket.featurePack.entryGapPct ?? 0);
@@ -890,23 +962,23 @@ export class AiDayTraderEngine {
     const rawStopDistance = Math.max(
       recommendationStopDistance,
       llmStopDistance,
-      MIN_ENTRY_STOP_DISTANCE_PCT,
+      tempoProfile.minStopDistancePct,
       spreadPercent * 4.5,
       Math.min(entryGapPct, 0.35) * 1.2
     );
-    const stopDistancePercent = clamp(rawStopDistance, MIN_ENTRY_STOP_DISTANCE_PCT, MAX_ENTRY_STOP_DISTANCE_PCT);
+    const stopDistancePercent = clamp(rawStopDistance, tempoProfile.minStopDistancePct, tempoProfile.maxStopDistancePct);
 
     const recommendationTakeDistance = this.calculateUpsideDistancePercent(currentPrice, scanMarket.recommendation.takeProfitPrice);
     const llmTakeDistance = this.calculateUpsideDistancePercent(currentPrice, decision.takeProfit);
     const rawTakeDistance = Math.max(
       recommendationTakeDistance,
       llmTakeDistance,
-      MIN_ENTRY_TAKE_DISTANCE_PCT,
+      tempoProfile.minTakeDistancePct,
       spreadPercent * 8,
-      stopDistancePercent * Math.max(scanMarket.recommendation.riskRewardRatio || 0, MIN_ENTRY_RISK_REWARD_TARGET)
+      stopDistancePercent * Math.max(scanMarket.recommendation.riskRewardRatio || 0, tempoProfile.minTargetRiskReward)
     );
-    const minTakeDistance = Math.max(MIN_ENTRY_TAKE_DISTANCE_PCT, stopDistancePercent * MIN_ENTRY_RISK_REWARD_TARGET);
-    const takeDistancePercent = clamp(rawTakeDistance, minTakeDistance, MAX_ENTRY_TAKE_DISTANCE_PCT);
+    const minTakeDistance = Math.max(tempoProfile.minTakeDistancePct, stopDistancePercent * tempoProfile.minTargetRiskReward);
+    const takeDistancePercent = clamp(rawTakeDistance, minTakeDistance, tempoProfile.maxTakeDistancePct);
 
     const stopLoss = currentPrice * (1 - stopDistancePercent / 100);
     const takeProfit = currentPrice * (1 + takeDistancePercent / 100);
@@ -1041,38 +1113,42 @@ export class AiDayTraderEngine {
     }
   }
 
-  private evaluateEntryGate(scanMarket: AiScalpScanMarket): string | null {
+  private evaluateEntryGate(scanMarket: AiScalpScanMarket, tempoProfile: AiTempoProfile): string | null {
     const expectancyPct = scanMarket.recommendation.expectancyPct;
-    if (expectancyPct < MIN_ENTRY_EXPECTANCY_PCT) {
+    if (expectancyPct < tempoProfile.minEntryExpectancyPct) {
       return `순기대값 ${expectancyPct.toFixed(2)}% 부족`;
     }
 
     const recommendedWinRate = scanMarket.recommendation.recommendedEntryWinRate;
-    if (recommendedWinRate < MIN_ENTRY_WIN_RATE) {
+    if (recommendedWinRate < tempoProfile.minEntryWinRate) {
       return `추천 승률 ${recommendedWinRate.toFixed(1)}% 부족`;
     }
 
     const riskRewardRatio = scanMarket.recommendation.riskRewardRatio;
-    if (riskRewardRatio < MIN_ENTRY_RISK_REWARD) {
+    if (riskRewardRatio < tempoProfile.minEntryRiskReward) {
       return `RR ${riskRewardRatio.toFixed(2)} 부족`;
     }
 
     const spreadPercent = scanMarket.crowd?.spreadPercent ?? scanMarket.featurePack.spreadPercent ?? 0;
-    if (spreadPercent > MAX_ENTRY_SPREAD_PCT) {
+    if (spreadPercent > tempoProfile.maxEntrySpreadPct) {
       return `스프레드 ${spreadPercent.toFixed(2)}% 과다`;
     }
 
     const entryGapPct = Math.max(0, scanMarket.featurePack.entryGapPct ?? 0);
-    if (entryGapPct > MAX_ENTRY_GAP_PCT) {
+    if (entryGapPct > tempoProfile.maxEntryGapPct) {
       return `진입 괴리 ${entryGapPct.toFixed(2)}% 과다`;
     }
 
     const crowdFlow = scanMarket.crowd?.flowScore ?? scanMarket.featurePack.crowdFlowScore ?? 0;
-    if (crowdFlow > 0 && crowdFlow < MIN_ENTRY_CROWD_FLOW) {
+    if (crowdFlow > 0 && crowdFlow < tempoProfile.minEntryCrowdFlow) {
       return `crowd flow ${crowdFlow.toFixed(0)} 부족`;
     }
 
     const priceChange = scanMarket.changeRate;
+    if (tempoProfile.key === 'DOLLAR_PEG' && priceChange >= 1.2 && entryGapPct >= 0.08) {
+      return `달러 추종 자산 급등 추격 ${priceChange.toFixed(2)}%`;
+    }
+
     if (priceChange >= 4.0 && entryGapPct >= 0.18) {
       return `급등 추격 구간 ${priceChange.toFixed(2)}%`;
     }
@@ -1083,14 +1159,36 @@ export class AiDayTraderEngine {
   private shouldDeferEarlySell(
     position: GuidedTradePosition,
     holdingMinutes: number,
-    decision: AiManageDecision
+    decision: AiManageDecision,
+    tempoProfile: AiTempoProfile
   ): boolean {
     return (
-      holdingMinutes < MIN_EARLY_HOLD_MINUTES &&
+      holdingMinutes < tempoProfile.earlyHoldMinutes &&
       decision.confidence < 0.72 &&
       decision.urgency !== 'HIGH' &&
-      position.unrealizedPnlPercent > EARLY_EXIT_PNL_FLOOR
+      position.unrealizedPnlPercent > tempoProfile.earlyExitPnlFloor
     );
+  }
+
+  private getTempoProfile(market: string, koreanName?: string | null): AiTempoProfile {
+    const symbol = market.replace(/^KRW-/, '').trim().toUpperCase();
+    const name = (koreanName ?? '').trim().toUpperCase();
+    if (
+      DOLLAR_PEG_SYMBOLS.has(symbol) ||
+      name.includes('테더') ||
+      name.includes('USD') ||
+      name.includes('달러')
+    ) {
+      return DOLLAR_PEG_TEMPO_PROFILE;
+    }
+    return DEFAULT_TEMPO_PROFILE;
+  }
+
+  private getEffectiveMaxHoldingMinutes(tempoProfile: AiTempoProfile): number {
+    if (tempoProfile.key !== 'DOLLAR_PEG') {
+      return this.config.maxHoldingMinutes;
+    }
+    return this.config.maxHoldingMinutes + tempoProfile.maxHoldingExtraMinutes;
   }
 
   private calculateDownsideDistancePercent(referencePrice: number, candidatePrice?: number): number {
@@ -1107,6 +1205,65 @@ export class AiDayTraderEngine {
     return Math.max(0, (((candidatePrice as number) - referencePrice) / referencePrice) * 100);
   }
 
+  private normalizePosition(position: GuidedTradePosition): GuidedTradePosition {
+    const currentPrice = position.currentPrice;
+    const entryPrice = position.averageEntryPrice;
+    if (!this.isPlausiblePositionEntry(entryPrice, currentPrice)) {
+      const estimatedEntryPrice = this.estimatePositionEntryPrice(position);
+      return {
+        ...position,
+        averageEntryPrice: estimatedEntryPrice,
+        unrealizedPnlPercent: this.calculateFeeAdjustedReturnPercent(estimatedEntryPrice, currentPrice),
+      };
+    }
+    return {
+      ...position,
+      unrealizedPnlPercent: this.calculateFeeAdjustedReturnPercent(entryPrice, currentPrice),
+    };
+  }
+
+  private isPlausiblePositionEntry(entryPrice: number, currentPrice: number): boolean {
+    if (!Number.isFinite(entryPrice) || entryPrice <= 0 || !Number.isFinite(currentPrice) || currentPrice <= 0) {
+      return false;
+    }
+    return entryPrice >= currentPrice * 0.5 && entryPrice <= currentPrice * 1.5;
+  }
+
+  private estimatePositionEntryPrice(position: GuidedTradePosition): number {
+    const currentPrice = position.currentPrice;
+    if (!Number.isFinite(currentPrice) || currentPrice <= 0) {
+      return position.averageEntryPrice;
+    }
+
+    const candidates: number[] = [];
+    if (
+      Number.isFinite(position.stopLossPrice) &&
+      Number.isFinite(position.takeProfitPrice) &&
+      position.stopLossPrice > 0 &&
+      position.takeProfitPrice > position.stopLossPrice
+    ) {
+      candidates.push((position.stopLossPrice + position.takeProfitPrice) / 2);
+    }
+    if (Number.isFinite(position.stopLossPrice) && position.stopLossPrice > 0 && position.stopLossPrice < currentPrice) {
+      candidates.push((position.stopLossPrice + currentPrice) / 2);
+    }
+    if (Number.isFinite(position.takeProfitPrice) && position.takeProfitPrice > currentPrice) {
+      candidates.push((position.takeProfitPrice + currentPrice) / 2);
+    }
+
+    const plausibleCandidate = candidates.find((candidate) => this.isPlausiblePositionEntry(candidate, currentPrice));
+    return plausibleCandidate ?? currentPrice;
+  }
+
+  private calculateFeeAdjustedReturnPercent(entryPrice: number, currentPrice: number): number {
+    if (!Number.isFinite(entryPrice) || entryPrice <= 0 || !Number.isFinite(currentPrice) || currentPrice <= 0) {
+      return 0;
+    }
+    const grossReturn = (currentPrice - entryPrice) / entryPrice;
+    const feeReturn = BITHUMB_FEE_RATE * (1 + currentPrice / entryPrice);
+    return (grossReturn - feeReturn) * 100;
+  }
+
   private registerClosedTrade(trade: AiClosedTrade) {
     this.state.closedTrades = [trade, ...this.state.closedTrades].slice(0, CLOSED_TRADE_LIMIT);
     this.recalculateClosedTradeStats();
@@ -1120,12 +1277,13 @@ export class AiDayTraderEngine {
   }
 
   private upsertPosition(position: GuidedTradePosition) {
+    const normalizedPosition = this.normalizePosition(position);
     const next = [...this.state.positions];
-    const index = next.findIndex((item) => item.tradeId === position.tradeId || item.market === position.market);
+    const index = next.findIndex((item) => item.tradeId === normalizedPosition.tradeId || item.market === normalizedPosition.market);
     if (index >= 0) {
-      next[index] = position;
+      next[index] = normalizedPosition;
     } else {
-      next.unshift(position);
+      next.unshift(normalizedPosition);
     }
     this.state.positions = next;
     this.emit();
