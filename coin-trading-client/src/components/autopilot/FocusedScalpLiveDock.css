@@ -26,21 +26,21 @@
 
 .focused-live-header strong {
   color: #e6ecfb;
-  font-size: 13px;
+  font-size: 14px;
 }
 
 .focused-live-header span {
   color: #8fa1c3;
-  font-size: 11px;
+  font-size: 12px;
 }
 
 .focused-live-header button {
   border: 1px solid #3a4f86;
   background: #1a2b57;
   color: #d9e6ff;
-  font-size: 11px;
+  font-size: 12px;
   border-radius: 6px;
-  padding: 5px 10px;
+  padding: 6px 12px;
   cursor: pointer;
 }
 
@@ -54,8 +54,8 @@
 .focused-live-summary .chip {
   border: 1px solid rgba(109, 147, 242, 0.35);
   border-radius: 999px;
-  padding: 3px 10px;
-  font-size: 11px;
+  padding: 4px 12px;
+  font-size: 12px;
   color: #b6cbef;
   background: rgba(16, 28, 53, 0.64);
 }
@@ -97,9 +97,9 @@
 
 .focused-live-body {
   display: grid;
-  grid-template-columns: 460px 1fr;
-  gap: 10px;
-  padding: 10px 12px 12px;
+  grid-template-columns: minmax(380px, 1fr) minmax(300px, 1fr);
+  gap: 12px;
+  padding: 12px 14px 14px;
 }
 
 .focused-live-column {
@@ -112,26 +112,27 @@
 }
 
 .focused-live-column .column-title {
-  padding: 9px 10px;
+  padding: 10px 12px;
   border-bottom: 1px solid rgba(255, 255, 255, 0.06);
-  font-size: 11px;
+  font-size: 13px;
+  font-weight: 600;
   color: #c1d4fb;
 }
 
 .focused-card-list,
 .focused-event-list {
   overflow: auto;
-  padding: 8px;
+  padding: 10px;
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 10px;
 }
 
 .focused-card {
   border: 1px solid rgba(255, 255, 255, 0.08);
   border-radius: 8px;
   background: rgba(12, 23, 42, 0.82);
-  padding: 8px;
+  padding: 10px 12px;
   color: #dce9ff;
   text-align: left;
   cursor: pointer;
@@ -150,13 +151,13 @@
 
 .focused-card-top strong {
   color: #e3edff;
-  font-size: 12px;
+  font-size: 13px;
 }
 
 .focused-card-top span {
   display: block;
   color: #8fa7d3;
-  font-size: 11px;
+  font-size: 12px;
   margin-top: 2px;
 }
 
@@ -170,9 +171,9 @@
 .status-wrap .position {
   border: 1px solid rgba(255, 255, 255, 0.22);
   border-radius: 999px;
-  padding: 2px 6px;
+  padding: 3px 8px;
   color: #a8c0ed;
-  font-size: 10px;
+  font-size: 11px;
 }
 
 .status-wrap .position.open {
@@ -197,16 +198,16 @@
 
 .focused-card-lines label {
   color: #9fb4da;
-  font-size: 10px;
+  font-size: 11px;
   min-width: 24px;
 }
 
 .focused-card-lines .state {
   border: 1px solid rgba(255, 255, 255, 0.22);
   border-radius: 999px;
-  padding: 2px 6px;
+  padding: 3px 8px;
   color: #a8c0ed;
-  font-size: 10px;
+  font-size: 11px;
 }
 
 .focused-card-lines .state.entered,
@@ -234,43 +235,43 @@
 
 .focused-card-lines small {
   color: #84a0cf;
-  font-size: 10px;
+  font-size: 11px;
   margin-left: auto;
 }
 
 .focused-card-lines p {
   margin: 5px 0 0;
   color: #b9cae7;
-  font-size: 11px;
-  line-height: 1.35;
+  font-size: 12px;
+  line-height: 1.4;
 }
 
 .focused-card .worker-note {
   display: block;
   margin-top: 6px;
   color: #86a1cf;
-  font-size: 10px;
+  font-size: 11px;
 }
 
 .focused-event-item {
   display: grid;
   grid-template-columns: 90px 52px 160px 1fr;
   align-items: center;
-  gap: 8px;
+  gap: 10px;
   border: 1px solid rgba(255, 255, 255, 0.1);
   border-radius: 8px;
   background: rgba(11, 20, 38, 0.86);
   color: #dce9ff;
-  padding: 8px;
+  padding: 9px 10px;
 }
 
 .focused-event-item .time {
   color: #99b5e4;
-  font-size: 11px;
+  font-size: 12px;
 }
 
 .focused-event-item .level {
-  font-size: 11px;
+  font-size: 12px;
   font-weight: 700;
 }
 
@@ -288,22 +289,22 @@
 
 .focused-event-item .action {
   color: #dce9ff;
-  font-size: 11px;
+  font-size: 12px;
 }
 
 .focused-event-item .detail {
   color: #b5c8ea;
-  font-size: 11px;
-  line-height: 1.35;
+  font-size: 12px;
+  line-height: 1.4;
 }
 
 .focused-live-column .empty {
-  margin: 8px;
+  margin: 10px;
   border: 1px dashed rgba(255, 255, 255, 0.14);
   border-radius: 8px;
-  padding: 14px 10px;
+  padding: 18px 12px;
   color: #8fa4ca;
-  font-size: 11px;
+  font-size: 12px;
   text-align: center;
 }
 
