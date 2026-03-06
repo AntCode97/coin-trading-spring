@@ -14,9 +14,6 @@ type InvestmentTimelineRow = {
 };
 
 interface InvestmentLiveDockProps {
-  open: boolean;
-  collapsed: boolean;
-  onToggleCollapse: () => void;
   swingEnabled: boolean;
   positionEnabled: boolean;
   swingState: AutopilotState;
@@ -66,9 +63,6 @@ function sumFunnel(left: OrderLifecycleGroupSummary, right: OrderLifecycleGroupS
 }
 
 export function InvestmentLiveDock({
-  open,
-  collapsed,
-  onToggleCollapse,
   swingEnabled,
   positionEnabled,
   swingState,
@@ -114,10 +108,8 @@ export function InvestmentLiveDock({
       .slice(0, 160);
   }, [positionLiveData?.orderEvents, swingLiveData?.orderEvents]);
 
-  if (!open) return null;
-
   return (
-    <section className={`investment-live-dock ${collapsed ? 'collapsed' : ''}`}>
+    <section className="investment-live-dock">
       <div className="investment-live-header">
         <div>
           <strong>투자 시스템 라이브 도크</strong>
@@ -125,13 +117,8 @@ export function InvestmentLiveDock({
             SWING {swingEnabled ? 'ON' : 'OFF'} · POSITION {positionEnabled ? 'ON' : 'OFF'}
           </span>
         </div>
-        <button type="button" onClick={onToggleCollapse}>
-          {collapsed ? '열기' : '접기'}
-        </button>
       </div>
 
-      {!collapsed && (
-        <>
           <div className="investment-live-summary">
             <article className="engine-card swing">
               <h4>SWING</h4>
@@ -207,8 +194,6 @@ export function InvestmentLiveDock({
               )}
             </div>
           </div>
-        </>
-      )}
     </section>
   );
 }

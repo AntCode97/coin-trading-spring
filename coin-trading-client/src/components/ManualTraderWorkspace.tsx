@@ -100,7 +100,6 @@ const ENGINE_CAPITAL_RATIOS = {
   POSITION: 0.25,
 } as const;
 
-type MonitorTab = 'SCALP' | 'INVEST';
 
 function createInitialAutopilotState(): AutopilotState {
   return {
@@ -246,7 +245,6 @@ type WorkspacePrefs = {
   playwrightAutoStart?: boolean;
   playwrightMcpPort?: number;
   playwrightMcpUrl?: string;
-  autopilotDockCollapsed?: boolean;
   winRateThresholdMode?: 'DYNAMIC_P70' | 'FIXED';
   fixedMinRecommendedWinRate?: number;
   fixedMinMarketWinRate?: number;
@@ -259,9 +257,6 @@ type WorkspacePrefs = {
   focusedScalpEnabled?: boolean;
   focusedScalpMarkets?: string[];
   focusedScalpPollIntervalSec?: number;
-  focusedScalpDockCollapsed?: boolean;
-  investmentDockCollapsed?: boolean;
-  monitorTab?: MonitorTab;
   llmProvider?: LlmProviderId;
   openAiModel?: CodexModelId;
   zaiModel?: ZaiModelId;
@@ -319,8 +314,7 @@ function migrateWorkspacePrefs(prefs: WorkspacePrefs): WorkspacePrefs {
   const hasEngineSplitPrefs =
     typeof prefs.swingAutopilotEnabled === 'boolean' ||
     typeof prefs.positionAutopilotEnabled === 'boolean' ||
-    typeof prefs.autopilotCapitalPoolKrw === 'number' ||
-    typeof prefs.monitorTab === 'string';
+    typeof prefs.autopilotCapitalPoolKrw === 'number';
 
   if (!hasEngineSplitPrefs) {
     const legacyEnabled = prefs.autopilotEnabled ?? false;
@@ -330,22 +324,18 @@ function migrateWorkspacePrefs(prefs: WorkspacePrefs): WorkspacePrefs {
         next.autopilotEnabled = false;
         next.swingAutopilotEnabled = true;
         next.positionAutopilotEnabled = false;
-        next.monitorTab = 'INVEST';
       } else if (legacyMode === 'POSITION') {
         next.autopilotEnabled = false;
         next.swingAutopilotEnabled = false;
         next.positionAutopilotEnabled = true;
-        next.monitorTab = 'INVEST';
       } else {
         next.autopilotEnabled = true;
         next.swingAutopilotEnabled = false;
         next.positionAutopilotEnabled = false;
-        next.monitorTab = 'SCALP';
       }
     } else {
       next.swingAutopilotEnabled = false;
       next.positionAutopilotEnabled = false;
-      next.monitorTab = 'SCALP';
     }
 
     const legacyAmountKrw = Math.max(MIN_ORDER_AMOUNT_KRW, Math.round(prefs.autopilotAmountKrw ?? 10_000));
@@ -354,13 +344,6 @@ function migrateWorkspacePrefs(prefs: WorkspacePrefs): WorkspacePrefs {
       DEFAULT_AUTOPILOT_CAPITAL_POOL_KRW,
       legacyAmountKrw * legacyMaxPositions
     );
-  }
-
-  if (!next.monitorTab) {
-    next.monitorTab =
-      (next.swingAutopilotEnabled || next.positionAutopilotEnabled)
-        ? 'INVEST'
-        : 'SCALP';
   }
 
   next.amountPresets = normalizeAmountPresets(next.amountPresets);
@@ -805,7 +788,6 @@ export default function ManualTraderWorkspace() {
   );
   const [playwrightStatus, setPlaywrightStatus] = useState<PlaywrightMcpStatus | null>(null);
   const [playwrightAction, setPlaywrightAction] = useState<'idle' | 'starting' | 'stopping'>('idle');
-  const [monitorTab, setMonitorTab] = useState<MonitorTab>(prefs.monitorTab ?? 'SCALP');
   const [deepDiveOpen, setDeepDiveOpen] = useState(false);
   const [autopilotEnabled, setAutopilotEnabled] = useState<boolean>(prefs.autopilotEnabled ?? false);
   const [swingAutopilotEnabled, setSwingAutopilotEnabled] = useState<boolean>(prefs.swingAutopilotEnabled ?? false);
@@ -837,9 +819,6 @@ export default function ManualTraderWorkspace() {
   );
   const [marketFallbackAfterCancel, setMarketFallbackAfterCancel] = useState<boolean>(
     prefs.marketFallbackAfterCancel ?? true
-  );
-  const [autopilotDockCollapsed, setAutopilotDockCollapsed] = useState<boolean>(
-    prefs.autopilotDockCollapsed ?? false
   );
   const [winRateThresholdMode, setWinRateThresholdMode] = useState<'DYNAMIC_P70' | 'FIXED'>(
     prefs.winRateThresholdMode ?? 'DYNAMIC_P70'
@@ -876,12 +855,6 @@ export default function ManualTraderWorkspace() {
     prefs.selectedMarket ?? 'KRW-BTC'
   );
   const [focusedScalpContextMenu, setFocusedScalpContextMenu] = useState<FocusedScalpContextMenu | null>(null);
-  const [focusedScalpDockCollapsed, setFocusedScalpDockCollapsed] = useState<boolean>(
-    prefs.focusedScalpDockCollapsed ?? false
-  );
-  const [investmentDockCollapsed, setInvestmentDockCollapsed] = useState<boolean>(
-    prefs.investmentDockCollapsed ?? false
-  );
   const [focusedScalpPollIntervalSec, setFocusedScalpPollIntervalSec] = useState<number>(
     Math.min(300, Math.max(5, Math.round(prefs.focusedScalpPollIntervalSec ?? 20)))
   );
@@ -1393,7 +1366,6 @@ export default function ManualTraderWorkspace() {
       sortDirection,
       aiRefreshSec,
       tradingMode,
-      monitorTab,
       autopilotEnabled,
       swingAutopilotEnabled,
       positionAutopilotEnabled,
@@ -1413,7 +1385,6 @@ export default function ManualTraderWorkspace() {
       playwrightAutoStart,
       playwrightMcpPort,
       playwrightMcpUrl,
-      autopilotDockCollapsed,
       winRateThresholdMode,
       fixedMinMarketWinRate,
       minLlmConfidence,
@@ -1424,8 +1395,6 @@ export default function ManualTraderWorkspace() {
       focusedScalpEnabled,
       focusedScalpMarkets: focusedScalpParsed.markets,
       focusedScalpPollIntervalSec,
-      focusedScalpDockCollapsed,
-      investmentDockCollapsed,
       llmProvider,
       openAiModel,
       zaiModel,
@@ -1442,7 +1411,6 @@ export default function ManualTraderWorkspace() {
     sortDirection,
     aiRefreshSec,
     tradingMode,
-    monitorTab,
     autopilotEnabled,
     swingAutopilotEnabled,
     positionAutopilotEnabled,
@@ -1462,7 +1430,6 @@ export default function ManualTraderWorkspace() {
     playwrightAutoStart,
     playwrightMcpPort,
     playwrightMcpUrl,
-    autopilotDockCollapsed,
     winRateThresholdMode,
     fixedMinMarketWinRate,
     minLlmConfidence,
@@ -1473,8 +1440,6 @@ export default function ManualTraderWorkspace() {
     focusedScalpEnabled,
     focusedScalpParsed.markets,
     focusedScalpPollIntervalSec,
-    focusedScalpDockCollapsed,
-    investmentDockCollapsed,
     llmProvider,
     openAiModel,
     zaiModel,

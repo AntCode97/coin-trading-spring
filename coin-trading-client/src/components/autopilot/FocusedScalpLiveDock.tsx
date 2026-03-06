@@ -33,9 +33,6 @@ export interface FocusedScalpDecisionSummaryView {
 }
 
 interface FocusedScalpLiveDockProps {
-  open: boolean;
-  collapsed: boolean;
-  onToggleCollapse: () => void;
   enabled: boolean;
   cards: FocusedScalpDecisionCardView[];
   summary: FocusedScalpDecisionSummaryView;
@@ -56,9 +53,6 @@ function toClassToken(value: string): string {
 }
 
 export function FocusedScalpLiveDock({
-  open,
-  collapsed,
-  onToggleCollapse,
   enabled,
   cards,
   summary,
@@ -81,26 +75,19 @@ export function FocusedScalpLiveDock({
     [cards, selectedMarket]
   );
 
-  if (!open) return null;
-
   return (
-    <section className={`focused-live-dock ${collapsed ? 'collapsed' : ''}`}>
+    <section className="focused-live-dock">
       <div className="focused-live-header">
         <div>
-          <strong>선택 단타 라이브 도크</strong>
+          <strong>선택 단타</strong>
           <span>
             {enabled
-              ? `활성 코인 ${cards.length}개 · 진입 ${summary.entered} · 미진입 ${summary.noEntry}`
-              : '선택 단타 루프 비활성'}
+              ? `활성 ${cards.length}개 · 진입 ${summary.entered} · 미진입 ${summary.noEntry}`
+              : '비활성'}
           </span>
         </div>
-        <button type="button" onClick={onToggleCollapse}>
-          {collapsed ? '열기' : '접기'}
-        </button>
       </div>
 
-      {!collapsed && (
-        <>
           <div className="focused-live-summary">
             <span className="chip entered">진입 {summary.entered}</span>
             <span className="chip pending">대기 {summary.pending}</span>
@@ -186,8 +173,6 @@ export function FocusedScalpLiveDock({
               )}
             </div>
           </div>
-        </>
-      )}
     </section>
   );
 }

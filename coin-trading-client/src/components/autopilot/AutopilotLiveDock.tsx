@@ -208,9 +208,6 @@ function normalizeServerCandidates(liveData: AutopilotLiveResponse | undefined):
 }
 
 interface AutopilotLiveDockProps {
-  open: boolean;
-  collapsed: boolean;
-  onToggleCollapse: () => void;
   autopilotEnabled: boolean;
   autopilotState: AutopilotState;
   liveData?: AutopilotLiveResponse;
@@ -218,9 +215,6 @@ interface AutopilotLiveDockProps {
 }
 
 export function AutopilotLiveDock({
-  open,
-  collapsed,
-  onToggleCollapse,
   autopilotEnabled,
   autopilotState,
   liveData,
@@ -446,22 +440,16 @@ export function AutopilotLiveDock({
     enterFillRate * 0.38 + exitFillRate * 0.32 + entryTokenHealth * 0.2 + workerActivityRate * 0.1
   );
 
-  if (!open) return null;
-
   return (
-    <section className={`autopilot-live-dock ${collapsed ? 'collapsed' : ''}`}>
+    <section className="autopilot-live-dock">
       <header className="autopilot-live-header">
         <div>
-          <strong>오토파일럿 라이브 도크</strong>
+          <strong>초단타 라이브</strong>
           <span>{autopilotEnabled ? '실행 중' : '대기'}</span>
         </div>
-        <button type="button" onClick={onToggleCollapse}>
-          {collapsed ? '펼치기' : '접기'}
-        </button>
       </header>
 
-      {!collapsed && (
-        <div className="autopilot-command-hub">
+      <div className="autopilot-command-hub">
           <div className="command-tile">
             <label>AI 헬스스코어</label>
             <strong>{autopilotHealthScore} / 100</strong>
@@ -507,8 +495,6 @@ export function AutopilotLiveDock({
         </div>
       )}
 
-      {!collapsed && (
-        <>
           <div className="autopilot-funnel-tabs">
             {groupTabs.map((group) => (
               <button
@@ -877,8 +863,6 @@ export function AutopilotLiveDock({
               </div>
             )}
           </div>
-        </>
-      )}
     </section>
   );
 }

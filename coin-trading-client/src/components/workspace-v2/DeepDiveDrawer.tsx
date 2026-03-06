@@ -101,9 +101,6 @@ export function DeepDiveDrawer({
         <div className="dd-body">
           {tab === 'FOCUSED_SCALP' ? (
             <FocusedScalpLiveDock
-              open={true}
-              collapsed={false}
-              onToggleCollapse={() => {}}
               enabled={focusedScalpEnabled}
               cards={focusedScalpCards}
               summary={focusedScalpSummary}
@@ -113,9 +110,6 @@ export function DeepDiveDrawer({
             <>
               {showScalp && (
                 <AutopilotLiveDock
-                  open={true}
-                  collapsed={false}
-                  onToggleCollapse={() => {}}
                   autopilotEnabled={autopilotEnabled}
                   autopilotState={autopilotState}
                   liveData={scalpLiveData}
@@ -124,9 +118,6 @@ export function DeepDiveDrawer({
               )}
               {showInvest && (
                 <InvestmentLiveDock
-                  open={true}
-                  collapsed={false}
-                  onToggleCollapse={() => {}}
                   swingEnabled={swingEnabled}
                   positionEnabled={positionEnabled}
                   swingState={swingState}
