@@ -613,14 +613,14 @@ curl -X POST http://localhost:8080/api/settings/regime \
 
 1. 데스크톱 기본 진입 화면을 `AiDayTraderScreen` 하나로 고정하고, 기존 `ManualTraderWorkspace` 중심 경로를 데스크톱 주 경로에서 제거했습니다.
 2. 신규 API `GET /api/guided-trading/ai-scalp/scan`를 추가해 거래대금 상위 KRW 시장, 추천 요약, featurePack, optional crowd 데이터를 한 번에 제공합니다.
-3. `AiDayTraderEngine`는 더 이상 `/autopilot/opportunities`의 `AUTO_PASS/BORDERLINE`를 하드 게이트로 쓰지 않고 `scan -> shortlist 12 -> finalist 4 -> BUY|WAIT`, `HOLD|SELL`의 LLM-first 루프로 동작합니다.
+3. `AiDayTraderEngine`는 더 이상 `/autopilot/opportunities`의 `AUTO_PASS/BORDERLINE`를 하드 게이트로 쓰지 않고 `scan -> shortlist 12 -> finalist(진입 강도별 4/6/8) -> BUY|WAIT`, `HOLD|SELL`의 LLM-first 루프로 동작합니다.
 4. 데스크톱 앱은 `AI_SCALP_TRADER` prefix 포지션만 관리하며, `10초 스캔`, `5초 포지션 점검`, `최대 5포지션`, `최대 30분 보유`, `60~120초 재진입 쿨다운`, `물타기 금지` 기본값을 사용합니다.
 5. 새 터미널 UI는 상단 세션 바, 좌측 기회 큐, 중앙 결정 저널, 우측 포지션/설정의 3열 구조로 재정렬해 “지금 단타가 잘 돌고 있는지”를 한 화면에서 확인할 수 있게 했습니다.
 6. 설정 패널에서 `스캔 주기`와 `포지션 점검`을 최대 `3분`까지 선택할 수 있고, `1회 금액` 입력은 `5,000원` 단위로 조정됩니다.
 7. `중지`는 신규 진입만 끊고 기존 포지션 관리는 계속 유지합니다. 포지션이 모두 정리되면 엔진이 완전히 멈춥니다.
 8. 하단 `오늘 거래내역` 패널에서 금일 거래를 전체/코인별로 필터링해 볼 수 있습니다.
 9. 초단타 수익률/PnL은 빗썸 왕복 수수료 0.08%를 항상 반영하며, 시장가 매수 금액이 진입단가로 잘못 저장된 경우 현재가/잔고 평균단가 기준으로 자동 교정합니다.
-10. AI 초단타 엔진은 순기대값/승률/RR/스프레드/진입괴리 기반 리스크 게이트를 먼저 통과한 후보만 진입 분석하며, 기본 보호폭은 손절 최소 `0.55%`, 익절 최소 `0.95%`, 손절 후 재진입 쿨다운 `8분`으로 넓혀 과도한 손절 반복을 줄였습니다.
+10. AI 초단타 엔진은 순기대값/승률/RR/스프레드/진입괴리 기반 soft gate를 먼저 적용합니다. 아주 나쁜 후보만 강하게 탈락시키고, borderline 후보도 LLM이 재검토할 수 있게 열어둡니다. 설정 패널의 `진입 강도`로 `보수적 / 균형 / 공격적`을 선택하면 finalist 수, BUY confidence 컷, soft gate 민감도가 함께 바뀝니다. 기본 보호폭은 손절 최소 `0.55%`, 익절 최소 `0.95%`, 손절 후 재진입 쿨다운 `8분`입니다.
 11. `KRW-USDT` 같은 달러 추종 자산은 별도 `DOLLAR_PEG` 템포 프로필로 처리합니다. 일반 알트보다 느린 전개를 가정해 더 긴 초기 보유 인내시간, 더 낮은 목표폭, 더 긴 최대 보유시간을 사용합니다.
 12. 원격 서버가 비정상 `averageEntryPrice`를 보내더라도 데스크톱 앱은 현재가/손절/익절 기반 sanity check를 적용해 과장된 미실현 수익률 표시를 억제합니다.
 

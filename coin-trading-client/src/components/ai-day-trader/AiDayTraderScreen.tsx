@@ -5,10 +5,12 @@ import {
   type GuidedClosedTradeView,
 } from '../../api';
 import {
+  AI_ENTRY_AGGRESSION_OPTIONS,
   AiDayTraderEngine,
   DEFAULT_AI_DAY_TRADER_CONFIG,
   createInitialAiTraderState,
   type AiDayTraderConfig,
+  type AiEntryAggression,
   type AiRankedOpportunity,
   type AiTraderEvent,
   type AiTraderState,
@@ -35,6 +37,13 @@ const PREFERENCE_KEY = 'ai-scalp-terminal.preferences.v1';
 const OPENAI_TRADER_MODELS = CODEX_MODELS.filter((model) => model.id !== 'gpt-4');
 const JOURNAL_PAGE_SIZE = 18;
 
+function normalizeEntryAggression(value?: string): AiEntryAggression {
+  if (value === 'CONSERVATIVE' || value === 'AGGRESSIVE') {
+    return value;
+  }
+  return 'BALANCED';
+}
+
 function normalizePreferredModel(provider: LlmProviderId, model?: string): string {
   const catalog = provider === 'zai' ? ZAI_MODELS : OPENAI_TRADER_MODELS;
   const normalized = model?.trim();
@@ -56,6 +65,7 @@ function loadPreferences(): AiDayTraderConfig {
       ...DEFAULT_AI_DAY_TRADER_CONFIG,
       ...parsed,
       provider,
+      entryAggression: normalizeEntryAggression(parsed.entryAggression),
       model: normalizePreferredModel(provider, parsed.model),
       strategyCode: DEFAULT_AI_DAY_TRADER_CONFIG.strategyCode,
     };
@@ -569,6 +579,18 @@ export default function AiDayTraderScreen() {
                 >
                   {(config.provider === 'openai' ? OPENAI_TRADER_MODELS : ZAI_MODELS).map((model) => (
                     <option key={model.id} value={model.id}>{model.label}</option>
+                  ))}
+                </select>
+              </ConfigField>
+
+              <ConfigField label="진입 강도">
+                <select
+                  value={config.entryAggression}
+                  disabled={running}
+                  onChange={(event) => updateConfig({ entryAggression: event.target.value as AiEntryAggression })}
+                >
+                  {AI_ENTRY_AGGRESSION_OPTIONS.map((option) => (
+                    <option key={option.value} value={option.value}>{option.label}</option>
                   ))}
                 </select>
               </ConfigField>

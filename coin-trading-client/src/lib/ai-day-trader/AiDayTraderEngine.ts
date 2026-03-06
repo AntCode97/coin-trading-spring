@@ -17,6 +17,7 @@ export interface AiDayTraderConfig {
   enabled: boolean;
   provider: LlmProviderId;
   model: string;
+  entryAggression: AiEntryAggression;
   zaiEndpointMode?: ZaiEndpointMode;
   delegationMode?: DelegationMode;
   zaiDelegateModel?: string;
@@ -31,6 +32,7 @@ export interface AiDayTraderConfig {
 }
 
 export type AiTraderStatus = 'IDLE' | 'SCANNING' | 'RANKING' | 'ANALYZING' | 'EXECUTING' | 'PAUSED' | 'ERROR';
+export type AiEntryAggression = 'CONSERVATIVE' | 'BALANCED' | 'AGGRESSIVE';
 export type AiTraderEventType =
   | 'SCAN'
   | 'RANK'
@@ -130,10 +132,22 @@ interface AiTempoProfile {
   manageNote: string;
 }
 
+interface AiEntryAggressionProfile {
+  label: string;
+  finalistLimit: number;
+  minBuyConfidence: number;
+  expectancyOffset: number;
+  winRateOffset: number;
+  riskRewardOffset: number;
+  gapMultiplier: number;
+  spreadMultiplier: number;
+  crowdFlowOffset: number;
+  softPenaltyAllowance: number;
+}
+
 type StateListener = (state: AiTraderState) => void;
 
 const SHORTLIST_LIMIT = 12;
-const FINALIST_LIMIT = 4;
 const EVENT_HISTORY_LIMIT = 240;
 const CLOSED_TRADE_LIMIT = 200;
 const TAKE_PROFIT_COOLDOWN_MS = 120_000;
@@ -144,12 +158,12 @@ const CONTEXT_FAILURE_EXIT_THRESHOLD = 3;
 const DEFAULT_TEMPO_PROFILE: AiTempoProfile = {
   key: 'DEFAULT',
   label: '기본',
-  minEntryExpectancyPct: 0.10,
-  minEntryWinRate: 55,
-  minEntryRiskReward: 1.35,
-  maxEntryGapPct: 0.35,
-  maxEntrySpreadPct: 0.12,
-  minEntryCrowdFlow: 42,
+  minEntryExpectancyPct: 0.05,
+  minEntryWinRate: 53.5,
+  minEntryRiskReward: 1.18,
+  maxEntryGapPct: 0.55,
+  maxEntrySpreadPct: 0.18,
+  minEntryCrowdFlow: 18,
   earlyHoldMinutes: 2,
   earlyExitPnlFloor: -0.45,
   minStopDistancePct: 0.55,
@@ -164,12 +178,12 @@ const DEFAULT_TEMPO_PROFILE: AiTempoProfile = {
 const DOLLAR_PEG_TEMPO_PROFILE: AiTempoProfile = {
   key: 'DOLLAR_PEG',
   label: '달러 추종',
-  minEntryExpectancyPct: 0.04,
-  minEntryWinRate: 56.5,
-  minEntryRiskReward: 1.15,
-  maxEntryGapPct: 0.18,
-  maxEntrySpreadPct: 0.08,
-  minEntryCrowdFlow: 18,
+  minEntryExpectancyPct: 0.02,
+  minEntryWinRate: 55.0,
+  minEntryRiskReward: 1.05,
+  maxEntryGapPct: 0.24,
+  maxEntrySpreadPct: 0.12,
+  minEntryCrowdFlow: 8,
   earlyHoldMinutes: 4,
   earlyExitPnlFloor: -0.30,
   minStopDistancePct: 0.32,
@@ -192,6 +206,51 @@ const DOLLAR_PEG_SYMBOLS = new Set([
 ]);
 const BITHUMB_FEE_RATE = 0.0004;
 
+const ENTRY_AGGRESSION_PROFILES: Record<AiEntryAggression, AiEntryAggressionProfile> = {
+  CONSERVATIVE: {
+    label: '보수적',
+    finalistLimit: 4,
+    minBuyConfidence: 0.62,
+    expectancyOffset: 0.05,
+    winRateOffset: 1.5,
+    riskRewardOffset: 0.12,
+    gapMultiplier: 0.8,
+    spreadMultiplier: 0.8,
+    crowdFlowOffset: 8,
+    softPenaltyAllowance: -0.35,
+  },
+  BALANCED: {
+    label: '균형',
+    finalistLimit: 6,
+    minBuyConfidence: 0.56,
+    expectancyOffset: 0,
+    winRateOffset: 0,
+    riskRewardOffset: 0,
+    gapMultiplier: 1,
+    spreadMultiplier: 1,
+    crowdFlowOffset: 0,
+    softPenaltyAllowance: 0,
+  },
+  AGGRESSIVE: {
+    label: '공격적',
+    finalistLimit: 8,
+    minBuyConfidence: 0.48,
+    expectancyOffset: -0.03,
+    winRateOffset: -1.5,
+    riskRewardOffset: -0.08,
+    gapMultiplier: 1.25,
+    spreadMultiplier: 1.25,
+    crowdFlowOffset: -8,
+    softPenaltyAllowance: 0.45,
+  },
+};
+
+export const AI_ENTRY_AGGRESSION_OPTIONS: Array<{ value: AiEntryAggression; label: string }> = [
+  { value: 'CONSERVATIVE', label: '보수적' },
+  { value: 'BALANCED', label: '균형' },
+  { value: 'AGGRESSIVE', label: '공격적' },
+];
+
 const SHORTLIST_SYSTEM_PROMPT = [
   '너는 빗썸 KRW 현물 시장만 보는 전업 초단타 트레이더다.',
   '목표는 5~30분 안에 끝낼 수 있는 유동성 높은 기회를 많이 잡는 것이다.',
@@ -205,7 +264,8 @@ const SHORTLIST_SYSTEM_PROMPT = [
 const ENTRY_SYSTEM_PROMPT = [
   '너는 공격적이지만 규율 있는 KRW 현물 초단타 트레이더다.',
   '보유시간 목표는 5~30분이다.',
-  '순기대값이 수수료를 넘지 못하거나, 스프레드가 넓거나, 추격 진입이면 WAIT를 선택하라.',
+  '하드리스크가 아니면 과도하게 WAIT 하지 말고, follow-through 가능성이 있으면 BUY를 우선 검토하라.',
+  '순기대값이 명확히 음수이거나, 스프레드가 과도하게 넓거나, 급등 추격이면 WAIT를 선택하라.',
   '깨끗한 추세 지속이나 눌림 재가속만 BUY하고, 잡음성 급등/급락 반대매매는 피하라.',
   'JSON만 반환한다.',
   '형식: {"action":"BUY|WAIT","confidence":0.0,"reasoning":"짧은 근거","stopLoss":0,"takeProfit":0,"urgency":"LOW|MEDIUM|HIGH"}',
@@ -296,6 +356,7 @@ export const DEFAULT_AI_DAY_TRADER_CONFIG: AiDayTraderConfig = {
   enabled: false,
   provider: 'openai',
   model: DEFAULT_OPENAI_MODEL,
+  entryAggression: 'BALANCED',
   zaiEndpointMode: 'coding',
   delegationMode: 'AUTO_AND_MANUAL',
   zaiDelegateModel: 'glm-5',
@@ -563,7 +624,8 @@ export class AiDayTraderEngine {
           .join(' · ')
       );
 
-      const finalists = ranked.slice(0, FINALIST_LIMIT);
+      const aggressionProfile = this.getEntryAggressionProfile();
+      const finalists = ranked.slice(0, aggressionProfile.finalistLimit);
       if (finalists.length === 0) return;
 
       this.setStatus('ANALYZING');
@@ -577,12 +639,12 @@ export class AiDayTraderEngine {
         if (!scanMarket) continue;
         const tempoProfile = this.getTempoProfile(scanMarket.market, scanMarket.koreanName);
 
-        const entryGateFailure = this.evaluateEntryGate(scanMarket, tempoProfile);
+        const entryGateFailure = this.evaluateEntryGate(scanMarket, tempoProfile, aggressionProfile);
         if (entryGateFailure) {
           this.pushEvent(
             'BUY_DECISION',
             `${finalist.market} WAIT`,
-            `${tempoProfile.label} 템포 · 리스크 필터: ${entryGateFailure}`,
+            `${aggressionProfile.label} 진입 · ${tempoProfile.label} 템포 · 리스크 필터: ${entryGateFailure}`,
             finalist.market,
             0.99,
             'LOW'
@@ -608,7 +670,7 @@ export class AiDayTraderEngine {
           continue;
         }
 
-        const decision = await this.requestEntryDecision(scanMarket, finalist, context, tempoProfile);
+        const decision = await this.requestEntryDecision(scanMarket, finalist, context, tempoProfile, aggressionProfile);
         if (!decision) continue;
 
         this.pushEvent(
@@ -620,7 +682,7 @@ export class AiDayTraderEngine {
           decision.urgency
         );
 
-        if (decision.action !== 'BUY' || decision.confidence < 0.62) {
+        if (decision.action !== 'BUY' || decision.confidence < aggressionProfile.minBuyConfidence) {
           continue;
         }
 
@@ -839,13 +901,15 @@ export class AiDayTraderEngine {
     scanMarket: AiScalpScanMarket,
     finalist: AiRankedOpportunity,
     context: GuidedAgentContextResponse,
-    tempoProfile: AiTempoProfile
+    tempoProfile: AiTempoProfile,
+    aggressionProfile: AiEntryAggressionProfile
   ): Promise<AiEntryDecision | null> {
     try {
       const response = await requestOneShotTextWithMeta({
         prompt: [
           ENTRY_SYSTEM_PROMPT,
           '',
+          `진입 강도: ${aggressionProfile.label}. finalist ${aggressionProfile.finalistLimit}개, BUY confidence 하한 ${Math.round(aggressionProfile.minBuyConfidence * 100)}%.`,
           `템포 프로필: ${tempoProfile.label}. ${tempoProfile.manageNote}`,
           `후보 요약: ${JSON.stringify({
             market: scanMarket.market,
@@ -1113,37 +1177,39 @@ export class AiDayTraderEngine {
     }
   }
 
-  private evaluateEntryGate(scanMarket: AiScalpScanMarket, tempoProfile: AiTempoProfile): string | null {
+  private evaluateEntryGate(
+    scanMarket: AiScalpScanMarket,
+    tempoProfile: AiTempoProfile,
+    aggressionProfile: AiEntryAggressionProfile
+  ): string | null {
+    const minExpectancyPct = Math.max(-0.01, tempoProfile.minEntryExpectancyPct + aggressionProfile.expectancyOffset);
+    const minWinRate = tempoProfile.minEntryWinRate + aggressionProfile.winRateOffset;
+    const minRiskReward = Math.max(0.95, tempoProfile.minEntryRiskReward + aggressionProfile.riskRewardOffset);
+    const maxSpreadPct = tempoProfile.maxEntrySpreadPct * aggressionProfile.spreadMultiplier;
+    const maxEntryGapPct = tempoProfile.maxEntryGapPct * aggressionProfile.gapMultiplier;
+    const minCrowdFlow = Math.max(0, tempoProfile.minEntryCrowdFlow + aggressionProfile.crowdFlowOffset);
     const expectancyPct = scanMarket.recommendation.expectancyPct;
-    if (expectancyPct < tempoProfile.minEntryExpectancyPct) {
-      return `순기대값 ${expectancyPct.toFixed(2)}% 부족`;
+    if (expectancyPct < -0.02) {
+      return `순기대값 ${expectancyPct.toFixed(2)}% 음수`;
     }
 
     const recommendedWinRate = scanMarket.recommendation.recommendedEntryWinRate;
-    if (recommendedWinRate < tempoProfile.minEntryWinRate) {
-      return `추천 승률 ${recommendedWinRate.toFixed(1)}% 부족`;
-    }
-
     const riskRewardRatio = scanMarket.recommendation.riskRewardRatio;
-    if (riskRewardRatio < tempoProfile.minEntryRiskReward) {
-      return `RR ${riskRewardRatio.toFixed(2)} 부족`;
+    if (riskRewardRatio < 0.95) {
+      return `RR ${riskRewardRatio.toFixed(2)} 과소`;
     }
 
     const spreadPercent = scanMarket.crowd?.spreadPercent ?? scanMarket.featurePack.spreadPercent ?? 0;
-    if (spreadPercent > tempoProfile.maxEntrySpreadPct) {
+    if (spreadPercent > maxSpreadPct * 1.8) {
       return `스프레드 ${spreadPercent.toFixed(2)}% 과다`;
     }
 
     const entryGapPct = Math.max(0, scanMarket.featurePack.entryGapPct ?? 0);
-    if (entryGapPct > tempoProfile.maxEntryGapPct) {
+    if (entryGapPct > maxEntryGapPct * 2.0) {
       return `진입 괴리 ${entryGapPct.toFixed(2)}% 과다`;
     }
 
     const crowdFlow = scanMarket.crowd?.flowScore ?? scanMarket.featurePack.crowdFlowScore ?? 0;
-    if (crowdFlow > 0 && crowdFlow < tempoProfile.minEntryCrowdFlow) {
-      return `crowd flow ${crowdFlow.toFixed(0)} 부족`;
-    }
-
     const priceChange = scanMarket.changeRate;
     if (tempoProfile.key === 'DOLLAR_PEG' && priceChange >= 1.2 && entryGapPct >= 0.08) {
       return `달러 추종 자산 급등 추격 ${priceChange.toFixed(2)}%`;
@@ -1151,6 +1217,55 @@ export class AiDayTraderEngine {
 
     if (priceChange >= 4.0 && entryGapPct >= 0.18) {
       return `급등 추격 구간 ${priceChange.toFixed(2)}%`;
+    }
+
+    let softPenalty = 0;
+    const penaltyReasons: string[] = [];
+
+    if (expectancyPct < minExpectancyPct) {
+      softPenalty += expectancyPct < minExpectancyPct * 0.5 ? 1.35 : 0.75;
+      penaltyReasons.push(`exp ${expectancyPct.toFixed(2)}%`);
+    }
+
+    if (recommendedWinRate < minWinRate) {
+      softPenalty += recommendedWinRate < minWinRate - 2.0 ? 1.0 : 0.55;
+      penaltyReasons.push(`승률 ${recommendedWinRate.toFixed(1)}%`);
+    }
+
+    if (riskRewardRatio < minRiskReward) {
+      softPenalty += riskRewardRatio < minRiskReward - 0.15 ? 1.0 : 0.55;
+      penaltyReasons.push(`RR ${riskRewardRatio.toFixed(2)}`);
+    }
+
+    if (spreadPercent > maxSpreadPct) {
+      softPenalty += spreadPercent > maxSpreadPct * 1.35 ? 0.95 : 0.45;
+      penaltyReasons.push(`spread ${spreadPercent.toFixed(2)}%`);
+    }
+
+    if (entryGapPct > maxEntryGapPct) {
+      softPenalty += entryGapPct > maxEntryGapPct * 1.4 ? 0.95 : 0.45;
+      penaltyReasons.push(`gap ${entryGapPct.toFixed(2)}%`);
+    }
+
+    if (crowdFlow > 0 && crowdFlow < minCrowdFlow) {
+      softPenalty += 0.35;
+      penaltyReasons.push(`flow ${crowdFlow.toFixed(0)}`);
+    }
+
+    const strongOverride =
+      expectancyPct >= minExpectancyPct + 0.08 &&
+      recommendedWinRate >= minWinRate + 2.5 &&
+      riskRewardRatio >= minRiskReward + 0.12;
+
+    const hardSoftPenaltyLimit = 2.4 + aggressionProfile.softPenaltyAllowance;
+    const weakSoftPenaltyLimit = 1.6 + aggressionProfile.softPenaltyAllowance * 0.5;
+
+    if (softPenalty >= hardSoftPenaltyLimit && !strongOverride) {
+      return `소프트게이트 초과 · ${penaltyReasons.join(' · ')}`;
+    }
+
+    if (softPenalty >= weakSoftPenaltyLimit && expectancyPct < minExpectancyPct + 0.03 && !strongOverride) {
+      return `진입 근거 약함 · ${penaltyReasons.join(' · ')}`;
     }
 
     return null;
@@ -1168,6 +1283,10 @@ export class AiDayTraderEngine {
       decision.urgency !== 'HIGH' &&
       position.unrealizedPnlPercent > tempoProfile.earlyExitPnlFloor
     );
+  }
+
+  private getEntryAggressionProfile(): AiEntryAggressionProfile {
+    return ENTRY_AGGRESSION_PROFILES[this.config.entryAggression] ?? ENTRY_AGGRESSION_PROFILES.BALANCED;
   }
 
   private getTempoProfile(market: string, koreanName?: string | null): AiTempoProfile {
