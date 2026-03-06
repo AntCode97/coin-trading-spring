@@ -1,8 +1,10 @@
 import {
+  type AutopilotOpportunityProfile,
   type AutopilotDecisionLogRequest,
   type AutopilotOpportunityView,
   guidedTradingApi,
   type GuidedAgentContextResponse,
+  type GuidedCrowdFeaturePack,
   type GuidedTradePosition,
 } from '../../api';
 import {
@@ -36,6 +38,7 @@ export interface AutopilotConfig {
   interval: string;
   confirmInterval: string;
   tradingMode: TradingMode;
+  opportunityProfile?: AutopilotOpportunityProfile;
   amountKrw: number;
   dailyLossLimitKrw: number;
   maxConcurrentPositions: number;
@@ -103,6 +106,8 @@ export interface AutopilotCandidateView {
   score?: number | null;
   riskRewardRatio?: number | null;
   entryGapPct?: number | null;
+  opportunityProfile?: AutopilotOpportunityProfile | null;
+  crowdMetrics?: GuidedCrowdFeaturePack | null;
   stage: CandidateStage;
   reason: string;
   updatedAt: number;
@@ -231,6 +236,7 @@ interface SpawnWorkerOptions {
   skipLlmEntryReview: boolean;
   entryAmountKrw: number;
   sourceStage: 'AUTO_PASS' | 'BORDERLINE' | 'FOCUSED_SCALP';
+  opportunityProfile?: AutopilotOpportunityProfile;
   updateCandidateView?: boolean;
   workerTickMs?: number;
   warnHoldingMs?: number | null;
@@ -320,6 +326,15 @@ export class AutopilotOrchestrator {
   updateConfig(next: AutopilotConfig): void {
     this.config = next;
     this.configureTokenGovernor();
+  }
+
+  private resolveOpportunityProfile(): AutopilotOpportunityProfile {
+    if (this.config.tradingMode !== 'SCALP') return 'CLASSIC';
+    return this.config.opportunityProfile === 'CROWD_PRESSURE' ? 'CROWD_PRESSURE' : 'CLASSIC';
+  }
+
+  private isCrowdPressureProfile(): boolean {
+    return this.resolveOpportunityProfile() === 'CROWD_PRESSURE';
   }
 
   pauseMarket(market: string, durationMs: number, reason: string): void {
@@ -420,6 +435,8 @@ export class AutopilotOrchestrator {
       score: seed?.score ?? prev?.score ?? null,
       riskRewardRatio: seed?.riskRewardRatio ?? prev?.riskRewardRatio ?? null,
       entryGapPct: seed?.entryGapPct ?? prev?.entryGapPct ?? null,
+      opportunityProfile: seed?.opportunityProfile ?? prev?.opportunityProfile ?? this.resolveOpportunityProfile(),
+      crowdMetrics: seed?.crowdMetrics ?? prev?.crowdMetrics ?? null,
       stage,
       reason,
       updatedAt: Date.now(),
@@ -554,7 +571,8 @@ export class AutopilotOrchestrator {
         this.config.interval,
         this.config.confirmInterval,
         this.config.tradingMode,
-        this.config.candidateLimit
+        this.config.candidateLimit,
+        this.resolveOpportunityProfile()
       );
       const allowlist = this.normalizeMarketAllowlist();
       const allowlistSet = allowlist.length > 0 ? new Set(allowlist) : null;
@@ -571,6 +589,7 @@ export class AutopilotOrchestrator {
       const fineAgentMaxPerTick = this.resolveFineAgentMaxPerTick();
       const llmEntryReviewMaxPerTick = this.resolveLlmEntryReviewMaxPerTick();
       const budgetEngine = this.resolveBudgetEngine();
+      const crowdPressureProfile = this.isCrowdPressureProfile();
       let fineAgentUsedInTick = 0;
       let llmEntryReviewUsedInTick = 0;
       let autoPass = 0;
@@ -601,68 +620,74 @@ export class AutopilotOrchestrator {
           stage = evaluation.stage;
           reason = evaluation.reason;
         } else {
-          const quantGate = this.evaluateQuantLlmGate(candidate, budgetEngine);
-          if (!quantGate.allow) {
-            stage = 'QUANT_FILTERED';
-            reason = quantGate.reason;
-          } else if (stage === 'BORDERLINE' && this.isScalpEngine()) {
-            // SCALP 엔진: BORDERLINE을 AUTO_PASS처럼 즉시 진입 (LLM 심사 생략)
-            stage = 'AUTO_PASS';
-            reason = 'SCALP 즉시진입: BORDERLINE → AUTO_PASS 승격';
-          } else if (stage === 'BORDERLINE') {
-            const budgetSnapshot = this.tokenGovernor.getSnapshot();
-            const quantOnlyFallback =
-              budgetSnapshot.remainingTokens <= 0 ||
-              budgetSnapshot.entryRemainingByEngine[budgetEngine] <= 0;
-            if (quantOnlyFallback) {
-              stage = 'TOKEN_BUDGET_SKIP';
-              reason = 'Quant-only fallback: BORDERLINE LLM 심사 차단';
-            } else if (llmEntryReviewUsedInTick >= llmEntryReviewMaxPerTick) {
-              stage = 'RECHECK_SCHEDULED';
-              reason = `tick당 LLM 진입심사 상한(${llmEntryReviewMaxPerTick}) 도달`;
-            } else {
-              const entryReviewBudget = this.canSpendLlm(
-                'ENTRY_REVIEW',
-                candidate.market,
-                this.estimateEntryReviewTokens()
-              );
-              if (!entryReviewBudget.allow) {
+          if (!crowdPressureProfile) {
+            const quantGate = this.evaluateQuantLlmGate(candidate, budgetEngine);
+            if (!quantGate.allow) {
+              stage = 'QUANT_FILTERED';
+              reason = quantGate.reason;
+            } else if (stage === 'BORDERLINE' && this.isScalpEngine()) {
+              // SCALP 엔진: BORDERLINE을 AUTO_PASS처럼 즉시 진입 (LLM 심사 생략)
+              stage = 'AUTO_PASS';
+              reason = 'SCALP 즉시진입: BORDERLINE → AUTO_PASS 승격';
+            } else if (stage === 'BORDERLINE') {
+              const budgetSnapshot = this.tokenGovernor.getSnapshot();
+              const quantOnlyFallback =
+                budgetSnapshot.remainingTokens <= 0 ||
+                budgetSnapshot.entryRemainingByEngine[budgetEngine] <= 0;
+              if (quantOnlyFallback) {
                 stage = 'TOKEN_BUDGET_SKIP';
-                reason = entryReviewBudget.reason ?? 'ENTRY_REVIEW 예산 부족';
-              }
-              if (
-                stage === 'BORDERLINE' &&
-                fineAgentEnabled &&
-                this.isFineAgentInvestOnly() &&
-                fineAgentUsedInTick < fineAgentMaxPerTick
-              ) {
-                const fineBudget = this.canSpendLlm(
-                  'FINE_AGENT',
+                reason = 'Quant-only fallback: BORDERLINE LLM 심사 차단';
+              } else if (llmEntryReviewUsedInTick >= llmEntryReviewMaxPerTick) {
+                stage = 'RECHECK_SCHEDULED';
+                reason = `tick당 LLM 진입심사 상한(${llmEntryReviewMaxPerTick}) 도달`;
+              } else {
+                const entryReviewBudget = this.canSpendLlm(
+                  'ENTRY_REVIEW',
                   candidate.market,
-                  this.estimateFineAgentTokens()
+                  this.estimateEntryReviewTokens()
                 );
-                if (!fineBudget.allow) {
+                if (!entryReviewBudget.allow) {
                   stage = 'TOKEN_BUDGET_SKIP';
-                  reason = fineBudget.reason ?? 'FineAgent 토큰 예산 부족';
-                } else {
-                  fineAgentUsedInTick += 1;
-                  const fineResolved = await this.resolveFineGrainedDecision(candidate);
-                  fineDecision = fineResolved.decision;
-                  if (!fineResolved.fromCache && fineDecision.usage.totalTokens > 0) {
-                    this.recordLlmTokenUsage('FINE_AGENT', candidate.market, fineDecision.usage.totalTokens);
+                  reason = entryReviewBudget.reason ?? 'ENTRY_REVIEW 예산 부족';
+                }
+                if (
+                  stage === 'BORDERLINE' &&
+                  fineAgentEnabled &&
+                  this.isFineAgentInvestOnly() &&
+                  fineAgentUsedInTick < fineAgentMaxPerTick
+                ) {
+                  const fineBudget = this.canSpendLlm(
+                    'FINE_AGENT',
+                    candidate.market,
+                    this.estimateFineAgentTokens()
+                  );
+                  if (!fineBudget.allow) {
+                    stage = 'TOKEN_BUDGET_SKIP';
+                    reason = fineBudget.reason ?? 'FineAgent 토큰 예산 부족';
+                  } else {
+                    fineAgentUsedInTick += 1;
+                    const fineResolved = await this.resolveFineGrainedDecision(candidate);
+                    fineDecision = fineResolved.decision;
+                    if (!fineResolved.fromCache && fineDecision.usage.totalTokens > 0) {
+                      this.recordLlmTokenUsage('FINE_AGENT', candidate.market, fineDecision.usage.totalTokens);
+                    }
+                    stage = fineDecision.stage;
+                    reason = `FineAgent: ${fineDecision.reason}`;
+                    this.pushEvent({
+                      type: 'CANDIDATE',
+                      level: fineDecision.approve ? 'INFO' : 'WARN',
+                      market: candidate.market,
+                      action: 'FINE_AGENT_REVIEW',
+                      detail: `stage=${fineDecision.stage}, score=${fineDecision.score.toFixed(1)}, confidence=${fineDecision.confidence.toFixed(0)} | ${fineDecision.reason}`,
+                    });
                   }
-                  stage = fineDecision.stage;
-                  reason = `FineAgent: ${fineDecision.reason}`;
-                  this.pushEvent({
-                    type: 'CANDIDATE',
-                    level: fineDecision.approve ? 'INFO' : 'WARN',
-                    market: candidate.market,
-                    action: 'FINE_AGENT_REVIEW',
-                    detail: `stage=${fineDecision.stage}, score=${fineDecision.score.toFixed(1)}, confidence=${fineDecision.confidence.toFixed(0)} | ${fineDecision.reason}`,
-                  });
                 }
               }
+            } else if (stage !== 'AUTO_PASS') {
+              reason = candidate.reason;
             }
+          } else if (stage === 'BORDERLINE') {
+            reason = `CROWD_PRESSURE quant-only: ${candidate.reason}`;
           } else if (stage !== 'AUTO_PASS') {
             reason = candidate.reason;
           }
@@ -671,7 +696,7 @@ export class AutopilotOrchestrator {
 
         if (evaluation.allow && (stage === 'AUTO_PASS' || stage === 'BORDERLINE')) {
           const sourceStage = stage === 'AUTO_PASS' ? 'AUTO_PASS' : 'BORDERLINE';
-          const scalpSkipLlm = this.isScalpEngine();
+          const scalpSkipLlm = this.isScalpEngine() || crowdPressureProfile;
           if (sourceStage === 'BORDERLINE' && !scalpSkipLlm && llmEntryReviewUsedInTick >= llmEntryReviewMaxPerTick) {
             stage = 'RECHECK_SCHEDULED';
             reason = `tick당 LLM 진입심사 상한(${llmEntryReviewMaxPerTick}) 도달`;
@@ -692,15 +717,18 @@ export class AutopilotOrchestrator {
                 score: candidate.score,
                 riskRewardRatio: candidate.riskReward1m,
                 entryGapPct: candidate.entryGapPct1m,
+                opportunityProfile: candidate.opportunityProfile ?? this.resolveOpportunityProfile(),
+                crowdMetrics: candidate.crowdMetrics ?? null,
               },
               {
                 skipLlmEntryReview: sourceStage === 'AUTO_PASS' || scalpSkipLlm,
                 entryAmountKrw,
                 sourceStage,
+                opportunityProfile: this.resolveOpportunityProfile(),
               }
             );
             stage = 'ENTERED';
-            reason = `${sourceStage} 워커 생성 (진입금 ${entryAmountKrw.toLocaleString('ko-KR')}원)${scalpSkipLlm ? ' [SCALP 즉시진입]' : ''}`;
+            reason = `${sourceStage} 워커 생성 (진입금 ${entryAmountKrw.toLocaleString('ko-KR')}원)${crowdPressureProfile ? ' [CROWD_PRESSURE quant-only]' : scalpSkipLlm ? ' [SCALP 즉시진입]' : ''}`;
             availableSlots -= 1;
             executed = true;
             this.pushEvent({
@@ -708,7 +736,7 @@ export class AutopilotOrchestrator {
               level: 'INFO',
               market: candidate.market,
               action: 'ENTERED',
-              detail: `${candidate.koreanName} ${sourceStage} 후보 진입 파이프라인 시작${scalpSkipLlm ? ' (SCALP LLM 생략)' : ''}`,
+              detail: `${candidate.koreanName} ${sourceStage} 후보 진입 파이프라인 시작${crowdPressureProfile ? ' (CROWD_PRESSURE quant-only)' : scalpSkipLlm ? ' (SCALP LLM 생략)' : ''}`,
             });
           }
         }
@@ -730,6 +758,8 @@ export class AutopilotOrchestrator {
           score: candidate.score,
           riskRewardRatio: candidate.riskReward1m,
           entryGapPct: candidate.entryGapPct1m,
+          opportunityProfile: candidate.opportunityProfile ?? this.resolveOpportunityProfile(),
+          crowdMetrics: candidate.crowdMetrics ?? null,
           stage,
           reason,
           updatedAt: Date.now(),
@@ -791,7 +821,8 @@ export class AutopilotOrchestrator {
       this.config.interval,
       120,
       20,
-      this.config.tradingMode
+      this.config.tradingMode,
+      this.resolveOpportunityProfile()
     );
     const decision = await runFineGrainedAgentPipeline({
       market: candidate.market,
@@ -840,6 +871,10 @@ export class AutopilotOrchestrator {
       reason: decision.reason,
       executed,
       entryAmountKrw,
+      featurePack: this.toSerializable({
+        opportunityProfile: candidate.opportunityProfile ?? this.resolveOpportunityProfile(),
+        crowdMetrics: candidate.crowdMetrics ?? null,
+      }),
       specialistOutputs: decision.specialists.map((item) => this.toSerializable(item)),
       synthOutput: this.toSerializable(decision.synth),
       pmOutput: this.toSerializable(decision.pm),
@@ -935,6 +970,7 @@ export class AutopilotOrchestrator {
   }
 
   private resolveOpportunityDisplayThreshold(candidates: AutopilotOpportunityView[]): number {
+    if (this.isCrowdPressureProfile()) return 56;
     const wins = candidates
       .map((candidate) => candidate.recommendedEntryWinRate1m)
       .filter((value): value is number => value != null && Number.isFinite(value));
@@ -1192,11 +1228,13 @@ export class AutopilotOrchestrator {
           koreanName: market,
           recommendedEntryWinRate: null,
           marketEntryWinRate: null,
+          opportunityProfile: this.resolveOpportunityProfile(),
         },
         {
           skipLlmEntryReview: this.config.focusedEntryGate === 'FAST_ONLY',
           entryAmountKrw: Math.max(5100, Math.min(20_000, this.config.amountKrw)),
           sourceStage: 'FOCUSED_SCALP',
+          opportunityProfile: this.resolveOpportunityProfile(),
           updateCandidateView: false,
           workerTickMs: this.config.focusedScalpPollIntervalMs,
           warnHoldingMs: this.config.focusedWarnHoldingMs,
@@ -1222,6 +1260,7 @@ export class AutopilotOrchestrator {
         koreanName: position.market,
         recommendedEntryWinRate: null,
         marketEntryWinRate: null,
+        opportunityProfile: this.resolveOpportunityProfile(),
       });
     }
   }
@@ -1266,6 +1305,7 @@ export class AutopilotOrchestrator {
       skipLlmEntryReview: false,
       entryAmountKrw: this.resolveEntryAmount('BORDERLINE'),
       sourceStage: 'BORDERLINE',
+      opportunityProfile: this.resolveOpportunityProfile(),
       updateCandidateView: true,
     };
 
@@ -1287,10 +1327,18 @@ export class AutopilotOrchestrator {
         warnHoldingMs: effectiveOptions.warnHoldingMs ?? null,
         maxHoldingMs: effectiveOptions.maxHoldingMs ?? null,
         engineType: this.resolveBudgetEngine(),
+        opportunityProfile: effectiveOptions.opportunityProfile ?? this.resolveOpportunityProfile(),
       },
       {
         fetchContext: async (workerMarket) =>
-          guidedTradingApi.getAgentContext(workerMarket, this.config.interval, this.config.interval === 'tick' ? 300 : 120, 20, this.config.tradingMode),
+          guidedTradingApi.getAgentContext(
+            workerMarket,
+            this.config.interval,
+            this.config.interval === 'tick' ? 300 : 120,
+            20,
+            this.config.tradingMode,
+            effectiveOptions.opportunityProfile ?? this.resolveOpportunityProfile()
+          ),
         evaluateEntry: async (workerMarket, context) => this.evaluateEntry(workerMarket, context),
         planEntryOrder: async (workerMarket, context) => this.planEntryOrder(workerMarket, context),
         verifyWithPlaywright: async (workerMarket) => this.verifyWithPlaywright(workerMarket),

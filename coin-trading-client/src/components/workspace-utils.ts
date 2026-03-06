@@ -5,6 +5,7 @@ import type {
 } from 'lightweight-charts';
 import {
   getApiBaseUrl,
+  type AutopilotOpportunityProfile,
   type GuidedChartResponse,
   type GuidedCandle,
   type GuidedMarketSortBy,
@@ -64,6 +65,7 @@ export type WorkspacePrefs = {
   defaultAmountKrw?: number;
   autopilotInterval?: string;
   autopilotMode?: TradingMode;
+  opportunityProfile?: AutopilotOpportunityProfile;
   entryPolicy?: 'BALANCED' | 'AGGRESSIVE' | 'CONSERVATIVE';
   entryOrderMode?: 'ADAPTIVE' | 'MARKET' | 'LIMIT';
   pendingEntryTimeoutSec?: number;
@@ -389,6 +391,7 @@ export function migrateWorkspacePrefs(prefs: WorkspacePrefs): WorkspacePrefs {
   next.zaiModel = isZaiModelId(next.zaiModel) ? next.zaiModel : 'glm-4.7-flash';
   next.zaiEndpointMode = normalizeZaiEndpointMode(next.zaiEndpointMode);
   next.delegationMode = normalizeDelegationMode(next.delegationMode);
+  next.opportunityProfile = next.opportunityProfile === 'CROWD_PRESSURE' ? 'CROWD_PRESSURE' : 'CLASSIC';
 
   return next;
 }
@@ -658,4 +661,3 @@ export function deriveMcpUrl(): string {
 export function derivePlaywrightMcpUrl(port: number): string {
   return `http://127.0.0.1:${port}/mcp`;
 }
-

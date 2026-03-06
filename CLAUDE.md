@@ -342,9 +342,9 @@ coin-trading-spring/
 
 - `GET /api/guided-trading/autopilot/live`
   - 응답: `orderSummary`, `orderEvents`, `autopilotEvents`, `candidates`
-  - 쿼리: `thresholdMode`, `minMarketWinRate`(고정 모드 현재가 승률 기준), `minRecommendedWinRate`(하위 호환), `strategyCodePrefix`(optional)
+  - 쿼리: `thresholdMode`, `minMarketWinRate`(고정 모드 현재가 승률 기준), `minRecommendedWinRate`(하위 호환), `strategyCodePrefix`(optional), `opportunityProfile=CLASSIC|CROWD_PRESSURE`
 - `GET /api/guided-trading/autopilot/opportunities`
-  - 응답: `generatedAt`, `primaryInterval`, `confirmInterval`, `mode`, `appliedUniverseLimit`, `opportunities[]`
+  - 응답: `generatedAt`, `primaryInterval`, `confirmInterval`, `mode`, `appliedUniverseLimit`, `opportunityProfile`, `opportunities[]`
   - 후보 stage: `AUTO_PASS` | `BORDERLINE` | `RULE_FAIL`
 - `POST /api/guided-trading/autopilot/decisions`
   - 클라이언트 Fine-Grained Agent 의사결정(`specialists/synth/pm`) 로그 저장
@@ -352,11 +352,19 @@ coin-trading-spring/
   - 쿼리: `windowDays`, `strategyCodePrefix`(optional)
   - 응답: `windowDays`, `trades`, `winRate`, `netPnlKrw`, `netReturnPercent`, `sharpe`, `maxDrawdownPercent`, `gateEligible`, `gateReason`
 - `GET /api/guided-trading/agent/context`
-  - 응답 확장: `featurePack(technical/microstructure/executionRisk)` 추가
-- `GuidedTradingService.getAutopilotLive(interval, mode, thresholdMode, minMarketWinRate, minRecommendedWinRate, strategyCodePrefix)` 추가.
-- `GuidedTradingService.getAutopilotOpportunities(interval, confirmInterval, mode, universeLimit)` 추가.
+  - 응답 확장: `featurePack(technical/microstructure/executionRisk/crowd?)` 추가
+- `GuidedTradingService.getAutopilotLive(interval, mode, thresholdMode, minMarketWinRate, minRecommendedWinRate, strategyCodePrefix, opportunityProfile)` 추가.
+- `GuidedTradingService.getAutopilotOpportunities(interval, confirmInterval, mode, universeLimit, opportunityProfile)` 추가.
 - `GuidedTradingService.logAutopilotDecision(request)` 추가.
 - `GuidedTradingService.getAutopilotPerformance(windowDays, strategyCodePrefix)` 추가.
+
+### 3-1. CROWD_PRESSURE SCALP 프로필
+
+- `CROWD_PRESSURE`는 `TradingMode`를 늘리지 않고 `SCALP`에서만 선택 가능한 기회평가 프로필이다.
+- 평가는 빗썸 WebSocket `latestPulse(market)` 기반 `tradeNotional10sKrw`, `notionalSpikeRatio`, `priceSpike10sPercent`, `bidImbalance`, `spreadPercent`, `pulseAgeMs`를 hard gate로 사용한다.
+- crowd pulse가 없거나 stale이면 fail-closed로 `RULE_FAIL` 처리하고 클래식 전략으로 자동 폴백하지 않는다.
+- `GuidedAutopilotOpportunityView` / `GuidedAutopilotCandidateView`에는 optional `crowdMetrics`가 추가되고, `GuidedAgentFeaturePack`에는 optional `crowd` pack이 추가된다.
+- 클라이언트 `AutopilotOrchestrator` / `MarketWorker`는 `CROWD_PRESSURE`에서 LLM gate를 사용하지 않고 deterministic exit(`-0.30% stop`, `+0.70% take profit`, `trailing`, `max holding 300s`, `imbalance/spread/spike decay exit`)만 적용한다.
 
 ### 4. 텔레메트리 기록 포인트 확장
 

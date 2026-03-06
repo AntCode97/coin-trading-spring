@@ -752,11 +752,25 @@ export interface GuidedExecutionRiskFeaturePack {
   confidence: number;
 }
 
+export type AutopilotOpportunityProfile = 'CLASSIC' | 'CROWD_PRESSURE';
+
+export interface GuidedCrowdFeaturePack {
+  flowScore: number;
+  priceSpike10sPercent: number;
+  tradeNotional10sKrw: number;
+  notionalSpikeRatio: number;
+  bidImbalance: number;
+  spreadPercent: number;
+  signedChangeRatePercent: number;
+  pulseAgeMs: number;
+}
+
 export interface GuidedAgentFeaturePack {
   generatedAt: string;
   technical: GuidedTechnicalFeaturePack;
   microstructure: GuidedMicrostructureFeaturePack;
   executionRisk: GuidedExecutionRiskFeaturePack;
+  crowd?: GuidedCrowdFeaturePack | null;
 }
 
 export interface GuidedAgentContextResponse {
@@ -802,8 +816,14 @@ export interface AutopilotCandidateView {
   recommendedEntryWinRate?: number | null;
   marketEntryWinRate?: number | null;
   confidence?: number | null;
+  expectancyPct?: number | null;
+  score?: number | null;
+  riskRewardRatio?: number | null;
+  entryGapPct?: number | null;
   stage: string;
   reason: string;
+  opportunityProfile?: AutopilotOpportunityProfile | null;
+  crowdMetrics?: GuidedCrowdFeaturePack | null;
 }
 
 export interface AutopilotEventView {
@@ -838,6 +858,7 @@ export interface AutopilotLiveResponse {
     failed: number;
     cancelled: number;
   }>;
+  opportunityProfile?: AutopilotOpportunityProfile;
 }
 
 export interface AutopilotOpportunityView {
@@ -853,6 +874,8 @@ export interface AutopilotOpportunityView {
   score: number;
   stage: 'AUTO_PASS' | 'BORDERLINE' | 'RULE_FAIL' | string;
   reason: string;
+  opportunityProfile?: AutopilotOpportunityProfile | null;
+  crowdMetrics?: GuidedCrowdFeaturePack | null;
 }
 
 export interface AutopilotOpportunitiesResponse {
@@ -861,6 +884,7 @@ export interface AutopilotOpportunitiesResponse {
   confirmInterval: string;
   mode: string;
   appliedUniverseLimit: number;
+  opportunityProfile?: AutopilotOpportunityProfile;
   opportunities: AutopilotOpportunityView[];
 }
 
@@ -1038,9 +1062,12 @@ export const guidedTradingApi = {
     interval = 'minute30',
     count = 120,
     closedTradeLimit = 20,
-    mode?: string
+    mode?: string,
+    opportunityProfile?: AutopilotOpportunityProfile
   ): Promise<GuidedAgentContextResponse> =>
-    api.get('/guided-trading/agent/context', { params: { market, interval, count, closedTradeLimit, mode } }).then((res) => res.data),
+    api.get('/guided-trading/agent/context', {
+      params: { market, interval, count, closedTradeLimit, mode, opportunityProfile },
+    }).then((res) => res.data),
 
   getOpenPositions: (): Promise<GuidedTradePosition[]> =>
     api.get('/guided-trading/positions/open').then((res) => res.data),
@@ -1053,11 +1080,12 @@ export const guidedTradingApi = {
     mode?: string,
     thresholdMode?: 'DYNAMIC_P70' | 'FIXED',
     minMarketWinRate?: number,
-    strategyCodePrefix?: string
+    strategyCodePrefix?: string,
+    opportunityProfile?: AutopilotOpportunityProfile
   ): Promise<AutopilotLiveResponse> =>
     api
       .get('/guided-trading/autopilot/live', {
-        params: { interval, mode, thresholdMode, minMarketWinRate, strategyCodePrefix },
+        params: { interval, mode, thresholdMode, minMarketWinRate, strategyCodePrefix, opportunityProfile },
       })
       .then((res) => res.data),
 
@@ -1065,11 +1093,12 @@ export const guidedTradingApi = {
     interval = 'minute1',
     confirmInterval = 'minute10',
     mode?: string,
-    universeLimit = 15
+    universeLimit = 15,
+    opportunityProfile?: AutopilotOpportunityProfile
   ): Promise<AutopilotOpportunitiesResponse> =>
     api
       .get('/guided-trading/autopilot/opportunities', {
-        params: { interval, confirmInterval, mode, universeLimit },
+        params: { interval, confirmInterval, mode, universeLimit, opportunityProfile },
       })
       .then((res) => res.data),
 

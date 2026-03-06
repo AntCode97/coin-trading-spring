@@ -14,6 +14,7 @@ import {
   type UTCTimestamp,
 } from 'lightweight-charts';
 import {
+  type AutopilotOpportunityProfile,
   guidedTradingApi,
   type GuidedAgentContextResponse,
   type GuidedChartResponse,
@@ -237,6 +238,9 @@ export default function ManualTraderWorkspace({ onNavigateAiTrader }: ManualTrad
   const [autopilotMode] = useState<TradingMode>(
     prefs.autopilotMode ?? 'SCALP'
   );
+  const [opportunityProfile, setOpportunityProfile] = useState<AutopilotOpportunityProfile>(
+    prefs.opportunityProfile === 'CROWD_PRESSURE' ? 'CROWD_PRESSURE' : 'CLASSIC'
+  );
   const [entryPolicy, setEntryPolicy] = useState<'BALANCED' | 'AGGRESSIVE' | 'CONSERVATIVE'>(
     prefs.entryPolicy ?? 'BALANCED'
   );
@@ -313,6 +317,8 @@ export default function ManualTraderWorkspace({ onNavigateAiTrader }: ManualTrad
   const providerConnected = activeProviderStatus === 'connected';
   const providerChecking = activeProviderStatus === 'checking';
   const selectedModel = llmProvider === 'zai' ? zaiModel : openAiModel;
+  const activeOpportunityProfile: AutopilotOpportunityProfile =
+    tradingMode === 'SCALP' ? opportunityProfile : 'CLASSIC';
 
   const chartContainerRef = useRef<HTMLDivElement | null>(null);
   const chartRef = useRef<IChartApi | null>(null);
@@ -348,8 +354,16 @@ export default function ManualTraderWorkspace({ onNavigateAiTrader }: ManualTrad
   });
 
   const agentContextQuery = useQuery<GuidedAgentContextResponse>({
-    queryKey: ['guided-agent-context', selectedMarket, interval, tradingMode],
-    queryFn: () => guidedTradingApi.getAgentContext(selectedMarket, interval, interval === 'tick' ? 300 : 120, 20, tradingMode),
+    queryKey: ['guided-agent-context', selectedMarket, interval, tradingMode, activeOpportunityProfile],
+    queryFn: () =>
+      guidedTradingApi.getAgentContext(
+        selectedMarket,
+        interval,
+        interval === 'tick' ? 300 : 120,
+        20,
+        tradingMode,
+        activeOpportunityProfile
+      ),
     enabled: aiEnabled,
     refetchInterval: aiEnabled ? aiRefreshSec * 1000 : false,
   });
@@ -374,6 +388,7 @@ export default function ManualTraderWorkspace({ onNavigateAiTrader }: ManualTrad
       winRateThresholdMode,
       fixedMinMarketWinRate,
       STRATEGY_CODE_SCALP,
+      opportunityProfile,
     ],
     queryFn: () =>
       guidedTradingApi.getAutopilotLive(
@@ -381,7 +396,8 @@ export default function ManualTraderWorkspace({ onNavigateAiTrader }: ManualTrad
         'SCALP',
         winRateThresholdMode,
         fixedMinMarketWinRate,
-        STRATEGY_CODE_SCALP
+        STRATEGY_CODE_SCALP,
+        opportunityProfile
       ),
     refetchInterval: 5000,
   });
@@ -401,7 +417,8 @@ export default function ManualTraderWorkspace({ onNavigateAiTrader }: ManualTrad
         'SWING',
         winRateThresholdMode,
         fixedMinMarketWinRate,
-        STRATEGY_CODE_SWING
+        STRATEGY_CODE_SWING,
+        'CLASSIC'
       ),
     refetchInterval: 5000,
   });
@@ -421,7 +438,8 @@ export default function ManualTraderWorkspace({ onNavigateAiTrader }: ManualTrad
         'POSITION',
         winRateThresholdMode,
         fixedMinMarketWinRate,
-        STRATEGY_CODE_POSITION
+        STRATEGY_CODE_POSITION,
+        'CLASSIC'
       ),
     refetchInterval: 5000,
   });
@@ -806,6 +824,7 @@ export default function ManualTraderWorkspace({ onNavigateAiTrader }: ManualTrad
       autopilotCapitalPoolKrw,
       autopilotInterval,
       autopilotMode,
+      opportunityProfile,
       entryPolicy,
       entryOrderMode,
       pendingEntryTimeoutSec,
@@ -851,6 +870,7 @@ export default function ManualTraderWorkspace({ onNavigateAiTrader }: ManualTrad
     autopilotCapitalPoolKrw,
     autopilotInterval,
     autopilotMode,
+    opportunityProfile,
     entryPolicy,
     entryOrderMode,
     pendingEntryTimeoutSec,
@@ -1429,6 +1449,7 @@ export default function ManualTraderWorkspace({ onNavigateAiTrader }: ManualTrad
       interval: 'minute1',
       confirmInterval: 'minute10',
       tradingMode: 'SCALP',
+      opportunityProfile,
       amountKrw: resolveEngineAmount(budgetKrw, maxConcurrent),
       maxConcurrentPositions: maxConcurrent,
       candidateLimit: 15,
@@ -1446,7 +1467,7 @@ export default function ManualTraderWorkspace({ onNavigateAiTrader }: ManualTrad
     });
   }, [
     autopilotEnabled, autopilotCapitalPoolKrw, autopilotMaxConcurrentPositions,
-    autopilotAmountKrw, playwrightEnabled, focusedScalpEnabled,
+    autopilotAmountKrw, opportunityProfile, playwrightEnabled, focusedScalpEnabled,
     focusedScalpParsed.markets, focusedScalpPollIntervalSec,
     resolveEngineAmount, startEngine,
   ]);
@@ -1458,6 +1479,7 @@ export default function ManualTraderWorkspace({ onNavigateAiTrader }: ManualTrad
       interval: 'minute30',
       confirmInterval: 'minute240',
       tradingMode: 'SWING',
+      opportunityProfile: 'CLASSIC',
       amountKrw: resolveEngineAmount(budgetKrw, maxConcurrent),
       maxConcurrentPositions: maxConcurrent,
       candidateLimit: 10,
@@ -1483,6 +1505,7 @@ export default function ManualTraderWorkspace({ onNavigateAiTrader }: ManualTrad
       interval: 'day',
       confirmInterval: 'day',
       tradingMode: 'POSITION',
+      opportunityProfile: 'CLASSIC',
       amountKrw: resolveEngineAmount(budgetKrw, maxConcurrent),
       maxConcurrentPositions: maxConcurrent,
       candidateLimit: 8,
@@ -1759,11 +1782,17 @@ export default function ManualTraderWorkspace({ onNavigateAiTrader }: ManualTrad
           koreanName: c.koreanName,
           recommendedEntryWinRate: c.recommendedEntryWinRate ?? null,
           marketEntryWinRate: c.marketEntryWinRate ?? null,
+          expectancyPct: c.expectancyPct ?? null,
+          score: c.score ?? null,
+          riskRewardRatio: c.riskRewardRatio ?? null,
+          entryGapPct: c.entryGapPct ?? null,
+          opportunityProfile: c.opportunityProfile ?? opportunityProfile,
+          crowdMetrics: c.crowdMetrics ?? null,
           stage: c.stage as any,
           reason: c.reason,
           updatedAt: Date.now(),
         }));
-  }, [autopilotState.candidates, scalpAutopilotLiveQuery.data?.candidates]);
+  }, [autopilotState.candidates, opportunityProfile, scalpAutopilotLiveQuery.data?.candidates]);
 
   const liveStripHealthScore = useMemo(() => {
     const scalpSummary = scalpAutopilotLiveQuery.data?.orderSummary?.total;
@@ -2145,6 +2174,23 @@ export default function ManualTraderWorkspace({ onNavigateAiTrader }: ManualTrad
                     </button>
                   ))}
                 </div>
+                {tradingMode === 'SCALP' && (
+                  <div className="guided-mode-selector">
+                    {([
+                      ['CLASSIC', '클래식'],
+                      ['CROWD_PRESSURE', '군중 추종'],
+                    ] as const).map(([profile, label]) => (
+                      <button
+                        key={profile}
+                        type="button"
+                        className={`guided-mode-btn ${opportunityProfile === profile ? 'active' : ''}`}
+                        onClick={() => setOpportunityProfile(profile)}
+                      >
+                        {label}
+                      </button>
+                    ))}
+                  </div>
+                )}
                 <div className="guided-interval-slider">
                   <input
                     type="range"
@@ -3764,6 +3810,7 @@ export default function ManualTraderWorkspace({ onNavigateAiTrader }: ManualTrad
         autopilotState={autopilotState}
         scalpLiveData={scalpAutopilotLiveQuery.data}
         scalpLoading={scalpAutopilotLiveQuery.isLoading}
+        scalpOpportunityProfile={opportunityProfile}
         swingEnabled={swingAutopilotEnabled}
         positionEnabled={positionAutopilotEnabled}
         swingState={swingAutopilotState}

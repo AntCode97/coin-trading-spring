@@ -20,6 +20,7 @@ import com.ant.cointrading.guided.GuidedSyncResult
 import com.ant.cointrading.guided.GuidedTradeView
 import com.ant.cointrading.guided.GuidedTradingService
 import com.ant.cointrading.guided.TradingMode
+import com.ant.cointrading.guided.GuidedAutopilotOpportunityProfile
 import com.ant.cointrading.guided.GuidedWinRateThresholdMode
 import com.ant.cointrading.guided.GuidedAdoptPositionRequest
 import com.ant.cointrading.guided.GuidedAdoptPositionResponse
@@ -168,14 +169,16 @@ class GuidedTradingController(
         @RequestParam(defaultValue = "minute30") interval: String,
         @RequestParam(defaultValue = "120") count: Int,
         @RequestParam(defaultValue = "20") closedTradeLimit: Int,
-        @RequestParam(defaultValue = "SWING") mode: String
+        @RequestParam(defaultValue = "SWING") mode: String,
+        @RequestParam(required = false) opportunityProfile: String?
     ): GuidedAgentContextResponse {
         return guidedTradingService.getAgentContext(
             market = market.uppercase(),
             interval = interval,
             count = count,
             closedTradeLimit = closedTradeLimit,
-            mode = TradingMode.fromString(mode)
+            mode = TradingMode.fromString(mode),
+            opportunityProfile = GuidedAutopilotOpportunityProfile.fromString(opportunityProfile)
         )
     }
 
@@ -186,7 +189,8 @@ class GuidedTradingController(
         @RequestParam(required = false) thresholdMode: String?,
         @RequestParam(required = false) minMarketWinRate: Double?,
         @RequestParam(required = false) minRecommendedWinRate: Double?,
-        @RequestParam(required = false) strategyCodePrefix: String?
+        @RequestParam(required = false) strategyCodePrefix: String?,
+        @RequestParam(required = false) opportunityProfile: String?
     ): GuidedAutopilotLiveResponse {
         return guidedTradingService.getAutopilotLive(
             interval = interval,
@@ -194,7 +198,8 @@ class GuidedTradingController(
             thresholdMode = GuidedWinRateThresholdMode.fromString(thresholdMode),
             minMarketWinRate = minMarketWinRate,
             minRecommendedWinRate = minRecommendedWinRate,
-            strategyCodePrefix = strategyCodePrefix
+            strategyCodePrefix = strategyCodePrefix,
+            opportunityProfile = GuidedAutopilotOpportunityProfile.fromString(opportunityProfile)
         )
     }
 
@@ -203,13 +208,15 @@ class GuidedTradingController(
         @RequestParam(defaultValue = "minute1") interval: String,
         @RequestParam(defaultValue = "minute10") confirmInterval: String,
         @RequestParam(defaultValue = "SCALP") mode: String,
-        @RequestParam(defaultValue = "15") universeLimit: Int
+        @RequestParam(defaultValue = "15") universeLimit: Int,
+        @RequestParam(required = false) opportunityProfile: String?
     ): GuidedAutopilotOpportunitiesResponse {
         return guidedTradingService.getAutopilotOpportunities(
             interval = interval,
             confirmInterval = confirmInterval,
             mode = TradingMode.fromString(mode),
-            universeLimit = universeLimit
+            universeLimit = universeLimit,
+            opportunityProfile = GuidedAutopilotOpportunityProfile.fromString(opportunityProfile)
         )
     }
 

@@ -7,6 +7,7 @@ import com.ant.cointrading.guided.GuidedAutopilotEvent
 import com.ant.cointrading.guided.GuidedAutopilotLiveResponse
 import com.ant.cointrading.guided.GuidedAutopilotOpportunitiesResponse
 import com.ant.cointrading.guided.GuidedAutopilotOpportunityView
+import com.ant.cointrading.guided.GuidedAutopilotOpportunityProfile
 import com.ant.cointrading.guided.GuidedAutopilotDecisionStats
 import com.ant.cointrading.guided.GuidedAutopilotDecisionLogRequest
 import com.ant.cointrading.guided.GuidedAutopilotDecisionLogResponse
@@ -158,7 +159,17 @@ class GuidedTradingControllerTest {
                 )
             )
         )
-        whenever(guidedTradingService.getAutopilotLive(any(), any(), any(), anyOrNull(), anyOrNull(), anyOrNull())).thenReturn(expected)
+        whenever(
+            guidedTradingService.getAutopilotLive(
+                any(),
+                any(),
+                any(),
+                anyOrNull(),
+                anyOrNull(),
+                anyOrNull(),
+                any()
+            )
+        ).thenReturn(expected)
 
         val actual = controller.getAutopilotLive(
             interval = "minute30",
@@ -166,7 +177,8 @@ class GuidedTradingControllerTest {
             thresholdMode = null,
             minMarketWinRate = null,
             minRecommendedWinRate = null,
-            strategyCodePrefix = null
+            strategyCodePrefix = null,
+            opportunityProfile = null
         )
 
         kotlin.test.assertEquals(expected, actual)
@@ -202,7 +214,8 @@ class GuidedTradingControllerTest {
                 any(),
                 anyOrNull(),
                 anyOrNull(),
-                org.mockito.kotlin.eq("GUIDED_AUTOPILOT_SCALP")
+                org.mockito.kotlin.eq("GUIDED_AUTOPILOT_SCALP"),
+                any()
             )
         ).thenReturn(expected)
 
@@ -212,7 +225,8 @@ class GuidedTradingControllerTest {
             thresholdMode = null,
             minMarketWinRate = null,
             minRecommendedWinRate = null,
-            strategyCodePrefix = "GUIDED_AUTOPILOT_SCALP"
+            strategyCodePrefix = "GUIDED_AUTOPILOT_SCALP",
+            opportunityProfile = null
         )
 
         kotlin.test.assertEquals(expected, actual)
@@ -244,13 +258,47 @@ class GuidedTradingControllerTest {
                 )
             )
         )
-        whenever(guidedTradingService.getAutopilotOpportunities(any(), any(), any(), any())).thenReturn(expected)
+        whenever(guidedTradingService.getAutopilotOpportunities(any(), any(), any(), any(), any())).thenReturn(expected)
 
         val actual = controller.getAutopilotOpportunities(
             interval = "minute1",
             confirmInterval = "minute10",
             mode = "SCALP",
-            universeLimit = 15
+            universeLimit = 15,
+            opportunityProfile = null
+        )
+
+        kotlin.test.assertEquals(expected, actual)
+    }
+
+    @Test
+    @DisplayName("autopilot/opportunities는 opportunityProfile을 서비스로 전달한다")
+    fun getAutopilotOpportunitiesPassesOpportunityProfile() {
+        val expected = GuidedAutopilotOpportunitiesResponse(
+            generatedAt = Instant.parse("2026-02-24T01:00:00Z"),
+            primaryInterval = "minute1",
+            confirmInterval = "minute10",
+            mode = "SCALP",
+            appliedUniverseLimit = 15,
+            opportunityProfile = "CROWD_PRESSURE",
+            opportunities = emptyList()
+        )
+        whenever(
+            guidedTradingService.getAutopilotOpportunities(
+                any(),
+                any(),
+                any(),
+                any(),
+                org.mockito.kotlin.eq(GuidedAutopilotOpportunityProfile.CROWD_PRESSURE)
+            )
+        ).thenReturn(expected)
+
+        val actual = controller.getAutopilotOpportunities(
+            interval = "minute1",
+            confirmInterval = "minute10",
+            mode = "SCALP",
+            universeLimit = 15,
+            opportunityProfile = "CROWD_PRESSURE"
         )
 
         kotlin.test.assertEquals(expected, actual)

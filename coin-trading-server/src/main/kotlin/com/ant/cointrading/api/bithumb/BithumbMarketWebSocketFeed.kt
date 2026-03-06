@@ -116,6 +116,14 @@ class BithumbMarketWebSocketFeed(
         return states[market.uppercase()]?.latestPrice()
     }
 
+    fun latestPulse(market: String): RealtimeMarketPulse? {
+        if (!isReady()) return null
+        val nowMs = System.currentTimeMillis()
+        return states[market.uppercase()]
+            ?.toPulse(nowMs)
+            ?.takeIf { nowMs - it.updatedAt.toEpochMilli() <= wsConfig.staleThresholdMs }
+    }
+
     fun topPulses(
         limit: Int,
         minNotional10sKrw: Double,

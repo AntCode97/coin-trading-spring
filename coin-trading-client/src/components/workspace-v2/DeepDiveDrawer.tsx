@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import type { AutopilotLiveResponse } from '../../api';
+import type { AutopilotLiveResponse, AutopilotOpportunityProfile } from '../../api';
 import type { AutopilotState } from '../../lib/autopilot/AutopilotOrchestrator';
 import { AutopilotLiveDock } from '../autopilot/AutopilotLiveDock';
 import {
@@ -20,6 +20,7 @@ interface DeepDiveDrawerProps {
   autopilotState: AutopilotState;
   scalpLiveData?: AutopilotLiveResponse;
   scalpLoading?: boolean;
+  scalpOpportunityProfile?: AutopilotOpportunityProfile;
   swingEnabled: boolean;
   positionEnabled: boolean;
   swingState: AutopilotState;
@@ -48,6 +49,7 @@ export function DeepDiveDrawer({
   autopilotState,
   scalpLiveData,
   scalpLoading,
+  scalpOpportunityProfile,
   swingEnabled,
   positionEnabled,
   swingState,
@@ -114,6 +116,7 @@ export function DeepDiveDrawer({
                   autopilotState={autopilotState}
                   liveData={scalpLiveData}
                   loading={scalpLoading}
+                  opportunityProfile={scalpOpportunityProfile}
                 />
               )}
               {showInvest && (

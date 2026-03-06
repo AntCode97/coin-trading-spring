@@ -561,6 +561,7 @@ curl -X POST http://localhost:8080/api/settings/regime \
 - `minMarketWinRate`: 고정 모드(`FIXED`)에서 후보 선별용 최소 **현재가 승률**(%)
 - `minRecommendedWinRate`: 하위 호환 파라미터(신규 호출은 `minMarketWinRate` 권장)
 - `strategyCodePrefix`: 전략 코드 prefix 필터 (예: `GUIDED_AUTOPILOT_SCALP`)
+- `opportunityProfile`: `CLASSIC | CROWD_PRESSURE` (`CROWD_PRESSURE`는 `SCALP` 전용)
 
 `/api/guided-trading/autopilot/performance` 쿼리 파라미터:
 - `windowDays`: 조회 기간(기본 30일)
@@ -571,14 +572,15 @@ curl -X POST http://localhost:8080/api/settings/regime \
 - `confirmInterval`: 기본 `minute10` (확인 축)
 - `mode`: 기본 `SCALP`
 - `universeLimit`: 기본 `15`
+- `opportunityProfile`: `CLASSIC | CROWD_PRESSURE`
 
 `/api/guided-trading/autopilot/opportunities` 응답 핵심 필드:
-- `generatedAt`, `primaryInterval`, `confirmInterval`, `mode`, `appliedUniverseLimit`
-- `opportunities[]`: `market`, `koreanName`, `recommendedEntryWinRate1m/10m`, `marketEntryWinRate1m/10m`, `riskReward1m`, `entryGapPct1m`, `expectancyPct`, `score`, `stage`, `reason`
+- `generatedAt`, `primaryInterval`, `confirmInterval`, `mode`, `appliedUniverseLimit`, `opportunityProfile`
+- `opportunities[]`: `market`, `koreanName`, `recommendedEntryWinRate1m/10m`, `marketEntryWinRate1m/10m`, `riskReward1m`, `entryGapPct1m`, `expectancyPct`, `score`, `stage`, `reason`, `opportunityProfile`, optional `crowdMetrics`
 - `stage`: `AUTO_PASS` | `BORDERLINE` | `RULE_FAIL`
 
 `/api/guided-trading/agent/context` 응답 확장:
-- `featurePack`: `technical`, `microstructure`, `executionRisk`를 포함한 Fine-Grained 입력 세트
+- `featurePack`: `technical`, `microstructure`, `executionRisk`, optional `crowd(flowScore/spike/notionalSpike/imbalance/spread/pulseAgeMs)`를 포함한 Fine-Grained 입력 세트
 
 `GuidedTradeView`/`GuidedTradePosition` 확장:
 - `entrySource`: 진입 출처(`MANUAL`, `AUTOPILOT`, `MCP_DIRECT` 등)
@@ -587,6 +589,14 @@ curl -X POST http://localhost:8080/api/settings/regime \
 ---
 
 ## 최근 개선사항
+
+### CROWD_PRESSURE 초단타 프로필 추가 (2026-03-06)
+
+1. Guided/Autopilot에 `opportunityProfile=CROWD_PRESSURE`를 추가했습니다. `TradingMode`는 그대로 두고 `SCALP`에서만 선택 가능합니다.
+2. 서버는 빗썸 WebSocket `latestPulse(market)`를 사용해 `10초 체결대금`, `notional spike`, `bid imbalance`, `spread`, `pulse freshness` gate를 적용합니다.
+3. crowd 데이터가 없거나 stale이면 `RULE_FAIL`로 fail-closed 처리하며 클래식 전략으로 자동 폴백하지 않습니다.
+4. `/autopilot/opportunities`, `/autopilot/live`, `/agent/context`는 optional `opportunityProfile` 파라미터를 받고, 후보/컨텍스트 응답에 optional `crowdMetrics`/`featurePack.crowd`를 담습니다.
+5. `CROWD_PRESSURE` 워커는 LLM gate 없이 정량만 사용하고 `-0.30% hard stop`, `+0.70% take profit`, `peak>=+0.15% & drawdown>=0.18% trailing`, `max holding 300s`, `imbalance/spread/spike decay` 청산 규칙을 적용합니다.
 
 ### 데스크톱 OpenAI + z.ai 멀티-프로바이더 통합 (2026-03-02)
 

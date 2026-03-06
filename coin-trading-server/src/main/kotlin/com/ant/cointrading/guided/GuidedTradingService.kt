@@ -4,7 +4,9 @@ import com.ant.cointrading.api.bithumb.BithumbPrivateApi
 import com.ant.cointrading.api.bithumb.BithumbPublicApi
 import com.ant.cointrading.api.bithumb.BithumbApiException
 import com.ant.cointrading.api.bithumb.Balance
+import com.ant.cointrading.api.bithumb.BithumbMarketWebSocketFeed
 import com.ant.cointrading.api.bithumb.OrderResponse
+import com.ant.cointrading.api.bithumb.RealtimeMarketPulse
 import com.ant.cointrading.api.bithumb.TradeResponse
 import com.ant.cointrading.repository.GuidedAutopilotDecisionEntity
 import com.ant.cointrading.repository.GuidedAutopilotDecisionRepository
@@ -46,6 +48,7 @@ class GuidedTradingService(
     private val guidedTradeEventRepository: GuidedTradeEventRepository,
     private val orderLifecycleTelemetryService: OrderLifecycleTelemetryService,
     private val guidedAutopilotDecisionRepository: GuidedAutopilotDecisionRepository,
+    private val marketWebSocketFeed: BithumbMarketWebSocketFeed? = null,
 ) {
     private val log = LoggerFactory.getLogger(javaClass)
     private val objectMapper = jacksonObjectMapper()
@@ -219,9 +222,11 @@ class GuidedTradingService(
         interval: String = "minute30",
         count: Int = 120,
         closedTradeLimit: Int = 20,
-        mode: TradingMode = TradingMode.SWING
+        mode: TradingMode = TradingMode.SWING,
+        opportunityProfile: GuidedAutopilotOpportunityProfile = GuidedAutopilotOpportunityProfile.CLASSIC
     ): GuidedAgentContextResponse {
         val normalizedMarket = market.trim().uppercase()
+        val resolvedProfile = opportunityProfile.normalizeForMode(mode)
         val chart = getChartData(normalizedMarket, interval, count, mode)
         val recentClosedTrades = guidedTradeRepository
             .findTop80ByMarketAndStatusOrderByCreatedAtDesc(normalizedMarket, GuidedTradeEntity.STATUS_CLOSED)
@@ -246,7 +251,7 @@ class GuidedTradingService(
                 winRate = winRate,
                 avgPnlPercent = avgPnlPercent
             ),
-            featurePack = buildAgentFeaturePack(chart)
+            featurePack = buildAgentFeaturePack(chart, resolvedProfile)
         )
     }
 
@@ -1365,7 +1370,10 @@ class GuidedTradingService(
         )
     }
 
-    private fun buildAgentFeaturePack(chart: GuidedChartResponse): GuidedAgentFeaturePack {
+    private fun buildAgentFeaturePack(
+        chart: GuidedChartResponse,
+        opportunityProfile: GuidedAutopilotOpportunityProfile = GuidedAutopilotOpportunityProfile.CLASSIC
+    ): GuidedAgentFeaturePack {
         val recommendation = chart.recommendation
         val closes = chart.candles.map { it.close }
         val current = recommendation.currentPrice
@@ -1442,6 +1450,10 @@ class GuidedTradingService(
                 stopDistancePercent = stopDistancePct,
                 takeProfitDistancePercent = takeProfitDistancePct,
                 confidence = recommendation.confidence
+            ),
+            crowd = buildCrowdFeaturePack(
+                chart.market,
+                opportunityProfile
             )
         )
     }
@@ -1628,15 +1640,22 @@ class GuidedTradingService(
         interval: String = "minute1",
         confirmInterval: String = "minute10",
         mode: TradingMode = TradingMode.SCALP,
-        universeLimit: Int = AUTOPILOT_OPPORTUNITY_UNIVERSE_LIMIT
+        universeLimit: Int = AUTOPILOT_OPPORTUNITY_UNIVERSE_LIMIT,
+        opportunityProfile: GuidedAutopilotOpportunityProfile = GuidedAutopilotOpportunityProfile.CLASSIC
     ): GuidedAutopilotOpportunitiesResponse {
         val effectiveUniverseLimit = universeLimit.coerceIn(5, 50)
+        val resolvedProfile = opportunityProfile.normalizeForMode(mode)
+        val scanUniverseLimit = if (resolvedProfile == GuidedAutopilotOpportunityProfile.CROWD_PRESSURE) {
+            max(effectiveUniverseLimit * 3, 30)
+        } else {
+            effectiveUniverseLimit
+        }
         val universe = getMarketBoard(
             sortBy = GuidedMarketSortBy.TURNOVER,
             sortDirection = GuidedSortDirection.DESC,
             interval = interval,
             mode = mode
-        ).take(effectiveUniverseLimit)
+        ).take(scanUniverseLimit)
 
         if (universe.isEmpty()) {
             return GuidedAutopilotOpportunitiesResponse(
@@ -1645,6 +1664,7 @@ class GuidedTradingService(
                 confirmInterval = confirmInterval,
                 mode = mode.name,
                 appliedUniverseLimit = effectiveUniverseLimit,
+                opportunityProfile = resolvedProfile.name,
                 opportunities = emptyList()
             )
         }
@@ -1658,10 +1678,13 @@ class GuidedTradingService(
                 buildAutopilotOpportunity(
                     marketItem = marketItem,
                     primaryRecommendation = primaryRecommendations[marketItem.market],
-                    confirmRecommendation = confirmRecommendations[marketItem.market]
+                    confirmRecommendation = confirmRecommendations[marketItem.market],
+                    opportunityProfile = resolvedProfile,
+                    pulse = marketWebSocketFeed?.latestPulse(marketItem.market)
                 )
             }
             .sortedByDescending { it.score }
+            .take(effectiveUniverseLimit)
 
         return GuidedAutopilotOpportunitiesResponse(
             generatedAt = Instant.now(),
@@ -1669,6 +1692,7 @@ class GuidedTradingService(
             confirmInterval = confirmInterval,
             mode = mode.name,
             appliedUniverseLimit = effectiveUniverseLimit,
+            opportunityProfile = resolvedProfile.name,
             opportunities = opportunities
         )
     }
@@ -1679,8 +1703,10 @@ class GuidedTradingService(
         thresholdMode: GuidedWinRateThresholdMode = GuidedWinRateThresholdMode.DYNAMIC_P70,
         minMarketWinRate: Double? = null,
         minRecommendedWinRate: Double? = null,
-        strategyCodePrefix: String? = null
+        strategyCodePrefix: String? = null,
+        opportunityProfile: GuidedAutopilotOpportunityProfile = GuidedAutopilotOpportunityProfile.CLASSIC
     ): GuidedAutopilotLiveResponse {
+        val resolvedProfile = opportunityProfile.normalizeForMode(mode)
         val normalizedStrategyCodePrefix = strategyCodePrefix
             ?.trim()
             ?.uppercase()
@@ -1688,51 +1714,78 @@ class GuidedTradingService(
         val telemetry = orderLifecycleTelemetryService.getLiveSnapshot(
             strategyCodePrefix = normalizedStrategyCodePrefix
         )
-        val sortedMarkets = getMarketBoard(
-            sortBy = GuidedMarketSortBy.MARKET_ENTRY_WIN_RATE,
-            sortDirection = GuidedSortDirection.DESC,
-            interval = interval,
-            mode = mode
-        )
-        val topCandidates = sortedMarkets.take(10)
         val requestedMin = (minMarketWinRate ?: minRecommendedWinRate)?.coerceIn(50.0, 80.0)
-        val recommendedRates = sortedMarkets.mapNotNull { it.recommendedEntryWinRate }
-        val appliedThreshold = when (thresholdMode) {
-            GuidedWinRateThresholdMode.FIXED -> requestedMin ?: 60.0
-            GuidedWinRateThresholdMode.DYNAMIC_P70 -> resolveDynamicRecommendedThreshold(recommendedRates)
-        }
-
-        val candidates = topCandidates.map { market ->
-            val recommendedWinRate = market.recommendedEntryWinRate
-            val marketWinRate = market.marketEntryWinRate
-            val thresholdValue = if (thresholdMode == GuidedWinRateThresholdMode.FIXED) {
-                marketWinRate
-            } else {
-                recommendedWinRate
+        val (candidates, appliedThreshold) = if (resolvedProfile == GuidedAutopilotOpportunityProfile.CROWD_PRESSURE) {
+            val crowdCandidates = getAutopilotOpportunities(
+                interval = interval,
+                confirmInterval = resolveAutopilotConfirmInterval(mode, interval),
+                mode = mode,
+                universeLimit = 10,
+                opportunityProfile = resolvedProfile
+            ).opportunities.map { opportunity ->
+                GuidedAutopilotCandidateView(
+                    market = opportunity.market,
+                    koreanName = opportunity.koreanName,
+                    recommendedEntryWinRate = opportunity.recommendedEntryWinRate1m,
+                    marketEntryWinRate = opportunity.marketEntryWinRate1m,
+                    expectancyPct = opportunity.expectancyPct,
+                    score = opportunity.score,
+                    riskRewardRatio = opportunity.riskReward1m,
+                    entryGapPct = opportunity.entryGapPct1m,
+                    stage = opportunity.stage,
+                    reason = opportunity.reason,
+                    opportunityProfile = opportunity.opportunityProfile,
+                    crowdMetrics = opportunity.crowdMetrics
+                )
             }
-            val thresholdLabel = if (thresholdMode == GuidedWinRateThresholdMode.FIXED) {
-                "현재가 승률"
-            } else {
-                "추천가 승률"
-            }
-            val pass = (thresholdValue ?: 0.0) >= appliedThreshold
-            val stage = when {
-                !pass -> "RULE_FAIL"
-                (thresholdValue ?: 0.0) >= appliedThreshold + 2.0 -> "AUTO_PASS"
-                else -> "BORDERLINE"
-            }
-            GuidedAutopilotCandidateView(
-                market = market.market,
-                koreanName = market.koreanName,
-                recommendedEntryWinRate = recommendedWinRate,
-                marketEntryWinRate = marketWinRate,
-                stage = stage,
-                reason = if (pass) {
-                    "$thresholdLabel ${String.format("%.1f", thresholdValue ?: 0.0)}% >= ${String.format("%.1f", appliedThreshold)}% ($stage)"
-                } else {
-                    "$thresholdLabel ${String.format("%.1f", thresholdValue ?: 0.0)}% < ${String.format("%.1f", appliedThreshold)}%"
-                }
+            crowdCandidates to 56.0
+        } else {
+            val sortedMarkets = getMarketBoard(
+                sortBy = GuidedMarketSortBy.MARKET_ENTRY_WIN_RATE,
+                sortDirection = GuidedSortDirection.DESC,
+                interval = interval,
+                mode = mode
             )
+            val topCandidates = sortedMarkets.take(10)
+            val recommendedRates = sortedMarkets.mapNotNull { it.recommendedEntryWinRate }
+            val classicThreshold = when (thresholdMode) {
+                GuidedWinRateThresholdMode.FIXED -> requestedMin ?: 60.0
+                GuidedWinRateThresholdMode.DYNAMIC_P70 -> resolveDynamicRecommendedThreshold(recommendedRates)
+            }
+
+            topCandidates.map { market ->
+                val recommendedWinRate = market.recommendedEntryWinRate
+                val marketWinRate = market.marketEntryWinRate
+                val thresholdValue = if (thresholdMode == GuidedWinRateThresholdMode.FIXED) {
+                    marketWinRate
+                } else {
+                    recommendedWinRate
+                }
+                val thresholdLabel = if (thresholdMode == GuidedWinRateThresholdMode.FIXED) {
+                    "현재가 승률"
+                } else {
+                    "추천가 승률"
+                }
+                val pass = (thresholdValue ?: 0.0) >= classicThreshold
+                val stage = when {
+                    !pass -> "RULE_FAIL"
+                    (thresholdValue ?: 0.0) >= classicThreshold + 2.0 -> "AUTO_PASS"
+                    else -> "BORDERLINE"
+                }
+                GuidedAutopilotCandidateView(
+                    market = market.market,
+                    koreanName = market.koreanName,
+                    recommendedEntryWinRate = recommendedWinRate,
+                    marketEntryWinRate = marketWinRate,
+                    stage = stage,
+                    reason = if (pass) {
+                        "$thresholdLabel ${String.format("%.1f", thresholdValue ?: 0.0)}% >= ${String.format("%.1f", classicThreshold)}% ($stage)"
+                    } else {
+                        "$thresholdLabel ${String.format("%.1f", thresholdValue ?: 0.0)}% < ${String.format("%.1f", classicThreshold)}%"
+                    },
+                    opportunityProfile = resolvedProfile.name
+                )
+            } to classicThreshold
         }
 
         val autopilotEvents = telemetry.orderEvents
@@ -1797,6 +1850,7 @@ class GuidedTradingService(
             requestedMinRecommendedWinRate = requestedMin,
             decisionStats = decisionStats,
             strategyCodeSummary = strategyCodeSummary,
+            opportunityProfile = resolvedProfile.name,
         )
     }
 
@@ -2022,6 +2076,29 @@ class GuidedTradingService(
     private fun buildAutopilotOpportunity(
         marketItem: GuidedMarketItem,
         primaryRecommendation: GuidedRecommendation?,
+        confirmRecommendation: GuidedRecommendation?,
+        opportunityProfile: GuidedAutopilotOpportunityProfile = GuidedAutopilotOpportunityProfile.CLASSIC,
+        pulse: RealtimeMarketPulse? = null
+    ): GuidedAutopilotOpportunityView {
+        return if (opportunityProfile == GuidedAutopilotOpportunityProfile.CROWD_PRESSURE) {
+            buildCrowdPressureOpportunity(
+                marketItem = marketItem,
+                primaryRecommendation = primaryRecommendation,
+                confirmRecommendation = confirmRecommendation,
+                pulse = pulse
+            )
+        } else {
+            buildClassicAutopilotOpportunity(
+                marketItem = marketItem,
+                primaryRecommendation = primaryRecommendation,
+                confirmRecommendation = confirmRecommendation
+            )
+        }
+    }
+
+    private fun buildClassicAutopilotOpportunity(
+        marketItem: GuidedMarketItem,
+        primaryRecommendation: GuidedRecommendation?,
         confirmRecommendation: GuidedRecommendation?
     ): GuidedAutopilotOpportunityView {
         val recWin1m = primaryRecommendation?.recommendedEntryWinRate?.takeIf { it.isFinite() }
@@ -2062,7 +2139,8 @@ class GuidedTradingService(
                 expectancyPct = 0.0,
                 score = 0.0,
                 stage = "RULE_FAIL",
-                reason = "승률 또는 RR 데이터 부족"
+                reason = "승률 또는 RR 데이터 부족",
+                opportunityProfile = GuidedAutopilotOpportunityProfile.CLASSIC.name
             )
         }
 
@@ -2112,8 +2190,224 @@ class GuidedTradingService(
             expectancyPct = expectancyPct,
             score = score,
             stage = stage,
-            reason = reason
+            reason = reason,
+            opportunityProfile = GuidedAutopilotOpportunityProfile.CLASSIC.name
         )
+    }
+
+    private fun buildCrowdPressureOpportunity(
+        marketItem: GuidedMarketItem,
+        primaryRecommendation: GuidedRecommendation?,
+        confirmRecommendation: GuidedRecommendation?,
+        pulse: RealtimeMarketPulse?
+    ): GuidedAutopilotOpportunityView {
+        val recWin1m = primaryRecommendation?.recommendedEntryWinRate?.takeIf { it.isFinite() }
+        val recWin10m = confirmRecommendation?.recommendedEntryWinRate?.takeIf { it.isFinite() }
+        val marketWin1m = primaryRecommendation?.marketEntryWinRate?.takeIf { it.isFinite() }
+        val marketWin10m = confirmRecommendation?.marketEntryWinRate?.takeIf { it.isFinite() }
+        val rr1m = primaryRecommendation?.riskRewardRatio?.takeIf { it.isFinite() } ?: 0.0
+        val entryPrice = primaryRecommendation?.recommendedEntryPrice ?: 0.0
+        val currentPrice = primaryRecommendation?.currentPrice ?: 0.0
+        val stopLoss = primaryRecommendation?.stopLossPrice ?: 0.0
+        val takeProfit = primaryRecommendation?.takeProfitPrice ?: 0.0
+        val entryGapPct = if (entryPrice > 0.0 && currentPrice > 0.0) {
+            max(0.0, (currentPrice - entryPrice) / entryPrice * 100.0)
+        } else {
+            0.0
+        }
+        val crowdMetrics = pulse?.toCrowdMetricsView()
+
+        if (recWin1m == null || marketWin1m == null || !rr1m.isFinite()) {
+            return GuidedAutopilotOpportunityView(
+                market = marketItem.market,
+                koreanName = marketItem.koreanName,
+                recommendedEntryWinRate1m = recWin1m,
+                recommendedEntryWinRate10m = recWin10m,
+                marketEntryWinRate1m = marketWin1m,
+                marketEntryWinRate10m = marketWin10m,
+                riskReward1m = rr1m,
+                entryGapPct1m = entryGapPct,
+                expectancyPct = 0.0,
+                score = 0.0,
+                stage = "RULE_FAIL",
+                reason = "CROWD_PRESSURE 데이터 부족",
+                opportunityProfile = GuidedAutopilotOpportunityProfile.CROWD_PRESSURE.name,
+                crowdMetrics = crowdMetrics
+            )
+        }
+
+        val profitPct = if (entryPrice > 0.0 && takeProfit > 0.0) {
+            (takeProfit - entryPrice) / entryPrice * 100.0
+        } else {
+            0.0
+        }
+        val lossPct = if (entryPrice > 0.0 && stopLoss > 0.0) {
+            max(0.0, (entryPrice - stopLoss) / entryPrice * 100.0)
+        } else {
+            0.0
+        }
+        val expectancyPct = recWin1m / 100.0 * profitPct - (1.0 - recWin1m / 100.0) * lossPct
+
+        val gateFailure = resolveCrowdPressureGateFailure(
+            recommendationWinRate = recWin1m,
+            riskReward1m = rr1m,
+            entryGapPct = entryGapPct,
+            pulse = pulse
+        )
+        if (gateFailure != null) {
+            return GuidedAutopilotOpportunityView(
+                market = marketItem.market,
+                koreanName = marketItem.koreanName,
+                recommendedEntryWinRate1m = recWin1m,
+                recommendedEntryWinRate10m = recWin10m,
+                marketEntryWinRate1m = marketWin1m,
+                marketEntryWinRate10m = marketWin10m,
+                riskReward1m = rr1m,
+                entryGapPct1m = entryGapPct,
+                expectancyPct = expectancyPct,
+                score = 0.0,
+                stage = "RULE_FAIL",
+                reason = gateFailure,
+                opportunityProfile = GuidedAutopilotOpportunityProfile.CROWD_PRESSURE.name,
+                crowdMetrics = crowdMetrics
+            )
+        }
+
+        val safePulse = pulse!!
+        val pressure =
+            30.0 * normalizeRange(safePulse.notionalSpikeRatio, 2.0, 4.0) +
+                20.0 * normalizeRange(safePulse.priceSpike10sPercent, 0.25, 1.25) +
+                15.0 * normalizeRange(safePulse.bidImbalance, 0.08, 0.30)
+        val followThrough =
+            15.0 * normalizeRange(safePulse.signedChangeRatePercent, 0.10, 1.20) +
+                10.0 * normalizeRange(recWin1m, 56.0, 66.0)
+        val execution = 10.0 * (1.0 - normalizeRange(safePulse.spreadPercent, 0.05, 0.25))
+        val payoff = 10.0 * normalizeRange(expectancyPct, 0.0, 0.12)
+        val latePenalty =
+            10.0 * normalizeRange(safePulse.priceSpike10sPercent, 1.40, 1.80) +
+                15.0 * normalizeRange(entryGapPct, 0.25, 0.60)
+        val score = (pressure + followThrough + execution + payoff - latePenalty).coerceIn(0.0, 100.0)
+
+        val stage = when {
+            score >= 70.0 &&
+                safePulse.notionalSpikeRatio >= 2.5 &&
+                safePulse.bidImbalance >= 0.12 &&
+                expectancyPct >= 0.03 -> "AUTO_PASS"
+            score >= 60.0 &&
+                safePulse.notionalSpikeRatio >= 2.2 &&
+                expectancyPct >= 0.0 -> "BORDERLINE"
+            else -> "RULE_FAIL"
+        }
+        val flowScore = crowdMetrics?.flowScore ?: 0.0
+        val reason = when (stage) {
+            "AUTO_PASS" ->
+                "Crowd score ${String.format("%.1f", score)} · flow ${String.format("%.1f", flowScore)} · spike ${String.format("%.2f", safePulse.priceSpike10sPercent)}% · imbalance ${String.format("%.2f", safePulse.bidImbalance)}"
+            "BORDERLINE" ->
+                "Crowd 경계 ${String.format("%.1f", score)} · flow ${String.format("%.1f", flowScore)} · spread ${String.format("%.2f", safePulse.spreadPercent)}% · expectancy ${String.format("%.3f", expectancyPct)}%"
+            else ->
+                "Crowd score ${String.format("%.1f", score)} 미달 · spike ${String.format("%.2f", safePulse.priceSpike10sPercent)}% · imbalance ${String.format("%.2f", safePulse.bidImbalance)}"
+        }
+
+        return GuidedAutopilotOpportunityView(
+            market = marketItem.market,
+            koreanName = marketItem.koreanName,
+            recommendedEntryWinRate1m = recWin1m,
+            recommendedEntryWinRate10m = recWin10m,
+            marketEntryWinRate1m = marketWin1m,
+            marketEntryWinRate10m = marketWin10m,
+            riskReward1m = rr1m,
+            entryGapPct1m = entryGapPct,
+            expectancyPct = expectancyPct,
+            score = score,
+            stage = stage,
+            reason = reason,
+            opportunityProfile = GuidedAutopilotOpportunityProfile.CROWD_PRESSURE.name,
+            crowdMetrics = crowdMetrics
+        )
+    }
+
+    private fun resolveCrowdPressureGateFailure(
+        recommendationWinRate: Double,
+        riskReward1m: Double,
+        entryGapPct: Double,
+        pulse: RealtimeMarketPulse?
+    ): String? {
+        if (pulse == null) return "CROWD_PRESSURE fail-closed: 실시간 pulse 없음"
+        val pulseAgeMs = max(0L, Instant.now().toEpochMilli() - pulse.updatedAt.toEpochMilli())
+        return when {
+            pulseAgeMs > 5_000L -> "CROWD_PRESSURE fail-closed: pulse stale ${pulseAgeMs}ms"
+            pulse.tradeNotional10sKrw < 50_000_000.0 ->
+                "CROWD_PRESSURE fail: 10초 체결대금 ${String.format("%.0f", pulse.tradeNotional10sKrw)} < 50000000"
+            pulse.notionalSpikeRatio < 2.0 ->
+                "CROWD_PRESSURE fail: notional spike ${String.format("%.2f", pulse.notionalSpikeRatio)} < 2.00"
+            pulse.priceSpike10sPercent < 0.25 || pulse.priceSpike10sPercent > 1.80 ->
+                "CROWD_PRESSURE fail: price spike ${String.format("%.2f", pulse.priceSpike10sPercent)}% out of range"
+            pulse.bidImbalance < 0.08 ->
+                "CROWD_PRESSURE fail: bid imbalance ${String.format("%.2f", pulse.bidImbalance)} < 0.08"
+            pulse.spreadPercent > 0.25 ->
+                "CROWD_PRESSURE fail: spread ${String.format("%.2f", pulse.spreadPercent)}% > 0.25%"
+            entryGapPct > 0.60 ->
+                "CROWD_PRESSURE fail: entry gap ${String.format("%.2f", entryGapPct)}% > 0.60%"
+            riskReward1m < 1.15 ->
+                "CROWD_PRESSURE fail: RR ${String.format("%.2f", riskReward1m)} < 1.15"
+            recommendationWinRate < 56.0 ->
+                "CROWD_PRESSURE fail: 추천가 승률 ${String.format("%.1f", recommendationWinRate)}% < 56.0%"
+            else -> null
+        }
+    }
+
+    private fun buildCrowdFeaturePack(
+        market: String,
+        opportunityProfile: GuidedAutopilotOpportunityProfile
+    ): GuidedCrowdFeaturePack? {
+        if (market.isBlank()) return null
+        if (opportunityProfile != GuidedAutopilotOpportunityProfile.CROWD_PRESSURE && marketWebSocketFeed == null) {
+            return null
+        }
+        return marketWebSocketFeed
+            ?.latestPulse(market)
+            ?.toCrowdFeaturePack()
+    }
+
+    private fun RealtimeMarketPulse.toCrowdFeaturePack(now: Instant = Instant.now()): GuidedCrowdFeaturePack {
+        val pulseAgeMs = max(0L, now.toEpochMilli() - updatedAt.toEpochMilli())
+        return GuidedCrowdFeaturePack(
+            flowScore = compositeScore,
+            priceSpike10sPercent = priceSpike10sPercent,
+            tradeNotional10sKrw = tradeNotional10sKrw,
+            notionalSpikeRatio = notionalSpikeRatio,
+            bidImbalance = bidImbalance,
+            spreadPercent = spreadPercent,
+            signedChangeRatePercent = signedChangeRatePercent,
+            pulseAgeMs = pulseAgeMs
+        )
+    }
+
+    private fun RealtimeMarketPulse.toCrowdMetricsView(now: Instant = Instant.now()): GuidedAutopilotCrowdMetricsView {
+        val featurePack = toCrowdFeaturePack(now)
+        return GuidedAutopilotCrowdMetricsView(
+            flowScore = featurePack.flowScore,
+            priceSpike10sPercent = featurePack.priceSpike10sPercent,
+            tradeNotional10sKrw = featurePack.tradeNotional10sKrw,
+            notionalSpikeRatio = featurePack.notionalSpikeRatio,
+            bidImbalance = featurePack.bidImbalance,
+            spreadPercent = featurePack.spreadPercent,
+            signedChangeRatePercent = featurePack.signedChangeRatePercent,
+            pulseAgeMs = featurePack.pulseAgeMs
+        )
+    }
+
+    private fun normalizeRange(value: Double, minValue: Double, maxValue: Double): Double {
+        if (!value.isFinite() || maxValue <= minValue) return 0.0
+        return ((value - minValue) / (maxValue - minValue)).coerceIn(0.0, 1.0)
+    }
+
+    private fun resolveAutopilotConfirmInterval(mode: TradingMode, interval: String): String {
+        return when (mode) {
+            TradingMode.SCALP -> if (interval.lowercase() == "tick") "minute1" else "minute10"
+            TradingMode.SWING -> "minute240"
+            TradingMode.POSITION -> "day"
+        }
     }
 
     private fun resolveDynamicRecommendedThreshold(rates: List<Double>): Double {
@@ -2747,6 +3041,22 @@ enum class GuidedWinRateThresholdMode {
     }
 }
 
+enum class GuidedAutopilotOpportunityProfile {
+    CLASSIC,
+    CROWD_PRESSURE;
+
+    fun normalizeForMode(mode: TradingMode): GuidedAutopilotOpportunityProfile {
+        return if (this == CROWD_PRESSURE && mode == TradingMode.SCALP) this else CLASSIC
+    }
+
+    companion object {
+        fun fromString(value: String?): GuidedAutopilotOpportunityProfile {
+            val normalized = value?.trim()
+            return entries.firstOrNull { it.name.equals(normalized, ignoreCase = true) } ?: CLASSIC
+        }
+    }
+}
+
 data class GuidedCandle(
     val timestamp: Long,
     val open: Double,
@@ -2868,7 +3178,8 @@ data class GuidedAgentFeaturePack(
     val generatedAt: Instant,
     val technical: GuidedTechnicalFeaturePack,
     val microstructure: GuidedMicrostructureFeaturePack,
-    val executionRisk: GuidedExecutionRiskFeaturePack
+    val executionRisk: GuidedExecutionRiskFeaturePack,
+    val crowd: GuidedCrowdFeaturePack? = null
 )
 
 data class GuidedTechnicalFeaturePack(
@@ -2903,6 +3214,17 @@ data class GuidedExecutionRiskFeaturePack(
     val confidence: Double
 )
 
+data class GuidedCrowdFeaturePack(
+    val flowScore: Double,
+    val priceSpike10sPercent: Double,
+    val tradeNotional10sKrw: Double,
+    val notionalSpikeRatio: Double,
+    val bidImbalance: Double,
+    val spreadPercent: Double,
+    val signedChangeRatePercent: Double,
+    val pulseAgeMs: Long
+)
+
 data class GuidedAutopilotLiveResponse(
     val orderSummary: OrderLifecycleSummary,
     val orderEvents: List<OrderLifecycleEvent>,
@@ -2914,6 +3236,7 @@ data class GuidedAutopilotLiveResponse(
     val requestedMinRecommendedWinRate: Double?,
     val decisionStats: GuidedAutopilotDecisionStats,
     val strategyCodeSummary: Map<String, GuidedStrategyCodeSummary>,
+    val opportunityProfile: String = GuidedAutopilotOpportunityProfile.CLASSIC.name,
 )
 
 data class GuidedAutopilotDecisionStats(
@@ -2946,8 +3269,14 @@ data class GuidedAutopilotCandidateView(
     val koreanName: String,
     val recommendedEntryWinRate: Double?,
     val marketEntryWinRate: Double?,
+    val expectancyPct: Double? = null,
+    val score: Double? = null,
+    val riskRewardRatio: Double? = null,
+    val entryGapPct: Double? = null,
     val stage: String,
-    val reason: String
+    val reason: String,
+    val opportunityProfile: String = GuidedAutopilotOpportunityProfile.CLASSIC.name,
+    val crowdMetrics: GuidedAutopilotCrowdMetricsView? = null
 )
 
 data class GuidedAutopilotOpportunitiesResponse(
@@ -2956,6 +3285,7 @@ data class GuidedAutopilotOpportunitiesResponse(
     val confirmInterval: String,
     val mode: String,
     val appliedUniverseLimit: Int,
+    val opportunityProfile: String = GuidedAutopilotOpportunityProfile.CLASSIC.name,
     val opportunities: List<GuidedAutopilotOpportunityView>
 )
 
@@ -2971,7 +3301,20 @@ data class GuidedAutopilotOpportunityView(
     val expectancyPct: Double,
     val score: Double,
     val stage: String,
-    val reason: String
+    val reason: String,
+    val opportunityProfile: String = GuidedAutopilotOpportunityProfile.CLASSIC.name,
+    val crowdMetrics: GuidedAutopilotCrowdMetricsView? = null
+)
+
+data class GuidedAutopilotCrowdMetricsView(
+    val flowScore: Double,
+    val priceSpike10sPercent: Double,
+    val tradeNotional10sKrw: Double,
+    val notionalSpikeRatio: Double,
+    val bidImbalance: Double,
+    val spreadPercent: Double,
+    val signedChangeRatePercent: Double,
+    val pulseAgeMs: Long
 )
 
 data class GuidedAutopilotDecisionLogRequest(

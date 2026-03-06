@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import type {
   AutopilotLiveResponse,
   AutopilotEventView,
+  AutopilotOpportunityProfile,
   OrderLifecycleGroupSummary,
 } from '../../api';
 import type {
@@ -48,6 +49,12 @@ function clampPercent(value: number): number {
 function formatScore(value: number | undefined | null): string {
   if (!Number.isFinite(value as number)) return '-';
   return `${Math.round(value as number)}점`;
+}
+
+function formatCrowdMetrics(candidate: AutopilotCandidateView): string | null {
+  const crowd = candidate.crowdMetrics;
+  if (!crowd) return null;
+  return `flow ${crowd.flowScore.toFixed(1)} · spike ${crowd.priceSpike10sPercent.toFixed(2)}% · imbalance ${crowd.bidImbalance.toFixed(2)} · spread ${crowd.spreadPercent.toFixed(2)}%`;
 }
 
 function formatTs(ts: number): string {
@@ -319,6 +326,12 @@ function normalizeServerCandidates(liveData: AutopilotLiveResponse | undefined):
     koreanName: candidate.koreanName,
     recommendedEntryWinRate: candidate.recommendedEntryWinRate ?? null,
     marketEntryWinRate: candidate.marketEntryWinRate ?? null,
+    expectancyPct: candidate.expectancyPct ?? null,
+    score: candidate.score ?? null,
+    riskRewardRatio: candidate.riskRewardRatio ?? null,
+    entryGapPct: candidate.entryGapPct ?? null,
+    opportunityProfile: candidate.opportunityProfile ?? liveData.opportunityProfile ?? 'CLASSIC',
+    crowdMetrics: candidate.crowdMetrics ?? null,
     stage: candidate.stage as AutopilotCandidateView['stage'],
     reason: candidate.reason,
     updatedAt: now,
@@ -330,6 +343,7 @@ interface AutopilotLiveDockProps {
   autopilotState: AutopilotState;
   liveData?: AutopilotLiveResponse;
   loading?: boolean;
+  opportunityProfile?: AutopilotOpportunityProfile;
 }
 
 export function AutopilotLiveDock({
@@ -337,6 +351,7 @@ export function AutopilotLiveDock({
   autopilotState,
   liveData,
   loading = false,
+  opportunityProfile = 'CLASSIC',
 }: AutopilotLiveDockProps) {
   const [selectedGroup, setSelectedGroup] = useState('TOTAL');
   const [orderFeedFilter, setOrderFeedFilter] = useState<OrderFeedFilter>('FILLED');
@@ -541,6 +556,7 @@ export function AutopilotLiveDock({
   const appliedThreshold = liveData?.appliedRecommendedWinRateThreshold
     ?? autopilotState.appliedRecommendedWinRateThreshold;
   const thresholdMode = liveData?.thresholdMode ?? autopilotState.thresholdMode;
+  const effectiveOpportunityProfile = liveData?.opportunityProfile ?? opportunityProfile;
   const thresholdLabel = thresholdMode === 'DYNAMIC_P70' ? '동적 P70(추천가)' : '고정(현재가)';
   const focusedMarkets = autopilotState.focusedScalp.markets;
   const focusedEnabled = autopilotState.focusedScalp.enabled;
@@ -680,7 +696,10 @@ export function AutopilotLiveDock({
             {` (대기 ${localFlow.pending}, 취소 ${localFlow.cancelled})`}
           </div>
           <div className="autopilot-threshold-meta">
-            임계값 모드: {thresholdLabel} · 적용 기준: {appliedThreshold.toFixed(1)}%
+            전략 성향: {effectiveOpportunityProfile === 'CROWD_PRESSURE' ? 'CROWD_PRESSURE' : 'CLASSIC'}
+            {effectiveOpportunityProfile === 'CROWD_PRESSURE'
+              ? ' · pulse freshness <= 5s · 추천가 승률 gate 56% · score gate 60/70'
+              : ` · 임계값 모드: ${thresholdLabel} · 적용 기준: ${appliedThreshold.toFixed(1)}%`}
           </div>
           <div className="autopilot-opportunity-meta">
             <span>AUTO_PASS {stageBreakdown.autoPass}</span>
@@ -741,6 +760,12 @@ export function AutopilotLiveDock({
                     <div className="candidate-metrics">
                       기대값 {candidate.expectancyPct?.toFixed(3) ?? '-'}% · score {candidate.score?.toFixed(1) ?? '-'} · RR {candidate.riskRewardRatio?.toFixed(2) ?? '-'}R · 괴리 {candidate.entryGapPct?.toFixed(2) ?? '-'}%
                     </div>
+                    {candidate.crowdMetrics && (
+                      <div className="candidate-metrics">
+                        {formatCrowdMetrics(candidate)}
+                        {candidate.crowdMetrics.pulseAgeMs > 0 ? ` · pulse ${candidate.crowdMetrics.pulseAgeMs}ms` : ''}
+                      </div>
+                    )}
                     <div className="candidate-score-meter">
                       <div
                         className="candidate-score-fill"

@@ -1,4 +1,9 @@
-import type { GuidedAgentContextResponse, GuidedTradePosition } from '../../api';
+import type {
+  AutopilotOpportunityProfile,
+  GuidedAgentContextResponse,
+  GuidedCrowdFeaturePack,
+  GuidedTradePosition,
+} from '../../api';
 
 export type WorkerStatus =
   | 'SCANNING'
@@ -70,6 +75,7 @@ export interface WorkerConfig {
   warnHoldingMs?: number | null;
   maxHoldingMs?: number | null;
   engineType?: 'SCALP' | 'SWING' | 'POSITION';
+  opportunityProfile?: AutopilotOpportunityProfile;
 }
 
 interface WorkerEntryDecision {
@@ -145,6 +151,10 @@ export class MarketWorker {
 
   private get isScalp(): boolean {
     return this.config.engineType === 'SCALP';
+  }
+
+  private get isCrowdPressure(): boolean {
+    return this.config.opportunityProfile === 'CROWD_PRESSURE' && this.isScalp;
   }
 
   start(): void {
@@ -437,6 +447,28 @@ export class MarketWorker {
     const current = recommendation.currentPrice;
     const stopLoss = recommendation.stopLossPrice;
     const takeProfit = recommendation.takeProfitPrice;
+    const crowd = context.featurePack?.crowd ?? null;
+
+    if (this.isCrowdPressure) {
+      if (!crowd) {
+        return { allow: false, reason: 'CROWD_PRESSURE fail-closed: crowd pulse 없음' };
+      }
+      if (crowd.pulseAgeMs > 5_000) {
+        return { allow: false, reason: `CROWD_PRESSURE fail-closed: pulse stale ${crowd.pulseAgeMs}ms` };
+      }
+      if (crowd.notionalSpikeRatio < 2.0) {
+        return { allow: false, reason: `CROWD_PRESSURE fail: spike ${crowd.notionalSpikeRatio.toFixed(2)} < 2.00` };
+      }
+      if (crowd.priceSpike10sPercent < 0.25 || crowd.priceSpike10sPercent > 1.8) {
+        return { allow: false, reason: `CROWD_PRESSURE fail: spike ${crowd.priceSpike10sPercent.toFixed(2)}% out of range` };
+      }
+      if (crowd.bidImbalance < 0.08) {
+        return { allow: false, reason: `CROWD_PRESSURE fail: imbalance ${crowd.bidImbalance.toFixed(2)} < 0.08` };
+      }
+      if (crowd.spreadPercent > 0.25) {
+        return { allow: false, reason: `CROWD_PRESSURE fail: spread ${crowd.spreadPercent.toFixed(2)}% > 0.25%` };
+      }
+    }
 
     if (!Number.isFinite(rr) || rr < 1.05) {
       return { allow: false, reason: `Risk/Reward ${rr.toFixed(2)}R < 1.05R` };
@@ -534,12 +566,32 @@ export class MarketWorker {
 
     const openedAt = Date.parse(position.createdAt);
     const holdingMs = Number.isFinite(openedAt) ? Math.max(0, Date.now() - openedAt) : null;
-    const warnHoldingMs = this.isScalp
+    const crowdContext = this.isCrowdPressure ? await this.deps.fetchContext(this.config.market) : null;
+    const crowd = crowdContext?.featurePack?.crowd ?? null;
+    const warnHoldingMs = this.isCrowdPressure
+      ? null
+      : this.isScalp
       ? Math.min(this.config.warnHoldingMs ?? 10 * 60_000, 10 * 60_000)
       : (this.config.warnHoldingMs ?? null);
-    const maxHoldingMs = this.isScalp
+    const maxHoldingMs = this.isCrowdPressure
+      ? 300_000
+      : this.isScalp
       ? Math.min(this.config.maxHoldingMs ?? 15 * 60_000, 15 * 60_000)
       : (this.config.maxHoldingMs ?? null);
+
+    if (this.isCrowdPressure) {
+      const exitReason = this.resolveCrowdPressureExit(pnl, peakDrawdown, holdingMs, crowd);
+      if (exitReason) {
+        this.emitOrderFlow('SELL_REQUESTED', exitReason);
+        await this.deps.stopPosition(this.config.market, exitReason);
+        this.emitOrderFlow('SELL_FILLED', `${exitReason} 체결`);
+        this.emitEvent('POSITION_EXIT', exitReason.includes('손절') ? 'WARN' : 'INFO', exitReason);
+        this.cooldownUntil = Date.now() + (pnl <= 0 ? 60_000 : 30_000);
+        this.peakPnlPercent = Number.NEGATIVE_INFINITY;
+        this.setState('COOLDOWN', exitReason);
+        return;
+      }
+    }
 
     if (
       holdingMs != null &&
@@ -692,6 +744,42 @@ export class MarketWorker {
       return Math.min(3600_000, Math.max(300_000, Math.round(nextReviewSec * 1000)));
     }
     return Math.max(300_000, this.config.llmReviewMs);
+  }
+
+  private resolveCrowdPressureExit(
+    pnl: number,
+    peakDrawdown: number,
+    holdingMs: number | null,
+    crowd: GuidedCrowdFeaturePack | null
+  ): string | null {
+    if (pnl <= -0.30) {
+      return 'CROWD_PRESSURE hard stop -0.30%';
+    }
+    if (!crowd) {
+      return 'CROWD_PRESSURE fail-closed: crowd pulse 없음';
+    }
+    if (crowd.pulseAgeMs > 5_000) {
+      return `CROWD_PRESSURE fail-closed: pulse stale ${crowd.pulseAgeMs}ms`;
+    }
+    if (crowd.bidImbalance < 0.02) {
+      return `CROWD_PRESSURE 즉시청산: imbalance ${crowd.bidImbalance.toFixed(2)} < 0.02`;
+    }
+    if (crowd.spreadPercent > 0.30) {
+      return `CROWD_PRESSURE 즉시청산: spread ${crowd.spreadPercent.toFixed(2)}% > 0.30%`;
+    }
+    if (pnl >= 0.70) {
+      return 'CROWD_PRESSURE take profit +0.70%';
+    }
+    if (this.peakPnlPercent >= 0.15 && peakDrawdown >= 0.18) {
+      return `CROWD_PRESSURE trailing exit (peak ${this.peakPnlPercent.toFixed(2)}%, drawdown -${peakDrawdown.toFixed(2)}%)`;
+    }
+    if (holdingMs != null && holdingMs >= 90_000 && crowd.notionalSpikeRatio < 1.20) {
+      return `CROWD_PRESSURE 조기청산: spike ${crowd.notionalSpikeRatio.toFixed(2)} < 1.20`;
+    }
+    if (holdingMs != null && holdingMs >= 300_000) {
+      return 'CROWD_PRESSURE max holding 300s';
+    }
+    return null;
   }
 
   private scheduleEntryCooldown(cooldownMs: number): void {

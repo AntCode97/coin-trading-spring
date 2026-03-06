@@ -2,10 +2,12 @@ package com.ant.cointrading.guided
 
 import com.ant.cointrading.api.bithumb.BithumbPrivateApi
 import com.ant.cointrading.api.bithumb.BithumbPublicApi
+import com.ant.cointrading.api.bithumb.BithumbMarketWebSocketFeed
 import com.ant.cointrading.api.bithumb.Balance
 import com.ant.cointrading.api.bithumb.CandleResponse
 import com.ant.cointrading.api.bithumb.MarketInfo
 import com.ant.cointrading.api.bithumb.OrderResponse
+import com.ant.cointrading.api.bithumb.RealtimeMarketPulse
 import com.ant.cointrading.api.bithumb.TickerInfo
 import com.ant.cointrading.repository.GuidedTradeEntity
 import com.ant.cointrading.repository.GuidedTradeEventEntity
@@ -44,6 +46,7 @@ class GuidedTradingServiceTest {
     private val guidedTradeEventRepository: GuidedTradeEventRepository = mock()
     private val orderLifecycleTelemetryService: OrderLifecycleTelemetryService = mock()
     private val guidedAutopilotDecisionRepository: GuidedAutopilotDecisionRepository = mock()
+    private val marketWebSocketFeed: BithumbMarketWebSocketFeed = mock()
 
     private lateinit var service: GuidedTradingService
     private lateinit var markets: List<MarketInfo>
@@ -57,7 +60,8 @@ class GuidedTradingServiceTest {
             guidedTradeRepository = guidedTradeRepository,
             guidedTradeEventRepository = guidedTradeEventRepository,
             orderLifecycleTelemetryService = orderLifecycleTelemetryService,
-            guidedAutopilotDecisionRepository = guidedAutopilotDecisionRepository
+            guidedAutopilotDecisionRepository = guidedAutopilotDecisionRepository,
+            marketWebSocketFeed = marketWebSocketFeed
         )
 
         markets = (1..61).map { index ->
@@ -258,7 +262,9 @@ class GuidedTradingServiceTest {
             "buildAutopilotOpportunity",
             GuidedMarketItem::class.java,
             GuidedRecommendation::class.java,
-            GuidedRecommendation::class.java
+            GuidedRecommendation::class.java,
+            GuidedAutopilotOpportunityProfile::class.java,
+            RealtimeMarketPulse::class.java
         )
         method.isAccessible = true
 
@@ -300,7 +306,14 @@ class GuidedTradingServiceTest {
             riskRewardRatio = 1.22
         )
 
-        val result = method.invoke(service, marketItem, primary, confirm) as GuidedAutopilotOpportunityView
+        val result = method.invoke(
+            service,
+            marketItem,
+            primary,
+            confirm,
+            GuidedAutopilotOpportunityProfile.CLASSIC,
+            null
+        ) as GuidedAutopilotOpportunityView
 
         val p = 0.6 * (62.0 / 100.0) + 0.4 * (58.0 / 100.0)
         val profitPct = (101.7 - 99.5) / 99.5 * 100.0
@@ -319,6 +332,141 @@ class GuidedTradingServiceTest {
         assertEquals(expectancy, result.expectancyPct, 1e-9)
         assertEquals(expectedScore, result.score, 1e-9)
         assertEquals("AUTO_PASS", result.stage)
+    }
+
+    @Test
+    @DisplayName("CROWD_PRESSURE는 fresh pulse와 gate 충족 시 AUTO_PASS를 산출한다")
+    fun crowdPressureOpportunityAutoPassesFreshPulse() {
+        val method = GuidedTradingService::class.java.getDeclaredMethod(
+            "buildAutopilotOpportunity",
+            GuidedMarketItem::class.java,
+            GuidedRecommendation::class.java,
+            GuidedRecommendation::class.java,
+            GuidedAutopilotOpportunityProfile::class.java,
+            RealtimeMarketPulse::class.java
+        )
+        method.isAccessible = true
+
+        val marketItem = GuidedMarketItem(
+            market = "KRW-FAST",
+            symbol = "FAST",
+            koreanName = "패스트",
+            englishName = "FAST",
+            tradePrice = 100.0,
+            changeRate = 0.0,
+            changePrice = 0.0,
+            accTradePrice = 10_000_000_000.0,
+            accTradeVolume = 100_000.0,
+            surgeRate = 0.0
+        )
+        val primary = GuidedRecommendation(
+            market = "KRW-FAST",
+            currentPrice = 100.4,
+            recommendedEntryPrice = 100.0,
+            stopLossPrice = 99.6,
+            takeProfitPrice = 100.9,
+            confidence = 72.0,
+            predictedWinRate = 61.0,
+            recommendedEntryWinRate = 60.0,
+            marketEntryWinRate = 58.0,
+            riskRewardRatio = 2.25,
+            winRateBreakdown = GuidedWinRateBreakdown(60.0, 57.0, 56.0, 62.0),
+            suggestedOrderType = "LIMIT",
+            rationale = listOf("crowd-auto-pass")
+        )
+        val pulse = RealtimeMarketPulse(
+            market = "KRW-FAST",
+            currentPrice = 100.4,
+            priceSpike10sPercent = 1.02,
+            tradeNotional10sKrw = 95_000_000.0,
+            tradeNotionalPrev60sKrw = 180_000_000.0,
+            notionalSpikeRatio = 3.8,
+            bidImbalance = 0.24,
+            spreadPercent = 0.07,
+            signedChangeRatePercent = 0.95,
+            updatedAt = Instant.now(),
+            compositeScore = 88.0
+        )
+
+        val result = method.invoke(
+            service,
+            marketItem,
+            primary,
+            primary,
+            GuidedAutopilotOpportunityProfile.CROWD_PRESSURE,
+            pulse
+        ) as GuidedAutopilotOpportunityView
+
+        assertEquals("AUTO_PASS", result.stage)
+        assertTrue(result.score >= 70.0)
+        assertTrue(result.crowdMetrics != null)
+    }
+
+    @Test
+    @DisplayName("CROWD_PRESSURE는 stale pulse에서 RULE_FAIL로 fail-closed 한다")
+    fun crowdPressureOpportunityFailsClosedOnStalePulse() {
+        val method = GuidedTradingService::class.java.getDeclaredMethod(
+            "buildAutopilotOpportunity",
+            GuidedMarketItem::class.java,
+            GuidedRecommendation::class.java,
+            GuidedRecommendation::class.java,
+            GuidedAutopilotOpportunityProfile::class.java,
+            RealtimeMarketPulse::class.java
+        )
+        method.isAccessible = true
+
+        val marketItem = GuidedMarketItem(
+            market = "KRW-STALE",
+            symbol = "STALE",
+            koreanName = "스테일",
+            englishName = "STALE",
+            tradePrice = 100.0,
+            changeRate = 0.0,
+            changePrice = 0.0,
+            accTradePrice = 8_000_000_000.0,
+            accTradeVolume = 80_000.0,
+            surgeRate = 0.0
+        )
+        val primary = GuidedRecommendation(
+            market = "KRW-STALE",
+            currentPrice = 100.3,
+            recommendedEntryPrice = 100.0,
+            stopLossPrice = 99.6,
+            takeProfitPrice = 100.8,
+            confidence = 68.0,
+            predictedWinRate = 60.0,
+            recommendedEntryWinRate = 60.0,
+            marketEntryWinRate = 58.0,
+            riskRewardRatio = 2.0,
+            winRateBreakdown = GuidedWinRateBreakdown(58.0, 56.0, 55.0, 60.0),
+            suggestedOrderType = "LIMIT",
+            rationale = listOf("crowd-stale")
+        )
+        val pulse = RealtimeMarketPulse(
+            market = "KRW-STALE",
+            currentPrice = 100.3,
+            priceSpike10sPercent = 0.65,
+            tradeNotional10sKrw = 90_000_000.0,
+            tradeNotionalPrev60sKrw = 170_000_000.0,
+            notionalSpikeRatio = 3.0,
+            bidImbalance = 0.16,
+            spreadPercent = 0.08,
+            signedChangeRatePercent = 0.75,
+            updatedAt = Instant.now().minusSeconds(10),
+            compositeScore = 80.0
+        )
+
+        val result = method.invoke(
+            service,
+            marketItem,
+            primary,
+            primary,
+            GuidedAutopilotOpportunityProfile.CROWD_PRESSURE,
+            pulse
+        ) as GuidedAutopilotOpportunityView
+
+        assertEquals("RULE_FAIL", result.stage)
+        assertTrue(result.reason.contains("fail-closed", ignoreCase = true))
     }
 
     @Test
