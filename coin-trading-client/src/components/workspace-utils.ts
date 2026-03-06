@@ -385,7 +385,7 @@ export function migrateWorkspacePrefs(prefs: WorkspacePrefs): WorkspacePrefs {
 
   next.llmProvider = normalizeLlmProvider(next.llmProvider);
   const legacyOpenAiModel = isCodexModelId(next.chatModel) ? next.chatModel : undefined;
-  next.openAiModel = isCodexModelId(next.openAiModel) ? next.openAiModel : (legacyOpenAiModel ?? 'gpt-5.3-codex');
+  next.openAiModel = isCodexModelId(next.openAiModel) ? next.openAiModel : (legacyOpenAiModel ?? 'gpt-4');
   next.zaiModel = isZaiModelId(next.zaiModel) ? next.zaiModel : 'glm-4.7-flash';
   next.zaiEndpointMode = normalizeZaiEndpointMode(next.zaiEndpointMode);
   next.delegationMode = normalizeDelegationMode(next.delegationMode);

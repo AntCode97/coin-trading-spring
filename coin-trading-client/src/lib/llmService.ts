@@ -89,6 +89,7 @@ const ZAI_MAX_CONCURRENCY = 3;
 const ZAI_DELEGATE_TOOL_NAME = 'delegate_to_zai_agent';
 
 export const CODEX_MODELS = [
+  { id: 'gpt-4', label: 'GPT-4' },
   { id: 'gpt-5.3-codex', label: 'GPT-5.3 Codex' },
   { id: 'o3', label: 'o3' },
   { id: 'o4-mini', label: 'o4-mini' },
@@ -713,7 +714,7 @@ async function sendOpenAiChatMessage(options: SendChatMessageOptions): Promise<C
     loopCount += 1;
 
     const requestBody: Record<string, unknown> = {
-      model: options.model || 'gpt-5.3-codex',
+      model: options.model || 'gpt-4',
       instructions: buildSystemPrompt(options.tradingMode || 'SWING'),
       input,
       stream: true,
@@ -955,7 +956,7 @@ async function requestOpenAiOneShotWithMeta(options: OneShotOptions): Promise<{ 
     loopCount += 1;
 
     const requestBody: Record<string, unknown> = {
-      model: options.model || 'gpt-5.3-codex',
+      model: options.model || 'gpt-4',
       instructions: buildSystemPrompt(options.tradingMode || 'SWING'),
       input,
       stream: true,

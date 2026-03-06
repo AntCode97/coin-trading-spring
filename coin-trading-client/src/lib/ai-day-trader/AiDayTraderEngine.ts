@@ -564,7 +564,7 @@ export function resetAiDayTraderEngine(): void {
 export const DEFAULT_AI_DAY_TRADER_CONFIG: AiDayTraderConfig = {
   enabled: false,
   provider: 'openai',
-  model: 'gpt-4.1-mini',
+  model: 'gpt-4',
   scanIntervalMs: 15_000,
   positionCheckMs: 8_000,
   maxConcurrentPositions: 3,
