@@ -15,16 +15,17 @@ type TimelineItem = {
   id: string;
   at: number;
   market?: string;
-  type: string;
+  type: 'LLM' | 'WORKER' | 'ORDER' | 'PLAYWRIGHT' | 'SYSTEM' | 'CANDIDATE';
   level: 'INFO' | 'WARN' | 'ERROR';
   action: string;
   detail: string;
   screenshotId?: string;
+  rawType?: string;
   source: 'LOCAL' | 'SERVER';
 };
 type TimelineSourceFilter = 'ALL' | 'LOCAL' | 'SERVER';
 type TimelineLevelFilter = 'ALL' | 'INFO' | 'WARN' | 'ERROR';
-type TimelineTypeFilter = 'ALL' | 'LLM' | 'WORKER' | 'ORDER' | 'PLAYWRIGHT' | 'SYSTEM';
+type TimelineTypeFilter = 'ALL' | 'LLM' | 'WORKER' | 'ORDER' | 'PLAYWRIGHT' | 'SYSTEM' | 'CANDIDATE';
 
 type OrderFeedFilter = 'ALL' | 'REQUESTED' | 'FILLED' | 'FAILED';
 type StrategyCodeFilter = 'ALL' | 'AUTOPILOT' | 'MANUAL';
@@ -56,6 +57,18 @@ function formatTs(ts: number): string {
     minute: '2-digit',
     second: '2-digit',
   });
+}
+
+function formatRelativeAge(ts: number): string {
+  const diffSec = Math.max(0, Math.floor((Date.now() - ts) / 1000));
+  if (diffSec < 5) return '방금';
+  if (diffSec < 60) return `${diffSec}초 전`;
+  const diffMin = Math.floor(diffSec / 60);
+  if (diffMin < 60) return `${diffMin}분 전`;
+  const diffHour = Math.floor(diffMin / 60);
+  if (diffHour < 24) return `${diffHour}시간 전`;
+  const diffDay = Math.floor(diffHour / 24);
+  return `${diffDay}일 전`;
 }
 
 function stageLabel(stage: string): string {
@@ -159,6 +172,7 @@ function toTimelineEvent(event: AutopilotTimelineEvent): TimelineItem {
     action: event.action,
     detail: event.detail,
     screenshotId: event.screenshotId,
+    rawType: event.type,
     source: 'LOCAL',
   };
 }
@@ -177,18 +191,122 @@ function normalizeServerEventType(eventType: string): string {
     .trim() || 'EVENT';
 }
 
+function normalizeTimelineType(eventType: string): TimelineItem['type'] {
+  const normalized = normalizeServerEventType(eventType);
+  if (normalized.includes('PLAYWRIGHT') || normalized.includes('SCREENSHOT') || normalized.includes('BROWSER')) {
+    return 'PLAYWRIGHT';
+  }
+  if (normalized.includes('LLM')) return 'LLM';
+  if (normalized.includes('WORKER')) return 'WORKER';
+  if (
+    normalized.includes('CANDIDATE') ||
+    normalized.includes('RULE') ||
+    normalized.includes('BORDERLINE') ||
+    normalized.includes('RECHECK') ||
+    normalized.includes('TOKEN BUDGET') ||
+    normalized.includes('QUANT')
+  ) {
+    return 'CANDIDATE';
+  }
+  if (
+    normalized === 'FAILED' ||
+    normalized.includes('ORDER') ||
+    normalized.startsWith('BUY ') ||
+    normalized.startsWith('SELL ') ||
+    normalized.includes('FILLED') ||
+    normalized.includes('REQUESTED') ||
+    normalized.includes('CANCEL')
+  ) {
+    return 'ORDER';
+  }
+  return 'SYSTEM';
+}
+
+function timelineTypeLabel(type: TimelineTypeFilter | TimelineItem['type']): string {
+  switch (type) {
+    case 'LLM':
+      return 'LLM';
+    case 'WORKER':
+      return '워커';
+    case 'ORDER':
+      return '주문';
+    case 'PLAYWRIGHT':
+      return '브라우저';
+    case 'CANDIDATE':
+      return '후보';
+    case 'SYSTEM':
+      return '시스템';
+    case 'ALL':
+      return '전체';
+    default:
+      return type;
+  }
+}
+
+function timelineSourceLabel(source: TimelineSourceFilter | TimelineItem['source']): string {
+  switch (source) {
+    case 'LOCAL':
+      return '로컬';
+    case 'SERVER':
+      return '서버';
+    case 'ALL':
+      return '전체';
+    default:
+      return source;
+  }
+}
+
+function serverTimelineActionLabel(eventType: string): string {
+  const token = eventType
+    .trim()
+    .toUpperCase()
+    .replace(/\s+/g, '_');
+  switch (token) {
+    case 'WORKER_PRUNED':
+      return '워커 정리';
+    case 'LLM_REJECT':
+      return 'LLM 거절';
+    case 'PLAYWRIGHT_WARN':
+      return 'UI 경고';
+    case 'TOKEN_BUDGET_SKIP':
+      return '토큰 예산 스킵';
+    case 'RECHECK_SCHEDULED':
+      return '재검토 예약';
+    case 'AUTO_PASS':
+      return '자동 통과';
+    case 'RULE_FAIL':
+      return '규칙 탈락';
+    case 'RULE_PASS':
+      return '규칙 통과';
+    case 'BORDERLINE':
+      return '경계 구간';
+    default:
+      if (
+        token.endsWith('_REQUESTED') ||
+        token.endsWith('_FILLED') ||
+        token === 'CANCEL_REQUESTED' ||
+        token === 'CANCELLED' ||
+        token === 'FAILED'
+      ) {
+        return orderEventLabel(token);
+      }
+      return normalizeServerEventType(eventType);
+  }
+}
+
 function toServerTimelineEvent(event: AutopilotEventView, index: number): TimelineItem {
   const parsed = Date.parse(event.createdAt);
   const at = Number.isFinite(parsed) ? parsed : Date.now();
-  const eventType = normalizeServerEventType(event.eventType);
+  const rawType = normalizeServerEventType(event.eventType);
   return {
     id: `server-${at}-${index}`,
     at,
     market: event.market,
-    type: eventType,
+    type: normalizeTimelineType(event.eventType),
     level: normalizeTimelineLevel(event.level),
-    action: eventType,
+    action: serverTimelineActionLabel(event.eventType),
     detail: event.message,
+    rawType,
     source: 'SERVER',
   };
 }
@@ -262,6 +380,7 @@ export function AutopilotLiveDock({
     const summary = {
       llm: 0,
       worker: 0,
+      candidate: 0,
       order: 0,
       playwright: 0,
       system: 0,
@@ -279,6 +398,7 @@ export function AutopilotLiveDock({
       summary.localTotal += 1;
       if (item.type === 'LLM') summary.llm += 1;
       else if (item.type === 'WORKER') summary.worker += 1;
+      else if (item.type === 'CANDIDATE') summary.candidate += 1;
       else if (item.type === 'ORDER') summary.order += 1;
       else if (item.type === 'PLAYWRIGHT') summary.playwright += 1;
       else if (item.type === 'SYSTEM') summary.system += 1;
@@ -286,6 +406,24 @@ export function AutopilotLiveDock({
     }
     return summary;
   }, [timelineAll]);
+
+  const filteredTimelineSummary = useMemo(() => {
+    const summary = {
+      warn: 0,
+      error: 0,
+      screenshots: 0,
+      local: 0,
+      server: 0,
+    };
+    for (const item of timeline) {
+      if (item.level === 'WARN') summary.warn += 1;
+      if (item.level === 'ERROR') summary.error += 1;
+      if (item.screenshotId) summary.screenshots += 1;
+      if (item.source === 'LOCAL') summary.local += 1;
+      if (item.source === 'SERVER') summary.server += 1;
+    }
+    return summary;
+  }, [timeline]);
 
   const orderFeed = useMemo(() => {
     const rows = liveData?.orderEvents ?? [];
@@ -352,6 +490,9 @@ export function AutopilotLiveDock({
   const selectedShot = selectedTimeline?.screenshotId
     ? screenshotById.get(selectedTimeline.screenshotId)
     : undefined;
+  const latestVisibleTimeline = timeline[0] ?? null;
+  const timelineVisibleStart = timeline.length === 0 ? 0 : (timelinePage - 1) * timelinePageSize + 1;
+  const timelineVisibleEnd = Math.min(timeline.length, timelinePage * timelinePageSize);
 
   const groupTabs = useMemo(() => {
     const keys = Object.keys(liveData?.orderSummary.groups ?? {}).sort();
@@ -489,8 +630,8 @@ export function AutopilotLiveDock({
           <div className="command-tile">
             <label>액션 레이어</label>
             <strong>{actionLayerSummary.localTotal + actionLayerSummary.server} 이벤트</strong>
-            <small>LLM {actionLayerSummary.llm} · WORKER {actionLayerSummary.worker} · ORDER {actionLayerSummary.order}</small>
-            <small>Playwright {actionLayerSummary.playwright} · SYSTEM {actionLayerSummary.system + actionLayerSummary.other} · SERVER {actionLayerSummary.server}</small>
+            <small>LLM {actionLayerSummary.llm} · WORKER {actionLayerSummary.worker} · 후보 {actionLayerSummary.candidate}</small>
+            <small>ORDER {actionLayerSummary.order} · Playwright {actionLayerSummary.playwright} · SERVER {actionLayerSummary.server}</small>
           </div>
         </div>
 
@@ -614,48 +755,83 @@ export function AutopilotLiveDock({
             </div>
 
             <div className="dock-column timeline">
-              <div className="column-title with-pagination timeline-header">
-                <span>실시간 액션 타임라인</span>
-                <div className="timeline-controls">
-                  <div className="timeline-source-filters">
-                    {(['ALL', 'LOCAL', 'SERVER'] as const).map((filter) => (
-                      <button
-                        key={filter}
-                        type="button"
-                        className={timelineSourceFilter === filter ? 'active' : ''}
-                        onClick={() => setTimelineSourceFilter(filter)}
-                      >
-                        {filter === 'ALL' ? '전체' : filter === 'LOCAL' ? '로컬' : '서버'}
-                      </button>
-                    ))}
+              <div className="column-title timeline-header">
+                <div className="timeline-title-block">
+                  <div className="timeline-title-copy">
+                    <strong>실시간 액션 타임라인</strong>
+                    <span>최신 이벤트 순으로 보이며, 카드를 누르면 오른쪽에서 전문과 스크린샷을 확인할 수 있습니다.</span>
                   </div>
-                  <label className="page-size-select timeline-filter-select">
-                    <span>레벨</span>
-                    <select
-                      value={timelineLevelFilter}
-                      onChange={(event) => setTimelineLevelFilter(event.target.value as TimelineLevelFilter)}
-                    >
-                      <option value="ALL">전체</option>
-                      <option value="INFO">INFO</option>
-                      <option value="WARN">WARN</option>
-                      <option value="ERROR">ERROR</option>
-                    </select>
-                  </label>
-                  <label className="page-size-select timeline-filter-select">
-                    <span>타입</span>
-                    <select
-                      value={timelineTypeFilter}
-                      onChange={(event) => setTimelineTypeFilter(event.target.value as TimelineTypeFilter)}
-                    >
-                      <option value="ALL">전체</option>
-                      <option value="LLM">LLM</option>
-                      <option value="WORKER">WORKER</option>
-                      <option value="ORDER">ORDER</option>
-                      <option value="PLAYWRIGHT">PLAYWRIGHT</option>
-                      <option value="SYSTEM">SYSTEM</option>
-                    </select>
-                  </label>
+                  <div className="timeline-summary-strip">
+                    <div className="timeline-summary-card">
+                      <label>표시 중</label>
+                      <strong>{timeline.length}</strong>
+                      <span>전체 {timelineAll.length}개</span>
+                    </div>
+                    <div className="timeline-summary-card">
+                      <label>마지막 액션</label>
+                      <strong>{latestVisibleTimeline ? latestVisibleTimeline.action : '대기'}</strong>
+                      <span>
+                        {latestVisibleTimeline
+                          ? `${formatRelativeAge(latestVisibleTimeline.at)} · ${latestVisibleTimeline.market ?? timelineTypeLabel(latestVisibleTimeline.type)}`
+                          : '이벤트 없음'}
+                      </span>
+                    </div>
+                    <div className="timeline-summary-card">
+                      <label>주의 상태</label>
+                      <strong>{filteredTimelineSummary.warn + filteredTimelineSummary.error}</strong>
+                      <span>WARN {filteredTimelineSummary.warn} · ERROR {filteredTimelineSummary.error}</span>
+                    </div>
+                    <div className="timeline-summary-card">
+                      <label>증거 연결</label>
+                      <strong>{filteredTimelineSummary.screenshots}</strong>
+                      <span>{filteredTimelineSummary.local} 로컬 · {filteredTimelineSummary.server} 서버</span>
+                    </div>
+                  </div>
+                </div>
+                <div className="timeline-controls">
+                  <div className="timeline-filter-row">
+                    <div className="timeline-source-filters">
+                      {(['ALL', 'LOCAL', 'SERVER'] as const).map((filter) => (
+                        <button
+                          key={filter}
+                          type="button"
+                          className={timelineSourceFilter === filter ? 'active' : ''}
+                          onClick={() => setTimelineSourceFilter(filter)}
+                        >
+                          {timelineSourceLabel(filter)}
+                        </button>
+                      ))}
+                    </div>
+                    <label className="page-size-select timeline-filter-select">
+                      <span>레벨</span>
+                      <select
+                        value={timelineLevelFilter}
+                        onChange={(event) => setTimelineLevelFilter(event.target.value as TimelineLevelFilter)}
+                      >
+                        <option value="ALL">전체</option>
+                        <option value="INFO">INFO</option>
+                        <option value="WARN">WARN</option>
+                        <option value="ERROR">ERROR</option>
+                      </select>
+                    </label>
+                    <label className="page-size-select timeline-filter-select">
+                      <span>타입</span>
+                      <select
+                        value={timelineTypeFilter}
+                        onChange={(event) => setTimelineTypeFilter(event.target.value as TimelineTypeFilter)}
+                      >
+                        <option value="ALL">전체</option>
+                        <option value="LLM">LLM</option>
+                        <option value="WORKER">워커</option>
+                        <option value="CANDIDATE">후보</option>
+                        <option value="ORDER">주문</option>
+                        <option value="PLAYWRIGHT">브라우저</option>
+                        <option value="SYSTEM">시스템</option>
+                      </select>
+                    </label>
+                  </div>
                   <div className="timeline-pagination">
+                    <span>{timelineVisibleStart === 0 ? '0개' : `${timelineVisibleStart}-${timelineVisibleEnd} / ${timeline.length}`}</span>
                     <label className="page-size-select">
                       <span>개수</span>
                       <select
@@ -694,19 +870,31 @@ export function AutopilotLiveDock({
                       className={`timeline-item ${selectedTimelineId === item.id ? 'active' : ''} timeline-source-${item.source.toLowerCase()}`}
                       onClick={() => setSelectedTimelineId(item.id)}
                     >
-                      <div className="timeline-head">
-                        <span>{item.market || item.type}</span>
-                        <span>{formatTs(item.at)}</span>
+                      <div className="timeline-rail">
+                        <span className="timeline-time">{formatTs(item.at)}</span>
+                        <span className="timeline-age">{formatRelativeAge(item.at)}</span>
                       </div>
-                      <div className="timeline-meta-line">
-                        <span className={`timeline-badge timeline-source-badge-${item.source.toLowerCase()}`}>{item.source}</span>
-                        <span className="timeline-badge">{normalizeServerEventType(item.type)}</span>
-                        {item.level !== 'INFO' && (
-                          <span className={`timeline-badge timeline-level-${item.level.toLowerCase()}`}>{item.level}</span>
-                        )}
+                      <div className="timeline-item-body">
+                        <div className="timeline-item-topline">
+                          <div className="timeline-item-title-group">
+                            <div className="timeline-action">{item.action}</div>
+                            <span className="timeline-market-label">{item.market ?? timelineTypeLabel(item.type)}</span>
+                          </div>
+                          <span className="timeline-open-hint">{selectedTimelineId === item.id ? '선택됨' : '상세 보기'}</span>
+                        </div>
+                        <div className="timeline-meta-line">
+                          <span className={`timeline-badge timeline-source-badge-${item.source.toLowerCase()}`}>{timelineSourceLabel(item.source)}</span>
+                          <span className="timeline-badge">{timelineTypeLabel(item.type)}</span>
+                          {item.rawType && item.rawType !== item.type && (
+                            <span className="timeline-badge timeline-badge-raw">{item.rawType}</span>
+                          )}
+                          {item.level !== 'INFO' && (
+                            <span className={`timeline-badge timeline-level-${item.level.toLowerCase()}`}>{item.level}</span>
+                          )}
+                          {item.screenshotId && <span className="timeline-badge timeline-badge-evidence">스크린샷</span>}
+                        </div>
+                        <p>{item.detail}</p>
                       </div>
-                      <div className="timeline-action">{item.action}</div>
-                      <p>{item.detail}</p>
                     </button>
                   ))}
                   {pagedTimeline.length === 0 && (
@@ -716,16 +904,29 @@ export function AutopilotLiveDock({
                 <div className="timeline-detail">
                   {selectedTimeline ? (
                     <>
+                      <div className="timeline-detail-label">선택한 이벤트</div>
                       <div className="detail-head">
-                        <strong>{selectedTimeline.action}</strong>
-                        <span>{selectedTimeline.level}</span>
+                        <div className="timeline-detail-title-group">
+                          <strong>{selectedTimeline.action}</strong>
+                          <span>{formatTs(selectedTimeline.at)} · {formatRelativeAge(selectedTimeline.at)}</span>
+                        </div>
+                        <span className={`timeline-detail-level timeline-detail-level-${selectedTimeline.level.toLowerCase()}`}>{selectedTimeline.level}</span>
                       </div>
                       <div className="detail-subhead">
-                        <span className={`timeline-badge timeline-source-badge-${selectedTimeline.source.toLowerCase()}`}>{selectedTimeline.source}</span>
-                        <span>{normalizeServerEventType(selectedTimeline.type)}</span>
+                        <span className={`timeline-badge timeline-source-badge-${selectedTimeline.source.toLowerCase()}`}>{timelineSourceLabel(selectedTimeline.source)}</span>
+                        <span className="timeline-badge">{timelineTypeLabel(selectedTimeline.type)}</span>
+                        {selectedTimeline.rawType && selectedTimeline.rawType !== selectedTimeline.type && (
+                          <span className="timeline-badge timeline-badge-raw">{selectedTimeline.rawType}</span>
+                        )}
                         {selectedTimeline.market ? <span>시장: {selectedTimeline.market}</span> : null}
                       </div>
-                      <p>{selectedTimeline.detail}</p>
+                      <div className="timeline-detail-copy">
+                        <p>{selectedTimeline.detail}</p>
+                      </div>
+                      <div className="timeline-detail-media-head">
+                        <strong>증거 / 스크린샷</strong>
+                        <span>{selectedShot ? 'Playwright 캡처 연결됨' : '연결된 스크린샷 없음'}</span>
+                      </div>
                       {selectedShot ? (
                         <img src={selectedShot.src} alt="playwright evidence" loading="lazy" />
                       ) : (
