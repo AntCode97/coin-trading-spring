@@ -206,7 +206,7 @@
 
 .autopilot-live-body {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: minmax(300px, 1.05fr) minmax(460px, 1.35fr) minmax(280px, 0.95fr);
   gap: 10px;
   padding: 0 12px 12px;
   align-items: stretch;
@@ -490,7 +490,7 @@
 
 .timeline-layout {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(220px, 0.85fr);
+  grid-template-columns: minmax(250px, 1.1fr) minmax(320px, 1fr);
   gap: 8px;
   flex: 1;
   padding: 8px;
@@ -502,6 +502,7 @@
   display: flex;
   flex-direction: column;
   gap: 6px;
+  min-width: 0;
 }
 
 .timeline-item {
@@ -512,6 +513,8 @@
   text-align: left;
   padding: 7px;
   cursor: pointer;
+  width: 100%;
+  min-width: 0;
 }
 
 .timeline-item.active {
@@ -549,6 +552,13 @@
   color: #b5c8ea;
   font-size: 11px;
   line-height: 1.35;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 
 .timeline-meta-line {
@@ -598,6 +608,7 @@
   padding: 8px;
   background: rgba(12, 21, 39, 0.9);
   overflow: auto;
+  min-width: 0;
 }
 
 .detail-head strong {
@@ -623,6 +634,8 @@
   color: #bdd0ef;
   font-size: 11px;
   line-height: 1.4;
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 
 .timeline-detail img {
