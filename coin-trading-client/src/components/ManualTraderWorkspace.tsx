@@ -75,7 +75,6 @@ import { DeepDiveDrawer } from './workspace-v2/DeepDiveDrawer';
 import { EmptyState } from './workspace-v2/EmptyState';
 import type { WorkspaceDensity } from './workspace-v2/types';
 import {
-  KRW_FORMATTER,
   STORAGE_KEY,
   STRATEGY_CODE_SCALP,
   STRATEGY_CODE_SWING,
@@ -100,18 +99,12 @@ import {
   clampAmount,
   normalizeAmountPresets,
   parseAmountPresetInput,
-  isCodexModelId,
-  isZaiModelId,
-  normalizeLlmProvider,
-  normalizeZaiEndpointMode,
-  normalizeDelegationMode,
   loadPrefs,
   normalizeFocusedScalpMarket,
   normalizeFocusedScalpMarkets,
   classifyFocusedEntryEvent,
   classifyFocusedManageEvent,
   asUtc,
-  intervalSeconds,
   toBucketStart,
   toCandlestick,
   buildFallbackCandle,
@@ -187,7 +180,8 @@ export default function ManualTraderWorkspace({ onNavigateAiTrader }: ManualTrad
   const [limitPrice, setLimitPrice] = useState<number | ''>('');
   const [customStopLoss, setCustomStopLoss] = useState<number | ''>('');
   const [customTakeProfit, setCustomTakeProfit] = useState<number | ''>('');
-  const [statusMessage, setStatusMessage] = useState<string>('');
+  const [_statusMessage, setStatusMessage] = useState<string>('');
+  void _statusMessage;
   const [openAiStatus, setOpenAiStatus] = useState<LlmConnectionStatus>('checking');
   const [zaiStatus, setZaiStatus] = useState<LlmConnectionStatus>('checking');
   const [llmProvider, setLlmProvider] = useState<LlmProviderId>(prefs.llmProvider ?? 'openai');
@@ -1800,13 +1794,7 @@ export default function ManualTraderWorkspace({ onNavigateAiTrader }: ManualTrad
     }
   }, [registerUndoToast]);
 
-  const openRightPanel = useCallback(() => {
-    setActionConsoleOpen((prev) => {
-      if (prev) return prev;
-      setStatusMessage('우측 패널 표시: 엔진 스위치/리스크/후보 제어가 보입니다.');
-      return true;
-    });
-  }, []);
+  // openRightPanel reserved for future use via toggleRightPanel
 
   const closeRightPanel = useCallback(() => {
     setActionConsoleOpen((prev) => {

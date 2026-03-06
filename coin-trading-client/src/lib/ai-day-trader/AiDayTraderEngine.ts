@@ -18,7 +18,6 @@ import {
   type LlmProviderId,
   type ZaiEndpointMode,
   type DelegationMode,
-  type OneShotUsageMeta,
 } from '../llmService';
 
 // ---------- Types ----------
@@ -368,8 +367,8 @@ export class AiDayTraderEngine {
       `## 현재가: ${ctx.chart.recommendation.currentPrice.toLocaleString()}`,
       `## 추천 진입가: ${ctx.chart.recommendation.recommendedEntryPrice.toLocaleString()}`,
       `## 오더북 요약:`,
-      `  매수잔량 상위: ${ctx.chart.orderbook?.bidTotal?.toLocaleString() ?? 'N/A'}`,
-      `  매도잔량 상위: ${ctx.chart.orderbook?.askTotal?.toLocaleString() ?? 'N/A'}`,
+      `  매수잔량 상위: ${ctx.chart.orderbook?.totalBidSize?.toLocaleString() ?? 'N/A'}`,
+      `  매도잔량 상위: ${ctx.chart.orderbook?.totalAskSize?.toLocaleString() ?? 'N/A'}`,
       '',
       `## 최근 ${slicedCandles.length}개 1분봉 (최신 3개):`,
       JSON.stringify(slicedCandles.slice(-3)),
@@ -398,11 +397,11 @@ export class AiDayTraderEngine {
         type: 'SCAN_ENTRY',
         market: opp.market,
         action: parsed.action === 'BUY' ? 'BUY' : 'WAIT',
-        confidence: parsed.confidence ?? 0,
-        reasoning: parsed.reasoning ?? '',
-        stopLoss: parsed.stopLoss,
-        takeProfit: parsed.takeProfit,
-        urgency: parsed.urgency ?? 'MEDIUM',
+        confidence: Number(parsed.confidence ?? 0),
+        reasoning: String(parsed.reasoning ?? ''),
+        stopLoss: parsed.stopLoss != null ? Number(parsed.stopLoss) : undefined,
+        takeProfit: parsed.takeProfit != null ? Number(parsed.takeProfit) : undefined,
+        urgency: (['LOW', 'MEDIUM', 'HIGH'].includes(String(parsed.urgency)) ? String(parsed.urgency) : 'MEDIUM') as AiDecision['urgency'],
         timestamp: Date.now(),
       };
     } catch (err) {
@@ -455,9 +454,9 @@ export class AiDayTraderEngine {
         type: 'MANAGE_POSITION',
         market: pos.market,
         action: parsed.action === 'SELL' ? 'SELL' : 'HOLD',
-        confidence: parsed.confidence ?? 0,
-        reasoning: parsed.reasoning ?? '',
-        urgency: parsed.urgency ?? 'MEDIUM',
+        confidence: Number(parsed.confidence ?? 0),
+        reasoning: String(parsed.reasoning ?? ''),
+        urgency: (['LOW', 'MEDIUM', 'HIGH'].includes(String(parsed.urgency)) ? String(parsed.urgency) : 'MEDIUM') as AiDecision['urgency'],
         timestamp: Date.now(),
       };
     } catch (err) {
