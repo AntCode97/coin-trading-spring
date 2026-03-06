@@ -405,6 +405,57 @@
   padding: 16px;
 }
 
+.ai-scalp-journal__pager {
+  position: sticky;
+  top: -16px;
+  z-index: 1;
+  margin-bottom: 4px;
+  padding: 10px 12px;
+  border-radius: 16px;
+  border: 1px solid rgba(120, 167, 255, 0.16);
+  background: rgba(7, 15, 27, 0.94);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  backdrop-filter: blur(10px);
+}
+
+.ai-scalp-journal__pager-meta {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  color: var(--ai-scalp-text-dim);
+  font-size: 0.84rem;
+}
+
+.ai-scalp-journal__pager-meta strong {
+  color: var(--ai-scalp-text);
+  font-size: 0.9rem;
+}
+
+.ai-scalp-journal__pager-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.ai-scalp-journal__pager-button {
+  padding: 7px 11px;
+  border-radius: 999px;
+  border: 1px solid rgba(120, 167, 255, 0.18);
+  background: rgba(11, 23, 40, 0.84);
+  color: var(--ai-scalp-text);
+  font-size: 0.8rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.ai-scalp-journal__pager-button:disabled {
+  opacity: 0.42;
+  cursor: default;
+}
+
 .ai-scalp-journal__rail {
   width: 2px;
   border-radius: 999px;

@@ -33,6 +33,7 @@ import './AiDayTraderScreen.css';
 
 const PREFERENCE_KEY = 'ai-scalp-terminal.preferences.v1';
 const OPENAI_TRADER_MODELS = CODEX_MODELS.filter((model) => model.id !== 'gpt-4');
+const JOURNAL_PAGE_SIZE = 18;
 
 function normalizePreferredModel(provider: LlmProviderId, model?: string): string {
   const catalog = provider === 'zai' ? ZAI_MODELS : OPENAI_TRADER_MODELS;
@@ -65,9 +66,11 @@ function loadPreferences(): AiDayTraderConfig {
 
 export default function AiDayTraderScreen() {
   const engineRef = useRef<AiDayTraderEngine | null>(null);
+  const journalScrollRef = useRef<HTMLDivElement | null>(null);
   const [config, setConfig] = useState<AiDayTraderConfig>(() => loadPreferences());
   const [state, setState] = useState<AiTraderState>(() => createInitialAiTraderState());
   const [selectedHistoryMarket, setSelectedHistoryMarket] = useState<string>('ALL');
+  const [journalPage, setJournalPage] = useState(1);
   const [openAiStatus, setOpenAiStatus] = useState<LlmConnectionStatus>('checking');
   const [zaiStatus, setZaiStatus] = useState<LlmConnectionStatus>('checking');
   const [providerBusy, setProviderBusy] = useState(false);
@@ -192,6 +195,13 @@ export default function AiDayTraderScreen() {
     if (selectedHistoryMarket === 'ALL') return todayTrades;
     return todayTrades.filter((trade) => trade.market === selectedHistoryMarket);
   }, [selectedHistoryMarket, todayTrades]);
+  const journalPageCount = Math.max(1, Math.ceil(state.events.length / JOURNAL_PAGE_SIZE));
+  const journalPageEvents = useMemo(() => {
+    const start = (journalPage - 1) * JOURNAL_PAGE_SIZE;
+    return state.events.slice(start, start + JOURNAL_PAGE_SIZE);
+  }, [journalPage, state.events]);
+  const journalStartIndex = state.events.length === 0 ? 0 : (journalPage - 1) * JOURNAL_PAGE_SIZE + 1;
+  const journalEndIndex = Math.min(journalPage * JOURNAL_PAGE_SIZE, state.events.length);
 
   const updateConfig = (patch: Partial<AiDayTraderConfig>) => {
     setConfig((current) => ({ ...current, ...patch }));
@@ -316,6 +326,14 @@ export default function AiDayTraderScreen() {
     setSelectedHistoryMarket('ALL');
   }, [historyMarketSummaries, selectedHistoryMarket]);
 
+  useEffect(() => {
+    setJournalPage((current) => Math.min(current, journalPageCount));
+  }, [journalPageCount]);
+
+  useEffect(() => {
+    journalScrollRef.current?.scrollTo({ top: 0, behavior: 'smooth' });
+  }, [journalPage]);
+
   return (
     <div className="ai-scalp-terminal">
       <header className="ai-scalp-sessionbar">
@@ -395,13 +413,49 @@ export default function AiDayTraderScreen() {
             subtitle="SCAN -> BUY/WAIT -> MANAGE -> SELL"
             right={`${state.events.length} events`}
           />
-          <div className="ai-scalp-panel__body ai-scalp-scroll ai-scalp-journal">
+          <div ref={journalScrollRef} className="ai-scalp-panel__body ai-scalp-scroll ai-scalp-journal">
             {state.events.length === 0 ? (
               <EmptyState title="저널 비어 있음" description="실시간 스캔과 AI 결정 이벤트가 여기에 시간순으로 쌓입니다." />
             ) : (
-              state.events.map((event) => (
-                <JournalItem key={event.id} event={event} />
-              ))
+              <>
+                {journalPageCount > 1 && (
+                  <div className="ai-scalp-journal__pager">
+                    <div className="ai-scalp-journal__pager-meta">
+                      <strong>{journalPage} / {journalPageCount}</strong>
+                      <span>{journalStartIndex}-{journalEndIndex} / {state.events.length}</span>
+                    </div>
+                    <div className="ai-scalp-journal__pager-actions">
+                      <button
+                        type="button"
+                        className="ai-scalp-journal__pager-button"
+                        onClick={() => setJournalPage(1)}
+                        disabled={journalPage === 1}
+                      >
+                        최신
+                      </button>
+                      <button
+                        type="button"
+                        className="ai-scalp-journal__pager-button"
+                        onClick={() => setJournalPage((current) => Math.max(1, current - 1))}
+                        disabled={journalPage === 1}
+                      >
+                        이전
+                      </button>
+                      <button
+                        type="button"
+                        className="ai-scalp-journal__pager-button"
+                        onClick={() => setJournalPage((current) => Math.min(journalPageCount, current + 1))}
+                        disabled={journalPage === journalPageCount}
+                      >
+                        다음
+                      </button>
+                    </div>
+                  </div>
+                )}
+                {journalPageEvents.map((event) => (
+                  <JournalItem key={event.id} event={event} />
+                ))}
+              </>
             )}
           </div>
         </main>
