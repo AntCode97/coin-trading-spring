@@ -103,6 +103,7 @@ class GuidedTradingServiceTest {
             val market = invocation.getArgument<String>(0)
             buildCandles(market)
         }
+        whenever(guidedTradeRepository.findByStatusIn(any())).thenReturn(emptyList())
         whenever(
             guidedTradeRepository.findTop80ByMarketAndStatusOrderByCreatedAtDesc(
                 any(),
@@ -119,6 +120,7 @@ class GuidedTradingServiceTest {
                 eq(GuidedTradeEntity.STATUS_CLOSED)
             )
         ).thenReturn(emptyList())
+        whenever(bithumbPrivateApi.getBalances()).thenReturn(emptyList())
         whenever(guidedTradeRepository.save(any())).thenAnswer { invocation ->
             val entity = invocation.getArgument<GuidedTradeEntity>(0)
             if (entity.id == null) entity.id = 1L
@@ -234,6 +236,87 @@ class GuidedTradingServiceTest {
 
         verify(bithumbPublicApi, never()).getOhlcv(any(), any(), any(), anyOrNull())
         assertTrue(sorted.all { it.recommendedEntryWinRate == null && it.marketEntryWinRate == null })
+    }
+
+    @Test
+    @DisplayName("ai-scalp scan은 상위 36개 유동성 시장과 prefix 필터 포지션만 반환한다")
+    fun aiScalpScanReturnsLiquidityUniverseAndPrefixFilteredPositions() {
+        val aiPosition = GuidedTradeEntity(
+            id = 100L,
+            market = "KRW-C001",
+            status = GuidedTradeEntity.STATUS_OPEN,
+            entryOrderType = GuidedTradeEntity.ORDER_TYPE_MARKET,
+            averageEntryPrice = BigDecimal("1000"),
+            entryQuantity = BigDecimal("10"),
+            remainingQuantity = BigDecimal("10"),
+            stopLossPrice = BigDecimal("996"),
+            takeProfitPrice = BigDecimal("1006"),
+            strategyCode = "AI_SCALP_TRADER_MAIN"
+        )
+        val otherPosition = GuidedTradeEntity(
+            id = 101L,
+            market = "KRW-C002",
+            status = GuidedTradeEntity.STATUS_OPEN,
+            entryOrderType = GuidedTradeEntity.ORDER_TYPE_MARKET,
+            averageEntryPrice = BigDecimal("1000"),
+            entryQuantity = BigDecimal("10"),
+            remainingQuantity = BigDecimal("10"),
+            stopLossPrice = BigDecimal("996"),
+            takeProfitPrice = BigDecimal("1006"),
+            strategyCode = "GUIDED_AUTOPILOT"
+        )
+        whenever(guidedTradeRepository.findByStatusIn(any())).thenReturn(listOf(aiPosition, otherPosition))
+        whenever(bithumbPrivateApi.getBalances()).thenReturn(
+            listOf(
+                Balance(
+                    currency = "C001",
+                    balance = BigDecimal("10"),
+                    locked = BigDecimal.ZERO,
+                    avgBuyPrice = null,
+                    avgBuyPriceModified = null,
+                    unitCurrency = "KRW"
+                ),
+                Balance(
+                    currency = "C002",
+                    balance = BigDecimal("10"),
+                    locked = BigDecimal.ZERO,
+                    avgBuyPrice = null,
+                    avgBuyPriceModified = null,
+                    unitCurrency = "KRW"
+                )
+            )
+        )
+        whenever(marketWebSocketFeed.latestPulse(eq("KRW-C001"))).thenReturn(
+            RealtimeMarketPulse(
+                market = "KRW-C001",
+                currentPrice = 1001.0,
+                priceSpike10sPercent = 0.82,
+                tradeNotional10sKrw = 88_000_000.0,
+                tradeNotionalPrev60sKrw = 190_000_000.0,
+                notionalSpikeRatio = 2.6,
+                bidImbalance = 0.14,
+                spreadPercent = 0.05,
+                signedChangeRatePercent = 0.44,
+                updatedAt = Instant.now(),
+                compositeScore = 81.0
+            )
+        )
+
+        val result = service.getAiScalpScan(
+            interval = "minute1",
+            universeLimit = 36,
+            strategyCodePrefix = " ai_scalp_trader "
+        )
+
+        assertEquals(36, result.universeLimit)
+        assertEquals(36, result.markets.size)
+        assertEquals("AI_SCALP_TRADER", result.strategyCodePrefix)
+        assertEquals(1, result.positions.size)
+        assertTrue(result.positions.all { it.strategyCode?.startsWith("AI_SCALP_TRADER") == true })
+        assertEquals("KRW-C001", result.markets.first().market)
+        assertTrue(result.markets.first().recommendation.rationale.isNotEmpty())
+        assertTrue(result.markets.first().recommendation.expectancyPct.isFinite())
+        assertTrue(result.markets.first().crowd != null)
     }
 
     @Test

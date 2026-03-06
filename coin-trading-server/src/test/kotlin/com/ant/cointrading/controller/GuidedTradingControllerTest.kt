@@ -2,6 +2,10 @@ package com.ant.cointrading.controller
 
 import com.ant.cointrading.guided.GuidedStartRequest
 import com.ant.cointrading.guided.GuidedAdoptPositionRequest
+import com.ant.cointrading.guided.GuidedAiScalpFeaturePack
+import com.ant.cointrading.guided.GuidedAiScalpRecommendationSummary
+import com.ant.cointrading.guided.GuidedAiScalpScanMarketView
+import com.ant.cointrading.guided.GuidedAiScalpScanResponse
 import com.ant.cointrading.guided.GuidedAutopilotCandidateView
 import com.ant.cointrading.guided.GuidedAutopilotEvent
 import com.ant.cointrading.guided.GuidedAutopilotLiveResponse
@@ -78,6 +82,65 @@ class GuidedTradingControllerTest {
         }
 
         kotlin.test.assertEquals(HttpStatus.BAD_REQUEST, exception.statusCode)
+    }
+
+    @Test
+    @DisplayName("ai-scalp/scan은 서비스 응답 스키마를 그대로 반환한다")
+    fun getAiScalpScanReturnsServicePayload() {
+        val expected = GuidedAiScalpScanResponse(
+            generatedAt = Instant.parse("2026-03-06T01:00:00Z"),
+            interval = "minute1",
+            universeLimit = 36,
+            strategyCodePrefix = "AI_SCALP_TRADER",
+            positions = emptyList(),
+            markets = listOf(
+                GuidedAiScalpScanMarketView(
+                    market = "KRW-BTC",
+                    koreanName = "비트코인",
+                    tradePrice = 103_000_000.0,
+                    changeRate = 1.2,
+                    turnover = 650_000_000_000.0,
+                    liquidityRank = 1,
+                    recommendation = GuidedAiScalpRecommendationSummary(
+                        currentPrice = 103_000_000.0,
+                        recommendedEntryPrice = 102_800_000.0,
+                        stopLossPrice = 102_200_000.0,
+                        takeProfitPrice = 103_700_000.0,
+                        recommendedEntryWinRate = 61.5,
+                        marketEntryWinRate = 58.0,
+                        riskRewardRatio = 1.45,
+                        confidence = 67.0,
+                        suggestedOrderType = "MARKET",
+                        rationale = listOf("flow strong"),
+                        expectancyPct = 0.08
+                    ),
+                    featurePack = GuidedAiScalpFeaturePack(
+                        marketCapFlowScore = 84.0,
+                        turnoverKrw = 650_000_000_000.0,
+                        changeRate = 1.2,
+                        riskRewardRatio = 1.45,
+                        recommendedEntryWinRate = 61.5,
+                        marketEntryWinRate = 58.0,
+                        entryGapPct = 0.19,
+                        expectancyPct = 0.08,
+                        confidence = 67.0,
+                        crowdFlowScore = 78.0,
+                        spreadPercent = 0.04,
+                        bidImbalance = 0.15,
+                        notionalSpikeRatio = 2.7
+                    )
+                )
+            )
+        )
+        whenever(guidedTradingService.getAiScalpScan(any(), any(), any())).thenReturn(expected)
+
+        val actual = controller.getAiScalpScan(
+            interval = "minute1",
+            universeLimit = 36,
+            strategyCodePrefix = "AI_SCALP_TRADER"
+        )
+
+        kotlin.test.assertEquals(expected, actual)
     }
 
     @Test

@@ -1,26 +1,16 @@
-/**
- * AiDayTraderEngine
- *
- * LLM이 직접 시장을 분석하고 진입/청산 결정을 내리는 자율 단타 엔진.
- * 룰 기반 오토파일럿과 달리 모든 의사결정을 LLM이 수행한다.
- *
- * 루프: 마켓 스캔 -> LLM 분석 -> 진입/관리/청산 결정 -> API 실행 -> 반복
- */
 import {
   guidedTradingApi,
-  type AutopilotOpportunityView,
+  type AiScalpScanMarket,
   type GuidedAgentContextResponse,
+  type GuidedCrowdFeaturePack,
   type GuidedTradePosition,
-  type GuidedMarketItem,
 } from '../../api';
 import {
   requestOneShotTextWithMeta,
+  type DelegationMode,
   type LlmProviderId,
   type ZaiEndpointMode,
-  type DelegationMode,
 } from '../llmService';
-
-// ---------- Types ----------
 
 export interface AiDayTraderConfig {
   enabled: boolean;
@@ -29,547 +19,967 @@ export interface AiDayTraderConfig {
   zaiEndpointMode?: ZaiEndpointMode;
   delegationMode?: DelegationMode;
   zaiDelegateModel?: string;
-  scanIntervalMs: number;        // 마켓 스캔 주기 (기본 15초)
-  positionCheckMs: number;       // 보유 포지션 관리 주기 (기본 8초)
+  scanIntervalMs: number;
+  positionCheckMs: number;
   maxConcurrentPositions: number;
-  amountKrw: number;             // 1회 진입 금액
+  amountKrw: number;
   dailyLossLimitKrw: number;
-  universeLimit: number;         // 스캔할 마켓 수
+  universeLimit: number;
+  maxHoldingMinutes: number;
   strategyCode: string;
 }
 
-export type AiDecisionType =
-  | 'SCAN_ENTRY'      // 시장 스캔 후 진입 결정
-  | 'MANAGE_POSITION'  // 보유 포지션 관리
-  | 'EXIT_POSITION';   // 청산 결정
-
-export interface AiDecision {
-  id: string;
-  type: AiDecisionType;
-  market: string;
-  action: 'BUY' | 'SELL' | 'HOLD' | 'WAIT';
-  confidence: number;
-  reasoning: string;
-  targetPrice?: number;
-  stopLoss?: number;
-  takeProfit?: number;
-  urgency: 'LOW' | 'MEDIUM' | 'HIGH';
-  timestamp: number;
-}
+export type AiTraderStatus = 'IDLE' | 'SCANNING' | 'RANKING' | 'ANALYZING' | 'EXECUTING' | 'PAUSED' | 'ERROR';
+export type AiTraderEventType =
+  | 'SCAN'
+  | 'RANK'
+  | 'BUY_DECISION'
+  | 'BUY_EXECUTION'
+  | 'MANAGE_DECISION'
+  | 'SELL_EXECUTION'
+  | 'ERROR'
+  | 'STATUS';
+export type AiUrgency = 'LOW' | 'MEDIUM' | 'HIGH';
+export type AiExitCategory = 'TAKE_PROFIT' | 'STOP_LOSS' | 'LLM_EXIT' | 'FORCED_EXIT';
 
 export interface AiTraderEvent {
   id: string;
-  type: 'SCAN' | 'DECISION' | 'EXECUTION' | 'ERROR' | 'STATUS';
+  type: AiTraderEventType;
   message: string;
   detail?: string;
   market?: string;
+  confidence?: number;
+  urgency?: AiUrgency;
   timestamp: number;
 }
 
-export type AiTraderStatus = 'IDLE' | 'SCANNING' | 'ANALYZING' | 'EXECUTING' | 'PAUSED' | 'ERROR';
+export interface AiRankedOpportunity {
+  market: string;
+  koreanName: string;
+  score: number;
+  reason: string;
+  tradePrice: number;
+  changeRate: number;
+  turnover: number;
+  crowd?: GuidedCrowdFeaturePack | null;
+}
+
+export interface AiClosedTrade {
+  market: string;
+  pnlKrw: number;
+  pnlPercent: number;
+  holdingMinutes: number;
+  exitCategory: AiExitCategory;
+  closedAt: string;
+}
 
 export interface AiTraderState {
+  running: boolean;
   status: AiTraderStatus;
-  decisions: AiDecision[];
   events: AiTraderEvent[];
   positions: GuidedTradePosition[];
+  queue: AiRankedOpportunity[];
+  closedTrades: AiClosedTrade[];
   dailyPnl: number;
-  dailyTradeCount: number;
-  totalTokensUsed: number;
+  wins: number;
+  losses: number;
+  scanCycles: number;
+  finalistsReviewed: number;
+  buyExecutions: number;
   lastScanAt: number | null;
-  topCandidates: GuidedMarketItem[];
+  blockedReason: string | null;
+}
+
+interface AiEntryDecision {
+  action: 'BUY' | 'WAIT';
+  confidence: number;
+  reasoning: string;
+  stopLoss?: number;
+  takeProfit?: number;
+  urgency: AiUrgency;
+}
+
+interface AiManageDecision {
+  action: 'HOLD' | 'SELL';
+  confidence: number;
+  reasoning: string;
+  urgency: AiUrgency;
 }
 
 type StateListener = (state: AiTraderState) => void;
 
-// ---------- Prompts ----------
+const SHORTLIST_LIMIT = 12;
+const FINALIST_LIMIT = 4;
+const EVENT_HISTORY_LIMIT = 240;
+const CLOSED_TRADE_LIMIT = 200;
+const SHORT_COOLDOWN_MS = 60_000;
+const LONG_COOLDOWN_MS = 120_000;
+const CONTEXT_FAILURE_EXIT_THRESHOLD = 3;
 
-const SCAN_SYSTEM_PROMPT = [
-  '너는 암호화폐 전문 AI 데이 트레이더다.',
-  '빗썸 거래소에서 초단타(1분~15분 보유) 매매를 수행한다.',
-  '',
-  '## 역할',
-  '- 제공된 시장 데이터를 분석하여 가장 유망한 진입 기회를 찾는다.',
-  '- 모멘텀, 거래량 급등, 오더북 불균형, 기술적 패턴을 종합 분석한다.',
-  '- 확률이 낮은 기회는 과감히 건너뛴다 (WAIT).',
-  '',
-  '## 응답 형식',
-  '반드시 아래 JSON만 출력한다. 다른 텍스트는 출력하지 않는다.',
-  '```json',
-  '{',
-  '  "action": "BUY" | "WAIT",',
-  '  "market": "KRW-XXX",',
-  '  "confidence": 0.0~1.0,',
-  '  "reasoning": "한줄 근거",',
-  '  "stopLoss": number (진입가 대비 손절 가격),',
-  '  "takeProfit": number (진입가 대비 익절 가격),',
-  '  "urgency": "LOW" | "MEDIUM" | "HIGH"',
-  '}',
-  '```',
-  '',
-  '## 원칙',
-  '- 승률보다 기대값(expectancy)을 중시한다.',
-  '- 확실하지 않으면 WAIT을 선택한다.',
-  '- 손절은 반드시 설정한다 (진입가 -0.5% 이내).',
-  '- 익절은 손절의 1.5배 이상으로 설정한다.',
+const SHORTLIST_SYSTEM_PROMPT = [
+  '너는 빗썸 KRW 현물 시장만 보는 전업 초단타 트레이더다.',
+  '목표는 5~30분 안에 끝낼 수 있는 유동성 높은 기회를 많이 잡는 것이다.',
+  '과도하게 WAIT만 반복하지 말고, 유동성/스프레드/모멘텀/기대값이 괜찮으면 여러 종목을 shortlist에 올려라.',
+  '평가 기준: 체결대금, 즉시성 있는 모멘텀, crowd pressure, 기대값, 스프레드, 진입 괴리.',
+  'JSON만 반환한다.',
+  '형식: {"shortlist":[{"market":"KRW-BTC","score":82,"reason":"짧은 근거"}]}',
+  '최대 12개까지만 반환한다.',
 ].join('\n');
 
-const POSITION_SYSTEM_PROMPT = [
-  '너는 암호화폐 포지션 관리 AI다.',
-  '현재 보유 중인 포지션을 분석하고 관리 결정을 내린다.',
-  '',
-  '## 응답 형식',
-  '반드시 아래 JSON만 출력한다.',
-  '```json',
-  '{',
-  '  "action": "HOLD" | "SELL",',
-  '  "market": "KRW-XXX",',
-  '  "confidence": 0.0~1.0,',
-  '  "reasoning": "한줄 근거",',
-  '  "urgency": "LOW" | "MEDIUM" | "HIGH"',
-  '}',
-  '```',
-  '',
-  '## 원칙',
-  '- 손절 가격에 도달하면 즉시 SELL (confidence 1.0, urgency HIGH).',
-  '- 익절 가격에 도달하면 SELL.',
-  '- 보유 10분 초과하면 시장 상황에 따라 판단.',
-  '- 추세가 반전되면 조기 청산을 고려.',
+const ENTRY_SYSTEM_PROMPT = [
+  '너는 공격적이지만 규율 있는 KRW 현물 초단타 트레이더다.',
+  '보유시간 목표는 5~30분이다.',
+  '조금만 괜찮아도 무조건 WAIT 하지 말고, 유동성과 payoff가 충분하면 BUY를 선택하라.',
+  'JSON만 반환한다.',
+  '형식: {"action":"BUY|WAIT","confidence":0.0,"reasoning":"짧은 근거","stopLoss":0,"takeProfit":0,"urgency":"LOW|MEDIUM|HIGH"}',
+  'stopLoss는 현재가보다 낮아야 하고 takeProfit은 현재가보다 높아야 한다.',
 ].join('\n');
 
-// ---------- Engine ----------
+const MANAGE_SYSTEM_PROMPT = [
+  '너는 이미 보유한 KRW 현물 초단타 포지션을 관리하는 트레이더다.',
+  '보유시간 목표는 5~30분이며, 모멘텀이 약해지거나 downside가 커지면 SELL을 선택한다.',
+  'JSON만 반환한다.',
+  '형식: {"action":"HOLD|SELL","confidence":0.0,"reasoning":"짧은 근거","urgency":"LOW|MEDIUM|HIGH"}',
+].join('\n');
 
-let nextEventId = 0;
-function makeEventId(): string {
-  return `evt_${Date.now()}_${nextEventId++}`;
+let nextId = 0;
+
+function makeId(prefix: string): string {
+  nextId += 1;
+  return `${prefix}_${Date.now()}_${nextId}`;
 }
 
-function makeDecisionId(): string {
-  return `dec_${Date.now()}_${nextEventId++}`;
+function clamp(value: number, minValue: number, maxValue: number): number {
+  return Math.min(maxValue, Math.max(minValue, value));
 }
+
+function toFiniteNumber(value: unknown, fallback = 0): number {
+  return typeof value === 'number' && Number.isFinite(value) ? value : fallback;
+}
+
+function parseJsonObject(text: string): Record<string, unknown> | null {
+  try {
+    const fenced = text.match(/```json\s*([\s\S]*?)```/i);
+    const raw = fenced?.[1] ?? text.match(/\{[\s\S]*\}/)?.[0];
+    if (!raw) return null;
+    return JSON.parse(raw.trim()) as Record<string, unknown>;
+  } catch {
+    return null;
+  }
+}
+
+function normalizeUrgency(value: unknown): AiUrgency {
+  const normalized = typeof value === 'string' ? value.trim().toUpperCase() : '';
+  return normalized === 'LOW' || normalized === 'HIGH' ? normalized : 'MEDIUM';
+}
+
+function normalizeMarket(value: unknown): string | null {
+  if (typeof value !== 'string') return null;
+  const normalized = value.trim().toUpperCase();
+  return normalized.startsWith('KRW-') ? normalized : null;
+}
+
+function normalizeStrategyPrefix(value: string): string {
+  const normalized = value.trim().toUpperCase();
+  return normalized || 'AI_SCALP_TRADER';
+}
+
+function cloneState(state: AiTraderState): AiTraderState {
+  return {
+    ...state,
+    events: [...state.events],
+    positions: [...state.positions],
+    queue: [...state.queue],
+    closedTrades: [...state.closedTrades],
+  };
+}
+
+export function createInitialAiTraderState(): AiTraderState {
+  return {
+    running: false,
+    status: 'IDLE',
+    events: [],
+    positions: [],
+    queue: [],
+    closedTrades: [],
+    dailyPnl: 0,
+    wins: 0,
+    losses: 0,
+    scanCycles: 0,
+    finalistsReviewed: 0,
+    buyExecutions: 0,
+    lastScanAt: null,
+    blockedReason: null,
+  };
+}
+
+export const DEFAULT_AI_DAY_TRADER_CONFIG: AiDayTraderConfig = {
+  enabled: false,
+  provider: 'openai',
+  model: 'gpt-5.3-codex',
+  zaiEndpointMode: 'coding',
+  delegationMode: 'AUTO_AND_MANUAL',
+  zaiDelegateModel: 'glm-5',
+  scanIntervalMs: 10_000,
+  positionCheckMs: 5_000,
+  maxConcurrentPositions: 5,
+  amountKrw: 10_000,
+  dailyLossLimitKrw: -20_000,
+  universeLimit: 36,
+  maxHoldingMinutes: 30,
+  strategyCode: 'AI_SCALP_TRADER',
+};
 
 export class AiDayTraderEngine {
   private config: AiDayTraderConfig;
   private state: AiTraderState;
   private listeners = new Set<StateListener>();
-  private scanTimer: ReturnType<typeof setInterval> | null = null;
-  private positionTimer: ReturnType<typeof setInterval> | null = null;
-  private running = false;
+  private scanTimer: number | null = null;
+  private manageTimer: number | null = null;
+  private scanInFlight = false;
+  private manageInFlight = false;
+  private cooldownUntilByMarket = new Map<string, number>();
+  private contextFailureCountByMarket = new Map<string, number>();
 
   constructor(config: AiDayTraderConfig) {
-    this.config = config;
-    this.state = {
-      status: 'IDLE',
-      decisions: [],
-      events: [],
-      positions: [],
-      dailyPnl: 0,
-      dailyTradeCount: 0,
-      totalTokensUsed: 0,
-      lastScanAt: null,
-      topCandidates: [],
-    };
+    this.config = { ...config };
+    this.state = createInitialAiTraderState();
   }
 
   subscribe(listener: StateListener): () => void {
     this.listeners.add(listener);
-    listener(this.state);
+    listener(cloneState(this.state));
     return () => this.listeners.delete(listener);
   }
 
-  private emit() {
-    const snapshot = { ...this.state };
-    for (const l of this.listeners) l(snapshot);
-  }
-
-  private pushEvent(type: AiTraderEvent['type'], message: string, detail?: string, market?: string) {
-    const event: AiTraderEvent = {
-      id: makeEventId(),
-      type,
-      message,
-      detail,
-      market,
-      timestamp: Date.now(),
-    };
-    this.state.events = [event, ...this.state.events].slice(0, 100);
-    this.emit();
-  }
-
-  private pushDecision(decision: AiDecision) {
-    this.state.decisions = [decision, ...this.state.decisions].slice(0, 50);
-    this.emit();
-  }
-
   getState(): AiTraderState {
-    return { ...this.state };
+    return cloneState(this.state);
   }
 
   updateConfig(patch: Partial<AiDayTraderConfig>) {
     this.config = { ...this.config, ...patch };
   }
 
-  // ---------- Lifecycle ----------
+  isRunning(): boolean {
+    return this.state.running;
+  }
 
   start() {
-    if (this.running) return;
-    this.running = true;
+    if (this.state.running) return;
+    this.state.running = true;
     this.state.status = 'IDLE';
-    this.pushEvent('STATUS', 'AI 데이 트레이더 시작');
-
-    // 즉시 첫 스캔
-    this.runScanCycle();
-
-    this.scanTimer = setInterval(() => this.runScanCycle(), this.config.scanIntervalMs);
-    this.positionTimer = setInterval(() => this.runPositionManagement(), this.config.positionCheckMs);
+    this.emit();
+    this.pushEvent('STATUS', 'LLM 초단타 터미널 시작');
+    void this.syncOpenPositions();
+    void this.runScanCycle();
+    void this.runPositionManagement();
+    this.scanTimer = window.setInterval(() => {
+      void this.runScanCycle();
+    }, this.config.scanIntervalMs);
+    this.manageTimer = window.setInterval(() => {
+      void this.runPositionManagement();
+    }, this.config.positionCheckMs);
   }
 
   stop() {
-    this.running = false;
-    if (this.scanTimer) { clearInterval(this.scanTimer); this.scanTimer = null; }
-    if (this.positionTimer) { clearInterval(this.positionTimer); this.positionTimer = null; }
+    if (this.scanTimer !== null) {
+      window.clearInterval(this.scanTimer);
+      this.scanTimer = null;
+    }
+    if (this.manageTimer !== null) {
+      window.clearInterval(this.manageTimer);
+      this.manageTimer = null;
+    }
+    this.state.running = false;
     this.state.status = 'IDLE';
-    this.pushEvent('STATUS', 'AI 데이 트레이더 중지');
+    this.emit();
+    this.pushEvent('STATUS', 'LLM 초단타 터미널 중지');
+  }
+
+  private emit() {
+    const snapshot = cloneState(this.state);
+    for (const listener of this.listeners) {
+      listener(snapshot);
+    }
+  }
+
+  private pushEvent(
+    type: AiTraderEventType,
+    message: string,
+    detail?: string,
+    market?: string,
+    confidence?: number,
+    urgency?: AiUrgency
+  ) {
+    const event: AiTraderEvent = {
+      id: makeId('evt'),
+      type,
+      message,
+      detail,
+      market,
+      confidence,
+      urgency,
+      timestamp: Date.now(),
+    };
+    this.state.events = [event, ...this.state.events].slice(0, EVENT_HISTORY_LIMIT);
     this.emit();
   }
 
-  isRunning(): boolean {
-    return this.running;
+  private setStatus(status: AiTraderStatus) {
+    if (this.state.status === status) return;
+    this.state.status = status;
+    this.emit();
   }
 
-  // ---------- Scan Cycle ----------
+  private setBlockedReason(reason: string | null) {
+    if (this.state.blockedReason === reason) return;
+    const previous = this.state.blockedReason;
+    this.state.blockedReason = reason;
+    this.emit();
+    if (reason) {
+      this.pushEvent('STATUS', reason);
+      return;
+    }
+    if (previous) {
+      this.pushEvent('STATUS', '진입 차단 해제');
+    }
+  }
+
+  private setIdleIfReady() {
+    if (!this.state.running) return;
+    if (this.scanInFlight || this.manageInFlight) return;
+    if (this.state.blockedReason) {
+      this.setStatus('PAUSED');
+      return;
+    }
+    this.setStatus('IDLE');
+  }
+
+  private async syncOpenPositions(): Promise<GuidedTradePosition[]> {
+    const positions = await guidedTradingApi.getOpenPositions();
+    const filtered = this.filterAiPositions(positions).sort(
+      (left, right) => new Date(right.createdAt).getTime() - new Date(left.createdAt).getTime()
+    );
+    this.state.positions = filtered;
+    this.emit();
+    return filtered;
+  }
+
+  private filterAiPositions(positions: GuidedTradePosition[]): GuidedTradePosition[] {
+    const strategyPrefix = normalizeStrategyPrefix(this.config.strategyCode);
+    return positions.filter((position) => {
+      const strategyCode = position.strategyCode?.trim().toUpperCase();
+      return Boolean(strategyCode?.startsWith(strategyPrefix));
+    });
+  }
+
+  private pruneTransientState() {
+    const now = Date.now();
+    for (const [market, until] of this.cooldownUntilByMarket.entries()) {
+      if (until <= now) {
+        this.cooldownUntilByMarket.delete(market);
+      }
+    }
+    if (this.state.events.length > EVENT_HISTORY_LIMIT) {
+      this.state.events = this.state.events.slice(0, EVENT_HISTORY_LIMIT);
+    }
+    if (this.state.closedTrades.length > CLOSED_TRADE_LIMIT) {
+      this.state.closedTrades = this.state.closedTrades.slice(0, CLOSED_TRADE_LIMIT);
+    }
+  }
 
   private async runScanCycle() {
-    if (!this.running) return;
-    if (this.state.status === 'SCANNING' || this.state.status === 'ANALYZING') return;
-
-    // 일일 손실 한도 체크
-    if (this.state.dailyPnl <= this.config.dailyLossLimitKrw) {
-      this.pushEvent('STATUS', `일일 손실 한도 도달 (${this.state.dailyPnl.toLocaleString()}원)`);
-      return;
-    }
-
-    // 동시 포지션 한도 체크
-    if (this.state.positions.length >= this.config.maxConcurrentPositions) {
-      return;
-    }
+    if (!this.state.running || this.scanInFlight) return;
+    this.scanInFlight = true;
+    this.pruneTransientState();
 
     try {
-      this.state.status = 'SCANNING';
-      this.emit();
+      const positions = await this.syncOpenPositions();
+      if (!this.state.running) return;
 
-      // 1) 마켓 데이터 수집
-      const markets = await guidedTradingApi.getMarkets('TURNOVER', 'DESC', 'minute1');
-      const top = markets.slice(0, this.config.universeLimit);
-      this.state.topCandidates = top;
-      this.state.lastScanAt = Date.now();
-
-      // 2) 기회 데이터
-      const opps = await guidedTradingApi.getAutopilotOpportunities('minute1', 'minute10', undefined, this.config.universeLimit);
-
-      // 3) 상위 후보 에이전트 컨텍스트 (최대 3개)
-      const passOrBorderline = opps.opportunities
-        .filter(o => o.stage === 'AUTO_PASS' || o.stage === 'BORDERLINE')
-        .slice(0, 3);
-
-      if (passOrBorderline.length === 0) {
-        this.pushEvent('SCAN', `${top.length}개 마켓 스캔 완료 - 유망 후보 없음`);
-        this.state.status = 'IDLE';
-        this.emit();
+      if (this.state.dailyPnl <= this.config.dailyLossLimitKrw) {
+        this.setBlockedReason(
+          `일손실 차단 활성화 · 실현 ${this.formatKrw(this.state.dailyPnl)} / 한도 ${this.formatKrw(this.config.dailyLossLimitKrw)}`
+        );
+        this.setStatus('PAUSED');
         return;
       }
 
-      this.pushEvent('SCAN', `${passOrBorderline.length}개 유망 후보 발견`, passOrBorderline.map(o => o.market).join(', '));
-
-      // 4) LLM 분석
-      this.state.status = 'ANALYZING';
-      this.emit();
-
-      for (const opp of passOrBorderline) {
-        if (!this.running) break;
-        if (this.state.positions.length >= this.config.maxConcurrentPositions) break;
-
-        // 이미 보유 중인 마켓이면 스킵
-        if (this.state.positions.some(p => p.market === opp.market)) continue;
-
-        try {
-          const ctx = await guidedTradingApi.getAgentContext(opp.market, 'minute1', 60);
-          const decision = await this.askLlmForEntry(opp, ctx);
-
-          if (decision && decision.action === 'BUY' && decision.confidence >= 0.6) {
-            this.pushDecision(decision);
-            await this.executeEntry(decision);
-          } else if (decision) {
-            this.pushDecision(decision);
-            this.pushEvent('DECISION', `${opp.market} WAIT`, decision.reasoning);
-          }
-        } catch (err) {
-          this.pushEvent('ERROR', `${opp.market} 분석 실패`, String(err));
-        }
+      if (positions.length >= this.config.maxConcurrentPositions) {
+        this.setBlockedReason(
+          `동시 포지션 한도 도달 · ${positions.length}/${this.config.maxConcurrentPositions}`
+        );
+        this.setStatus('PAUSED');
+        return;
       }
 
-      this.state.status = 'IDLE';
+      this.setBlockedReason(null);
+      this.state.lastScanAt = Date.now();
+      this.setStatus('SCANNING');
+      this.pushEvent('SCAN', `유동성 상위 ${this.config.universeLimit}개 시장 스캔`);
+
+      const scan = await guidedTradingApi.getAiScalpScan('minute1', this.config.universeLimit, this.config.strategyCode);
+      if (!this.state.running) return;
+
+      this.state.scanCycles += 1;
+      this.state.lastScanAt = Date.now();
+      this.state.positions = this.filterAiPositions(scan.positions);
       this.emit();
-    } catch (err) {
-      this.state.status = 'ERROR';
-      this.pushEvent('ERROR', '마켓 스캔 실패', String(err));
+
+      const openMarkets = new Set(this.state.positions.map((position) => position.market));
+      const candidates = scan.markets.filter((market) => !openMarkets.has(market.market) && !this.isCoolingDown(market.market));
+      if (candidates.length === 0) {
+        this.state.queue = [];
+        this.emit();
+        this.pushEvent('STATUS', '현재 진입 가능한 후보가 없음');
+        return;
+      }
+
+      this.setStatus('RANKING');
+      const ranked = await this.rankMarkets(candidates);
+      this.state.queue = ranked;
       this.emit();
+      this.pushEvent(
+        'RANK',
+        `LLM shortlist ${ranked.length}개`,
+        ranked
+          .slice(0, 3)
+          .map((item) => `${item.market.replace('KRW-', '')} ${item.score.toFixed(0)}`)
+          .join(' · ')
+      );
+
+      const finalists = ranked.slice(0, FINALIST_LIMIT);
+      if (finalists.length === 0) return;
+
+      this.setStatus('ANALYZING');
+      const activeMarkets = new Set(this.state.positions.map((position) => position.market));
+      let activePositionCount = this.state.positions.length;
+
+      for (const finalist of finalists) {
+        if (!this.state.running || activePositionCount >= this.config.maxConcurrentPositions) break;
+        if (activeMarkets.has(finalist.market)) continue;
+        const scanMarket = candidates.find((candidate) => candidate.market === finalist.market);
+        if (!scanMarket) continue;
+
+        this.state.finalistsReviewed += 1;
+        this.emit();
+
+        let context: GuidedAgentContextResponse;
+        try {
+          context = await guidedTradingApi.getAgentContext(
+            finalist.market,
+            'minute1',
+            60,
+            20,
+            'SCALP',
+            'CROWD_PRESSURE'
+          );
+        } catch (error) {
+          this.pushEvent('ERROR', `${finalist.market} 진입 컨텍스트 조회 실패`, this.toErrorText(error), finalist.market);
+          continue;
+        }
+
+        const decision = await this.requestEntryDecision(scanMarket, finalist, context);
+        if (!decision) continue;
+
+        this.pushEvent(
+          'BUY_DECISION',
+          `${finalist.market} ${decision.action}`,
+          decision.reasoning,
+          finalist.market,
+          decision.confidence,
+          decision.urgency
+        );
+
+        if (decision.action !== 'BUY' || decision.confidence < 0.55) {
+          continue;
+        }
+
+        const protectivePrices = this.resolveProtectivePrices(scanMarket, decision);
+
+        try {
+          this.setStatus('EXECUTING');
+          const position = await guidedTradingApi.start({
+            market: finalist.market,
+            amountKrw: this.config.amountKrw,
+            orderType: 'MARKET',
+            interval: 'minute1',
+            mode: 'SCALP',
+            entrySource: 'AI_SCALP',
+            strategyCode: normalizeStrategyPrefix(this.config.strategyCode),
+            stopLossPrice: protectivePrices.stopLoss,
+            takeProfitPrice: protectivePrices.takeProfit,
+            maxDcaCount: 0,
+          });
+
+          this.state.buyExecutions += 1;
+          activePositionCount += 1;
+          activeMarkets.add(position.market);
+          this.upsertPosition(position);
+          this.contextFailureCountByMarket.set(position.market, 0);
+          this.pushEvent(
+            'BUY_EXECUTION',
+            `${position.market} 매수 실행`,
+            `stop ${this.formatPrice(protectivePrices.stopLoss)} · take ${this.formatPrice(protectivePrices.takeProfit)} · ${decision.reasoning}`,
+            position.market,
+            decision.confidence,
+            decision.urgency
+          );
+        } catch (error) {
+          this.pushEvent('ERROR', `${finalist.market} 매수 실패`, this.toErrorText(error), finalist.market);
+        }
+      }
+    } catch (error) {
+      this.pushEvent('ERROR', '스캔 루프 실패', this.toErrorText(error));
+    } finally {
+      this.scanInFlight = false;
+      this.setIdleIfReady();
     }
   }
-
-  // ---------- Position Management ----------
 
   private async runPositionManagement() {
-    if (!this.running) return;
+    if (!this.state.running || this.manageInFlight) return;
+    this.manageInFlight = true;
+    this.pruneTransientState();
 
     try {
-      const positions = await guidedTradingApi.getOpenPositions();
-      // 필터: AI 데이트레이더 전략 코드만
-      this.state.positions = positions.filter(
-        p => p.strategyCode?.startsWith(this.config.strategyCode) ?? false
-      );
-      this.emit();
+      const positions = await this.syncOpenPositions();
+      if (!this.state.running || positions.length === 0) return;
 
-      for (const pos of this.state.positions) {
-        if (!this.running) break;
+      for (const position of positions) {
+        if (!this.state.running) break;
+
+        const holdingMinutes = this.getHoldingMinutes(position);
+        if (holdingMinutes >= this.config.maxHoldingMinutes) {
+          await this.executeSell(position, `최대 보유시간 ${this.config.maxHoldingMinutes}분 도달`, 'FORCED_EXIT');
+          continue;
+        }
+
+        let context: GuidedAgentContextResponse;
         try {
-          const ctx = await guidedTradingApi.getAgentContext(pos.market, 'minute1', 30);
-          const decision = await this.askLlmForManagement(pos, ctx);
-          if (decision) {
-            this.pushDecision(decision);
-            if (decision.action === 'SELL' && decision.confidence >= 0.5) {
-              await this.executeExit(pos, decision);
-            }
+          context = await guidedTradingApi.getAgentContext(
+            position.market,
+            'minute1',
+            30,
+            20,
+            'SCALP',
+            'CROWD_PRESSURE'
+          );
+          this.contextFailureCountByMarket.set(position.market, 0);
+        } catch (error) {
+          const failureCount = (this.contextFailureCountByMarket.get(position.market) ?? 0) + 1;
+          this.contextFailureCountByMarket.set(position.market, failureCount);
+          this.pushEvent(
+            'ERROR',
+            `${position.market} 관리 컨텍스트 실패 (${failureCount}/${CONTEXT_FAILURE_EXIT_THRESHOLD})`,
+            this.toErrorText(error),
+            position.market
+          );
+          if (failureCount >= CONTEXT_FAILURE_EXIT_THRESHOLD) {
+            await this.executeSell(position, '컨텍스트 조회 실패 누적', 'FORCED_EXIT');
           }
-        } catch (err) {
-          this.pushEvent('ERROR', `${pos.market} 포지션 관리 실패`, String(err));
+          continue;
+        }
+
+        const decision = await this.requestManageDecision(position, context);
+        if (!decision) continue;
+
+        this.pushEvent(
+          'MANAGE_DECISION',
+          `${position.market} ${decision.action}`,
+          `${decision.reasoning} · 보유 ${holdingMinutes.toFixed(1)}분 · 미실현 ${this.formatPercent(position.unrealizedPnlPercent)}`,
+          position.market,
+          decision.confidence,
+          decision.urgency
+        );
+
+        if (decision.action === 'SELL' && decision.confidence >= 0.5) {
+          await this.executeSell(position, decision.reasoning, undefined, decision);
         }
       }
-    } catch (err) {
-      this.pushEvent('ERROR', '포지션 조회 실패', String(err));
+
+      await this.syncOpenPositions();
+    } catch (error) {
+      this.pushEvent('ERROR', '포지션 관리 루프 실패', this.toErrorText(error));
+    } finally {
+      this.manageInFlight = false;
+      this.setIdleIfReady();
     }
   }
 
-  // ---------- LLM Calls ----------
-
-  private async askLlmForEntry(
-    opp: AutopilotOpportunityView,
-    ctx: GuidedAgentContextResponse
-  ): Promise<AiDecision | null> {
-    const slicedCandles = ctx.chart.candles.slice(-30);
-    const userPrompt = [
-      `## 마켓: ${opp.market} (${opp.koreanName})`,
-      `- 기대값: ${(opp.expectancyPct * 100).toFixed(2)}%`,
-      `- 스코어: ${opp.score.toFixed(1)}`,
-      `- RR: ${opp.riskReward1m.toFixed(2)}`,
-      `- 진입괴리: ${(opp.entryGapPct1m * 100).toFixed(2)}%`,
-      `- stage: ${opp.stage}`,
-      '',
-      `## 현재가: ${ctx.chart.recommendation.currentPrice.toLocaleString()}`,
-      `## 추천 진입가: ${ctx.chart.recommendation.recommendedEntryPrice.toLocaleString()}`,
-      `## 오더북 요약:`,
-      `  매수잔량 상위: ${ctx.chart.orderbook?.totalBidSize?.toLocaleString() ?? 'N/A'}`,
-      `  매도잔량 상위: ${ctx.chart.orderbook?.totalAskSize?.toLocaleString() ?? 'N/A'}`,
-      '',
-      `## 최근 ${slicedCandles.length}개 1분봉 (최신 3개):`,
-      JSON.stringify(slicedCandles.slice(-3)),
-      '',
-      '진입할지 판단하라.',
-    ].join('\n');
+  private async rankMarkets(markets: AiScalpScanMarket[]): Promise<AiRankedOpportunity[]> {
+    const normalizedMarkets = markets.map((market) => ({
+      market: market.market,
+      koreanName: market.koreanName,
+      tradePrice: market.tradePrice,
+      changeRate: market.changeRate,
+      turnover: market.turnover,
+      liquidityRank: market.liquidityRank,
+      expectancyPct: market.recommendation.expectancyPct,
+      recommendedEntryWinRate: market.recommendation.recommendedEntryWinRate,
+      marketEntryWinRate: market.recommendation.marketEntryWinRate,
+      riskRewardRatio: market.recommendation.riskRewardRatio,
+      entryGapPct: market.featurePack.entryGapPct,
+      confidence: market.featurePack.confidence,
+      flowScore: market.crowd?.flowScore ?? market.featurePack.crowdFlowScore ?? 0,
+      spreadPercent: market.crowd?.spreadPercent ?? market.featurePack.spreadPercent ?? 0,
+      bidImbalance: market.crowd?.bidImbalance ?? market.featurePack.bidImbalance ?? 0,
+      notionalSpikeRatio: market.crowd?.notionalSpikeRatio ?? market.featurePack.notionalSpikeRatio ?? 0,
+    }));
+    const deterministic = this.buildDeterministicShortlist(markets);
 
     try {
-      const { text, usage } = await requestOneShotTextWithMeta({
-        prompt: `${SCAN_SYSTEM_PROMPT}\n\n${userPrompt}`,
-        model: this.config.model,
+      const response = await requestOneShotTextWithMeta({
+        prompt: [
+          SHORTLIST_SYSTEM_PROMPT,
+          '',
+          `후보 시장 요약(JSON): ${JSON.stringify(normalizedMarkets)}`,
+        ].join('\n'),
         provider: this.config.provider,
+        model: this.config.model,
         tradingMode: 'SCALP',
         zaiEndpointMode: this.config.zaiEndpointMode,
         delegationMode: this.config.delegationMode,
         zaiDelegateModel: this.config.zaiDelegateModel,
       });
 
-      this.state.totalTokensUsed += usage.totalTokens;
+      const parsed = parseJsonObject(response.text);
+      const rawShortlist = Array.isArray(parsed?.shortlist) ? parsed.shortlist : [];
+      const marketMap = new Map(markets.map((market) => [market.market, market]));
+      const dedupe = new Set<string>();
+      const shortlist: AiRankedOpportunity[] = [];
 
-      const parsed = this.parseDecisionJson(text);
-      if (!parsed) return null;
+      for (const item of rawShortlist) {
+        if (typeof item !== 'object' || item === null) continue;
+        const shortlistItem = item as Record<string, unknown>;
+        const market = normalizeMarket(shortlistItem.market);
+        if (!market || dedupe.has(market)) continue;
+        const scanMarket = marketMap.get(market);
+        if (!scanMarket) continue;
 
-      return {
-        id: makeDecisionId(),
-        type: 'SCAN_ENTRY',
-        market: opp.market,
-        action: parsed.action === 'BUY' ? 'BUY' : 'WAIT',
-        confidence: Number(parsed.confidence ?? 0),
-        reasoning: String(parsed.reasoning ?? ''),
-        stopLoss: parsed.stopLoss != null ? Number(parsed.stopLoss) : undefined,
-        takeProfit: parsed.takeProfit != null ? Number(parsed.takeProfit) : undefined,
-        urgency: (['LOW', 'MEDIUM', 'HIGH'].includes(String(parsed.urgency)) ? String(parsed.urgency) : 'MEDIUM') as AiDecision['urgency'],
-        timestamp: Date.now(),
-      };
-    } catch (err) {
-      this.pushEvent('ERROR', `${opp.market} LLM 진입 분석 실패`, String(err));
-      return null;
+        dedupe.add(market);
+        shortlist.push({
+          market,
+          koreanName: scanMarket.koreanName,
+          score: clamp(toFiniteNumber(shortlistItem.score, 65), 0, 100),
+          reason:
+            typeof shortlistItem.reason === 'string' &&
+            shortlistItem.reason.trim().length > 0
+              ? shortlistItem.reason.trim()
+              : this.buildDeterministicReason(scanMarket),
+          tradePrice: scanMarket.tradePrice,
+          changeRate: scanMarket.changeRate,
+          turnover: scanMarket.turnover,
+          crowd: scanMarket.crowd,
+        });
+        if (shortlist.length >= Math.min(SHORTLIST_LIMIT, markets.length)) {
+          break;
+        }
+      }
+
+      if (shortlist.length > 0) {
+        return shortlist;
+      }
+    } catch (error) {
+      this.pushEvent('ERROR', 'LLM shortlist 실패, 정량 정렬로 폴백', this.toErrorText(error));
     }
+
+    return deterministic;
   }
 
-  private async askLlmForManagement(
-    pos: GuidedTradePosition,
-    ctx: GuidedAgentContextResponse
-  ): Promise<AiDecision | null> {
-    const holdingMs = Date.now() - new Date(pos.createdAt).getTime();
-    const holdingMin = (holdingMs / 60_000).toFixed(1);
-    const slicedCandles = ctx.chart.candles.slice(-15);
-
-    const userPrompt = [
-      `## 보유 포지션: ${pos.market}`,
-      `- 평균진입가: ${pos.averageEntryPrice.toLocaleString()}`,
-      `- 현재가: ${pos.currentPrice.toLocaleString()}`,
-      `- 미실현 PnL: ${pos.unrealizedPnlPercent.toFixed(2)}%`,
-      `- 보유시간: ${holdingMin}분`,
-      `- 손절가: ${pos.stopLossPrice.toLocaleString()}`,
-      `- 익절가: ${pos.takeProfitPrice.toLocaleString()}`,
-      '',
-      `## 최근 1분봉 (최신 5개):`,
-      JSON.stringify(slicedCandles.slice(-5)),
-      '',
-      '청산할지 판단하라.',
-    ].join('\n');
-
+  private async requestEntryDecision(
+    scanMarket: AiScalpScanMarket,
+    finalist: AiRankedOpportunity,
+    context: GuidedAgentContextResponse
+  ): Promise<AiEntryDecision | null> {
     try {
-      const { text, usage } = await requestOneShotTextWithMeta({
-        prompt: `${POSITION_SYSTEM_PROMPT}\n\n${userPrompt}`,
-        model: this.config.model,
+      const response = await requestOneShotTextWithMeta({
+        prompt: [
+          ENTRY_SYSTEM_PROMPT,
+          '',
+          `후보 요약: ${JSON.stringify({
+            market: scanMarket.market,
+            koreanName: scanMarket.koreanName,
+            score: finalist.score,
+            reason: finalist.reason,
+            tradePrice: scanMarket.tradePrice,
+            changeRate: scanMarket.changeRate,
+            turnover: scanMarket.turnover,
+            recommendation: scanMarket.recommendation,
+            featurePack: scanMarket.featurePack,
+            crowd: scanMarket.crowd,
+          })}`,
+        ].join('\n'),
         provider: this.config.provider,
+        model: this.config.model,
+        context,
         tradingMode: 'SCALP',
         zaiEndpointMode: this.config.zaiEndpointMode,
         delegationMode: this.config.delegationMode,
         zaiDelegateModel: this.config.zaiDelegateModel,
       });
 
-      this.state.totalTokensUsed += usage.totalTokens;
+      const parsed = parseJsonObject(response.text);
+      if (!parsed) {
+        this.pushEvent('ERROR', `${scanMarket.market} 진입 응답 파싱 실패`, response.text.slice(0, 200), scanMarket.market);
+        return null;
+      }
 
-      const parsed = this.parseDecisionJson(text);
-      if (!parsed) return null;
-
+      const action = typeof parsed.action === 'string' ? parsed.action.trim().toUpperCase() : 'WAIT';
+      const normalizedAction: AiEntryDecision['action'] = action === 'BUY' ? 'BUY' : 'WAIT';
       return {
-        id: makeDecisionId(),
-        type: 'MANAGE_POSITION',
-        market: pos.market,
-        action: parsed.action === 'SELL' ? 'SELL' : 'HOLD',
-        confidence: Number(parsed.confidence ?? 0),
-        reasoning: String(parsed.reasoning ?? ''),
-        urgency: (['LOW', 'MEDIUM', 'HIGH'].includes(String(parsed.urgency)) ? String(parsed.urgency) : 'MEDIUM') as AiDecision['urgency'],
-        timestamp: Date.now(),
+        action: normalizedAction,
+        confidence: clamp(toFiniteNumber(parsed.confidence, 0), 0, 1),
+        reasoning:
+          typeof parsed.reasoning === 'string' && parsed.reasoning.trim().length > 0
+            ? parsed.reasoning.trim()
+            : finalist.reason,
+        stopLoss: toFiniteNumber(parsed.stopLoss, NaN),
+        takeProfit: toFiniteNumber(parsed.takeProfit, NaN),
+        urgency: normalizeUrgency(parsed.urgency),
       };
-    } catch (err) {
-      this.pushEvent('ERROR', `${pos.market} LLM 관리 분석 실패`, String(err));
+    } catch (error) {
+      this.pushEvent('ERROR', `${scanMarket.market} 진입 LLM 실패`, this.toErrorText(error), scanMarket.market);
       return null;
     }
   }
 
-  // ---------- Execution ----------
-
-  private async executeEntry(decision: AiDecision) {
+  private async requestManageDecision(
+    position: GuidedTradePosition,
+    context: GuidedAgentContextResponse
+  ): Promise<AiManageDecision | null> {
     try {
-      this.state.status = 'EXECUTING';
-      this.emit();
-
-      const result = await guidedTradingApi.start({
-        market: decision.market,
-        amountKrw: this.config.amountKrw,
-        orderType: 'MARKET',
-        strategyCode: this.config.strategyCode,
-        entrySource: 'AUTOPILOT',
-        stopLossPrice: decision.stopLoss,
-        takeProfitPrice: decision.takeProfit,
+      const response = await requestOneShotTextWithMeta({
+        prompt: [
+          MANAGE_SYSTEM_PROMPT,
+          '',
+          `포지션 요약: ${JSON.stringify({
+            market: position.market,
+            averageEntryPrice: position.averageEntryPrice,
+            currentPrice: position.currentPrice,
+            stopLossPrice: position.stopLossPrice,
+            takeProfitPrice: position.takeProfitPrice,
+            unrealizedPnlPercent: position.unrealizedPnlPercent,
+            createdAt: position.createdAt,
+            strategyCode: position.strategyCode,
+          })}`,
+        ].join('\n'),
+        provider: this.config.provider,
+        model: this.config.model,
+        context,
+        tradingMode: 'SCALP',
+        zaiEndpointMode: this.config.zaiEndpointMode,
+        delegationMode: this.config.delegationMode,
+        zaiDelegateModel: this.config.zaiDelegateModel,
       });
 
-      this.state.dailyTradeCount++;
-      this.pushEvent(
-        'EXECUTION',
-        `${decision.market} 매수 체결`,
-        `수량: ${result.entryQuantity}, 가격: ${result.averageEntryPrice.toLocaleString()}`,
-        decision.market
-      );
+      const parsed = parseJsonObject(response.text);
+      if (!parsed) {
+        this.pushEvent('ERROR', `${position.market} 관리 응답 파싱 실패`, response.text.slice(0, 200), position.market);
+        return null;
+      }
 
-      this.state.status = 'IDLE';
-      this.emit();
-    } catch (err) {
-      this.pushEvent('ERROR', `${decision.market} 매수 실행 실패`, String(err), decision.market);
-      this.state.status = 'IDLE';
-      this.emit();
-    }
-  }
-
-  private async executeExit(pos: GuidedTradePosition, decision: AiDecision) {
-    try {
-      this.state.status = 'EXECUTING';
-      this.emit();
-
-      const result = await guidedTradingApi.stop(pos.market);
-
-      const pnl = result.realizedPnl ?? 0;
-      this.state.dailyPnl += pnl;
-      this.pushEvent(
-        'EXECUTION',
-        `${pos.market} 매도 체결`,
-        `PnL: ${pnl >= 0 ? '+' : ''}${pnl.toLocaleString()}원 (${decision.reasoning})`,
-        pos.market
-      );
-
-      this.state.status = 'IDLE';
-      this.emit();
-    } catch (err) {
-      this.pushEvent('ERROR', `${pos.market} 매도 실행 실패`, String(err), pos.market);
-      this.state.status = 'IDLE';
-      this.emit();
-    }
-  }
-
-  // ---------- Helpers ----------
-
-  private parseDecisionJson(text: string): Record<string, unknown> | null {
-    try {
-      // JSON 블록 추출
-      const jsonMatch = text.match(/```json\s*([\s\S]*?)```/) || text.match(/\{[\s\S]*\}/);
-      if (!jsonMatch) return null;
-      const raw = jsonMatch[1] || jsonMatch[0];
-      return JSON.parse(raw.trim());
-    } catch {
-      this.pushEvent('ERROR', 'LLM 응답 파싱 실패', text.slice(0, 200));
+      const action = typeof parsed.action === 'string' ? parsed.action.trim().toUpperCase() : 'HOLD';
+      return {
+        action: action === 'SELL' ? 'SELL' : 'HOLD',
+        confidence: clamp(toFiniteNumber(parsed.confidence, 0), 0, 1),
+        reasoning:
+          typeof parsed.reasoning === 'string' && parsed.reasoning.trim().length > 0
+            ? parsed.reasoning.trim()
+            : '시장 흐름 유지',
+        urgency: normalizeUrgency(parsed.urgency),
+      };
+    } catch (error) {
+      this.pushEvent('ERROR', `${position.market} 관리 LLM 실패`, this.toErrorText(error), position.market);
       return null;
     }
   }
-}
 
-// ---------- Singleton ----------
+  private resolveProtectivePrices(scanMarket: AiScalpScanMarket, decision: AiEntryDecision) {
+    const currentPrice = scanMarket.tradePrice > 0 ? scanMarket.tradePrice : scanMarket.recommendation.currentPrice;
+    let stopLoss = Number.isFinite(decision.stopLoss) ? (decision.stopLoss as number) : scanMarket.recommendation.stopLossPrice;
+    let takeProfit = Number.isFinite(decision.takeProfit) ? (decision.takeProfit as number) : scanMarket.recommendation.takeProfitPrice;
 
-let instance: AiDayTraderEngine | null = null;
+    if (!Number.isFinite(stopLoss) || stopLoss <= 0 || stopLoss >= currentPrice) {
+      stopLoss = currentPrice * 0.996;
+    }
+    if (!Number.isFinite(takeProfit) || takeProfit <= currentPrice) {
+      takeProfit = currentPrice * 1.006;
+    }
 
-export function getAiDayTraderEngine(config?: AiDayTraderConfig): AiDayTraderEngine {
-  if (!instance && config) {
-    instance = new AiDayTraderEngine(config);
+    return {
+      stopLoss,
+      takeProfit,
+    };
   }
-  if (!instance) {
-    throw new Error('AiDayTraderEngine not initialized');
-  }
-  return instance;
-}
 
-export function resetAiDayTraderEngine(): void {
-  if (instance) {
-    instance.stop();
-    instance = null;
+  private buildDeterministicShortlist(markets: AiScalpScanMarket[]): AiRankedOpportunity[] {
+    return [...markets]
+      .sort((left, right) => {
+        const expectancyGap = right.recommendation.expectancyPct - left.recommendation.expectancyPct;
+        if (Math.abs(expectancyGap) > 1e-9) return expectancyGap;
+        const flowGap =
+          (right.crowd?.flowScore ?? right.featurePack.crowdFlowScore ?? -Infinity) -
+          (left.crowd?.flowScore ?? left.featurePack.crowdFlowScore ?? -Infinity);
+        if (Math.abs(flowGap) > 1e-9) return flowGap;
+        return right.turnover - left.turnover;
+      })
+      .slice(0, Math.min(SHORTLIST_LIMIT, markets.length))
+      .map((market, index) => {
+        const crowdFlow = market.crowd?.flowScore ?? market.featurePack.crowdFlowScore ?? 0;
+        const score = clamp(
+          62 +
+            market.recommendation.expectancyPct * 120 +
+            crowdFlow * 0.18 +
+            market.recommendation.riskRewardRatio * 4 -
+            market.featurePack.entryGapPct * 3 -
+            index * 1.5,
+          0,
+          100
+        );
+        return {
+          market: market.market,
+          koreanName: market.koreanName,
+          score,
+          reason: this.buildDeterministicReason(market),
+          tradePrice: market.tradePrice,
+          changeRate: market.changeRate,
+          turnover: market.turnover,
+          crowd: market.crowd,
+        };
+      });
+  }
+
+  private buildDeterministicReason(market: AiScalpScanMarket): string {
+    const parts = [
+      `exp ${market.recommendation.expectancyPct.toFixed(2)}%`,
+      `RR ${market.recommendation.riskRewardRatio.toFixed(2)}`,
+      `spread ${(market.crowd?.spreadPercent ?? market.featurePack.spreadPercent ?? 0).toFixed(2)}%`,
+    ];
+    const flowScore = market.crowd?.flowScore ?? market.featurePack.crowdFlowScore;
+    if (typeof flowScore === 'number' && Number.isFinite(flowScore)) {
+      parts.push(`flow ${flowScore.toFixed(1)}`);
+    }
+    return parts.join(' · ');
+  }
+
+  private async executeSell(
+    position: GuidedTradePosition,
+    reason: string,
+    forcedCategory?: AiExitCategory,
+    decision?: Pick<AiManageDecision, 'confidence' | 'urgency'>
+  ) {
+    try {
+      this.setStatus('EXECUTING');
+      const result = await guidedTradingApi.stop(position.market);
+      const closed =
+        result.status === 'CLOSED' ||
+        Boolean(result.closedAt) ||
+        (typeof result.remainingQuantity === 'number' && result.remainingQuantity <= 0);
+      const pnlKrw = toFiniteNumber(result.realizedPnl, 0);
+      const pnlPercent = toFiniteNumber(result.realizedPnlPercent, 0);
+      const exitCategory = this.resolveExitCategory(reason, pnlKrw, pnlPercent, forcedCategory);
+
+      this.pushEvent(
+        'SELL_EXECUTION',
+        `${position.market} 매도 실행`,
+        `${reason} · 실현 ${this.formatKrw(pnlKrw)} / ${this.formatPercent(pnlPercent)}`,
+        position.market,
+        decision?.confidence,
+        decision?.urgency
+      );
+
+      if (closed) {
+        this.removePosition(position.market);
+        this.registerClosedTrade({
+          market: position.market,
+          pnlKrw,
+          pnlPercent,
+          holdingMinutes: this.getHoldingMinutes(result),
+          exitCategory,
+          closedAt: result.closedAt ?? new Date().toISOString(),
+        });
+        const cooldownMs = exitCategory === 'TAKE_PROFIT' ? SHORT_COOLDOWN_MS : LONG_COOLDOWN_MS;
+        this.cooldownUntilByMarket.set(position.market, Date.now() + cooldownMs);
+        this.contextFailureCountByMarket.delete(position.market);
+      } else {
+        this.upsertPosition(result);
+      }
+    } catch (error) {
+      this.pushEvent('ERROR', `${position.market} 매도 실패`, this.toErrorText(error), position.market);
+    }
+  }
+
+  private resolveExitCategory(
+    reason: string,
+    pnlKrw: number,
+    pnlPercent: number,
+    forcedCategory?: AiExitCategory
+  ): AiExitCategory {
+    if (forcedCategory) return forcedCategory;
+    if (/보유시간|컨텍스트|실패|max hold|failure/i.test(reason)) return 'FORCED_EXIT';
+    if (pnlKrw > 0 || pnlPercent > 0) return 'TAKE_PROFIT';
+    if (pnlKrw < 0 || pnlPercent < 0) return 'STOP_LOSS';
+    return 'LLM_EXIT';
+  }
+
+  private registerClosedTrade(trade: AiClosedTrade) {
+    this.state.closedTrades = [trade, ...this.state.closedTrades].slice(0, CLOSED_TRADE_LIMIT);
+    this.recalculateClosedTradeStats();
+    this.emit();
+  }
+
+  private recalculateClosedTradeStats() {
+    this.state.dailyPnl = this.state.closedTrades.reduce((sum, trade) => sum + trade.pnlKrw, 0);
+    this.state.wins = this.state.closedTrades.filter((trade) => trade.pnlKrw > 0 || trade.pnlPercent > 0).length;
+    this.state.losses = this.state.closedTrades.filter((trade) => trade.pnlKrw < 0 || trade.pnlPercent < 0).length;
+  }
+
+  private upsertPosition(position: GuidedTradePosition) {
+    const next = [...this.state.positions];
+    const index = next.findIndex((item) => item.tradeId === position.tradeId || item.market === position.market);
+    if (index >= 0) {
+      next[index] = position;
+    } else {
+      next.unshift(position);
+    }
+    this.state.positions = next;
+    this.emit();
+  }
+
+  private removePosition(market: string) {
+    this.state.positions = this.state.positions.filter((position) => position.market !== market);
+    this.emit();
+  }
+
+  private isCoolingDown(market: string): boolean {
+    const until = this.cooldownUntilByMarket.get(market);
+    return typeof until === 'number' && until > Date.now();
+  }
+
+  private getHoldingMinutes(position: Pick<GuidedTradePosition, 'createdAt'>): number {
+    const createdAt = new Date(position.createdAt).getTime();
+    if (!Number.isFinite(createdAt)) return 0;
+    return Math.max(0, (Date.now() - createdAt) / 60_000);
+  }
+
+  private formatKrw(value: number): string {
+    const sign = value > 0 ? '+' : '';
+    return `${sign}${Math.round(value).toLocaleString()}원`;
+  }
+
+  private formatPercent(value: number): string {
+    const sign = value > 0 ? '+' : '';
+    return `${sign}${value.toFixed(2)}%`;
+  }
+
+  private formatPrice(value: number): string {
+    if (!Number.isFinite(value)) return '-';
+    return value.toLocaleString('ko-KR', { maximumFractionDigits: 4 });
+  }
+
+  private toErrorText(error: unknown): string {
+    if (error instanceof Error && error.message) return error.message;
+    return String(error);
   }
 }
-
-export const DEFAULT_AI_DAY_TRADER_CONFIG: AiDayTraderConfig = {
-  enabled: false,
-  provider: 'openai',
-  model: 'gpt-4',
-  scanIntervalMs: 15_000,
-  positionCheckMs: 8_000,
-  maxConcurrentPositions: 3,
-  amountKrw: 10_000,
-  dailyLossLimitKrw: -20_000,
-  universeLimit: 15,
-  strategyCode: 'AI_DAY_TRADER',
-};

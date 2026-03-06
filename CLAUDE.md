@@ -4,7 +4,7 @@
 
 Bithumb 암호화폐 거래소를 위한 **Spring Boot** 기반 자동화 트레이딩 시스템.
 룰 기반 실시간 트레이딩 + LLM 주기적 최적화 하이브리드 아키텍처.
-추가로 Electron 기반 데스크톱 클라이언트에서 Guided 수동 트레이딩과 오토파일럿 모드를 지원.
+추가로 Electron 기반 데스크톱 클라이언트에서 LLM 초단타 터미널을 기본 제공하고, 웹 모드에서 Guided 수동 트레이딩과 오토파일럿을 유지.
 
 ---
 
@@ -54,7 +54,9 @@ Bithumb 암호화폐 거래소를 위한 **Spring Boot** 기반 자동화 트레
 
 [coin-trading-client - Electron + React]
 │
-├── ManualTraderWorkspace     - Guided 수동 트레이딩 UI
+├── AiDayTraderScreen         - 데스크톱 기본 LLM 초단타 터미널 UI
+├── AiDayTraderEngine         - scan -> shortlist -> finalist -> buy/manage 루프
+├── ManualTraderWorkspace     - 웹 모드 Guided 수동 트레이딩 UI
 ├── AutopilotOrchestrator     - 오토파일럿 의사결정/워커 오케스트레이션
 ├── AutopilotLiveDock         - 실시간 후보/액션/주문 퍼널 도크
 ├── electron/mcp              - MCP 허브 + Playwright MCP 프로세스 관리
@@ -147,6 +149,22 @@ coin-trading-spring/
 ## 최근 변경사항 (2026-02-27)
 
 ## 최근 변경사항 (2026-03-02)
+
+## 최근 변경사항 (2026-03-06)
+
+### 데스크톱 LLM 초단타 터미널 전면 개편
+
+- 데스크톱 기본 진입 화면을 `AiDayTraderScreen`으로 고정하고 기존 `ManualTraderWorkspace` 기반 분기 UI를 데스크톱 주 경로에서 제거.
+- 신규 API `GET /api/guided-trading/ai-scalp/scan` 추가.
+  - 응답: `generatedAt`, `interval`, `universeLimit`, `strategyCodePrefix`, `positions[]`, `markets[]`
+  - `markets[]`는 `recommendation`, `featurePack`, optional `crowd`를 포함한 LLM shortlist 압축 데이터.
+- `AiDayTraderEngine` 재작성:
+  - 스캔 루프: 상위 유동성 `36` -> LLM shortlist `12` -> finalist `4`
+  - 진입 결정: `BUY | WAIT`
+  - 보유 관리: `HOLD | SELL`
+  - 기본값: `scan 10초`, `manage 5초`, `max 5 positions`, `max holding 30분`, `reentry cooldown 60~120초`, `maxDcaCount=0`
+- 데스크톱은 `AI_SCALP_TRADER` prefix 포지션만 관리하고 `/autopilot/opportunities` stage를 하드 게이트로 사용하지 않음.
+- 새 UI는 상단 세션 바, 좌측 기회 큐, 중앙 결정 저널, 우측 포지션/설정의 3열 터미널 구조.
 
 ### 데스크톱 OpenAI + z.ai 멀티-프로바이더 통합
 
@@ -276,6 +294,10 @@ coin-trading-spring/
 
 ### 2. Guided API/DTO 확장
 
+- `GET /api/guided-trading/ai-scalp/scan`
+  - 쿼리: `interval`(default `minute1`), `universeLimit`(default `36`), `strategyCodePrefix`(default `AI_SCALP_TRADER`)
+  - 응답: `generatedAt`, `interval`, `universeLimit`, `strategyCodePrefix`, `positions[]`, `markets[]`
+  - `markets[]` 필드: `market`, `koreanName`, `tradePrice`, `changeRate`, `turnover`, `liquidityRank`, `recommendation`, `featurePack`, optional `crowd`
 - `GET /api/guided-trading/autopilot/live`
   - 신규 쿼리: `strategyCodePrefix` (optional)
   - `orderSummary/orderEvents/autopilotEvents`를 prefix 기준으로 분리 조회 가능
@@ -340,6 +362,9 @@ coin-trading-spring/
 
 ### 3. 신규 Guided API
 
+- `GET /api/guided-trading/ai-scalp/scan`
+  - 응답: `generatedAt`, `interval`, `universeLimit`, `strategyCodePrefix`, `positions[]`, `markets[]`
+  - 데스크톱 LLM 초단타 엔진의 기본 스캔 엔드포인트
 - `GET /api/guided-trading/autopilot/live`
   - 응답: `orderSummary`, `orderEvents`, `autopilotEvents`, `candidates`
   - 쿼리: `thresholdMode`, `minMarketWinRate`(고정 모드 현재가 승률 기준), `minRecommendedWinRate`(하위 호환), `strategyCodePrefix`(optional), `opportunityProfile=CLASSIC|CROWD_PRESSURE`

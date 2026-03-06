@@ -76,6 +76,7 @@ class GuidedTradingService(
         const val WIN_RATE_CALC_TIMEOUT_MILLIS = 2500L
         const val GUIDED_STRATEGY_CODE = "GUIDED_TRADING"
         const val GUIDED_AUTOPILOT_STRATEGY_CODE = "GUIDED_AUTOPILOT"
+        const val AI_SCALP_TRADER_STRATEGY_CODE = "AI_SCALP_TRADER"
         const val AUTOPILOT_OPPORTUNITY_UNIVERSE_LIMIT = 25
         const val AUTOPILOT_OPPORTUNITY_CACHE_TTL_MILLIS = 30_000L
         const val AUTOPILOT_PROMOTION_SHARPE_GATE = 1.2
@@ -215,6 +216,54 @@ class GuidedTradingService(
                 ?: emptyList()
         }
         return buildRecommendation(market, candles, mode)
+    }
+
+    fun getAiScalpScan(
+        interval: String = "minute1",
+        universeLimit: Int = 36,
+        strategyCodePrefix: String = AI_SCALP_TRADER_STRATEGY_CODE
+    ): GuidedAiScalpScanResponse {
+        val effectiveUniverseLimit = universeLimit.coerceIn(12, 60)
+        val normalizedStrategyCodePrefix = strategyCodePrefix
+            .trim()
+            .uppercase()
+            .ifBlank { AI_SCALP_TRADER_STRATEGY_CODE }
+        val universe = getMarketBoard(
+            sortBy = GuidedMarketSortBy.TURNOVER,
+            sortDirection = GuidedSortDirection.DESC,
+            interval = interval,
+            mode = TradingMode.SCALP
+        ).take(effectiveUniverseLimit)
+        val recommendations = fetchRecommendationsWithCache(
+            markets = universe.map { it.market },
+            interval = interval,
+            mode = TradingMode.SCALP
+        )
+        val positions = getAllOpenPositions()
+            .filter { position ->
+                position.strategyCode
+                    ?.trim()
+                    ?.uppercase()
+                    ?.startsWith(normalizedStrategyCodePrefix) == true
+            }
+            .sortedByDescending { it.createdAt }
+        val markets = universe.mapIndexed { index, marketItem ->
+            buildAiScalpScanMarketView(
+                rank = index + 1,
+                marketItem = marketItem,
+                recommendation = recommendations[marketItem.market],
+                pulse = marketWebSocketFeed?.latestPulse(marketItem.market)
+            )
+        }
+
+        return GuidedAiScalpScanResponse(
+            generatedAt = Instant.now(),
+            interval = interval.lowercase(),
+            universeLimit = effectiveUniverseLimit,
+            strategyCodePrefix = normalizedStrategyCodePrefix,
+            positions = positions,
+            markets = markets
+        )
     }
 
     fun getAgentContext(
@@ -2369,6 +2418,74 @@ class GuidedTradingService(
             ?.toCrowdFeaturePack()
     }
 
+    private fun buildAiScalpScanMarketView(
+        rank: Int,
+        marketItem: GuidedMarketItem,
+        recommendation: GuidedRecommendation?,
+        pulse: RealtimeMarketPulse?
+    ): GuidedAiScalpScanMarketView {
+        val currentPrice = recommendation?.currentPrice?.takeIf { it > 0.0 } ?: marketItem.tradePrice
+        val recommendedEntryPrice = recommendation?.recommendedEntryPrice?.takeIf { it > 0.0 } ?: currentPrice
+        val stopLossPrice = recommendation?.stopLossPrice?.takeIf { it > 0.0 } ?: (currentPrice * 0.996)
+        val takeProfitPrice = recommendation?.takeProfitPrice?.takeIf { it > 0.0 } ?: (currentPrice * 1.006)
+        val entryGapPct = if (recommendedEntryPrice > 0.0 && currentPrice > 0.0) {
+            ((currentPrice - recommendedEntryPrice) / recommendedEntryPrice * 100.0).coerceIn(-30.0, 30.0)
+        } else {
+            0.0
+        }
+        val profitPct = if (recommendedEntryPrice > 0.0 && takeProfitPrice > 0.0) {
+            (takeProfitPrice - recommendedEntryPrice) / recommendedEntryPrice * 100.0
+        } else {
+            0.0
+        }
+        val lossPct = if (recommendedEntryPrice > 0.0 && stopLossPrice > 0.0) {
+            max(0.0, (recommendedEntryPrice - stopLossPrice) / recommendedEntryPrice * 100.0)
+        } else {
+            0.0
+        }
+        val recommendationWinRate = recommendation?.recommendedEntryWinRate?.takeIf { it.isFinite() } ?: 0.0
+        val expectancyPct = (recommendationWinRate / 100.0) * profitPct - (1.0 - recommendationWinRate / 100.0) * lossPct
+        val crowd = pulse?.toCrowdFeaturePack()
+
+        return GuidedAiScalpScanMarketView(
+            market = marketItem.market,
+            koreanName = marketItem.koreanName,
+            tradePrice = marketItem.tradePrice,
+            changeRate = marketItem.changeRate,
+            turnover = marketItem.accTradePrice,
+            liquidityRank = rank,
+            recommendation = GuidedAiScalpRecommendationSummary(
+                currentPrice = currentPrice,
+                recommendedEntryPrice = recommendedEntryPrice,
+                stopLossPrice = stopLossPrice,
+                takeProfitPrice = takeProfitPrice,
+                recommendedEntryWinRate = recommendation?.recommendedEntryWinRate ?: 0.0,
+                marketEntryWinRate = recommendation?.marketEntryWinRate ?: 0.0,
+                riskRewardRatio = recommendation?.riskRewardRatio ?: 0.0,
+                confidence = recommendation?.confidence ?: 0.0,
+                suggestedOrderType = recommendation?.suggestedOrderType ?: GuidedTradeEntity.ORDER_TYPE_MARKET,
+                rationale = recommendation?.rationale?.take(3) ?: emptyList(),
+                expectancyPct = expectancyPct
+            ),
+            featurePack = GuidedAiScalpFeaturePack(
+                marketCapFlowScore = marketItem.marketCapFlowScore,
+                turnoverKrw = marketItem.accTradePrice,
+                changeRate = marketItem.changeRate,
+                riskRewardRatio = recommendation?.riskRewardRatio ?: 0.0,
+                recommendedEntryWinRate = recommendation?.recommendedEntryWinRate ?: 0.0,
+                marketEntryWinRate = recommendation?.marketEntryWinRate ?: 0.0,
+                entryGapPct = entryGapPct,
+                expectancyPct = expectancyPct,
+                confidence = recommendation?.confidence ?: 0.0,
+                crowdFlowScore = crowd?.flowScore,
+                spreadPercent = crowd?.spreadPercent,
+                bidImbalance = crowd?.bidImbalance,
+                notionalSpikeRatio = crowd?.notionalSpikeRatio
+            ),
+            crowd = crowd
+        )
+    }
+
     private fun RealtimeMarketPulse.toCrowdFeaturePack(now: Instant = Instant.now()): GuidedCrowdFeaturePack {
         val pulseAgeMs = max(0L, now.toEpochMilli() - updatedAt.toEpochMilli())
         return GuidedCrowdFeaturePack(
@@ -3223,6 +3340,57 @@ data class GuidedCrowdFeaturePack(
     val spreadPercent: Double,
     val signedChangeRatePercent: Double,
     val pulseAgeMs: Long
+)
+
+data class GuidedAiScalpScanResponse(
+    val generatedAt: Instant,
+    val interval: String,
+    val universeLimit: Int,
+    val strategyCodePrefix: String,
+    val positions: List<GuidedTradeView>,
+    val markets: List<GuidedAiScalpScanMarketView>
+)
+
+data class GuidedAiScalpScanMarketView(
+    val market: String,
+    val koreanName: String,
+    val tradePrice: Double,
+    val changeRate: Double,
+    val turnover: Double,
+    val liquidityRank: Int,
+    val recommendation: GuidedAiScalpRecommendationSummary,
+    val featurePack: GuidedAiScalpFeaturePack,
+    val crowd: GuidedCrowdFeaturePack? = null
+)
+
+data class GuidedAiScalpRecommendationSummary(
+    val currentPrice: Double,
+    val recommendedEntryPrice: Double,
+    val stopLossPrice: Double,
+    val takeProfitPrice: Double,
+    val recommendedEntryWinRate: Double,
+    val marketEntryWinRate: Double,
+    val riskRewardRatio: Double,
+    val confidence: Double,
+    val suggestedOrderType: String,
+    val rationale: List<String>,
+    val expectancyPct: Double
+)
+
+data class GuidedAiScalpFeaturePack(
+    val marketCapFlowScore: Double,
+    val turnoverKrw: Double,
+    val changeRate: Double,
+    val riskRewardRatio: Double,
+    val recommendedEntryWinRate: Double,
+    val marketEntryWinRate: Double,
+    val entryGapPct: Double,
+    val expectancyPct: Double,
+    val confidence: Double,
+    val crowdFlowScore: Double? = null,
+    val spreadPercent: Double? = null,
+    val bidImbalance: Double? = null,
+    val notionalSpikeRatio: Double? = null
 )
 
 data class GuidedAutopilotLiveResponse(

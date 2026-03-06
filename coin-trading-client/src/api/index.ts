@@ -782,6 +782,57 @@ export interface GuidedAgentContextResponse {
   featurePack?: GuidedAgentFeaturePack | null;
 }
 
+export interface AiScalpScanRecommendationSummary {
+  currentPrice: number;
+  recommendedEntryPrice: number;
+  stopLossPrice: number;
+  takeProfitPrice: number;
+  recommendedEntryWinRate: number;
+  marketEntryWinRate: number;
+  riskRewardRatio: number;
+  confidence: number;
+  suggestedOrderType: string;
+  rationale: string[];
+  expectancyPct: number;
+}
+
+export interface AiScalpScanFeaturePack {
+  marketCapFlowScore: number;
+  turnoverKrw: number;
+  changeRate: number;
+  riskRewardRatio: number;
+  recommendedEntryWinRate: number;
+  marketEntryWinRate: number;
+  entryGapPct: number;
+  expectancyPct: number;
+  confidence: number;
+  crowdFlowScore?: number | null;
+  spreadPercent?: number | null;
+  bidImbalance?: number | null;
+  notionalSpikeRatio?: number | null;
+}
+
+export interface AiScalpScanMarket {
+  market: string;
+  koreanName: string;
+  tradePrice: number;
+  changeRate: number;
+  turnover: number;
+  liquidityRank: number;
+  recommendation: AiScalpScanRecommendationSummary;
+  featurePack: AiScalpScanFeaturePack;
+  crowd?: GuidedCrowdFeaturePack | null;
+}
+
+export interface AiScalpScanResponse {
+  generatedAt: string;
+  interval: string;
+  universeLimit: number;
+  strategyCodePrefix: string;
+  positions: GuidedTradePosition[];
+  markets: AiScalpScanMarket[];
+}
+
 export interface OrderLifecycleGroupSummary {
   buyRequested: number;
   buyFilled: number;
@@ -941,7 +992,7 @@ export interface GuidedStartRequest {
   halfTakeProfitRatio?: number;
   interval?: string;
   mode?: string;
-  entrySource?: 'MANUAL' | 'AUTOPILOT';
+  entrySource?: string;
   strategyCode?: string;
 }
 
@@ -1067,6 +1118,15 @@ export const guidedTradingApi = {
   ): Promise<GuidedAgentContextResponse> =>
     api.get('/guided-trading/agent/context', {
       params: { market, interval, count, closedTradeLimit, mode, opportunityProfile },
+    }).then((res) => res.data),
+
+  getAiScalpScan: (
+    interval = 'minute1',
+    universeLimit = 36,
+    strategyCodePrefix = 'AI_SCALP_TRADER'
+  ): Promise<AiScalpScanResponse> =>
+    api.get('/guided-trading/ai-scalp/scan', {
+      params: { interval, universeLimit, strategyCodePrefix },
     }).then((res) => res.data),
 
   getOpenPositions: (): Promise<GuidedTradePosition[]> =>

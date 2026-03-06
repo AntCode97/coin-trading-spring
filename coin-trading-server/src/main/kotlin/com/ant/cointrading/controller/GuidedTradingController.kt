@@ -2,6 +2,7 @@ package com.ant.cointrading.controller
 
 import com.ant.cointrading.guided.GuidedChartResponse
 import com.ant.cointrading.guided.GuidedAgentContextResponse
+import com.ant.cointrading.guided.GuidedAiScalpScanResponse
 import com.ant.cointrading.guided.GuidedAutopilotOpportunitiesResponse
 import com.ant.cointrading.guided.GuidedClosedTradeView
 import com.ant.cointrading.guided.GuidedDailyStats
@@ -120,6 +121,19 @@ class GuidedTradingController(
     @GetMapping("/positions/open")
     fun getOpenPositions(): List<GuidedTradeView> {
         return guidedTradingService.getAllOpenPositions()
+    }
+
+    @GetMapping("/ai-scalp/scan")
+    fun getAiScalpScan(
+        @RequestParam(defaultValue = "minute1") interval: String,
+        @RequestParam(defaultValue = "36") universeLimit: Int,
+        @RequestParam(defaultValue = "AI_SCALP_TRADER") strategyCodePrefix: String
+    ): GuidedAiScalpScanResponse {
+        return guidedTradingService.getAiScalpScan(
+            interval = interval,
+            universeLimit = universeLimit,
+            strategyCodePrefix = strategyCodePrefix
+        )
     }
 
     @PostMapping("/positions/adopt")
