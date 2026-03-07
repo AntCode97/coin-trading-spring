@@ -167,6 +167,25 @@ class GuidedTradingService(
         marketWinRateExecutor.shutdownNow()
     }
 
+    private fun normalizeStrategyCodePrefix(
+        strategyCodePrefix: String?,
+        defaultPrefix: String? = null
+    ): String? {
+        val normalized = strategyCodePrefix
+            ?.trim()
+            ?.uppercase()
+            ?.ifBlank { null }
+        return normalized ?: defaultPrefix
+    }
+
+    private fun strategyCodeMatchesPrefix(strategyCode: String?, normalizedPrefix: String?): Boolean {
+        if (normalizedPrefix == null) return true
+        return strategyCode
+            ?.trim()
+            ?.uppercase()
+            ?.startsWith(normalizedPrefix) == true
+    }
+
     fun getMarketBoard(
         sortBy: GuidedMarketSortBy = GuidedMarketSortBy.TURNOVER,
         sortDirection: GuidedSortDirection = GuidedSortDirection.DESC,
@@ -301,10 +320,10 @@ class GuidedTradingService(
         strategyCodePrefix: String = AI_SCALP_TRADER_STRATEGY_CODE
     ): GuidedAiScalpScanResponse {
         val effectiveUniverseLimit = universeLimit.coerceIn(12, 60)
-        val normalizedStrategyCodePrefix = strategyCodePrefix
-            .trim()
-            .uppercase()
-            .ifBlank { AI_SCALP_TRADER_STRATEGY_CODE }
+        val normalizedStrategyCodePrefix = normalizeStrategyCodePrefix(
+            strategyCodePrefix,
+            AI_SCALP_TRADER_STRATEGY_CODE
+        )!!
         val universe = getMarketBoard(
             sortBy = GuidedMarketSortBy.TURNOVER,
             sortDirection = GuidedSortDirection.DESC,
@@ -317,12 +336,7 @@ class GuidedTradingService(
             mode = TradingMode.SCALP
         )
         val positions = getAllOpenPositions()
-            .filter { position ->
-                position.strategyCode
-                    ?.trim()
-                    ?.uppercase()
-                    ?.startsWith(normalizedStrategyCodePrefix) == true
-            }
+            .filter { position -> strategyCodeMatchesPrefix(position.strategyCode, normalizedStrategyCodePrefix) }
             .sortedByDescending { it.createdAt }
         val markets = universe.mapIndexed { index, marketItem ->
             buildAiScalpScanMarketView(
@@ -1699,32 +1713,18 @@ class GuidedTradingService(
     fun getTodayStats(strategyCodePrefix: String? = null): GuidedDailyStats {
         val todayStart = java.time.LocalDate.now(java.time.ZoneId.of("Asia/Seoul"))
             .atStartOfDay(java.time.ZoneId.of("Asia/Seoul")).toInstant()
-        val normalizedStrategyCodePrefix = strategyCodePrefix
-            ?.trim()
-            ?.uppercase()
-            ?.ifBlank { null }
+        val normalizedStrategyCodePrefix = normalizeStrategyCodePrefix(strategyCodePrefix)
         val closedToday = guidedTradeRepository.findByStatusAndClosedAtAfter(
             GuidedTradeEntity.STATUS_CLOSED, todayStart
-        ).filter { trade ->
-            normalizedStrategyCodePrefix == null ||
-                trade.strategyCode
-                    ?.trim()
-                    ?.uppercase()
-                    ?.startsWith(normalizedStrategyCodePrefix) == true
-        }
+        ).filter { trade -> strategyCodeMatchesPrefix(trade.strategyCode, normalizedStrategyCodePrefix) }
         val closedTradeViews = closedToday.map { it.toClosedTradeView() }
         val wins = closedTradeViews.count { it.realizedPnl > 0.0 }
         val losses = closedTradeViews.size - wins
         val totalPnl = closedTradeViews.sumOf { it.realizedPnl }
         val avgPnlPercent = if (closedTradeViews.isNotEmpty())
             closedTradeViews.map { it.realizedPnlPercent }.average() else 0.0
-        val openPositions = guidedTradeRepository.findByStatusIn(OPEN_STATUSES).filter { trade ->
-            normalizedStrategyCodePrefix == null ||
-                trade.strategyCode
-                    ?.trim()
-                    ?.uppercase()
-                    ?.startsWith(normalizedStrategyCodePrefix) == true
-        }
+        val openPositions = guidedTradeRepository.findByStatusIn(OPEN_STATUSES)
+            .filter { trade -> strategyCodeMatchesPrefix(trade.strategyCode, normalizedStrategyCodePrefix) }
         val tickerMap = fetchTickerMap(openPositions.map { it.market }.distinct())
         val balancesByCurrency = fetchBalancesByCurrency()
         val effectiveOpenPositions = openPositions.filter { trade ->
@@ -1954,10 +1954,7 @@ class GuidedTradingService(
         opportunityProfile: GuidedAutopilotOpportunityProfile = GuidedAutopilotOpportunityProfile.CLASSIC
     ): GuidedAutopilotLiveResponse {
         val resolvedProfile = opportunityProfile.normalizeForMode(mode)
-        val normalizedStrategyCodePrefix = strategyCodePrefix
-            ?.trim()
-            ?.uppercase()
-            ?.ifBlank { null }
+        val normalizedStrategyCodePrefix = normalizeStrategyCodePrefix(strategyCodePrefix)
         val telemetry = orderLifecycleTelemetryService.getLiveSnapshot(
             strategyCodePrefix = normalizedStrategyCodePrefix
         )
@@ -2151,10 +2148,7 @@ class GuidedTradingService(
         strategyCodePrefix: String? = null
     ): GuidedAutopilotPerformanceResponse {
         val effectiveWindowDays = windowDays.coerceIn(1, 120)
-        val normalizedStrategyCodePrefix = strategyCodePrefix
-            ?.trim()
-            ?.uppercase()
-            ?.ifBlank { null }
+        val normalizedStrategyCodePrefix = normalizeStrategyCodePrefix(strategyCodePrefix)
         val to = Instant.now()
         val from = to.minus(effectiveWindowDays.toLong(), ChronoUnit.DAYS)
         val closedTrades = guidedTradeRepository.findByStatusOrderByClosedAtDesc(GuidedTradeEntity.STATUS_CLOSED)
@@ -2162,10 +2156,10 @@ class GuidedTradingService(
             .filter { trade -> trade.closedAt != null && trade.closedAt!!.isAfter(from) }
             .filter { trade ->
                 val source = trade.entrySource?.uppercase().orEmpty()
-                val strategy = trade.strategyCode?.uppercase().orEmpty()
                 if (normalizedStrategyCodePrefix != null) {
-                    strategy.startsWith(normalizedStrategyCodePrefix)
+                    strategyCodeMatchesPrefix(trade.strategyCode, normalizedStrategyCodePrefix)
                 } else {
+                    val strategy = trade.strategyCode?.uppercase().orEmpty()
                     source.contains("AUTOPILOT") || source.contains("MCP_DIRECT") || strategy.contains("AUTOPILOT")
                 }
             }
