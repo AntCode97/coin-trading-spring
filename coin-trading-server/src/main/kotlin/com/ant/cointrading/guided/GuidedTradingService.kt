@@ -8,7 +8,6 @@ import com.ant.cointrading.api.bithumb.BithumbMarketWebSocketFeed
 import com.ant.cointrading.api.bithumb.OrderResponse
 import com.ant.cointrading.api.bithumb.RealtimeMarketPulse
 import com.ant.cointrading.api.bithumb.TradeResponse
-import com.ant.cointrading.config.TradingConstants
 import com.ant.cointrading.repository.GuidedAutopilotDecisionEntity
 import com.ant.cointrading.repository.GuidedAutopilotDecisionRepository
 import com.ant.cointrading.repository.OrderLifecycleStrategyGroup
@@ -41,13 +40,6 @@ import kotlin.math.ln
 import kotlin.math.max
 import kotlin.math.min
 
-private val GUIDED_BITHUMB_FEE_RATE: BigDecimal = TradingConstants.BITHUMB_FEE_RATE
-
-private data class FeeAdjustedTradePnl(
-    val pnlAmount: BigDecimal,
-    val pnlPercent: BigDecimal
-)
-
 private data class GuidedStopExecutionResult(
     val currentPrice: BigDecimal,
     val executedPrice: BigDecimal,
@@ -56,66 +48,6 @@ private data class GuidedStopExecutionResult(
     val exitAttempted: Boolean,
     val hasEffectiveBalance: Boolean
 )
-
-private fun calculateFeeAdjustedReturnPercent(entryPrice: Double, exitPrice: Double): Double {
-    if (entryPrice <= 0.0 || exitPrice <= 0.0) return 0.0
-    val grossReturn = (exitPrice - entryPrice) / entryPrice
-    val feeReturn = GUIDED_BITHUMB_FEE_RATE.toDouble() * (1.0 + exitPrice / entryPrice)
-    return (grossReturn - feeReturn) * 100.0
-}
-
-private fun calculateFeeAdjustedRewardPercent(entryPrice: Double, takeProfitPrice: Double): Double {
-    return max(0.0, calculateFeeAdjustedReturnPercent(entryPrice, takeProfitPrice))
-}
-
-private fun calculateFeeAdjustedLossPercent(entryPrice: Double, stopLossPrice: Double): Double {
-    return max(0.0, -calculateFeeAdjustedReturnPercent(entryPrice, stopLossPrice))
-}
-
-private fun calculateFeeAdjustedRiskRewardRatio(
-    entryPrice: Double,
-    stopLossPrice: Double,
-    takeProfitPrice: Double
-): Double {
-    val rewardPercent = calculateFeeAdjustedRewardPercent(entryPrice, takeProfitPrice)
-    val lossPercent = calculateFeeAdjustedLossPercent(entryPrice, stopLossPrice)
-    if (lossPercent <= 0.0) return 0.0
-    return (rewardPercent / lossPercent).coerceIn(0.0, 3.0)
-}
-
-private fun calculateFeeAdjustedPnl(
-    entryPrice: BigDecimal,
-    exitPrice: BigDecimal,
-    quantity: BigDecimal
-): FeeAdjustedTradePnl {
-    if (entryPrice <= BigDecimal.ZERO || exitPrice <= BigDecimal.ZERO || quantity <= BigDecimal.ZERO) {
-        return FeeAdjustedTradePnl(
-            pnlAmount = BigDecimal.ZERO.setScale(2, RoundingMode.HALF_UP),
-            pnlPercent = BigDecimal.ZERO.setScale(4, RoundingMode.HALF_UP)
-        )
-    }
-
-    val entryValue = entryPrice.multiply(quantity)
-    val exitValue = exitPrice.multiply(quantity)
-    val totalFees = entryValue.add(exitValue)
-        .multiply(GUIDED_BITHUMB_FEE_RATE)
-        .setScale(8, RoundingMode.HALF_UP)
-    val pnlAmount = exitValue.subtract(entryValue)
-        .subtract(totalFees)
-        .setScale(2, RoundingMode.HALF_UP)
-    val pnlPercent = if (entryValue > BigDecimal.ZERO) {
-        pnlAmount.divide(entryValue, 8, RoundingMode.HALF_UP)
-            .multiply(BigDecimal("100"))
-            .setScale(4, RoundingMode.HALF_UP)
-    } else {
-        BigDecimal.ZERO.setScale(4, RoundingMode.HALF_UP)
-    }
-
-    return FeeAdjustedTradePnl(
-        pnlAmount = pnlAmount,
-        pnlPercent = pnlPercent
-    )
-}
 
 @Service
 class GuidedTradingService(
@@ -165,25 +97,6 @@ class GuidedTradingService(
     @PreDestroy
     fun shutdown() {
         marketWinRateExecutor.shutdownNow()
-    }
-
-    private fun normalizeStrategyCodePrefix(
-        strategyCodePrefix: String?,
-        defaultPrefix: String? = null
-    ): String? {
-        val normalized = strategyCodePrefix
-            ?.trim()
-            ?.uppercase()
-            ?.ifBlank { null }
-        return normalized ?: defaultPrefix
-    }
-
-    private fun strategyCodeMatchesPrefix(strategyCode: String?, normalizedPrefix: String?): Boolean {
-        if (normalizedPrefix == null) return true
-        return strategyCode
-            ?.trim()
-            ?.uppercase()
-            ?.startsWith(normalizedPrefix) == true
     }
 
     fun getMarketBoard(
