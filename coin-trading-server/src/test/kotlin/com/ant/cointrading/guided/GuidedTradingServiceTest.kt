@@ -1040,6 +1040,63 @@ class GuidedTradingServiceTest {
     }
 
     @Test
+    @DisplayName("AI stop reason을 넘기면 청산 이력이 해당 reason으로 기록된다")
+    fun stopAutoTradingUsesCustomExitReason() {
+        val trade = GuidedTradeEntity(
+            id = 12L,
+            market = "KRW-ETH",
+            status = GuidedTradeEntity.STATUS_OPEN,
+            entryOrderType = GuidedTradeEntity.ORDER_TYPE_MARKET,
+            averageEntryPrice = BigDecimal("2900000"),
+            entryQuantity = BigDecimal("0.01000000"),
+            remainingQuantity = BigDecimal("0.01000000"),
+            stopLossPrice = BigDecimal("2870000"),
+            takeProfitPrice = BigDecimal("2940000"),
+        )
+        whenever(guidedTradeRepository.findByMarketAndStatusIn(eq("KRW-ETH"), any())).thenReturn(listOf(trade))
+        whenever(bithumbPublicApi.getCurrentPrice(eq("KRW-ETH"))).thenReturn(
+            listOf(
+                tickers.first().copy(
+                    market = "KRW-ETH",
+                    tradePrice = BigDecimal("2915000")
+                )
+            )
+        )
+        whenever(bithumbPrivateApi.getBalances()).thenReturn(
+            listOf(
+                Balance(
+                    currency = "ETH",
+                    balance = BigDecimal("0.01000000"),
+                    locked = BigDecimal.ZERO,
+                    avgBuyPrice = null,
+                    avgBuyPriceModified = null,
+                    unitCurrency = "KRW"
+                )
+            ),
+            emptyList()
+        )
+        whenever(bithumbPrivateApi.sellMarketOrder(eq("KRW-ETH"), any())).thenReturn(
+            orderResponse(uuid = "exit-eth", side = "ask", market = "KRW-ETH", state = "done")
+        )
+        whenever(bithumbPrivateApi.getOrder("exit-eth")).thenReturn(
+            orderResponse(
+                uuid = "exit-eth",
+                side = "ask",
+                market = "KRW-ETH",
+                state = "done",
+                price = BigDecimal("2915000"),
+                executedVolume = BigDecimal("0.01000000")
+            )
+        )
+        val result = service.stopAutoTrading("KRW-ETH", "ai_time_stop")
+
+        assertEquals(GuidedTradeEntity.STATUS_CLOSED, trade.status)
+        assertEquals("AI_TIME_STOP", trade.exitReason)
+        assertEquals("CLOSED_AI_TIME_STOP", trade.lastAction)
+        assertEquals("AI_TIME_STOP", result.exitReason)
+    }
+
+    @Test
     @DisplayName("최근 30일 보정은 이벤트 체결값으로 손익을 재계산하고 HIGH로 마킹한다")
     fun reconcileClosedTradesRecalculatesFromEvents() {
         val trade = GuidedTradeEntity(

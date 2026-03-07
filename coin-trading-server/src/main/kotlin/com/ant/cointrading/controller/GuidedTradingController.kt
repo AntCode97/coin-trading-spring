@@ -86,9 +86,12 @@ class GuidedTradingController(
     }
 
     @PostMapping("/stop")
-    fun stopTrading(@RequestParam market: String): GuidedTradeView {
+    fun stopTrading(
+        @RequestParam market: String,
+        @RequestParam(required = false) exitReason: String?
+    ): GuidedTradeView {
         return try {
-            guidedTradingService.stopAutoTrading(market.uppercase())
+            guidedTradingService.stopAutoTrading(market.uppercase(), exitReason)
         } catch (e: IllegalStateException) {
             throw ResponseStatusException(HttpStatus.BAD_REQUEST, e.message ?: "청산 실패")
         } catch (e: IllegalArgumentException) {

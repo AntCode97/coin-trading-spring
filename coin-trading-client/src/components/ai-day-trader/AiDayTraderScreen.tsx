@@ -777,7 +777,9 @@ export default function AiDayTraderScreen() {
                       <span className={trade.realizedPnl >= 0 ? 'positive' : 'negative'}>
                         {formatKrw(trade.realizedPnl)} / {formatPercent(trade.realizedPnlPercent)}
                       </span>
-                      <span>{trade.exitReason ?? '-'}</span>
+                      <span title={trade.exitReason ?? '-'}>
+                        {formatExitReason(trade.exitReason)}
+                      </span>
                     </div>
                   ))}
                 </div>
@@ -857,6 +859,28 @@ function formatHoldingMinutes(createdAt: string, closedAt?: string | null): stri
   const end = new Date(closedAt ?? createdAt).getTime();
   const minutes = Math.max(0, (end - start) / 60_000);
   return `${minutes.toFixed(1)}분`;
+}
+
+function formatExitReason(value?: string | null): string {
+  const normalized = value?.trim().toUpperCase();
+  if (!normalized) return '-';
+
+  const labels: Record<string, string> = {
+    MANUAL_STOP: '수동/기존 청산',
+    MANUAL_STOP_ESTIMATED: '추정 수동 청산',
+    STOP_LOSS: '손절',
+    AI_STOP_LOSS: 'AI 하드 손절',
+    AI_LLM_EXIT: 'AI 판단 청산',
+    AI_TIME_STOP: '시간 청산',
+    AI_CONTEXT_FAIL: '컨텍스트 실패 청산',
+    AI_FORCED_EXIT: '강제 청산',
+    AI_STALE_LOSER: '정체 손실 청산',
+    AI_STALE_FLAT: '정체 시간 청산',
+    AI_PROFIT_FADE: '이익 반납 방지',
+    AI_PROFIT_EXIT: 'AI 익절',
+  };
+
+  return labels[normalized] ?? normalized.replaceAll('_', ' ');
 }
 
 function PanelHeader({ title, subtitle, right }: { title: string; subtitle: string; right?: string }) {

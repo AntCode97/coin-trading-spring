@@ -529,7 +529,7 @@ curl -X POST http://localhost:8080/api/settings/regime \
 | GET | `/api/guided-trading/ai-scalp/scan` | 데스크톱 LLM 초단타 엔진용 대량 후보 스캔 |
 | GET | `/api/guided-trading/stats/today` | 금일 거래/손익 요약 (`strategyCodePrefix` 필터 지원) |
 | POST | `/api/guided-trading/start` | Guided 진입 시작 |
-| POST | `/api/guided-trading/stop` | Guided 포지션 정지/청산 |
+| POST | `/api/guided-trading/stop` | Guided 포지션 정지/청산 (`exitReason` optional) |
 | POST | `/api/guided-trading/partial-take-profit` | Guided 부분 익절 |
 | POST | `/api/guided-trading/positions/adopt` | MCP 직접 주문 포지션 편입 |
 | GET | `/api/guided-trading/autopilot/live` | 오토파일럿 라이브 도크 데이터(주문 퍼널/이벤트/후보, `strategyCodePrefix` 필터 지원) |
@@ -621,8 +621,12 @@ curl -X POST http://localhost:8080/api/settings/regime \
 8. 하단 `오늘 거래내역` 패널에서 금일 거래를 전체/코인별로 필터링해 볼 수 있습니다.
 9. 초단타 수익률/PnL은 빗썸 왕복 수수료 0.08%를 항상 반영하며, 시장가 매수 금액이 진입단가로 잘못 저장된 경우 현재가/잔고 평균단가 기준으로 자동 교정합니다.
 10. AI 초단타 엔진은 순기대값/승률/RR/스프레드/진입괴리 기반 soft gate를 먼저 적용합니다. 아주 나쁜 후보만 강하게 탈락시키고, borderline 후보도 LLM이 재검토할 수 있게 열어둡니다. 설정 패널의 `진입 강도`로 `보수적 / 균형 / 공격적`을 선택하면 finalist 수, BUY confidence 컷, soft gate 민감도가 함께 바뀝니다. 기본 보호폭은 손절 최소 `0.55%`, 익절 최소 `0.95%`, 손절 후 재진입 쿨다운 `8분`입니다.
-11. `KRW-USDT` 같은 달러 추종 자산은 별도 `DOLLAR_PEG` 템포 프로필로 처리합니다. 일반 알트보다 느린 전개를 가정해 더 긴 초기 보유 인내시간, 더 낮은 목표폭, 더 긴 최대 보유시간을 사용합니다.
-12. 원격 서버가 비정상 `averageEntryPrice`를 보내더라도 데스크톱 앱은 현재가/손절/익절 기반 sanity check를 적용해 과장된 미실현 수익률 표시를 억제합니다.
+11. 엔진은 `/stats/today`를 주기적으로 동기화해 `일손실 한도`, `최근 6건 성과`, `연속 손실`을 앱 재시작 후에도 이어서 반영합니다. 최근 성과가 나쁘면 `성과 방어모드`로 자동 전환해 진입 강도를 보수적으로 낮추고, 3연속 손실이면 신규 진입을 20분 일시 중지합니다.
+12. 당일 동일 코인에서 2연속 손실 또는 최근 3건 누적 손실이 커지면 해당 마켓은 몇 시간 동안 자동 재진입 락이 걸립니다. `WLD`, `VIRTUAL`처럼 같은 종목을 계속 반복 손절하는 패턴을 막기 위한 보호장치입니다.
+13. 보유 포지션은 LLM 판단만 기다리지 않고, `정체 손실`, `장시간 수익 부재`, `이익 반납` 패턴이면 deterministic exit로 먼저 청산합니다. 10~18분째 follow-through가 없으면 손실/플랫 포지션을 빨리 정리하고, 한 번 난 수익을 크게 반납하면 `AI_PROFIT_FADE`로 보호 청산합니다.
+14. `KRW-USDT` 같은 달러 추종 자산은 별도 `DOLLAR_PEG` 템포 프로필로 처리합니다. 일반 알트보다 느린 전개를 가정해 더 긴 초기 보유 인내시간, 더 낮은 목표폭, 더 긴 최대 보유시간을 사용합니다.
+15. 원격 서버가 비정상 `averageEntryPrice`를 보내더라도 데스크톱 앱은 현재가/손절/익절 기반 sanity check를 적용해 과장된 미실현 수익률 표시를 억제합니다.
+16. `POST /api/guided-trading/stop`는 이제 optional `exitReason`을 받아 `AI_TIME_STOP`, `AI_STALE_LOSER`, `AI_LLM_EXIT` 같은 AI 청산 사유를 오늘 거래내역에 그대로 남깁니다. 과거처럼 거의 모든 청산이 `MANUAL_STOP`으로 뭉개지지 않습니다.
 
 ### CROWD_PRESSURE 초단타 프로필 추가 (2026-03-06)
 

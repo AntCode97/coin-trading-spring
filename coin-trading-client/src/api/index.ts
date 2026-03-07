@@ -1099,8 +1099,8 @@ export const guidedTradingApi = {
   adoptPosition: (payload: GuidedAdoptRequest): Promise<GuidedAdoptResponse> =>
     api.post('/guided-trading/positions/adopt', payload).then((res) => res.data),
 
-  stop: (market: string): Promise<GuidedTradePosition> =>
-    api.post('/guided-trading/stop', null, { params: { market } }).then((res) => res.data),
+  stop: (market: string, exitReason?: string): Promise<GuidedTradePosition> =>
+    api.post('/guided-trading/stop', null, { params: { market, exitReason } }).then((res) => res.data),
 
   partialTakeProfit: (market: string, ratio = 0.5): Promise<GuidedTradePosition> =>
     api.post('/guided-trading/partial-take-profit', null, { params: { market, ratio } }).then((res) => res.data),

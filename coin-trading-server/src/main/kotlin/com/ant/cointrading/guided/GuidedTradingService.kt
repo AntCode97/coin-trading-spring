@@ -639,10 +639,12 @@ class GuidedTradingService(
     }
 
     @Transactional
-    fun stopAutoTrading(market: String): GuidedTradeView {
+    fun stopAutoTrading(market: String, exitReason: String? = null): GuidedTradeView {
         val allTrades = guidedTradeRepository.findByMarketAndStatusIn(market, OPEN_STATUSES)
         require(allTrades.isNotEmpty()) { "진행 중인 포지션이 없습니다." }
 
+        val resolvedExitReason = normalizeStopExitReason(exitReason)
+        val estimatedExitReason = "${resolvedExitReason}_ESTIMATED"
         val currentPrice = bithumbPublicApi.getCurrentPrice(market)?.firstOrNull()?.tradePrice ?: allTrades.first().averageEntryPrice
         val actualQty = getActualHoldingQuantity(market, currentPrice)
         var executedQty = BigDecimal.ZERO
@@ -683,7 +685,7 @@ class GuidedTradingService(
                             if (remainingToAllocate <= BigDecimal.ZERO) break
                             val tradeShare = trade.remainingQuantity.min(remainingToAllocate)
                             if (tradeShare <= BigDecimal.ZERO) continue
-                            applyExitFill(trade, tradeShare, executedPrice, "MANUAL_STOP")
+                            applyExitFill(trade, tradeShare, executedPrice, resolvedExitReason)
                             remainingToAllocate = remainingToAllocate.subtract(tradeShare).max(BigDecimal.ZERO)
                         }
                     }
@@ -711,19 +713,19 @@ class GuidedTradingService(
             for (trade in allTrades) {
                 val remaining = trade.remainingQuantity
                 if (remaining > BigDecimal.ZERO) {
-                    applyExitFill(trade, remaining, estimatedPrice, "MANUAL_STOP_ESTIMATED")
+                    applyExitFill(trade, remaining, estimatedPrice, estimatedExitReason)
                 }
                 trade.remainingQuantity = BigDecimal.ZERO
                 trade.status = GuidedTradeEntity.STATUS_CLOSED
                 trade.closedAt = Instant.now()
-                trade.exitReason = "MANUAL_STOP_ESTIMATED"
-                trade.lastAction = "CLOSED_MANUAL_STOP_ESTIMATED"
+                trade.exitReason = estimatedExitReason
+                trade.lastAction = "CLOSED_$estimatedExitReason"
                 trade.pnlConfidence = GuidedTradeEntity.PNL_CONFIDENCE_LOW
                 if (trade.averageExitPrice <= BigDecimal.ZERO) {
                     trade.averageExitPrice = estimatedPrice
                 }
                 guidedTradeRepository.save(trade)
-                appendEvent(trade.id!!, "CLOSE_ESTIMATED", estimatedPrice, null, "수동 청산 추정 종료(체결 조회 불가)")
+                appendEvent(trade.id!!, "CLOSE_ESTIMATED", estimatedPrice, null, "청산 추정 종료($estimatedExitReason)")
             }
             hasEffectiveBalance = false
         }
@@ -737,29 +739,29 @@ class GuidedTradingService(
                 trade.remainingQuantity = BigDecimal.ZERO
                 trade.status = GuidedTradeEntity.STATUS_CLOSED
                 trade.closedAt = Instant.now()
-                trade.exitReason = "MANUAL_STOP"
-                trade.lastAction = "CLOSED_MANUAL_STOP"
+                trade.exitReason = resolvedExitReason
+                trade.lastAction = "CLOSED_$resolvedExitReason"
                 if (trade.averageExitPrice <= BigDecimal.ZERO && executedPrice > BigDecimal.ZERO) {
                     trade.averageExitPrice = executedPrice
                 }
                 guidedTradeRepository.save(trade)
-                appendEvent(trade.id!!, "CLOSE_ALL", executedPrice, executedQty.takeIf { it > BigDecimal.ZERO }, "수동 전체 청산")
+                appendEvent(trade.id!!, "CLOSE_ALL", executedPrice, executedQty.takeIf { it > BigDecimal.ZERO }, "청산 완료: $resolvedExitReason")
                 continue
             }
 
             trade.status = GuidedTradeEntity.STATUS_OPEN
             trade.lastAction = if (exitAttempted) {
-                if (executedQty > BigDecimal.ZERO) "MANUAL_STOP_PARTIAL"
-                else "MANUAL_STOP_PENDING_EXIT"
+                if (executedQty > BigDecimal.ZERO) "${resolvedExitReason}_PARTIAL"
+                else "${resolvedExitReason}_PENDING_EXIT"
             } else {
-                "MANUAL_STOP_SKIPPED"
+                "${resolvedExitReason}_SKIPPED"
             }
             guidedTradeRepository.save(trade)
 
             if (exitAttempted && executedQty <= BigDecimal.ZERO) {
-                appendEvent(trade.id!!, "CLOSE_PENDING", executedPrice, BigDecimal.ZERO, "수동 청산 주문 미체결 - 포지션 유지")
+                appendEvent(trade.id!!, "CLOSE_PENDING", executedPrice, BigDecimal.ZERO, "청산 주문 미체결 - 포지션 유지($resolvedExitReason)")
             } else if (exitAttempted && executedQty > BigDecimal.ZERO) {
-                appendEvent(trade.id!!, "PARTIAL_CLOSE", executedPrice, executedQty, "수동 청산 부분 체결 - 잔여 포지션 유지")
+                appendEvent(trade.id!!, "PARTIAL_CLOSE", executedPrice, executedQty, "부분 청산 - 잔여 포지션 유지($resolvedExitReason)")
             }
         }
 
@@ -1355,6 +1357,16 @@ class GuidedTradingService(
             BigDecimal.ZERO
         }
         trade.exitReason = reason
+    }
+
+    private fun normalizeStopExitReason(exitReason: String?): String {
+        val normalized = exitReason
+            ?.trim()
+            ?.uppercase()
+            ?.replace(Regex("[^A-Z0-9_]+"), "_")
+            ?.trim('_')
+            ?.ifBlank { null }
+        return normalized ?: "MANUAL_STOP"
     }
 
     private fun getActiveTrade(market: String): GuidedTradeEntity? {

@@ -303,6 +303,10 @@ coin-trading-spring/
   - `recommendation.expectancyPct`는 빗썸 왕복 수수료 0.08%를 반영한 순기대값
   - `positions[].averageEntryPrice`는 저장값이 비정상적이면 잔고 `avgBuyPrice`로 자동 보정
   - AI 초단타 엔진은 `expectancyPct`, `recommendedEntryWinRate`, `riskRewardRatio`, `spreadPercent`, `entryGapPct` 기반 soft gate를 먼저 적용하고 `진입 강도` 설정에 따라 finalist `4/6/8`개까지 진입 분석
+  - 엔진은 `/stats/today`를 30초 주기로 동기화해 `일손실 한도`, 최근 6건 성과, 연속 손실을 앱 재시작 이후에도 이어서 반영한다
+  - 최근 3연속 손실 또는 최근 5건 평균 손익률 악화 시 `성과 방어모드`로 전환해 신규 진입을 20분 멈추고, 적용 진입 강도를 자동으로 한 단계 보수적으로 낮춘다
+  - 동일 마켓에서 최근 2연속 손실 또는 최근 3건 누적 손실률이 크면 4~12시간 재진입 락을 건다
+  - 보유 포지션은 LLM 판단 외에도 `AI_STALE_LOSER`, `AI_STALE_FLAT`, `AI_PROFIT_FADE`, `AI_TIME_STOP`, `AI_STOP_LOSS` deterministic exit를 우선 적용한다
   - 엔진 보호폭 기본값: 손절 최소 `0.55%`, 익절 최소 `0.95%`, 손절 후 재진입 쿨다운 `8분`
   - `KRW-USDT` 같은 달러 추종 자산은 `DOLLAR_PEG` 템포 프로필로 분기해 초기 보유 유예, 더 낮은 목표폭, 최대 보유시간 추가치를 적용
   - 서버가 비정상 진입가를 내려주면 데스크톱 엔진은 현재가/손절/익절 midpoint 기준 sanity fallback을 적용해 미실현 PnL 과장을 억제
@@ -310,6 +314,9 @@ coin-trading-spring/
   - 신규 쿼리: `strategyCodePrefix` (optional)
   - 금일 거래 요약과 `trades[]`를 전략 prefix 기준으로 분리 조회 가능
   - `totalPnlKrw`, `avgPnlPercent`, `trades[].realizedPnl(Percent)`는 빗썸 수수료 반영 순손익 기준
+- `POST /api/guided-trading/stop`
+  - 신규 쿼리: `exitReason` (optional)
+  - AI 초단타 엔진은 `AI_TIME_STOP`, `AI_STALE_LOSER`, `AI_LLM_EXIT` 같은 청산 코드를 전달해 금일 거래내역 사유를 정확히 남긴다
 - `GET /api/guided-trading/autopilot/live`
   - 신규 쿼리: `strategyCodePrefix` (optional)
   - `orderSummary/orderEvents/autopilotEvents`를 prefix 기준으로 분리 조회 가능

@@ -1,6 +1,7 @@
 import {
   guidedTradingApi,
   type AiScalpScanMarket,
+  type GuidedClosedTradeView,
   type GuidedAgentContextResponse,
   type GuidedCrowdFeaturePack,
   type GuidedTradePosition,
@@ -44,6 +45,7 @@ export type AiTraderEventType =
   | 'STATUS';
 export type AiUrgency = 'LOW' | 'MEDIUM' | 'HIGH';
 export type AiExitCategory = 'TAKE_PROFIT' | 'STOP_LOSS' | 'LLM_EXIT' | 'FORCED_EXIT';
+type AiPerformanceRegime = 'NORMAL' | 'CAUTIOUS' | 'DEFENSIVE';
 
 export interface AiTraderEvent {
   id: string;
@@ -145,6 +147,24 @@ interface AiEntryAggressionProfile {
   softPenaltyAllowance: number;
 }
 
+interface AiPerformanceSnapshot {
+  regime: AiPerformanceRegime;
+  selectedAggression: AiEntryAggression;
+  effectiveAggression: AiEntryAggression;
+  consecutiveLosses: number;
+  recentTradeCount: number;
+  recentNetPnlKrw: number;
+  recentAvgPnlPercent: number;
+}
+
+interface AiDeterministicExitDecision {
+  reason: string;
+  exitReasonCode: string;
+  category: AiExitCategory;
+  confidence: number;
+  urgency: AiUrgency;
+}
+
 type StateListener = (state: AiTraderState) => void;
 
 const SHORTLIST_LIMIT = 12;
@@ -155,6 +175,10 @@ const LLM_EXIT_COOLDOWN_MS = 240_000;
 const FORCED_EXIT_COOLDOWN_MS = 300_000;
 const STOP_LOSS_COOLDOWN_MS = 480_000;
 const CONTEXT_FAILURE_EXIT_THRESHOLD = 3;
+const TODAY_STATS_SYNC_MS = 30_000;
+const PERFORMANCE_GUARD_PAUSE_MS = 20 * 60_000;
+const PERFORMANCE_MARKET_LOCK_MS = 4 * 60 * 60_000;
+const PERFORMANCE_MARKET_DEEP_LOCK_MS = 12 * 60 * 60_000;
 const DEFAULT_TEMPO_PROFILE: AiTempoProfile = {
   key: 'DEFAULT',
   label: '기본',
@@ -380,6 +404,20 @@ export class AiDayTraderEngine {
   private manageInFlight = false;
   private cooldownUntilByMarket = new Map<string, number>();
   private contextFailureCountByMarket = new Map<string, number>();
+  private peakNetPnlByTradeId = new Map<number, number>();
+  private lastTodayStatsSyncAt = 0;
+  private todayStatsSyncFailed = false;
+  private performancePauseUntil: number | null = null;
+  private performancePauseTradeId: number | null = null;
+  private performanceSnapshot: AiPerformanceSnapshot = {
+    regime: 'NORMAL',
+    selectedAggression: 'BALANCED',
+    effectiveAggression: 'BALANCED',
+    consecutiveLosses: 0,
+    recentTradeCount: 0,
+    recentNetPnlKrw: 0,
+    recentAvgPnlPercent: 0,
+  };
 
   constructor(config: AiDayTraderConfig) {
     this.config = { ...config };
@@ -431,6 +469,7 @@ export class AiDayTraderEngine {
     this.state.status = 'IDLE';
     this.emit();
     this.pushEvent('STATUS', 'LLM 초단타 터미널 시작');
+    void this.syncTodayPerformance(true);
     void this.syncOpenPositions();
     void this.runScanCycle();
     void this.runPositionManagement();
@@ -536,6 +575,16 @@ export class AiDayTraderEngine {
     const filtered = this.filterAiPositions(positions)
       .map((position) => this.normalizePosition(position))
       .sort((left, right) => new Date(right.createdAt).getTime() - new Date(left.createdAt).getTime());
+    const activeTradeIds = new Set(filtered.map((position) => position.tradeId));
+    for (const position of filtered) {
+      const previousPeak = this.peakNetPnlByTradeId.get(position.tradeId) ?? position.unrealizedPnlPercent;
+      this.peakNetPnlByTradeId.set(position.tradeId, Math.max(previousPeak, position.unrealizedPnlPercent));
+    }
+    for (const tradeId of [...this.peakNetPnlByTradeId.keys()]) {
+      if (!activeTradeIds.has(tradeId)) {
+        this.peakNetPnlByTradeId.delete(tradeId);
+      }
+    }
     this.state.positions = filtered;
     this.emit();
     return filtered;
@@ -570,12 +619,22 @@ export class AiDayTraderEngine {
     this.pruneTransientState();
 
     try {
+      await this.syncTodayPerformance();
       const positions = await this.syncOpenPositions();
       if (!this.state.running || !this.state.entryEnabled) return;
 
       if (this.state.dailyPnl <= this.config.dailyLossLimitKrw) {
         this.setBlockedReason(
           `일손실 차단 활성화 · 실현 ${this.formatKrw(this.state.dailyPnl)} / 한도 ${this.formatKrw(this.config.dailyLossLimitKrw)}`
+        );
+        this.setStatus('PAUSED');
+        return;
+      }
+
+      if (this.performancePauseUntil && this.performancePauseUntil > Date.now()) {
+        const remainingMinutes = Math.max(1, Math.ceil((this.performancePauseUntil - Date.now()) / 60_000));
+        this.setBlockedReason(
+          `성과 방어모드 · ${remainingMinutes}분 후 재개 · 최근 ${this.performanceSnapshot.recentTradeCount}건 ${this.formatKrw(this.performanceSnapshot.recentNetPnlKrw)}`
         );
         this.setStatus('PAUSED');
         return;
@@ -748,7 +807,28 @@ export class AiDayTraderEngine {
         const holdingMinutes = this.getHoldingMinutes(position);
         const effectiveMaxHoldingMinutes = this.getEffectiveMaxHoldingMinutes(tempoProfile);
         if (holdingMinutes >= effectiveMaxHoldingMinutes) {
-          await this.executeSell(position, `최대 보유시간 ${effectiveMaxHoldingMinutes}분 도달`, 'FORCED_EXIT');
+          await this.executeSell(
+            position,
+            `최대 보유시간 ${effectiveMaxHoldingMinutes}분 도달`,
+            'FORCED_EXIT',
+            undefined,
+            'AI_TIME_STOP'
+          );
+          continue;
+        }
+
+        const deterministicExit = this.evaluateDeterministicExit(position, holdingMinutes, tempoProfile);
+        if (deterministicExit) {
+          await this.executeSell(
+            position,
+            deterministicExit.reason,
+            deterministicExit.category,
+            {
+              confidence: deterministicExit.confidence,
+              urgency: deterministicExit.urgency,
+            },
+            deterministicExit.exitReasonCode
+          );
           continue;
         }
 
@@ -773,7 +853,7 @@ export class AiDayTraderEngine {
             position.market
           );
           if (failureCount >= CONTEXT_FAILURE_EXIT_THRESHOLD) {
-            await this.executeSell(position, '컨텍스트 조회 실패 누적', 'FORCED_EXIT');
+            await this.executeSell(position, '컨텍스트 조회 실패 누적', 'FORCED_EXIT', undefined, 'AI_CONTEXT_FAIL');
           }
           continue;
         }
@@ -803,7 +883,7 @@ export class AiDayTraderEngine {
         }
 
         if (decision.action === 'SELL' && decision.confidence >= 0.58) {
-          await this.executeSell(position, decision.reasoning, undefined, decision);
+          await this.executeSell(position, decision.reasoning, undefined, decision, 'AI_LLM_EXIT');
         }
       }
 
@@ -1107,11 +1187,12 @@ export class AiDayTraderEngine {
     position: GuidedTradePosition,
     reason: string,
     forcedCategory?: AiExitCategory,
-    decision?: Pick<AiManageDecision, 'confidence' | 'urgency'>
+    decision?: Pick<AiManageDecision, 'confidence' | 'urgency'>,
+    exitReasonCode?: string
   ) {
     try {
       this.setStatus('EXECUTING');
-      const result = await guidedTradingApi.stop(position.market);
+      const result = await guidedTradingApi.stop(position.market, exitReasonCode ?? this.resolveServerExitReason(reason, forcedCategory));
       const closed =
         result.status === 'CLOSED' ||
         Boolean(result.closedAt) ||
@@ -1174,6 +1255,24 @@ export class AiDayTraderEngine {
       case 'STOP_LOSS':
       default:
         return STOP_LOSS_COOLDOWN_MS;
+    }
+  }
+
+  private resolveServerExitReason(reason: string, forcedCategory?: AiExitCategory): string {
+    const explicitCode = reason.trim().match(/AI_[A-Z0-9_]+/)?.[0];
+    if (explicitCode) return explicitCode;
+    if (/최대 보유시간|TIME STOP/i.test(reason)) return 'AI_TIME_STOP';
+    if (/컨텍스트|context/i.test(reason)) return 'AI_CONTEXT_FAIL';
+    switch (forcedCategory) {
+      case 'TAKE_PROFIT':
+        return 'AI_PROFIT_EXIT';
+      case 'STOP_LOSS':
+        return 'AI_STOP_LOSS';
+      case 'FORCED_EXIT':
+        return 'AI_FORCED_EXIT';
+      case 'LLM_EXIT':
+      default:
+        return 'AI_LLM_EXIT';
     }
   }
 
@@ -1286,7 +1385,8 @@ export class AiDayTraderEngine {
   }
 
   private getEntryAggressionProfile(): AiEntryAggressionProfile {
-    return ENTRY_AGGRESSION_PROFILES[this.config.entryAggression] ?? ENTRY_AGGRESSION_PROFILES.BALANCED;
+    const effectiveAggression = this.performanceSnapshot.effectiveAggression;
+    return ENTRY_AGGRESSION_PROFILES[effectiveAggression] ?? ENTRY_AGGRESSION_PROFILES.BALANCED;
   }
 
   private getTempoProfile(market: string, koreanName?: string | null): AiTempoProfile {
@@ -1339,6 +1439,261 @@ export class AiDayTraderEngine {
       ...position,
       unrealizedPnlPercent: this.calculateFeeAdjustedReturnPercent(entryPrice, currentPrice),
     };
+  }
+
+  private async syncTodayPerformance(force = false) {
+    if (!force && Date.now() - this.lastTodayStatsSyncAt < TODAY_STATS_SYNC_MS) {
+      return;
+    }
+    this.lastTodayStatsSyncAt = Date.now();
+
+    try {
+      const stats = await guidedTradingApi.getTodayStats(normalizeStrategyPrefix(this.config.strategyCode));
+      const trades = [...stats.trades].sort((left, right) => {
+        const rightTime = new Date(right.closedAt ?? right.createdAt).getTime();
+        const leftTime = new Date(left.closedAt ?? left.createdAt).getTime();
+        return rightTime - leftTime;
+      });
+      const previousSnapshot = this.performanceSnapshot;
+      this.state.closedTrades = trades.map((trade) => this.mapClosedTradeView(trade));
+      this.recalculateClosedTradeStats();
+      this.performanceSnapshot = this.buildPerformanceSnapshot(trades);
+      if (
+        previousSnapshot.regime !== this.performanceSnapshot.regime ||
+        previousSnapshot.effectiveAggression !== this.performanceSnapshot.effectiveAggression
+      ) {
+        this.pushEvent(
+          'STATUS',
+          `성과 모드 ${this.performanceSnapshot.regime}`,
+          `선택 ${this.performanceSnapshot.selectedAggression} -> 적용 ${this.performanceSnapshot.effectiveAggression} · 최근 ${this.performanceSnapshot.recentTradeCount}건 평균 ${this.formatPercent(this.performanceSnapshot.recentAvgPnlPercent)}`
+        );
+      }
+      this.applyPerformanceMarketLocks(trades);
+      this.applyPerformancePause(trades);
+      this.todayStatsSyncFailed = false;
+      this.emit();
+    } catch (error) {
+      if (!this.todayStatsSyncFailed) {
+        this.pushEvent('ERROR', '오늘 거래 통계 동기화 실패', this.toErrorText(error));
+      }
+      this.todayStatsSyncFailed = true;
+    }
+  }
+
+  private mapClosedTradeView(trade: GuidedClosedTradeView): AiClosedTrade {
+    return {
+      market: trade.market,
+      pnlKrw: trade.realizedPnl,
+      pnlPercent: trade.realizedPnlPercent,
+      holdingMinutes: this.getHoldingMinutes({
+        createdAt: trade.createdAt,
+        closedAt: trade.closedAt ?? trade.createdAt,
+      }),
+      exitCategory: this.mapExitReasonToCategory(trade.exitReason, trade.realizedPnlPercent),
+      closedAt: trade.closedAt ?? trade.createdAt,
+    };
+  }
+
+  private mapExitReasonToCategory(exitReason?: string | null, pnlPercent = 0): AiExitCategory {
+    const normalized = exitReason?.trim().toUpperCase() ?? '';
+    if (normalized.includes('PROFIT') || normalized.includes('TAKE') || normalized.includes('TP')) {
+      return 'TAKE_PROFIT';
+    }
+    if (
+      normalized.includes('STOP_LOSS') ||
+      normalized.includes('LOSS_CUT') ||
+      normalized === 'STOP_LOSS' ||
+      normalized === 'AI_STOP_LOSS'
+    ) {
+      return 'STOP_LOSS';
+    }
+    if (normalized.includes('TIME_STOP') || normalized.includes('CONTEXT_FAIL') || normalized.includes('FORCED')) {
+      return 'FORCED_EXIT';
+    }
+    if (pnlPercent > 0) return 'TAKE_PROFIT';
+    if (pnlPercent < 0) return 'LLM_EXIT';
+    return 'FORCED_EXIT';
+  }
+
+  private buildPerformanceSnapshot(trades: GuidedClosedTradeView[]): AiPerformanceSnapshot {
+    const recentTrades = trades.slice(0, 6);
+    const recentNetPnlKrw = recentTrades.reduce((sum, trade) => sum + trade.realizedPnl, 0);
+    const recentAvgPnlPercent = recentTrades.length > 0
+      ? recentTrades.reduce((sum, trade) => sum + trade.realizedPnlPercent, 0) / recentTrades.length
+      : 0;
+
+    let consecutiveLosses = 0;
+    for (const trade of trades) {
+      if (trade.realizedPnl >= 0) break;
+      consecutiveLosses += 1;
+    }
+
+    const recentWinRate = recentTrades.length > 0
+      ? (recentTrades.filter((trade) => trade.realizedPnl > 0).length / recentTrades.length) * 100
+      : 0;
+
+    let regime: AiPerformanceRegime = 'NORMAL';
+    if (
+      consecutiveLosses >= 3 ||
+      (recentTrades.length >= 5 && recentWinRate <= 25 && recentAvgPnlPercent <= -0.20)
+    ) {
+      regime = 'DEFENSIVE';
+    } else if (
+      consecutiveLosses >= 2 ||
+      (recentTrades.length >= 4 && recentWinRate < 40 && recentAvgPnlPercent < -0.08)
+    ) {
+      regime = 'CAUTIOUS';
+    }
+
+    const selectedAggression = this.getSelectedEntryAggression();
+    return {
+      regime,
+      selectedAggression,
+      effectiveAggression: this.resolveEffectiveAggression(selectedAggression, regime),
+      consecutiveLosses,
+      recentTradeCount: recentTrades.length,
+      recentNetPnlKrw,
+      recentAvgPnlPercent,
+    };
+  }
+
+  private getSelectedEntryAggression(): AiEntryAggression {
+    return this.config.entryAggression ?? 'BALANCED';
+  }
+
+  private resolveEffectiveAggression(
+    selectedAggression: AiEntryAggression,
+    regime: AiPerformanceRegime
+  ): AiEntryAggression {
+    if (regime === 'DEFENSIVE') {
+      return 'CONSERVATIVE';
+    }
+    if (regime === 'CAUTIOUS') {
+      if (selectedAggression === 'AGGRESSIVE') {
+        return 'BALANCED';
+      }
+      return 'CONSERVATIVE';
+    }
+    return selectedAggression;
+  }
+
+  private applyPerformancePause(trades: GuidedClosedTradeView[]) {
+    if (trades.length === 0) {
+      this.performancePauseUntil = null;
+      return;
+    }
+    const latestTradeId = trades[0]?.tradeId ?? null;
+    if (this.performanceSnapshot.regime !== 'DEFENSIVE' || latestTradeId === null) {
+      if (this.performancePauseUntil && this.performancePauseUntil <= Date.now()) {
+        this.performancePauseUntil = null;
+      }
+      return;
+    }
+    if (this.performancePauseTradeId === latestTradeId) {
+      return;
+    }
+    this.performancePauseTradeId = latestTradeId;
+    this.performancePauseUntil = Date.now() + PERFORMANCE_GUARD_PAUSE_MS;
+    this.pushEvent(
+      'STATUS',
+      `성과 방어모드 ${Math.round(PERFORMANCE_GUARD_PAUSE_MS / 60_000)}분`,
+      `최근 ${this.performanceSnapshot.recentTradeCount}건 ${this.formatKrw(this.performanceSnapshot.recentNetPnlKrw)} / 평균 ${this.formatPercent(this.performanceSnapshot.recentAvgPnlPercent)} / 연속 손실 ${this.performanceSnapshot.consecutiveLosses}`
+    );
+  }
+
+  private applyPerformanceMarketLocks(trades: GuidedClosedTradeView[]) {
+    const grouped = new Map<string, GuidedClosedTradeView[]>();
+    for (const trade of trades) {
+      const current = grouped.get(trade.market) ?? [];
+      current.push(trade);
+      grouped.set(trade.market, current);
+    }
+
+    for (const [market, marketTrades] of grouped.entries()) {
+      const recentTrades = marketTrades
+        .sort((left, right) => new Date(right.closedAt ?? right.createdAt).getTime() - new Date(left.closedAt ?? left.createdAt).getTime())
+        .slice(0, 3);
+      const consecutiveLosses = recentTrades.findIndex((trade) => trade.realizedPnl >= 0);
+      const leadingLosses = consecutiveLosses === -1 ? recentTrades.length : consecutiveLosses;
+      const totalPnlPercent = recentTrades.reduce((sum, trade) => sum + trade.realizedPnlPercent, 0);
+
+      let lockDuration = 0;
+      let lockReason = '';
+      if (leadingLosses >= 2) {
+        lockDuration = leadingLosses >= 3 ? PERFORMANCE_MARKET_DEEP_LOCK_MS : PERFORMANCE_MARKET_LOCK_MS;
+        lockReason = `최근 ${leadingLosses}연속 손실`;
+      } else if (recentTrades.length >= 3 && totalPnlPercent <= -0.60) {
+        lockDuration = PERFORMANCE_MARKET_LOCK_MS;
+        lockReason = `최근 3건 ${totalPnlPercent.toFixed(2)}%`;
+      }
+
+      if (lockDuration <= 0) continue;
+
+      const nextUntil = Date.now() + lockDuration;
+      const currentUntil = this.cooldownUntilByMarket.get(market) ?? 0;
+      if (currentUntil >= nextUntil) continue;
+      this.cooldownUntilByMarket.set(market, nextUntil);
+      this.pushEvent(
+        'STATUS',
+        `${market} 재진입 락`,
+        `${lockReason} · ${Math.round(lockDuration / 60_000)}분 차단`,
+        market
+      );
+    }
+  }
+
+  private evaluateDeterministicExit(
+    position: GuidedTradePosition,
+    holdingMinutes: number,
+    tempoProfile: AiTempoProfile
+  ): AiDeterministicExitDecision | null {
+    const netPnlPercent = position.unrealizedPnlPercent;
+    const peakNetPnl = this.peakNetPnlByTradeId.get(position.tradeId) ?? netPnlPercent;
+    const giveBack = peakNetPnl - netPnlPercent;
+    const staleLossMinutes = tempoProfile.key === 'DOLLAR_PEG' ? 18 : 10;
+    const staleFlatMinutes = tempoProfile.key === 'DOLLAR_PEG' ? 30 : 18;
+
+    if (netPnlPercent <= -0.62 && holdingMinutes >= 1.0) {
+      return {
+        reason: 'AI 하드 손실 가드 발동',
+        exitReasonCode: 'AI_STOP_LOSS',
+        category: 'STOP_LOSS',
+        confidence: 0.96,
+        urgency: 'HIGH',
+      };
+    }
+
+    if (holdingMinutes >= staleLossMinutes && netPnlPercent <= -0.12) {
+      return {
+        reason: `${holdingMinutes.toFixed(1)}분째 follow-through 부재로 정체 손실 청산`,
+        exitReasonCode: 'AI_STALE_LOSER',
+        category: 'LLM_EXIT',
+        confidence: 0.84,
+        urgency: 'MEDIUM',
+      };
+    }
+
+    if (holdingMinutes >= staleFlatMinutes && netPnlPercent < 0.10) {
+      return {
+        reason: `${holdingMinutes.toFixed(1)}분 경과에도 수익 전개가 약해 시간 청산`,
+        exitReasonCode: 'AI_STALE_FLAT',
+        category: 'LLM_EXIT',
+        confidence: 0.82,
+        urgency: 'MEDIUM',
+      };
+    }
+
+    if (peakNetPnl >= 0.28 && giveBack >= 0.22 && netPnlPercent <= Math.max(0.05, peakNetPnl * 0.55)) {
+      return {
+        reason: `최고 ${this.formatPercent(peakNetPnl)} 후 이익 반납 ${this.formatPercent(giveBack)}로 보호 청산`,
+        exitReasonCode: 'AI_PROFIT_FADE',
+        category: 'TAKE_PROFIT',
+        confidence: 0.9,
+        urgency: 'HIGH',
+      };
+    }
+
+    return null;
   }
 
   private isPlausiblePositionEntry(entryPrice: number, currentPrice: number): boolean {
@@ -1397,6 +1752,11 @@ export class AiDayTraderEngine {
 
   private upsertPosition(position: GuidedTradePosition) {
     const normalizedPosition = this.normalizePosition(position);
+    const previousPeak = this.peakNetPnlByTradeId.get(normalizedPosition.tradeId) ?? normalizedPosition.unrealizedPnlPercent;
+    this.peakNetPnlByTradeId.set(
+      normalizedPosition.tradeId,
+      Math.max(previousPeak, normalizedPosition.unrealizedPnlPercent)
+    );
     const next = [...this.state.positions];
     const index = next.findIndex((item) => item.tradeId === normalizedPosition.tradeId || item.market === normalizedPosition.market);
     if (index >= 0) {
@@ -1409,6 +1769,12 @@ export class AiDayTraderEngine {
   }
 
   private removePosition(market: string) {
+    const removedTradeIds = this.state.positions
+      .filter((position) => position.market === market)
+      .map((position) => position.tradeId);
+    for (const tradeId of removedTradeIds) {
+      this.peakNetPnlByTradeId.delete(tradeId);
+    }
     this.state.positions = this.state.positions.filter((position) => position.market !== market);
     this.emit();
   }
@@ -1438,10 +1804,11 @@ export class AiDayTraderEngine {
     return typeof until === 'number' && until > Date.now();
   }
 
-  private getHoldingMinutes(position: Pick<GuidedTradePosition, 'createdAt'>): number {
+  private getHoldingMinutes(position: Pick<GuidedTradePosition, 'createdAt'> & { closedAt?: string | null }): number {
     const createdAt = new Date(position.createdAt).getTime();
+    const endedAt = position.closedAt ? new Date(position.closedAt).getTime() : Date.now();
     if (!Number.isFinite(createdAt)) return 0;
-    return Math.max(0, (Date.now() - createdAt) / 60_000);
+    return Math.max(0, (endedAt - createdAt) / 60_000);
   }
 
   private formatKrw(value: number): string {

@@ -22,6 +22,7 @@ import com.ant.cointrading.guided.GuidedDailyStats
 import com.ant.cointrading.guided.GuidedPnlReconcileItem
 import com.ant.cointrading.guided.GuidedPnlReconcileResult
 import com.ant.cointrading.guided.GuidedTradingService
+import com.ant.cointrading.guided.GuidedTradeView
 import org.junit.jupiter.api.DisplayName
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.assertThrows
@@ -177,6 +178,46 @@ class GuidedTradingControllerTest {
         whenever(guidedTradingService.getTodayStats(org.mockito.kotlin.eq("AI_SCALP_TRADER"))).thenReturn(expected)
 
         val actual = controller.getTodayStats("AI_SCALP_TRADER")
+
+        kotlin.test.assertEquals(expected, actual)
+    }
+
+    @Test
+    @DisplayName("stopTrading은 exitReason을 서비스로 전달한다")
+    fun stopTradingPassesExitReason() {
+        val expected = GuidedTradeView(
+            tradeId = 91L,
+            market = "KRW-BTC",
+            status = "CLOSED",
+            entryOrderType = "MARKET",
+            entryOrderId = "entry-1",
+            averageEntryPrice = 100000000.0,
+            currentPrice = 100100000.0,
+            entryQuantity = 0.0001,
+            remainingQuantity = 0.0,
+            stopLossPrice = 99500000.0,
+            takeProfitPrice = 100800000.0,
+            trailingActive = false,
+            trailingPeakPrice = null,
+            trailingStopPrice = null,
+            dcaCount = 0,
+            maxDcaCount = 0,
+            halfTakeProfitDone = false,
+            unrealizedPnlPercent = 0.0,
+            realizedPnl = 12.0,
+            realizedPnlPercent = 0.12,
+            lastAction = "CLOSED_AI_TIME_STOP",
+            recommendationReason = null,
+            entrySource = "AI_SCALP",
+            strategyCode = "AI_SCALP_TRADER",
+            createdAt = Instant.parse("2026-03-07T00:00:00Z"),
+            updatedAt = Instant.parse("2026-03-07T00:20:00Z"),
+            closedAt = Instant.parse("2026-03-07T00:20:00Z"),
+            exitReason = "AI_TIME_STOP"
+        )
+        whenever(guidedTradingService.stopAutoTrading("KRW-BTC", "AI_TIME_STOP")).thenReturn(expected)
+
+        val actual = controller.stopTrading("KRW-BTC", "AI_TIME_STOP")
 
         kotlin.test.assertEquals(expected, actual)
     }
