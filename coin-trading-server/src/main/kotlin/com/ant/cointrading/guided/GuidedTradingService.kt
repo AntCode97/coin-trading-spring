@@ -48,6 +48,15 @@ private data class FeeAdjustedTradePnl(
     val pnlPercent: BigDecimal
 )
 
+private data class GuidedStopExecutionResult(
+    val currentPrice: BigDecimal,
+    val executedPrice: BigDecimal,
+    val executedQty: BigDecimal,
+    val exitOrderId: String?,
+    val exitAttempted: Boolean,
+    val hasEffectiveBalance: Boolean
+)
+
 private fun calculateFeeAdjustedReturnPercent(entryPrice: Double, exitPrice: Double): Double {
     if (entryPrice <= 0.0 || exitPrice <= 0.0) return 0.0
     val grossReturn = (exitPrice - entryPrice) / entryPrice
@@ -645,128 +654,24 @@ class GuidedTradingService(
 
         val resolvedExitReason = normalizeStopExitReason(exitReason)
         val estimatedExitReason = "${resolvedExitReason}_ESTIMATED"
-        val currentPrice = bithumbPublicApi.getCurrentPrice(market)?.firstOrNull()?.tradePrice ?: allTrades.first().averageEntryPrice
-        val actualQty = getActualHoldingQuantity(market, currentPrice)
-        var executedQty = BigDecimal.ZERO
-        var executedPrice = currentPrice
-        var exitOrderId: String? = null
-        var exitAttempted = false
+        val stopResult = executeGuidedStopOrder(market, allTrades, resolvedExitReason)
 
-        if (actualQty > BigDecimal.ZERO) {
-            val estimatedValue = actualQty.multiply(currentPrice)
-            if (estimatedValue >= MIN_EFFECTIVE_HOLDING_KRW) {
-                try {
-                    val sell = bithumbPrivateApi.sellMarketOrder(market, actualQty)
-                    exitAttempted = true
-                    exitOrderId = sell.uuid
-                    orderLifecycleTelemetryService.recordRequested(
-                        strategyGroup = OrderLifecycleStrategyGroup.GUIDED,
-                        market = market,
-                        side = "SELL",
-                        orderId = sell.uuid,
-                        strategyCode = GUIDED_STRATEGY_CODE,
-                        quantity = actualQty,
-                        message = "guided_stop_requested"
-                    )
-                    Thread.sleep(300)
-                    val sellInfo = bithumbPrivateApi.getOrder(sell.uuid) ?: sell
-                    orderLifecycleTelemetryService.reconcileOrderState(
-                        strategyGroup = OrderLifecycleStrategyGroup.GUIDED,
-                        order = sellInfo,
-                        fallbackMarket = market,
-                        strategyCode = GUIDED_STRATEGY_CODE
-                    )
-                    executedPrice = sellInfo.price ?: currentPrice
-                    executedQty = (sellInfo.executedVolume ?: BigDecimal.ZERO).min(actualQty)
-
-                    if (executedQty > BigDecimal.ZERO) {
-                        var remainingToAllocate = executedQty
-                        for (trade in allTrades) {
-                            if (remainingToAllocate <= BigDecimal.ZERO) break
-                            val tradeShare = trade.remainingQuantity.min(remainingToAllocate)
-                            if (tradeShare <= BigDecimal.ZERO) continue
-                            applyExitFill(trade, tradeShare, executedPrice, resolvedExitReason)
-                            remainingToAllocate = remainingToAllocate.subtract(tradeShare).max(BigDecimal.ZERO)
-                        }
-                    }
-                } catch (e: Exception) {
-                    log.error("[$market] 전량 매도 실패: ${e.message}", e)
-                    orderLifecycleTelemetryService.recordFailed(
-                        strategyGroup = OrderLifecycleStrategyGroup.GUIDED,
-                        market = market,
-                        side = "SELL",
-                        orderId = null,
-                        strategyCode = GUIDED_STRATEGY_CODE,
-                        message = e.message
-                    )
-                    throw IllegalStateException("[$market] 매도 주문 실패 — 빗썸에서 직접 매도하세요. 원인: ${e.message}")
-                }
-            } else {
-                log.warn("[$market] 잔여 수량 매도 불가 (추정금액 ${estimatedValue.toPlainString()}원 < ${MIN_EFFECTIVE_HOLDING_KRW.toPlainString()}원). 자동 종료 생략.")
-            }
+        if (stopResult.executedQty <= BigDecimal.ZERO && !stopResult.hasEffectiveBalance) {
+            closeTradesByEstimatedStop(
+                allTrades = allTrades,
+                estimatedPrice = stopResult.executedPrice.takeIf { it > BigDecimal.ZERO } ?: stopResult.currentPrice,
+                estimatedExitReason = estimatedExitReason
+            )
         }
 
-        var hasEffectiveBalance = getActualHoldingQuantity(market, executedPrice) > BigDecimal.ZERO
-
-        if (executedQty <= BigDecimal.ZERO && !hasEffectiveBalance) {
-            val estimatedPrice = executedPrice.takeIf { it > BigDecimal.ZERO } ?: currentPrice
-            for (trade in allTrades) {
-                val remaining = trade.remainingQuantity
-                if (remaining > BigDecimal.ZERO) {
-                    applyExitFill(trade, remaining, estimatedPrice, estimatedExitReason)
-                }
-                trade.remainingQuantity = BigDecimal.ZERO
-                trade.status = GuidedTradeEntity.STATUS_CLOSED
-                trade.closedAt = Instant.now()
-                trade.exitReason = estimatedExitReason
-                trade.lastAction = "CLOSED_$estimatedExitReason"
-                trade.pnlConfidence = GuidedTradeEntity.PNL_CONFIDENCE_LOW
-                if (trade.averageExitPrice <= BigDecimal.ZERO) {
-                    trade.averageExitPrice = estimatedPrice
-                }
-                guidedTradeRepository.save(trade)
-                appendEvent(trade.id!!, "CLOSE_ESTIMATED", estimatedPrice, null, "청산 추정 종료($estimatedExitReason)")
-            }
-            hasEffectiveBalance = false
-        }
-
-        for (trade in allTrades) {
-            if (trade.status == GuidedTradeEntity.STATUS_CLOSED) {
-                continue
-            }
-            trade.lastExitOrderId = exitOrderId ?: trade.lastExitOrderId
-            if (!hasEffectiveBalance || trade.remainingQuantity <= BigDecimal.ZERO) {
-                trade.remainingQuantity = BigDecimal.ZERO
-                trade.status = GuidedTradeEntity.STATUS_CLOSED
-                trade.closedAt = Instant.now()
-                trade.exitReason = resolvedExitReason
-                trade.lastAction = "CLOSED_$resolvedExitReason"
-                if (trade.averageExitPrice <= BigDecimal.ZERO && executedPrice > BigDecimal.ZERO) {
-                    trade.averageExitPrice = executedPrice
-                }
-                guidedTradeRepository.save(trade)
-                appendEvent(trade.id!!, "CLOSE_ALL", executedPrice, executedQty.takeIf { it > BigDecimal.ZERO }, "청산 완료: $resolvedExitReason")
-                continue
-            }
-
-            trade.status = GuidedTradeEntity.STATUS_OPEN
-            trade.lastAction = if (exitAttempted) {
-                if (executedQty > BigDecimal.ZERO) "${resolvedExitReason}_PARTIAL"
-                else "${resolvedExitReason}_PENDING_EXIT"
-            } else {
-                "${resolvedExitReason}_SKIPPED"
-            }
-            guidedTradeRepository.save(trade)
-
-            if (exitAttempted && executedQty <= BigDecimal.ZERO) {
-                appendEvent(trade.id!!, "CLOSE_PENDING", executedPrice, BigDecimal.ZERO, "청산 주문 미체결 - 포지션 유지($resolvedExitReason)")
-            } else if (exitAttempted && executedQty > BigDecimal.ZERO) {
-                appendEvent(trade.id!!, "PARTIAL_CLOSE", executedPrice, executedQty, "부분 청산 - 잔여 포지션 유지($resolvedExitReason)")
-            }
-        }
+        finalizeStopTrades(
+            allTrades = allTrades,
+            stopResult = stopResult,
+            resolvedExitReason = resolvedExitReason
+        )
 
         val primary = allTrades.first()
-        return primary.toView(executedPrice.toDouble())
+        return primary.toView(stopResult.executedPrice.toDouble())
     }
 
     @Transactional
@@ -1357,6 +1262,185 @@ class GuidedTradingService(
             BigDecimal.ZERO
         }
         trade.exitReason = reason
+    }
+
+    private fun executeGuidedStopOrder(
+        market: String,
+        allTrades: List<GuidedTradeEntity>,
+        resolvedExitReason: String
+    ): GuidedStopExecutionResult {
+        val currentPrice = bithumbPublicApi.getCurrentPrice(market)?.firstOrNull()?.tradePrice ?: allTrades.first().averageEntryPrice
+        val actualQty = getActualHoldingQuantity(market, currentPrice)
+        var executedQty = BigDecimal.ZERO
+        var executedPrice = currentPrice
+        var exitOrderId: String? = null
+        var exitAttempted = false
+
+        if (actualQty > BigDecimal.ZERO) {
+            val estimatedValue = actualQty.multiply(currentPrice)
+            if (estimatedValue >= MIN_EFFECTIVE_HOLDING_KRW) {
+                try {
+                    val sell = bithumbPrivateApi.sellMarketOrder(market, actualQty)
+                    exitAttempted = true
+                    exitOrderId = sell.uuid
+                    orderLifecycleTelemetryService.recordRequested(
+                        strategyGroup = OrderLifecycleStrategyGroup.GUIDED,
+                        market = market,
+                        side = "SELL",
+                        orderId = sell.uuid,
+                        strategyCode = GUIDED_STRATEGY_CODE,
+                        quantity = actualQty,
+                        message = "guided_stop_requested"
+                    )
+                    Thread.sleep(300)
+                    val sellInfo = bithumbPrivateApi.getOrder(sell.uuid) ?: sell
+                    orderLifecycleTelemetryService.reconcileOrderState(
+                        strategyGroup = OrderLifecycleStrategyGroup.GUIDED,
+                        order = sellInfo,
+                        fallbackMarket = market,
+                        strategyCode = GUIDED_STRATEGY_CODE
+                    )
+                    executedPrice = sellInfo.price ?: currentPrice
+                    executedQty = (sellInfo.executedVolume ?: BigDecimal.ZERO).min(actualQty)
+                    allocateStopFill(allTrades, executedQty, executedPrice, resolvedExitReason)
+                } catch (e: Exception) {
+                    log.error("[$market] 전량 매도 실패: ${e.message}", e)
+                    orderLifecycleTelemetryService.recordFailed(
+                        strategyGroup = OrderLifecycleStrategyGroup.GUIDED,
+                        market = market,
+                        side = "SELL",
+                        orderId = null,
+                        strategyCode = GUIDED_STRATEGY_CODE,
+                        message = e.message
+                    )
+                    throw IllegalStateException("[$market] 매도 주문 실패 — 빗썸에서 직접 매도하세요. 원인: ${e.message}")
+                }
+            } else {
+                log.warn("[$market] 잔여 수량 매도 불가 (추정금액 ${estimatedValue.toPlainString()}원 < ${MIN_EFFECTIVE_HOLDING_KRW.toPlainString()}원). 자동 종료 생략.")
+            }
+        }
+
+        return GuidedStopExecutionResult(
+            currentPrice = currentPrice,
+            executedPrice = executedPrice,
+            executedQty = executedQty,
+            exitOrderId = exitOrderId,
+            exitAttempted = exitAttempted,
+            hasEffectiveBalance = getActualHoldingQuantity(market, executedPrice) > BigDecimal.ZERO
+        )
+    }
+
+    private fun allocateStopFill(
+        allTrades: List<GuidedTradeEntity>,
+        executedQty: BigDecimal,
+        executedPrice: BigDecimal,
+        resolvedExitReason: String
+    ) {
+        if (executedQty <= BigDecimal.ZERO) return
+        var remainingToAllocate = executedQty
+        for (trade in allTrades) {
+            if (remainingToAllocate <= BigDecimal.ZERO) break
+            val tradeShare = trade.remainingQuantity.min(remainingToAllocate)
+            if (tradeShare <= BigDecimal.ZERO) continue
+            applyExitFill(trade, tradeShare, executedPrice, resolvedExitReason)
+            remainingToAllocate = remainingToAllocate.subtract(tradeShare).max(BigDecimal.ZERO)
+        }
+    }
+
+    private fun closeTradesByEstimatedStop(
+        allTrades: List<GuidedTradeEntity>,
+        estimatedPrice: BigDecimal,
+        estimatedExitReason: String
+    ) {
+        for (trade in allTrades) {
+            val remaining = trade.remainingQuantity
+            if (remaining > BigDecimal.ZERO) {
+                applyExitFill(trade, remaining, estimatedPrice, estimatedExitReason)
+            }
+            trade.remainingQuantity = BigDecimal.ZERO
+            trade.status = GuidedTradeEntity.STATUS_CLOSED
+            trade.closedAt = Instant.now()
+            trade.exitReason = estimatedExitReason
+            trade.lastAction = "CLOSED_$estimatedExitReason"
+            trade.pnlConfidence = GuidedTradeEntity.PNL_CONFIDENCE_LOW
+            if (trade.averageExitPrice <= BigDecimal.ZERO) {
+                trade.averageExitPrice = estimatedPrice
+            }
+            guidedTradeRepository.save(trade)
+            appendEvent(trade.id!!, "CLOSE_ESTIMATED", estimatedPrice, null, "청산 추정 종료($estimatedExitReason)")
+        }
+    }
+
+    private fun finalizeStopTrades(
+        allTrades: List<GuidedTradeEntity>,
+        stopResult: GuidedStopExecutionResult,
+        resolvedExitReason: String
+    ) {
+        for (trade in allTrades) {
+            if (trade.status == GuidedTradeEntity.STATUS_CLOSED) continue
+            trade.lastExitOrderId = stopResult.exitOrderId ?: trade.lastExitOrderId
+            if (!stopResult.hasEffectiveBalance || trade.remainingQuantity <= BigDecimal.ZERO) {
+                closeTradeAfterStop(trade, stopResult, resolvedExitReason)
+                continue
+            }
+            keepTradeOpenAfterStopAttempt(trade, stopResult, resolvedExitReason)
+        }
+    }
+
+    private fun closeTradeAfterStop(
+        trade: GuidedTradeEntity,
+        stopResult: GuidedStopExecutionResult,
+        resolvedExitReason: String
+    ) {
+        trade.remainingQuantity = BigDecimal.ZERO
+        trade.status = GuidedTradeEntity.STATUS_CLOSED
+        trade.closedAt = Instant.now()
+        trade.exitReason = resolvedExitReason
+        trade.lastAction = "CLOSED_$resolvedExitReason"
+        if (trade.averageExitPrice <= BigDecimal.ZERO && stopResult.executedPrice > BigDecimal.ZERO) {
+            trade.averageExitPrice = stopResult.executedPrice
+        }
+        guidedTradeRepository.save(trade)
+        appendEvent(
+            trade.id!!,
+            "CLOSE_ALL",
+            stopResult.executedPrice,
+            stopResult.executedQty.takeIf { it > BigDecimal.ZERO },
+            "청산 완료: $resolvedExitReason"
+        )
+    }
+
+    private fun keepTradeOpenAfterStopAttempt(
+        trade: GuidedTradeEntity,
+        stopResult: GuidedStopExecutionResult,
+        resolvedExitReason: String
+    ) {
+        trade.status = GuidedTradeEntity.STATUS_OPEN
+        trade.lastAction = if (stopResult.exitAttempted) {
+            if (stopResult.executedQty > BigDecimal.ZERO) "${resolvedExitReason}_PARTIAL"
+            else "${resolvedExitReason}_PENDING_EXIT"
+        } else {
+            "${resolvedExitReason}_SKIPPED"
+        }
+        guidedTradeRepository.save(trade)
+
+        if (stopResult.exitAttempted && stopResult.executedQty <= BigDecimal.ZERO) {
+            appendEvent(
+                trade.id!!,
+                "CLOSE_PENDING",
+                stopResult.executedPrice,
+                BigDecimal.ZERO,
+                "청산 주문 미체결 - 포지션 유지($resolvedExitReason)"
+            )
+        } else if (stopResult.exitAttempted && stopResult.executedQty > BigDecimal.ZERO) {
+            appendEvent(
+                trade.id!!,
+                "PARTIAL_CLOSE",
+                stopResult.executedPrice,
+                stopResult.executedQty,
+                "부분 청산 - 잔여 포지션 유지($resolvedExitReason)"
+            )
+        }
     }
 
     private fun normalizeStopExitReason(exitReason: String?): String {
