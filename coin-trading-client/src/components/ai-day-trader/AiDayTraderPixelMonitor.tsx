@@ -46,6 +46,14 @@ interface PositionedActor {
   y: number;
 }
 
+interface RoomSummary {
+  status: AiMonitorActor['status'];
+  statusLabel: string;
+  headline: string;
+  detail: string;
+  counter?: string;
+}
+
 interface AiDayTraderPixelMonitorProps {
   open: boolean;
   state: AiTraderState;
@@ -227,6 +235,101 @@ function getRelatedTrades(trades: GuidedClosedTradeView[], selection: MonitorSel
   return trades.slice(0, 6);
 }
 
+function summarizeRoom(roomId: RoomId, state: AiTraderState): RoomSummary | null {
+  const coreActor = state.monitorActors.find((actor) => actor.kind === 'CORE' && ROOM_BY_ROLE[actor.role] === roomId);
+  const latestExecutionEvent = state.events.find((event) =>
+    event.type === 'BUY_EXECUTION' || event.type === 'SELL_EXECUTION' || event.type === 'ERROR');
+  const latestManageEvent = state.events.find((event) => event.type === 'MANAGE_DECISION');
+  const activeSubagents = state.monitorActors.filter((actor) => actor.kind === 'SUBAGENT');
+  const latestSubagent = activeSubagents[0] ?? null;
+  const statusLabel = coreActor
+    ? {
+        IDLE: 'IDLE',
+        BUSY: 'LIVE',
+        SUCCESS: 'CLEAR',
+        ERROR: 'ALERT',
+        WAITING: 'WAIT',
+      }[coreActor.status]
+    : 'N/A';
+
+  switch (roomId) {
+    case 'scanner':
+      return {
+        status: coreActor?.status ?? 'IDLE',
+        statusLabel,
+        headline: coreActor?.taskSummary ?? '유동성 상위 시장을 순환 스캔합니다.',
+        detail: `최근 스캔 ${state.lastScanAt ? formatClock(state.lastScanAt) : '-'} · 사이클 ${state.scanCycles}회`,
+        counter: `${state.queue.length} queued`,
+      };
+    case 'ranking':
+      return {
+        status: coreActor?.status ?? 'IDLE',
+        statusLabel,
+        headline: coreActor?.taskSummary ?? 'LLM shortlist 압축 대기',
+        detail: state.queue.length > 0
+          ? `${state.queue[0].market.replace('KRW-', '')} 외 ${Math.max(state.queue.length - 1, 0)}개 후보 정렬`
+          : '큐가 비어 있어 다음 스캔을 기다립니다.',
+        counter: `${Math.min(state.queue.length, 12)} shortlist`,
+      };
+    case 'entry':
+      return {
+        status: coreActor?.status ?? 'IDLE',
+        statusLabel,
+        headline: coreActor?.taskSummary ?? '진입 후보를 아직 검토하지 않았습니다.',
+        detail: `최종 진입 검토 ${state.finalistsReviewed}건 · 매수 실행 ${state.buyExecutions}건`,
+        counter: `${Math.min(state.queue.length, 4)} finalists`,
+      };
+    case 'manage':
+      return {
+        status: coreActor?.status ?? 'IDLE',
+        statusLabel,
+        headline: coreActor?.taskSummary ?? '보유 포지션 모니터링 중',
+        detail: latestManageEvent?.message ?? '정체 손실, 시간 청산, 이익 반납 방지를 감시합니다.',
+        counter: `${state.positions.length} open`,
+      };
+    case 'execution':
+      return {
+        status: coreActor?.status ?? 'IDLE',
+        statusLabel,
+        headline: coreActor?.taskSummary ?? '주문 실행 대기',
+        detail: latestExecutionEvent?.message ?? '최근 주문 실행 이벤트가 없습니다.',
+        counter: `${state.buyExecutions} fills`,
+      };
+    case 'subagent':
+      return {
+        status: latestSubagent?.status ?? 'IDLE',
+        statusLabel: latestSubagent
+          ? {
+              IDLE: 'IDLE',
+              BUSY: 'LIVE',
+              SUCCESS: 'CLEAR',
+              ERROR: 'ALERT',
+              WAITING: 'WAIT',
+            }[latestSubagent.status]
+          : 'EMPTY',
+        headline: latestSubagent?.taskSummary ?? 'delegate / tool 호출이 생기면 여기에 나타납니다.',
+        detail: latestSubagent?.lastResult ?? '현재 활성 서브 에이전트가 없습니다.',
+        counter: `${activeSubagents.length} active`,
+      };
+    case 'market':
+      return {
+        status: 'BUSY',
+        statusLabel: 'BOARD',
+        headline: state.queue.length > 0
+          ? `${state.queue[0].market.replace('KRW-', '')}가 현재 최우선 후보입니다.`
+          : '현재 후보 큐가 비어 있습니다.',
+        detail: `보유 ${state.positions.length}개 · 오늘 거래 ${todayTradesCountFromState(state)}건`,
+        counter: `${state.queue.length} queue`,
+      };
+    default:
+      return null;
+  }
+}
+
+function todayTradesCountFromState(state: AiTraderState): number {
+  return state.closedTrades.length;
+}
+
 export default function AiDayTraderPixelMonitor({
   open,
   state,
@@ -260,6 +363,18 @@ export default function AiDayTraderPixelMonitor({
   const relatedTrades = useMemo(
     () => getRelatedTrades(todayTrades, selection, selectedActor ?? undefined),
     [selectedActor, selection, todayTrades],
+  );
+  const roomSummaries = useMemo<Record<RoomId, RoomSummary | null>>(
+    () => ({
+      scanner: summarizeRoom('scanner', state),
+      ranking: summarizeRoom('ranking', state),
+      entry: summarizeRoom('entry', state),
+      manage: summarizeRoom('manage', state),
+      execution: summarizeRoom('execution', state),
+      subagent: summarizeRoom('subagent', state),
+      market: summarizeRoom('market', state),
+    }),
+    [state],
   );
   const selectedPosition = useMemo(
     () => (selection?.kind === 'position'
@@ -467,7 +582,7 @@ export default function AiDayTraderPixelMonitor({
             {Object.values(layout.rooms).map((room) => (
               <div
                 key={room.id}
-                className={`ai-pixel-room ${selection?.kind === 'room' && selection.roomId === room.id ? 'is-selected' : ''}`}
+                className={`ai-pixel-room ai-pixel-room--${room.id} ${selection?.kind === 'room' && selection.roomId === room.id ? 'is-selected' : ''}`}
                 style={{
                   left: room.x,
                   top: room.y,
@@ -475,15 +590,28 @@ export default function AiDayTraderPixelMonitor({
                   height: room.height,
                 }}
                 onClick={() => handleSelect({ kind: 'room', roomId: room.id })}
-              >
-                <div
-                  className={`ai-pixel-room__header ${editMode ? 'is-editable' : ''}`}
+                >
+                  <div
+                    className={`ai-pixel-room__header ${editMode ? 'is-editable' : ''}`}
                   onPointerDown={(event) => handleRoomPointerDown(room.id, event)}
                   data-room-drag-handle="true"
                 >
-                  <div className="ai-pixel-room__title">{room.title}</div>
-                  <div className="ai-pixel-room__subtitle">{room.subtitle}</div>
-                </div>
+                    <div className="ai-pixel-room__title">{room.title}</div>
+                    <div className="ai-pixel-room__subtitle">{room.subtitle}</div>
+                  </div>
+
+                  {roomSummaries[room.id] && (
+                    <div className={`ai-pixel-room__console ai-pixel-room__console--${roomSummaries[room.id]!.status.toLowerCase()}`}>
+                      <div className="ai-pixel-room__console-topline">
+                        <span className="ai-pixel-room__console-status">{roomSummaries[room.id]!.statusLabel}</span>
+                        {roomSummaries[room.id]!.counter && (
+                          <span className="ai-pixel-room__console-counter">{roomSummaries[room.id]!.counter}</span>
+                        )}
+                      </div>
+                      <div className="ai-pixel-room__console-headline">{roomSummaries[room.id]!.headline}</div>
+                      <div className="ai-pixel-room__console-detail">{roomSummaries[room.id]!.detail}</div>
+                    </div>
+                  )}
 
                 {room.id === 'market' && (
                   <div className="ai-pixel-room__board">
@@ -577,7 +705,8 @@ export default function AiDayTraderPixelMonitor({
                 }}
                 title={`${actor.label} · ${actor.status}`}
               >
-                <span className={`ai-pixel-actor__sprite ai-pixel-actor__sprite--${actor.kind.toLowerCase()}`} />
+                <span className="ai-pixel-actor__shadow" />
+                <span className={`ai-pixel-actor__sprite ai-pixel-actor__sprite--${actor.kind.toLowerCase()} ai-pixel-actor__sprite--${actor.role.toLowerCase()}`} />
                 <span className="ai-pixel-actor__label">{actor.market ? `${actor.label} · ${actor.market.replace('KRW-', '')}` : actor.label}</span>
               </button>
             ))}
