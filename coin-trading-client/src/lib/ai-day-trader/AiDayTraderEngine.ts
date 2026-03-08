@@ -14,6 +14,9 @@ import {
   type AiDayTraderConfig,
   type AiEntryAggression,
   type AiExitCategory,
+  type AiMonitorActor,
+  type AiMonitorActorRole,
+  type AiMonitorActorStatus,
   type AiRankedOpportunity,
   type AiTraderEvent,
   type AiTraderEventType,
@@ -47,6 +50,10 @@ export {
   type AiDayTraderConfig,
   type AiEntryAggression,
   type AiExitCategory,
+  type AiMonitorActor,
+  type AiMonitorActorKind,
+  type AiMonitorActorRole,
+  type AiMonitorActorStatus,
   type AiRankedOpportunity,
   type AiTraderEvent,
   type AiTraderEventType,
@@ -85,6 +92,8 @@ const TODAY_STATS_SYNC_MS = 30_000;
 const PERFORMANCE_GUARD_PAUSE_MS = 20 * 60_000;
 const PERFORMANCE_MARKET_LOCK_MS = 4 * 60 * 60_000;
 const PERFORMANCE_MARKET_DEEP_LOCK_MS = 12 * 60 * 60_000;
+const MONITOR_CORE_RESET_MS = 2_800;
+const MONITOR_SUBAGENT_DISMISS_MS = 4_200;
 
 let nextId = 0;
 
@@ -135,6 +144,7 @@ function cloneState(state: AiTraderState): AiTraderState {
     positions: [...state.positions],
     queue: [...state.queue],
     closedTrades: [...state.closedTrades],
+    monitorActors: state.monitorActors.map((actor) => ({ ...actor })),
   };
 }
 
@@ -153,6 +163,9 @@ export class AiDayTraderEngine {
   private todayStatsSyncFailed = false;
   private performancePauseUntil: number | null = null;
   private performancePauseTradeId: number | null = null;
+  private monitorStatusResetTimers = new Map<string, number>();
+  private pendingSubagentIdsByContext = new Map<string, string[]>();
+  private subagentSequence = 0;
   private performanceSnapshot: AiPerformanceSnapshot = {
     regime: 'NORMAL',
     selectedAggression: 'BALANCED',
@@ -182,6 +195,12 @@ export class AiDayTraderEngine {
     this.config = { ...this.config, ...patch };
   }
 
+  setMonitorFocus(actorId: string | null) {
+    if (this.state.monitorFocusId === actorId) return;
+    this.state.monitorFocusId = actorId;
+    this.emit();
+  }
+
   isRunning(): boolean {
     return this.state.running;
   }
@@ -192,6 +211,7 @@ export class AiDayTraderEngine {
         this.state.entryEnabled = true;
         this.setBlockedReason(null);
         this.setStatus('IDLE');
+        this.setCoreActorState('ENTRY', 'WAITING', { taskSummary: '신규 진입 재개 대기' });
         this.emit();
         this.pushEvent('STATUS', '신규 진입 재개');
         if (this.scanTimer === null) {
@@ -211,6 +231,8 @@ export class AiDayTraderEngine {
     this.state.running = true;
     this.state.entryEnabled = true;
     this.state.status = 'IDLE';
+    this.state.monitorFocusId = this.state.monitorFocusId ?? 'core-scan';
+    this.resetCoreActors();
     this.emit();
     this.pushEvent('STATUS', 'LLM 초단타 터미널 시작');
     void this.syncTodayPerformance(true);
@@ -241,12 +263,14 @@ export class AiDayTraderEngine {
       this.state.running = false;
       this.state.status = 'IDLE';
       this.setBlockedReason(null);
+      this.resetCoreActors();
       this.emit();
       this.pushEvent('STATUS', 'LLM 초단타 터미널 중지');
       return;
     }
     this.setBlockedReason('신규 진입 중지 · 보유 포지션만 자동 관리');
     this.setStatus('PAUSED');
+    this.setCoreActorState('ENTRY', 'WAITING', { taskSummary: '신규 진입 중지 · 보유 포지션만 관리' });
     this.emit();
     this.pushEvent('STATUS', '신규 진입 중지 · 보유 포지션 관리 계속');
   }
@@ -284,6 +308,159 @@ export class AiDayTraderEngine {
     if (this.state.status === status) return;
     this.state.status = status;
     this.emit();
+  }
+
+  private resetCoreActors() {
+    const now = Date.now();
+    this.state.monitorActors = this.state.monitorActors.map((actor) => {
+      if (actor.kind !== 'CORE') return actor;
+      return {
+        ...actor,
+        status: 'IDLE',
+        market: undefined,
+        taskSummary: undefined,
+        lastResult: undefined,
+        updatedAt: now,
+      };
+    });
+  }
+
+  private withMonitorCleanup(actorId: string, callback: () => void, delayMs: number) {
+    const existingTimer = this.monitorStatusResetTimers.get(actorId);
+    if (existingTimer !== undefined) {
+      window.clearTimeout(existingTimer);
+    }
+    const nextTimer = window.setTimeout(() => {
+      this.monitorStatusResetTimers.delete(actorId);
+      callback();
+    }, delayMs);
+    this.monitorStatusResetTimers.set(actorId, nextTimer);
+  }
+
+  private updateMonitorActor(
+    actorId: string,
+    patch: Partial<AiMonitorActor>,
+    options?: { resetToIdleAfterMs?: number; removeAfterMs?: number }
+  ) {
+    const now = Date.now();
+    let changed = false;
+    this.state.monitorActors = this.state.monitorActors.map((actor) => {
+      if (actor.id !== actorId) return actor;
+      changed = true;
+      return {
+        ...actor,
+        ...patch,
+        updatedAt: now,
+        startedAt: patch.status === 'BUSY' && actor.status !== 'BUSY' ? now : actor.startedAt || now,
+      };
+    });
+    if (changed) {
+      this.emit();
+    }
+    if (options?.resetToIdleAfterMs) {
+      this.withMonitorCleanup(actorId, () => {
+        this.updateMonitorActor(actorId, {
+          status: 'IDLE',
+          market: undefined,
+          taskSummary: undefined,
+        });
+      }, options.resetToIdleAfterMs);
+    }
+    if (options?.removeAfterMs) {
+      this.withMonitorCleanup(actorId, () => {
+        this.state.monitorActors = this.state.monitorActors.filter((actor) => actor.id !== actorId);
+        if (this.state.monitorFocusId === actorId) {
+          this.state.monitorFocusId = null;
+        }
+        this.emit();
+      }, options.removeAfterMs);
+    }
+  }
+
+  private setCoreActorState(
+    role: AiMonitorActorRole,
+    status: AiMonitorActorStatus,
+    patch: Partial<AiMonitorActor> = {},
+    options?: { transient?: boolean }
+  ) {
+    const actorId = `core-${role.toLowerCase()}`;
+    this.updateMonitorActor(actorId, {
+      status,
+      ...patch,
+    }, options?.transient
+      ? { resetToIdleAfterMs: MONITOR_CORE_RESET_MS }
+      : undefined);
+  }
+
+  private buildSubagentLabel(toolName: string): string {
+    if (toolName === 'delegate_to_zai_agent') {
+      return 'Z.ai Delegate';
+    }
+    return toolName.replaceAll('_', ' ');
+  }
+
+  private buildToolTaskSummary(toolName: string, args: string): string {
+    if (toolName !== 'delegate_to_zai_agent') {
+      return args.slice(0, 120);
+    }
+    try {
+      const parsed = JSON.parse(args) as Record<string, unknown>;
+      const task = typeof parsed.task === 'string' ? parsed.task.trim() : '';
+      return task.slice(0, 160) || 'delegate task';
+    } catch {
+      return 'delegate task';
+    }
+  }
+
+  private startSubagentActor(contextId: string, parentRole: AiMonitorActorRole, market: string | undefined, toolName: string, args: string) {
+    this.subagentSequence += 1;
+    const actorId = `subagent-${this.subagentSequence}`;
+    const actor: AiMonitorActor = {
+      id: actorId,
+      kind: 'SUBAGENT',
+      role: 'DELEGATE',
+      status: 'BUSY',
+      label: this.buildSubagentLabel(toolName),
+      market,
+      taskSummary: this.buildToolTaskSummary(toolName, args),
+      parentId: `core-${parentRole.toLowerCase()}`,
+      toolName,
+      startedAt: Date.now(),
+      updatedAt: Date.now(),
+    };
+    this.state.monitorActors = [...this.state.monitorActors, actor];
+    const queue = this.pendingSubagentIdsByContext.get(contextId) ?? [];
+    queue.push(actorId);
+    this.pendingSubagentIdsByContext.set(contextId, queue);
+    this.state.monitorFocusId = actorId;
+    this.emit();
+  }
+
+  private completeSubagentActor(contextId: string, toolName: string, result: string) {
+    const queue = this.pendingSubagentIdsByContext.get(contextId);
+    const actorId = queue?.shift();
+    if (queue && queue.length === 0) {
+      this.pendingSubagentIdsByContext.delete(contextId);
+    }
+    if (!actorId) return;
+    const isError = /\"error\"|실패|error|timeout|초과|미연결/i.test(result);
+    this.updateMonitorActor(actorId, {
+      status: isError ? 'ERROR' : 'SUCCESS',
+      lastResult: result.slice(0, 220),
+      toolName,
+    }, { removeAfterMs: MONITOR_SUBAGENT_DISMISS_MS });
+  }
+
+  private buildToolMonitorCallbacks(parentRole: AiMonitorActorRole, market?: string) {
+    const contextId = makeId('subctx');
+    return {
+      onToolCall: (toolName: string, args: string) => {
+        this.startSubagentActor(contextId, parentRole, market, toolName, args);
+      },
+      onToolResult: (toolName: string, result: string) => {
+        this.completeSubagentActor(contextId, toolName, result);
+      },
+    };
   }
 
   private setBlockedReason(reason: string | null) {
@@ -368,6 +545,8 @@ export class AiDayTraderEngine {
       if (!this.state.running || !this.state.entryEnabled) return;
 
       if (this.state.dailyPnl <= this.config.dailyLossLimitKrw) {
+        this.setCoreActorState('SCAN', 'WAITING', { taskSummary: '일손실 차단으로 스캔 대기' });
+        this.setCoreActorState('ENTRY', 'WAITING', { taskSummary: '일손실 차단으로 진입 대기' });
         this.setBlockedReason(
           `일손실 차단 활성화 · 실현 ${this.formatKrw(this.state.dailyPnl)} / 한도 ${this.formatKrw(this.config.dailyLossLimitKrw)}`
         );
@@ -376,6 +555,8 @@ export class AiDayTraderEngine {
       }
 
       if (this.performancePauseUntil && this.performancePauseUntil > Date.now()) {
+        this.setCoreActorState('SCAN', 'WAITING', { taskSummary: '성과 방어모드로 스캔 대기' });
+        this.setCoreActorState('ENTRY', 'WAITING', { taskSummary: '성과 방어모드로 진입 대기' });
         const remainingMinutes = Math.max(1, Math.ceil((this.performancePauseUntil - Date.now()) / 60_000));
         this.setBlockedReason(
           `성과 방어모드 · ${remainingMinutes}분 후 재개 · 최근 ${this.performanceSnapshot.recentTradeCount}건 ${this.formatKrw(this.performanceSnapshot.recentNetPnlKrw)}`
@@ -385,6 +566,7 @@ export class AiDayTraderEngine {
       }
 
       if (positions.length >= this.config.maxConcurrentPositions) {
+        this.setCoreActorState('ENTRY', 'WAITING', { taskSummary: '포지션 한도 도달' });
         this.setBlockedReason(
           `동시 포지션 한도 도달 · ${positions.length}/${this.config.maxConcurrentPositions}`
         );
@@ -395,10 +577,14 @@ export class AiDayTraderEngine {
       this.setBlockedReason(null);
       this.state.lastScanAt = Date.now();
       this.setStatus('SCANNING');
+      this.setCoreActorState('SCAN', 'BUSY', { taskSummary: `유동성 상위 ${this.config.universeLimit}개 시장 스캔` });
       this.pushEvent('SCAN', `유동성 상위 ${this.config.universeLimit}개 시장 스캔`);
 
       const scan = await guidedTradingApi.getAiScalpScan('minute1', this.config.universeLimit, this.config.strategyCode);
       if (!this.state.running) return;
+      this.setCoreActorState('SCAN', 'SUCCESS', {
+        taskSummary: `스캔 완료 · ${scan.markets.length}개 시장`,
+      }, { transient: true });
 
       this.state.scanCycles += 1;
       this.state.lastScanAt = Date.now();
@@ -410,14 +596,19 @@ export class AiDayTraderEngine {
       if (candidates.length === 0) {
         this.state.queue = [];
         this.emit();
+        this.setCoreActorState('ENTRY', 'WAITING', { taskSummary: '진입 가능한 후보 없음' });
         this.pushEvent('STATUS', '현재 진입 가능한 후보가 없음');
         return;
       }
 
       this.setStatus('RANKING');
+      this.setCoreActorState('RANK', 'BUSY', { taskSummary: `${candidates.length}개 후보 shortlist 정리` });
       const ranked = await this.rankMarkets(candidates);
       this.state.queue = ranked;
       this.emit();
+      this.setCoreActorState('RANK', 'SUCCESS', {
+        taskSummary: `shortlist ${ranked.length}개`,
+      }, { transient: true });
       this.pushEvent(
         'RANK',
         `LLM shortlist ${ranked.length}개`,
@@ -429,9 +620,13 @@ export class AiDayTraderEngine {
 
       const aggressionProfile = this.getEntryAggressionProfile();
       const finalists = ranked.slice(0, aggressionProfile.finalistLimit);
-      if (finalists.length === 0) return;
+      if (finalists.length === 0) {
+        this.setCoreActorState('ENTRY', 'WAITING', { taskSummary: '최종 검토 후보 없음' });
+        return;
+      }
 
       this.setStatus('ANALYZING');
+      this.setCoreActorState('ENTRY', 'BUSY', { taskSummary: `최종 ${finalists.length}개 진입 검토` });
       const activeMarkets = new Set(this.state.positions.map((position) => position.market));
       let activePositionCount = this.state.positions.length;
 
@@ -493,6 +688,7 @@ export class AiDayTraderEngine {
 
         try {
           this.setStatus('EXECUTING');
+          this.setCoreActorState('EXECUTION', 'BUSY', { market: finalist.market, taskSummary: '시장가 매수 실행' });
           const position = await guidedTradingApi.start({
             market: finalist.market,
             amountKrw: this.config.amountKrw,
@@ -511,6 +707,14 @@ export class AiDayTraderEngine {
           activeMarkets.add(position.market);
           this.upsertPosition(position);
           this.contextFailureCountByMarket.set(position.market, 0);
+          this.setCoreActorState('EXECUTION', 'SUCCESS', {
+            market: position.market,
+            taskSummary: '매수 체결 완료',
+          }, { transient: true });
+          this.setCoreActorState('ENTRY', 'SUCCESS', {
+            market: position.market,
+            taskSummary: 'BUY 결정 승인',
+          }, { transient: true });
           this.pushEvent(
             'BUY_EXECUTION',
             `${position.market} 매수 실행`,
@@ -520,10 +724,16 @@ export class AiDayTraderEngine {
             decision.urgency
           );
         } catch (error) {
+          this.setCoreActorState('EXECUTION', 'ERROR', {
+            market: finalist.market,
+            taskSummary: this.toErrorText(error),
+          }, { transient: true });
           this.pushEvent('ERROR', `${finalist.market} 매수 실패`, this.toErrorText(error), finalist.market);
         }
       }
+      this.setCoreActorState('ENTRY', 'WAITING', { taskSummary: '다음 스캔 대기' });
     } catch (error) {
+      this.setCoreActorState('SCAN', 'ERROR', { taskSummary: this.toErrorText(error) }, { transient: true });
       this.pushEvent('ERROR', '스캔 루프 실패', this.toErrorText(error));
     } finally {
       this.scanInFlight = false;
@@ -537,9 +747,11 @@ export class AiDayTraderEngine {
     this.pruneTransientState();
 
     try {
+      this.setCoreActorState('MANAGE', 'BUSY', { taskSummary: '보유 포지션 점검' });
       const positions = await this.syncOpenPositions();
       if (!this.state.running) return;
       if (positions.length === 0) {
+        this.setCoreActorState('MANAGE', 'WAITING', { taskSummary: '보유 포지션 없음' });
         this.completeStopWhenFlat();
         return;
       }
@@ -588,6 +800,10 @@ export class AiDayTraderEngine {
           );
           this.contextFailureCountByMarket.set(position.market, 0);
         } catch (error) {
+          this.setCoreActorState('MANAGE', 'ERROR', {
+            market: position.market,
+            taskSummary: `컨텍스트 실패 ${this.toErrorText(error)}`,
+          }, { transient: true });
           const failureCount = (this.contextFailureCountByMarket.get(position.market) ?? 0) + 1;
           this.contextFailureCountByMarket.set(position.market, failureCount);
           this.pushEvent(
@@ -632,8 +848,12 @@ export class AiDayTraderEngine {
       }
 
       await this.syncOpenPositions();
+      this.setCoreActorState('MANAGE', 'SUCCESS', {
+        taskSummary: `관리 루프 완료 · ${positions.length}개 포지션`,
+      }, { transient: true });
       this.completeStopWhenFlat();
     } catch (error) {
+      this.setCoreActorState('MANAGE', 'ERROR', { taskSummary: this.toErrorText(error) }, { transient: true });
       this.pushEvent('ERROR', '포지션 관리 루프 실패', this.toErrorText(error));
     } finally {
       this.manageInFlight = false;
@@ -663,6 +883,7 @@ export class AiDayTraderEngine {
     const deterministic = this.buildDeterministicShortlist(markets);
 
     try {
+      const toolMonitor = this.buildToolMonitorCallbacks('RANK');
       const response = await requestOneShotTextWithMeta({
         prompt: [
           SHORTLIST_SYSTEM_PROMPT,
@@ -675,6 +896,8 @@ export class AiDayTraderEngine {
         zaiEndpointMode: this.config.zaiEndpointMode,
         delegationMode: this.config.delegationMode,
         zaiDelegateModel: this.config.zaiDelegateModel,
+        onToolCall: toolMonitor.onToolCall,
+        onToolResult: toolMonitor.onToolResult,
       });
 
       const parsed = parseJsonObject(response.text);
@@ -715,6 +938,7 @@ export class AiDayTraderEngine {
         return shortlist;
       }
     } catch (error) {
+      this.setCoreActorState('RANK', 'ERROR', { taskSummary: this.toErrorText(error) }, { transient: true });
       this.pushEvent('ERROR', 'LLM shortlist 실패, 정량 정렬로 폴백', this.toErrorText(error));
     }
 
@@ -729,6 +953,7 @@ export class AiDayTraderEngine {
     aggressionProfile: AiEntryAggressionProfile
   ): Promise<AiEntryDecision | null> {
     try {
+      const toolMonitor = this.buildToolMonitorCallbacks('ENTRY', scanMarket.market);
       const response = await requestOneShotTextWithMeta({
         prompt: [
           ENTRY_SYSTEM_PROMPT,
@@ -755,10 +980,16 @@ export class AiDayTraderEngine {
         zaiEndpointMode: this.config.zaiEndpointMode,
         delegationMode: this.config.delegationMode,
         zaiDelegateModel: this.config.zaiDelegateModel,
+        onToolCall: toolMonitor.onToolCall,
+        onToolResult: toolMonitor.onToolResult,
       });
 
       const parsed = parseJsonObject(response.text);
       if (!parsed) {
+        this.setCoreActorState('ENTRY', 'ERROR', {
+          market: scanMarket.market,
+          taskSummary: '진입 응답 파싱 실패',
+        }, { transient: true });
         this.pushEvent('ERROR', `${scanMarket.market} 진입 응답 파싱 실패`, response.text.slice(0, 200), scanMarket.market);
         return null;
       }
@@ -777,6 +1008,10 @@ export class AiDayTraderEngine {
         urgency: normalizeUrgency(parsed.urgency),
       };
     } catch (error) {
+      this.setCoreActorState('ENTRY', 'ERROR', {
+        market: scanMarket.market,
+        taskSummary: this.toErrorText(error),
+      }, { transient: true });
       this.pushEvent('ERROR', `${scanMarket.market} 진입 LLM 실패`, this.toErrorText(error), scanMarket.market);
       return null;
     }
@@ -789,6 +1024,7 @@ export class AiDayTraderEngine {
     effectiveMaxHoldingMinutes: number
   ): Promise<AiManageDecision | null> {
     try {
+      const toolMonitor = this.buildToolMonitorCallbacks('MANAGE', position.market);
       const response = await requestOneShotTextWithMeta({
         prompt: [
           MANAGE_SYSTEM_PROMPT,
@@ -813,10 +1049,16 @@ export class AiDayTraderEngine {
         zaiEndpointMode: this.config.zaiEndpointMode,
         delegationMode: this.config.delegationMode,
         zaiDelegateModel: this.config.zaiDelegateModel,
+        onToolCall: toolMonitor.onToolCall,
+        onToolResult: toolMonitor.onToolResult,
       });
 
       const parsed = parseJsonObject(response.text);
       if (!parsed) {
+        this.setCoreActorState('MANAGE', 'ERROR', {
+          market: position.market,
+          taskSummary: '관리 응답 파싱 실패',
+        }, { transient: true });
         this.pushEvent('ERROR', `${position.market} 관리 응답 파싱 실패`, response.text.slice(0, 200), position.market);
         return null;
       }
@@ -832,6 +1074,10 @@ export class AiDayTraderEngine {
         urgency: normalizeUrgency(parsed.urgency),
       };
     } catch (error) {
+      this.setCoreActorState('MANAGE', 'ERROR', {
+        market: position.market,
+        taskSummary: this.toErrorText(error),
+      }, { transient: true });
       this.pushEvent('ERROR', `${position.market} 관리 LLM 실패`, this.toErrorText(error), position.market);
       return null;
     }
@@ -936,6 +1182,7 @@ export class AiDayTraderEngine {
   ) {
     try {
       this.setStatus('EXECUTING');
+      this.setCoreActorState('EXECUTION', 'BUSY', { market: position.market, taskSummary: reason });
       const result = await guidedTradingApi.stop(position.market, exitReasonCode ?? this.resolveServerExitReason(reason, forcedCategory));
       const closed =
         result.status === 'CLOSED' ||
@@ -967,10 +1214,22 @@ export class AiDayTraderEngine {
         const cooldownMs = this.resolveCooldownMs(exitCategory);
         this.cooldownUntilByMarket.set(position.market, Date.now() + cooldownMs);
         this.contextFailureCountByMarket.delete(position.market);
+        this.setCoreActorState('EXECUTION', 'SUCCESS', {
+          market: position.market,
+          taskSummary: `${closed ? '매도 체결 완료' : '포지션 동기화'}`,
+        }, { transient: true });
       } else {
         this.upsertPosition(result);
+        this.setCoreActorState('EXECUTION', 'SUCCESS', {
+          market: position.market,
+          taskSummary: '부분 청산/동기화',
+        }, { transient: true });
       }
     } catch (error) {
+      this.setCoreActorState('EXECUTION', 'ERROR', {
+        market: position.market,
+        taskSummary: this.toErrorText(error),
+      }, { transient: true });
       this.pushEvent('ERROR', `${position.market} 매도 실패`, this.toErrorText(error), position.market);
     }
   }
@@ -1288,6 +1547,7 @@ export class AiDayTraderEngine {
     this.state.running = false;
     this.state.status = 'IDLE';
     this.state.blockedReason = null;
+    this.resetCoreActors();
     this.emit();
     this.pushEvent('STATUS', '보유 포지션 정리 완료 · 엔진 완전 중지');
     return true;

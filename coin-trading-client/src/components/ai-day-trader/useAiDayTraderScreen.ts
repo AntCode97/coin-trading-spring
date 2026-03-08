@@ -90,9 +90,11 @@ export interface AiDayTraderScreenViewModel {
   provider: AiDayTraderProviderView;
   journal: AiDayTraderJournalView;
   history: AiDayTraderHistoryView;
+  isMonitorOpen: boolean;
   journalScrollRef: React.MutableRefObject<HTMLDivElement | null>;
   updateConfig: (patch: Partial<AiDayTraderConfig>) => void;
   setSelectedHistoryMarket: (market: string) => void;
+  setMonitorFocus: (actorId: string | null) => void;
   setZaiApiKeyInput: (value: string) => void;
   refreshConnectionStatus: () => Promise<{ openai: LlmConnectionStatus; zai: LlmConnectionStatus }>;
   handleOpenAiLogin: () => Promise<void>;
@@ -100,6 +102,9 @@ export interface AiDayTraderScreenViewModel {
   handleSaveZaiKey: () => Promise<void>;
   handleClearZaiKey: () => Promise<void>;
   handleEngineAction: () => Promise<void>;
+  openMonitor: () => void;
+  closeMonitor: () => void;
+  toggleMonitor: () => void;
   goToLatestJournalPage: () => void;
   goToPreviousJournalPage: () => void;
   goToNextJournalPage: () => void;
@@ -112,6 +117,7 @@ export function useAiDayTraderScreen(): AiDayTraderScreenViewModel {
   const [state, setState] = useState<AiTraderState>(() => createInitialAiTraderState());
   const [selectedHistoryMarket, setSelectedHistoryMarket] = useState('ALL');
   const [journalPage, setJournalPage] = useState(1);
+  const [isMonitorOpen, setMonitorOpen] = useState(false);
   const [openAiStatus, setOpenAiStatus] = useState<LlmConnectionStatus>('checking');
   const [zaiStatus, setZaiStatus] = useState<LlmConnectionStatus>('checking');
   const [providerBusy, setProviderBusy] = useState(false);
@@ -287,6 +293,10 @@ export function useAiDayTraderScreen(): AiDayTraderScreenViewModel {
     setConfig((current) => ({ ...current, ...patch }));
   };
 
+  const setMonitorFocus = (actorId: string | null) => {
+    engineRef.current?.setMonitorFocus(actorId);
+  };
+
   const refreshConnectionStatus = async (): Promise<{ openai: LlmConnectionStatus; zai: LlmConnectionStatus }> => {
     try {
       const [openai, zai] = await Promise.all([
@@ -396,6 +406,20 @@ export function useAiDayTraderScreen(): AiDayTraderScreenViewModel {
   const goToLatestJournalPage = () => setJournalPage(1);
   const goToPreviousJournalPage = () => setJournalPage((current) => Math.max(1, current - 1));
   const goToNextJournalPage = () => setJournalPage((current) => Math.min(journalPageCount, current + 1));
+  const openMonitor = () => setMonitorOpen(true);
+  const closeMonitor = () => {
+    setMonitorOpen(false);
+    setMonitorFocus(null);
+  };
+  const toggleMonitor = () => {
+    setMonitorOpen((current) => {
+      const next = !current;
+      if (!next) {
+        setMonitorFocus(null);
+      }
+      return next;
+    });
+  };
 
   useEffect(() => {
     if (selectedHistoryMarket === 'ALL') return;
@@ -418,9 +442,11 @@ export function useAiDayTraderScreen(): AiDayTraderScreenViewModel {
     provider,
     journal,
     history,
+    isMonitorOpen,
     journalScrollRef,
     updateConfig,
     setSelectedHistoryMarket,
+    setMonitorFocus,
     setZaiApiKeyInput,
     refreshConnectionStatus,
     handleOpenAiLogin,
@@ -428,6 +454,9 @@ export function useAiDayTraderScreen(): AiDayTraderScreenViewModel {
     handleSaveZaiKey,
     handleClearZaiKey,
     handleEngineAction,
+    openMonitor,
+    closeMonitor,
+    toggleMonitor,
     goToLatestJournalPage,
     goToPreviousJournalPage,
     goToNextJournalPage,

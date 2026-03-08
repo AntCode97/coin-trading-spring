@@ -167,6 +167,7 @@ coin-trading-spring/
 - 데스크톱은 `AI_SCALP_TRADER` prefix 포지션만 관리하고 `/autopilot/opportunities` stage를 하드 게이트로 사용하지 않음.
 - 새 UI는 상단 세션 바, 좌측 기회 큐, 중앙 결정 저널, 우측 포지션/설정의 3열 터미널 구조.
 - 설정은 `스캔 주기/포지션 점검 최대 3분`, `1회 금액 5,000원 단위`, `오늘 거래내역 전체/코인별 필터`를 제공.
+- `모니터 열기` 오버레이는 코어 에이전트(`SCAN/RANK/ENTRY/MANAGE/EXECUTION`)와 실제 delegate/tool 호출 기반 서브 에이전트를 도트 그래픽으로 보여주며, 클릭 상세 패널과 로컬 레이아웃 편집(방 이동/줌/팬/저장/리셋)을 지원.
 
 ### 데스크톱 OpenAI + z.ai 멀티-프로바이더 통합
 

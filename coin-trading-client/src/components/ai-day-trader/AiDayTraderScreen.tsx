@@ -6,6 +6,7 @@ import {
   AiDayTraderQueuePanel,
   AiDayTraderSessionBar,
 } from './AiDayTraderScreenSections';
+import AiDayTraderPixelMonitor from './AiDayTraderPixelMonitor';
 import { useAiDayTraderScreen } from './useAiDayTraderScreen';
 import './AiDayTraderScreen.css';
 
@@ -20,6 +21,8 @@ export default function AiDayTraderScreen() {
         session={screen.session}
         provider={screen.provider}
         onEngineAction={() => void screen.handleEngineAction()}
+        onToggleMonitor={screen.toggleMonitor}
+        isMonitorOpen={screen.isMonitorOpen}
       />
 
       <div className="ai-scalp-layout">
@@ -60,6 +63,14 @@ export default function AiDayTraderScreen() {
       <AiDayTraderHistoryPanel
         history={screen.history}
         onSelectMarket={screen.setSelectedHistoryMarket}
+      />
+
+      <AiDayTraderPixelMonitor
+        open={screen.isMonitorOpen}
+        state={screen.state}
+        todayTrades={screen.history.todayTrades}
+        onClose={screen.closeMonitor}
+        onFocusActor={screen.setMonitorFocus}
       />
     </div>
   );

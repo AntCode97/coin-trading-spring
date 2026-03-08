@@ -37,6 +37,9 @@ export type AiTraderEventType =
   | 'STATUS';
 export type AiUrgency = 'LOW' | 'MEDIUM' | 'HIGH';
 export type AiExitCategory = 'TAKE_PROFIT' | 'STOP_LOSS' | 'LLM_EXIT' | 'FORCED_EXIT';
+export type AiMonitorActorKind = 'CORE' | 'SUBAGENT';
+export type AiMonitorActorRole = 'SCAN' | 'RANK' | 'ENTRY' | 'MANAGE' | 'EXECUTION' | 'DELEGATE';
+export type AiMonitorActorStatus = 'IDLE' | 'BUSY' | 'SUCCESS' | 'ERROR' | 'WAITING';
 
 export interface AiTraderEvent {
   id: string;
@@ -69,6 +72,21 @@ export interface AiClosedTrade {
   closedAt: string;
 }
 
+export interface AiMonitorActor {
+  id: string;
+  kind: AiMonitorActorKind;
+  role: AiMonitorActorRole;
+  status: AiMonitorActorStatus;
+  label: string;
+  market?: string;
+  taskSummary?: string;
+  parentId?: string;
+  toolName?: string;
+  lastResult?: string;
+  startedAt: number;
+  updatedAt: number;
+}
+
 export interface AiTraderState {
   running: boolean;
   entryEnabled: boolean;
@@ -85,6 +103,8 @@ export interface AiTraderState {
   buyExecutions: number;
   lastScanAt: number | null;
   blockedReason: string | null;
+  monitorActors: AiMonitorActor[];
+  monitorFocusId: string | null;
 }
 
 export const AI_ENTRY_AGGRESSION_OPTIONS: Array<{ value: AiEntryAggression; label: string }> = [
@@ -111,6 +131,14 @@ export const DEFAULT_AI_DAY_TRADER_CONFIG: AiDayTraderConfig = {
   strategyCode: 'AI_SCALP_TRADER',
 };
 
+const CORE_MONITOR_ACTORS: AiMonitorActor[] = [
+  { id: 'core-scan', kind: 'CORE', role: 'SCAN', status: 'IDLE', label: 'Scanner', startedAt: 0, updatedAt: 0 },
+  { id: 'core-rank', kind: 'CORE', role: 'RANK', status: 'IDLE', label: 'Ranker', startedAt: 0, updatedAt: 0 },
+  { id: 'core-entry', kind: 'CORE', role: 'ENTRY', status: 'IDLE', label: 'Entry Agent', startedAt: 0, updatedAt: 0 },
+  { id: 'core-manage', kind: 'CORE', role: 'MANAGE', status: 'IDLE', label: 'Position Agent', startedAt: 0, updatedAt: 0 },
+  { id: 'core-execution', kind: 'CORE', role: 'EXECUTION', status: 'IDLE', label: 'Execution Bot', startedAt: 0, updatedAt: 0 },
+];
+
 export function createInitialAiTraderState(): AiTraderState {
   return {
     running: false,
@@ -128,5 +156,7 @@ export function createInitialAiTraderState(): AiTraderState {
     buyExecutions: 0,
     lastScanAt: null,
     blockedReason: null,
+    monitorActors: CORE_MONITOR_ACTORS.map((actor) => ({ ...actor })),
+    monitorFocusId: null,
   };
 }

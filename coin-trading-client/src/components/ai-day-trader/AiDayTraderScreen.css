@@ -49,6 +49,11 @@
   justify-content: space-between;
 }
 
+.ai-scalp-sessionbar__actions {
+  align-items: flex-end;
+  gap: 10px;
+}
+
 .ai-scalp-sessionbar__title-row {
   display: flex;
   align-items: center;
@@ -226,6 +231,12 @@
 .ai-scalp-action.danger {
   color: #ffe9e9;
   background: linear-gradient(135deg, rgba(255, 110, 110, 0.9), rgba(255, 156, 96, 0.82));
+}
+
+.ai-scalp-action.secondary {
+  color: var(--ai-scalp-text);
+  border-color: rgba(102, 184, 255, 0.18);
+  background: rgba(10, 20, 36, 0.82);
 }
 
 .ai-scalp-layout {

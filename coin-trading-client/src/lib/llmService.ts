@@ -68,6 +68,8 @@ interface OneShotOptions {
   zaiEndpointMode?: ZaiEndpointMode;
   delegationMode?: DelegationMode;
   zaiDelegateModel?: string;
+  onToolCall?: (toolName: string, args: string) => void;
+  onToolResult?: (toolName: string, result: string) => void;
 }
 
 interface ZaiToolLoopResult {
@@ -1025,6 +1027,7 @@ async function requestOpenAiOneShotWithMeta(options: OneShotOptions): Promise<{ 
         input.push({ role: 'assistant', content: accumulated });
       }
       for (const tc of pendingToolCalls) {
+        options.onToolCall?.(tc.name, tc.args);
         let parsedArgs: Record<string, unknown> = {};
         try {
           parsedArgs = JSON.parse(tc.args);
@@ -1047,6 +1050,8 @@ async function requestOpenAiOneShotWithMeta(options: OneShotOptions): Promise<{ 
         } else {
           result = await callMcpTool(tc.name, parsedArgs, options.mcpTools);
         }
+
+        options.onToolResult?.(tc.name, result);
 
         input.push({
           role: 'user',
@@ -1089,6 +1094,8 @@ async function requestZaiOneShotWithMeta(options: OneShotOptions): Promise<{ tex
     model: options.model || ZAI_DEFAULT_MODEL,
     messages,
     mcpTools: options.mcpTools,
+    onToolCall: options.onToolCall,
+    onToolResult: options.onToolResult,
   });
 
   const usage = loopResult.usage.totalTokens > 0

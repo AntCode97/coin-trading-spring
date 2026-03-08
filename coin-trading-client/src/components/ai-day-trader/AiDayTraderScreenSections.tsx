@@ -51,6 +51,8 @@ interface SessionBarProps {
   session: AiDayTraderSessionView;
   provider: AiDayTraderProviderView;
   onEngineAction: () => void;
+  onToggleMonitor: () => void;
+  isMonitorOpen: boolean;
 }
 
 interface JournalPanelProps {
@@ -86,6 +88,8 @@ export function AiDayTraderSessionBar({
   session,
   provider,
   onEngineAction,
+  onToggleMonitor,
+  isMonitorOpen,
 }: SessionBarProps) {
   return (
     <header className="ai-scalp-sessionbar">
@@ -135,6 +139,13 @@ export function AiDayTraderSessionBar({
       </div>
 
       <div className="ai-scalp-sessionbar__actions">
+        <button
+          type="button"
+          className="ai-scalp-action secondary"
+          onClick={onToggleMonitor}
+        >
+          {isMonitorOpen ? '모니터 닫기' : '모니터 열기'}
+        </button>
         <button
           type="button"
           className={`ai-scalp-action ${session.engineActionClass}`}
