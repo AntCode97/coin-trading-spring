@@ -5,6 +5,7 @@ import {
   AiDayTraderPositionsPanel,
   AiDayTraderQueuePanel,
   AiDayTraderSessionBar,
+  AiDayTraderStrategyPanel,
 } from './AiDayTraderScreenSections';
 import AiDayTraderPixelMonitor from './AiDayTraderPixelMonitor';
 import { useAiDayTraderScreen } from './useAiDayTraderScreen';
@@ -43,6 +44,10 @@ export default function AiDayTraderScreen() {
             scanCycles={screen.state.scanCycles}
             finalistsReviewed={screen.state.finalistsReviewed}
             buyExecutions={screen.state.buyExecutions}
+          />
+
+          <AiDayTraderStrategyPanel
+            reflection={screen.state.strategyReflection}
           />
 
           <AiDayTraderConfigPanel

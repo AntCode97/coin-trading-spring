@@ -29,6 +29,7 @@ export type AiEntryAggression = 'CONSERVATIVE' | 'BALANCED' | 'AGGRESSIVE';
 export type AiTraderEventType =
   | 'SCAN'
   | 'RANK'
+  | 'REVIEW'
   | 'BUY_DECISION'
   | 'BUY_EXECUTION'
   | 'MANAGE_DECISION'
@@ -40,6 +41,37 @@ export type AiExitCategory = 'TAKE_PROFIT' | 'STOP_LOSS' | 'LLM_EXIT' | 'FORCED_
 export type AiMonitorActorKind = 'CORE' | 'SUBAGENT';
 export type AiMonitorActorRole = 'SCAN' | 'RANK' | 'ENTRY' | 'MANAGE' | 'EXECUTION' | 'DELEGATE';
 export type AiMonitorActorStatus = 'IDLE' | 'BUSY' | 'SUCCESS' | 'ERROR' | 'WAITING';
+export type AiStrategyReviewStatus = 'IDLE' | 'ANALYZING' | 'READY' | 'ERROR';
+
+export interface AiStrategyReviewAdjustments {
+  expectancyOffsetPct: number;
+  minWinRateOffset: number;
+  riskRewardOffset: number;
+  spreadMultiplier: number;
+  gapMultiplier: number;
+  crowdFlowOffset: number;
+  minBuyConfidenceOffset: number;
+  finalistLimitOffset: number;
+  maxHoldingMinutesOffset: number;
+  earlyExitPnlFloorOffset: number;
+  staleLossMinutesOffset: number;
+  staleFlatMinutesOffset: number;
+}
+
+export interface AiStrategyReflection {
+  status: AiStrategyReviewStatus;
+  source: 'AUTO' | 'LLM';
+  updatedAt: number | null;
+  basedOnTradeCount: number;
+  basedOnNetPnlKrw: number;
+  headline: string;
+  summary: string;
+  focusMarkets: string[];
+  avoidMarkets: string[];
+  preferredSetups: string[];
+  avoidSetups: string[];
+  adjustments: AiStrategyReviewAdjustments;
+}
 
 export interface AiTraderEvent {
   id: string;
@@ -105,6 +137,7 @@ export interface AiTraderState {
   blockedReason: string | null;
   monitorActors: AiMonitorActor[];
   monitorFocusId: string | null;
+  strategyReflection: AiStrategyReflection;
 }
 
 export const AI_ENTRY_AGGRESSION_OPTIONS: Array<{ value: AiEntryAggression; label: string }> = [
@@ -139,6 +172,38 @@ const CORE_MONITOR_ACTORS: AiMonitorActor[] = [
   { id: 'core-execution', kind: 'CORE', role: 'EXECUTION', status: 'IDLE', label: 'Execution Bot', startedAt: 0, updatedAt: 0 },
 ];
 
+export const DEFAULT_AI_STRATEGY_REVIEW_ADJUSTMENTS: AiStrategyReviewAdjustments = {
+  expectancyOffsetPct: 0,
+  minWinRateOffset: 0,
+  riskRewardOffset: 0,
+  spreadMultiplier: 1,
+  gapMultiplier: 1,
+  crowdFlowOffset: 0,
+  minBuyConfidenceOffset: 0,
+  finalistLimitOffset: 0,
+  maxHoldingMinutesOffset: 0,
+  earlyExitPnlFloorOffset: 0,
+  staleLossMinutesOffset: 0,
+  staleFlatMinutesOffset: 0,
+};
+
+export function createInitialAiStrategyReflection(): AiStrategyReflection {
+  return {
+    status: 'IDLE',
+    source: 'AUTO',
+    updatedAt: null,
+    basedOnTradeCount: 0,
+    basedOnNetPnlKrw: 0,
+    headline: '복기 데이터 대기',
+    summary: '오늘 거래가 쌓이면 최근 손실 패턴과 잘 먹히는 셋업을 반영해 자동으로 진입/청산 기준을 조정합니다.',
+    focusMarkets: [],
+    avoidMarkets: [],
+    preferredSetups: [],
+    avoidSetups: [],
+    adjustments: { ...DEFAULT_AI_STRATEGY_REVIEW_ADJUSTMENTS },
+  };
+}
+
 export function createInitialAiTraderState(): AiTraderState {
   return {
     running: false,
@@ -158,5 +223,6 @@ export function createInitialAiTraderState(): AiTraderState {
     blockedReason: null,
     monitorActors: CORE_MONITOR_ACTORS.map((actor) => ({ ...actor })),
     monitorFocusId: null,
+    strategyReflection: createInitialAiStrategyReflection(),
   };
 }

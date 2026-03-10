@@ -628,6 +628,7 @@ curl -X POST http://localhost:8080/api/settings/regime \
 14. `KRW-USDT` 같은 달러 추종 자산은 별도 `DOLLAR_PEG` 템포 프로필로 처리합니다. 일반 알트보다 느린 전개를 가정해 더 긴 초기 보유 인내시간, 더 낮은 목표폭, 더 긴 최대 보유시간을 사용합니다.
 15. 원격 서버가 비정상 `averageEntryPrice`를 보내더라도 데스크톱 앱은 현재가/손절/익절 기반 sanity check를 적용해 과장된 미실현 수익률 표시를 억제합니다.
 16. `POST /api/guided-trading/stop`는 이제 optional `exitReason`을 받아 `AI_TIME_STOP`, `AI_STALE_LOSER`, `AI_LLM_EXIT` 같은 AI 청산 사유를 오늘 거래내역에 그대로 남깁니다. 과거처럼 거의 모든 청산이 `MANUAL_STOP`으로 뭉개지지 않습니다.
+17. 엔진은 `오늘 거래내역`을 계속 복기해 최근 손실 패턴과 먹힌 시장을 바탕으로 전략을 스스로 조정합니다. 최근 거래가 쌓이면 deterministic 복기 결과를 즉시 반영하고, 이후 별도 `REVIEW` LLM 패스로 `집중 시장`, `회피 시장`, `선호/회피 셋업`, `confidence/spread/gap/max hold` 조정을 덧입힙니다. 이 결과는 우측 `전략 복기` 패널과 저널의 `REVIEW` 이벤트에서 확인할 수 있습니다.
 
 ### CROWD_PRESSURE 초단타 프로필 추가 (2026-03-06)
 

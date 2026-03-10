@@ -18,6 +18,7 @@ import {
   type AiMonitorActorRole,
   type AiMonitorActorStatus,
   type AiRankedOpportunity,
+  type AiStrategyReflection,
   type AiTraderEvent,
   type AiTraderEventType,
   type AiTraderState,
@@ -27,13 +28,18 @@ import {
 import {
   ENTRY_SYSTEM_PROMPT,
   MANAGE_SYSTEM_PROMPT,
+  REVIEW_SYSTEM_PROMPT,
   SHORTLIST_SYSTEM_PROMPT,
+  applyStrategyReflectionToAggressionProfile,
+  applyStrategyReflectionToTempoProfile,
   buildEntryAggressionProfile as buildPolicyEntryAggressionProfile,
   buildPerformanceSnapshot as buildPolicyPerformanceSnapshot,
+  deriveDeterministicStrategyReflection,
   evaluateDeterministicExit as evaluatePolicyDeterministicExit,
   evaluateEntryGate as evaluatePolicyEntryGate,
   getEffectiveMaxHoldingMinutes as getPolicyEffectiveMaxHoldingMinutes,
   getTempoProfile as getPolicyTempoProfile,
+  mergeStrategyReflection,
   type AiDeterministicExitDecision,
   type AiEntryAggressionProfile,
   type AiPerformanceSnapshot,
@@ -55,6 +61,9 @@ export {
   type AiMonitorActorRole,
   type AiMonitorActorStatus,
   type AiRankedOpportunity,
+  type AiStrategyReflection,
+  type AiStrategyReviewAdjustments,
+  type AiStrategyReviewStatus,
   type AiTraderEvent,
   type AiTraderEventType,
   type AiTraderState,
@@ -94,6 +103,9 @@ const PERFORMANCE_MARKET_LOCK_MS = 4 * 60 * 60_000;
 const PERFORMANCE_MARKET_DEEP_LOCK_MS = 12 * 60 * 60_000;
 const MONITOR_CORE_RESET_MS = 2_800;
 const MONITOR_SUBAGENT_DISMISS_MS = 4_200;
+const STRATEGY_REVIEW_MIN_INTERVAL_MS = 10 * 60_000;
+const STRATEGY_REVIEW_MIN_NEW_TRADES = 3;
+const STRATEGY_REVIEW_TRADE_SAMPLE = 12;
 
 let nextId = 0;
 
@@ -145,6 +157,14 @@ function cloneState(state: AiTraderState): AiTraderState {
     queue: [...state.queue],
     closedTrades: [...state.closedTrades],
     monitorActors: state.monitorActors.map((actor) => ({ ...actor })),
+    strategyReflection: {
+      ...state.strategyReflection,
+      focusMarkets: [...state.strategyReflection.focusMarkets],
+      avoidMarkets: [...state.strategyReflection.avoidMarkets],
+      preferredSetups: [...state.strategyReflection.preferredSetups],
+      avoidSetups: [...state.strategyReflection.avoidSetups],
+      adjustments: { ...state.strategyReflection.adjustments },
+    },
   };
 }
 
@@ -166,6 +186,9 @@ export class AiDayTraderEngine {
   private monitorStatusResetTimers = new Map<string, number>();
   private pendingSubagentIdsByContext = new Map<string, string[]>();
   private subagentSequence = 0;
+  private strategyReviewInFlight = false;
+  private lastStrategyReviewAt = 0;
+  private lastStrategyReviewTradeId: number | null = null;
   private performanceSnapshot: AiPerformanceSnapshot = {
     regime: 'NORMAL',
     selectedAggression: 'BALANCED',
@@ -637,6 +660,19 @@ export class AiDayTraderEngine {
         if (!scanMarket) continue;
         const tempoProfile = this.getTempoProfile(scanMarket.market, scanMarket.koreanName);
 
+        const reviewAvoidReason = this.reviewAvoidReason(finalist.market);
+        if (reviewAvoidReason && candidates.some((candidate) => !this.getStrategyReflection().avoidMarkets.includes(candidate.market))) {
+          this.pushEvent(
+            'BUY_DECISION',
+            `${finalist.market} WAIT`,
+            `${reviewAvoidReason} · ${this.getStrategyReflection().headline}`,
+            finalist.market,
+            0.95,
+            'LOW'
+          );
+          continue;
+        }
+
         const entryGateFailure = this.evaluateEntryGate(scanMarket, tempoProfile, aggressionProfile);
         if (entryGateFailure) {
           this.pushEvent(
@@ -888,6 +924,7 @@ export class AiDayTraderEngine {
         prompt: [
           SHORTLIST_SYSTEM_PROMPT,
           '',
+          this.buildStrategyReflectionPromptBlock(),
           `후보 시장 요약(JSON): ${JSON.stringify(normalizedMarkets)}`,
         ].join('\n'),
         provider: this.config.provider,
@@ -935,14 +972,14 @@ export class AiDayTraderEngine {
       }
 
       if (shortlist.length > 0) {
-        return shortlist;
+        return this.applyStrategyReviewToShortlist(shortlist);
       }
     } catch (error) {
       this.setCoreActorState('RANK', 'ERROR', { taskSummary: this.toErrorText(error) }, { transient: true });
       this.pushEvent('ERROR', 'LLM shortlist 실패, 정량 정렬로 폴백', this.toErrorText(error));
     }
 
-    return deterministic;
+    return this.applyStrategyReviewToShortlist(deterministic);
   }
 
   private async requestEntryDecision(
@@ -960,6 +997,7 @@ export class AiDayTraderEngine {
           '',
           `진입 강도: ${aggressionProfile.label}. finalist ${aggressionProfile.finalistLimit}개, BUY confidence 하한 ${Math.round(aggressionProfile.minBuyConfidence * 100)}%.`,
           `템포 프로필: ${tempoProfile.label}. ${tempoProfile.manageNote}`,
+          this.buildStrategyReflectionPromptBlock(scanMarket.market),
           `후보 요약: ${JSON.stringify({
             market: scanMarket.market,
             koreanName: scanMarket.koreanName,
@@ -1030,6 +1068,7 @@ export class AiDayTraderEngine {
           MANAGE_SYSTEM_PROMPT,
           '',
           `템포 프로필: ${tempoProfile.label}. ${tempoProfile.manageNote}`,
+          this.buildStrategyReflectionPromptBlock(position.market),
           `포지션 요약: ${JSON.stringify({
             market: position.market,
             averageEntryPrice: position.averageEntryPrice,
@@ -1158,6 +1197,33 @@ export class AiDayTraderEngine {
           crowd: market.crowd,
         };
       });
+  }
+
+  private applyStrategyReviewToShortlist(shortlist: AiRankedOpportunity[]): AiRankedOpportunity[] {
+    const reflection = this.getStrategyReflection();
+    const focusMarkets = new Set(reflection.focusMarkets);
+    const avoidMarkets = new Set(reflection.avoidMarkets);
+
+    return shortlist
+      .map((item) => {
+        let score = item.score;
+        const reasonParts: string[] = [];
+        if (focusMarkets.has(item.market)) {
+          score += 4;
+          reasonParts.push('복기 선호 시장');
+        }
+        if (avoidMarkets.has(item.market)) {
+          score -= 7;
+          reasonParts.push('복기 회피 시장');
+        }
+        return {
+          ...item,
+          score: clamp(score, 0, 100),
+          reason: reasonParts.length > 0 ? `${reasonParts.join(' · ')} · ${item.reason}` : item.reason,
+        };
+      })
+      .sort((left, right) => right.score - left.score)
+      .slice(0, SHORTLIST_LIMIT);
   }
 
   private buildDeterministicReason(market: AiScalpScanMarket): string {
@@ -1302,15 +1368,53 @@ export class AiDayTraderEngine {
   }
 
   private getEntryAggressionProfile(): AiEntryAggressionProfile {
-    return buildPolicyEntryAggressionProfile(this.getSelectedEntryAggression(), this.performanceSnapshot.regime);
+    const baseProfile = buildPolicyEntryAggressionProfile(this.getSelectedEntryAggression(), this.performanceSnapshot.regime);
+    return applyStrategyReflectionToAggressionProfile(baseProfile, this.getStrategyReflection());
   }
 
   private getTempoProfile(market: string, koreanName?: string | null): AiTempoProfile {
-    return getPolicyTempoProfile(market, koreanName);
+    const baseProfile = getPolicyTempoProfile(market, koreanName);
+    return applyStrategyReflectionToTempoProfile(baseProfile, this.getStrategyReflection());
   }
 
   private getEffectiveMaxHoldingMinutes(tempoProfile: AiTempoProfile): number {
-    return getPolicyEffectiveMaxHoldingMinutes(this.config.maxHoldingMinutes, tempoProfile);
+    const baseHoldingMinutes = getPolicyEffectiveMaxHoldingMinutes(this.config.maxHoldingMinutes, tempoProfile);
+    return Math.round(clamp(baseHoldingMinutes + this.getStrategyReflection().adjustments.maxHoldingMinutesOffset, 8, 45));
+  }
+
+  private buildStrategyReflectionPromptBlock(market?: string): string {
+    const reflection = this.getStrategyReflection();
+    const marketBias = market
+      ? [
+          reflection.focusMarkets.includes(market) ? `${market}는 최근 상대적으로 잘 먹힌 시장` : null,
+          reflection.avoidMarkets.includes(market) ? `${market}는 최근 손실 반복으로 회피 중인 시장` : null,
+        ].filter(Boolean).join(' · ')
+      : '';
+
+    return [
+      `현재 복기 상태: ${reflection.headline}`,
+      `복기 요약: ${reflection.summary}`,
+      reflection.focusMarkets.length > 0
+        ? `집중 시장: ${reflection.focusMarkets.join(', ')}`
+        : '집중 시장: 없음',
+      reflection.avoidMarkets.length > 0
+        ? `회피 시장: ${reflection.avoidMarkets.join(', ')}`
+        : '회피 시장: 없음',
+      reflection.preferredSetups.length > 0
+        ? `선호 셋업: ${reflection.preferredSetups.join(' / ')}`
+        : '선호 셋업: 현재 데이터 부족',
+      reflection.avoidSetups.length > 0
+        ? `회피 셋업: ${reflection.avoidSetups.join(' / ')}`
+        : '회피 셋업: 현재 데이터 부족',
+      marketBias ? `현재 시장 편향: ${marketBias}` : null,
+      `적응 조정: ${JSON.stringify(reflection.adjustments)}`,
+    ].filter(Boolean).join('\n');
+  }
+
+  private reviewAvoidReason(market: string): string | null {
+    const reflection = this.getStrategyReflection();
+    if (!reflection.avoidMarkets.includes(market)) return null;
+    return `${market}는 최근 복기에서 회피 시장으로 분류됨`;
   }
 
   private calculateDownsideDistancePercent(referencePrice: number, candidatePrice?: number): number {
@@ -1348,6 +1452,8 @@ export class AiDayTraderEngine {
       this.state.closedTrades = trades.map((trade) => this.mapClosedTradeView(trade));
       this.recalculateClosedTradeStats();
       this.performanceSnapshot = this.buildPerformanceSnapshot(trades);
+      const deterministicReflection = deriveDeterministicStrategyReflection(trades, this.performanceSnapshot);
+      this.state.strategyReflection = deterministicReflection;
       if (
         previousSnapshot.regime !== this.performanceSnapshot.regime ||
         previousSnapshot.effectiveAggression !== this.performanceSnapshot.effectiveAggression
@@ -1360,6 +1466,7 @@ export class AiDayTraderEngine {
       }
       this.applyPerformanceMarketLocks(trades);
       this.applyPerformancePause(trades);
+      this.maybeRunStrategyReview(trades, deterministicReflection);
       this.todayStatsSyncFailed = false;
       this.emit();
     } catch (error) {
@@ -1407,6 +1514,202 @@ export class AiDayTraderEngine {
 
   private buildPerformanceSnapshot(trades: GuidedClosedTradeView[]): AiPerformanceSnapshot {
     return buildPolicyPerformanceSnapshot(trades, this.getSelectedEntryAggression());
+  }
+
+  private getStrategyReflection(): AiStrategyReflection {
+    return this.state.strategyReflection;
+  }
+
+  private setStrategyReflection(nextReflection: AiStrategyReflection) {
+    this.state.strategyReflection = nextReflection;
+    this.emit();
+  }
+
+  private buildStrategyReviewPrompt(
+    trades: GuidedClosedTradeView[],
+    deterministicReflection: AiStrategyReflection
+  ): string {
+    const recentTrades = trades.slice(0, STRATEGY_REVIEW_TRADE_SAMPLE).map((trade) => ({
+      market: trade.market,
+      pnlKrw: trade.realizedPnl,
+      pnlPercent: trade.realizedPnlPercent,
+      holdingMinutes: this.getHoldingMinutes({
+        createdAt: trade.createdAt,
+        closedAt: trade.closedAt ?? trade.createdAt,
+      }),
+      exitReason: trade.exitReason ?? null,
+      closedAt: trade.closedAt ?? trade.createdAt,
+    }));
+
+    const marketSummary = [...new Map(
+      recentTrades.map((trade) => {
+        const current = this.state.closedTrades
+          .filter((item) => item.market === trade.market)
+          .slice(0, 4);
+        const totalPnlPercent = current.reduce((sum, item) => sum + item.pnlPercent, 0);
+        const totalPnlKrw = current.reduce((sum, item) => sum + item.pnlKrw, 0);
+        return [trade.market, {
+          market: trade.market,
+          trades: current.length,
+          pnlPercent: Number(totalPnlPercent.toFixed(2)),
+          pnlKrw: Math.round(totalPnlKrw),
+        }];
+      }),
+    ).values()];
+
+    return [
+      REVIEW_SYSTEM_PROMPT,
+      '',
+      `현재 자동 복기: ${JSON.stringify({
+        headline: deterministicReflection.headline,
+        summary: deterministicReflection.summary,
+        focusMarkets: deterministicReflection.focusMarkets,
+        avoidMarkets: deterministicReflection.avoidMarkets,
+        preferredSetups: deterministicReflection.preferredSetups,
+        avoidSetups: deterministicReflection.avoidSetups,
+        adjustments: deterministicReflection.adjustments,
+      })}`,
+      `성과 스냅샷: ${JSON.stringify(this.performanceSnapshot)}`,
+      `최근 거래: ${JSON.stringify(recentTrades)}`,
+      `시장별 요약: ${JSON.stringify(marketSummary)}`,
+    ].join('\n');
+  }
+
+  private parseStrategyReviewResponse(
+    text: string,
+    deterministicReflection: AiStrategyReflection
+  ): AiStrategyReflection | null {
+    const parsed = parseJsonObject(text);
+    if (!parsed) return null;
+    const adjustmentsRaw = typeof parsed.adjustments === 'object' && parsed.adjustments !== null
+      ? (parsed.adjustments as Record<string, unknown>)
+      : {};
+    const normalizeMarketList = (value: unknown): string[] => {
+      if (!Array.isArray(value)) return [];
+      return value
+        .map((item) => normalizeMarket(item))
+        .filter((item): item is string => Boolean(item))
+        .slice(0, 4);
+    };
+    const normalizeTextList = (value: unknown): string[] => {
+      if (!Array.isArray(value)) return [];
+      return value
+        .map((item) => typeof item === 'string' ? item.trim() : '')
+        .filter((item) => item.length > 0)
+        .slice(0, 4);
+    };
+
+    return mergeStrategyReflection(deterministicReflection, {
+      status: 'READY',
+      source: 'LLM',
+      updatedAt: Date.now(),
+      headline: typeof parsed.headline === 'string' && parsed.headline.trim().length > 0
+        ? parsed.headline.trim()
+        : deterministicReflection.headline,
+      summary: typeof parsed.summary === 'string' && parsed.summary.trim().length > 0
+        ? parsed.summary.trim()
+        : deterministicReflection.summary,
+      focusMarkets: normalizeMarketList(parsed.focusMarkets),
+      avoidMarkets: normalizeMarketList(parsed.avoidMarkets),
+      preferredSetups: normalizeTextList(parsed.preferredSetups),
+      avoidSetups: normalizeTextList(parsed.avoidSetups),
+      adjustments: {
+        expectancyOffsetPct: toFiniteNumber(adjustmentsRaw.expectancyOffsetPct, deterministicReflection.adjustments.expectancyOffsetPct),
+        minWinRateOffset: toFiniteNumber(adjustmentsRaw.minWinRateOffset, deterministicReflection.adjustments.minWinRateOffset),
+        riskRewardOffset: toFiniteNumber(adjustmentsRaw.riskRewardOffset, deterministicReflection.adjustments.riskRewardOffset),
+        spreadMultiplier: toFiniteNumber(adjustmentsRaw.spreadMultiplier, deterministicReflection.adjustments.spreadMultiplier),
+        gapMultiplier: toFiniteNumber(adjustmentsRaw.gapMultiplier, deterministicReflection.adjustments.gapMultiplier),
+        crowdFlowOffset: toFiniteNumber(adjustmentsRaw.crowdFlowOffset, deterministicReflection.adjustments.crowdFlowOffset),
+        minBuyConfidenceOffset: toFiniteNumber(adjustmentsRaw.minBuyConfidenceOffset, deterministicReflection.adjustments.minBuyConfidenceOffset),
+        finalistLimitOffset: toFiniteNumber(adjustmentsRaw.finalistLimitOffset, deterministicReflection.adjustments.finalistLimitOffset),
+        maxHoldingMinutesOffset: toFiniteNumber(adjustmentsRaw.maxHoldingMinutesOffset, deterministicReflection.adjustments.maxHoldingMinutesOffset),
+        earlyExitPnlFloorOffset: toFiniteNumber(adjustmentsRaw.earlyExitPnlFloorOffset, deterministicReflection.adjustments.earlyExitPnlFloorOffset),
+        staleLossMinutesOffset: toFiniteNumber(adjustmentsRaw.staleLossMinutesOffset, deterministicReflection.adjustments.staleLossMinutesOffset),
+        staleFlatMinutesOffset: toFiniteNumber(adjustmentsRaw.staleFlatMinutesOffset, deterministicReflection.adjustments.staleFlatMinutesOffset),
+      },
+    });
+  }
+
+  private shouldRunStrategyReview(trades: GuidedClosedTradeView[]): boolean {
+    if (this.strategyReviewInFlight) return false;
+    if (trades.length < 4) return false;
+    const latestTradeId = trades[0]?.tradeId ?? null;
+    if (latestTradeId === null) return false;
+    if (Date.now() - this.lastStrategyReviewAt >= STRATEGY_REVIEW_MIN_INTERVAL_MS) return true;
+    if (this.lastStrategyReviewTradeId === null) return true;
+    const latestIndex = trades.findIndex((trade) => trade.tradeId === this.lastStrategyReviewTradeId);
+    return latestIndex >= STRATEGY_REVIEW_MIN_NEW_TRADES || latestIndex === -1;
+  }
+
+  private maybeRunStrategyReview(
+    trades: GuidedClosedTradeView[],
+    deterministicReflection: AiStrategyReflection
+  ) {
+    if (!this.shouldRunStrategyReview(trades)) {
+      return;
+    }
+    void this.runStrategyReview(trades, deterministicReflection);
+  }
+
+  private async runStrategyReview(
+    trades: GuidedClosedTradeView[],
+    deterministicReflection: AiStrategyReflection
+  ) {
+    if (this.strategyReviewInFlight) return;
+    this.strategyReviewInFlight = true;
+    this.state.strategyReflection = {
+      ...deterministicReflection,
+      status: 'ANALYZING',
+    };
+    this.emit();
+    this.pushEvent(
+      'REVIEW',
+      '거래 복기 실행',
+      `${deterministicReflection.basedOnTradeCount}건 거래 기준으로 전략 조정 검토`,
+    );
+
+    try {
+      const response = await requestOneShotTextWithMeta({
+        prompt: this.buildStrategyReviewPrompt(trades, deterministicReflection),
+        provider: this.config.provider,
+        model: this.config.model,
+        tradingMode: 'SCALP',
+        zaiEndpointMode: this.config.zaiEndpointMode,
+        delegationMode: this.config.delegationMode,
+        zaiDelegateModel: this.config.zaiDelegateModel,
+      });
+
+      const nextReflection = this.parseStrategyReviewResponse(response.text, deterministicReflection);
+      if (!nextReflection) {
+        this.lastStrategyReviewAt = Date.now();
+        this.lastStrategyReviewTradeId = trades[0]?.tradeId ?? null;
+        this.setStrategyReflection({
+          ...deterministicReflection,
+          status: 'READY',
+        });
+        this.pushEvent('REVIEW', '거래 복기 파싱 실패', '자동 복기 결과만 유지');
+        return;
+      }
+
+      this.lastStrategyReviewAt = Date.now();
+      this.lastStrategyReviewTradeId = trades[0]?.tradeId ?? null;
+      this.setStrategyReflection(nextReflection);
+      this.pushEvent(
+        'REVIEW',
+        nextReflection.headline,
+        `${nextReflection.summary} · 회피 ${nextReflection.avoidMarkets.map((market) => market.replace('KRW-', '')).join(', ') || '-'} · 집중 ${nextReflection.focusMarkets.map((market) => market.replace('KRW-', '')).join(', ') || '-'}`
+      );
+    } catch (error) {
+      this.lastStrategyReviewAt = Date.now();
+      this.lastStrategyReviewTradeId = trades[0]?.tradeId ?? null;
+      this.setStrategyReflection({
+        ...deterministicReflection,
+        status: 'READY',
+      });
+      this.pushEvent('ERROR', '거래 복기 LLM 실패', this.toErrorText(error));
+    } finally {
+      this.strategyReviewInFlight = false;
+    }
   }
 
   private getSelectedEntryAggression(): AiEntryAggression {

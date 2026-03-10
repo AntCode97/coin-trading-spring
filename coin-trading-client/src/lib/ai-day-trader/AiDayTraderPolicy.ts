@@ -6,7 +6,12 @@ import type {
 import type {
   AiEntryAggression,
   AiExitCategory,
+  AiStrategyReflection,
+  AiStrategyReviewAdjustments,
   AiUrgency,
+} from './AiDayTraderModel';
+import {
+  createInitialAiStrategyReflection,
 } from './AiDayTraderModel';
 
 export type AiPerformanceRegime = 'NORMAL' | 'CAUTIOUS' | 'DEFENSIVE';
@@ -29,6 +34,8 @@ export interface AiTempoProfile {
   maxTakeDistancePct: number;
   minTargetRiskReward: number;
   maxHoldingExtraMinutes: number;
+  staleLossMinutes: number;
+  staleFlatMinutes: number;
   manageNote: string;
 }
 
@@ -80,6 +87,8 @@ const DEFAULT_TEMPO_PROFILE: AiTempoProfile = {
   maxTakeDistancePct: 2.20,
   minTargetRiskReward: 1.55,
   maxHoldingExtraMinutes: 0,
+  staleLossMinutes: 10,
+  staleFlatMinutes: 18,
   manageNote: '일반 알트 템포다. 5~30분 안에 방향성이 선명해야 한다.',
 };
 
@@ -100,6 +109,8 @@ const DOLLAR_PEG_TEMPO_PROFILE: AiTempoProfile = {
   maxTakeDistancePct: 1.20,
   minTargetRiskReward: 1.28,
   maxHoldingExtraMinutes: 10,
+  staleLossMinutes: 18,
+  staleFlatMinutes: 30,
   manageNote: '테더 같은 달러 추종 자산은 다른 코인보다 전개와 체결이 느리다. 작은 흔들림에 과민하게 청산하지 말고 10~40분 템포로 보라.',
 };
 
@@ -181,6 +192,66 @@ export const MANAGE_SYSTEM_PROMPT = [
   '형식: {"action":"HOLD|SELL","confidence":0.0,"reasoning":"짧은 근거","urgency":"LOW|MEDIUM|HIGH"}',
 ].join('\n');
 
+export const REVIEW_SYSTEM_PROMPT = [
+  '너는 자신의 KRW 현물 초단타 거래를 복기하며 전략을 즉시 조정하는 전업 트레이더다.',
+  '목표는 최근 손실 패턴을 빨리 끊고, 실제로 먹힌 패턴에 더 집중하는 것이다.',
+  '최근 거래내역을 읽고 focusMarkets, avoidMarkets, preferredSetups, avoidSetups와 작은 수치 조정만 제안하라.',
+  '조정은 보수적으로 해야 한다. 지나치게 큰 숫자를 내지 말라.',
+  'JSON만 반환한다.',
+  '형식: {"headline":"짧은 제목","summary":"짧은 요약","focusMarkets":["KRW-BTC"],"avoidMarkets":["KRW-WLD"],"preferredSetups":["짧은 문장"],"avoidSetups":["짧은 문장"],"adjustments":{"expectancyOffsetPct":0.00,"minWinRateOffset":0.0,"riskRewardOffset":0.0,"spreadMultiplier":1.0,"gapMultiplier":1.0,"crowdFlowOffset":0,"minBuyConfidenceOffset":0.0,"finalistLimitOffset":0,"maxHoldingMinutesOffset":0,"earlyExitPnlFloorOffset":0.0,"staleLossMinutesOffset":0,"staleFlatMinutesOffset":0}}',
+].join('\n');
+
+function clampNumber(value: number, minValue: number, maxValue: number): number {
+  return Math.min(maxValue, Math.max(minValue, value));
+}
+
+function holdingMinutesFromTrade(trade: GuidedClosedTradeView): number {
+  const start = new Date(trade.createdAt).getTime();
+  const end = new Date(trade.closedAt ?? trade.createdAt).getTime();
+  if (!Number.isFinite(start) || !Number.isFinite(end)) return 0;
+  return Math.max(0, (end - start) / 60_000);
+}
+
+function isStopLossExit(exitReason?: string | null): boolean {
+  const normalized = exitReason?.trim().toUpperCase() ?? '';
+  return normalized === 'STOP_LOSS' || normalized === 'AI_STOP_LOSS' || normalized.includes('LOSS');
+}
+
+function isStaleExit(exitReason?: string | null): boolean {
+  const normalized = exitReason?.trim().toUpperCase() ?? '';
+  return normalized === 'AI_STALE_LOSER' || normalized === 'AI_STALE_FLAT' || normalized.includes('STALE');
+}
+
+function isProfitFadeExit(exitReason?: string | null): boolean {
+  const normalized = exitReason?.trim().toUpperCase() ?? '';
+  return normalized === 'AI_PROFIT_FADE' || normalized.includes('PROFIT_FADE');
+}
+
+function neutralAdjustments(): AiStrategyReviewAdjustments {
+  return {
+    expectancyOffsetPct: 0,
+    minWinRateOffset: 0,
+    riskRewardOffset: 0,
+    spreadMultiplier: 1,
+    gapMultiplier: 1,
+    crowdFlowOffset: 0,
+    minBuyConfidenceOffset: 0,
+    finalistLimitOffset: 0,
+    maxHoldingMinutesOffset: 0,
+    earlyExitPnlFloorOffset: 0,
+    staleLossMinutesOffset: 0,
+    staleFlatMinutesOffset: 0,
+  };
+}
+
+function topMarketsByScore(entries: Array<{ market: string; score: number }>, predicate: (entry: { market: string; score: number }) => boolean): string[] {
+  return [...entries]
+    .filter(predicate)
+    .sort((left, right) => right.score - left.score)
+    .slice(0, 3)
+    .map((entry) => entry.market);
+}
+
 function formatPercentValue(value: number): string {
   const sign = value > 0 ? '+' : '';
   return `${sign}${value.toFixed(2)}%`;
@@ -251,12 +322,221 @@ export function buildPerformanceSnapshot(
   };
 }
 
+export function deriveDeterministicStrategyReflection(
+  trades: GuidedClosedTradeView[],
+  performanceSnapshot: AiPerformanceSnapshot,
+): AiStrategyReflection {
+  if (trades.length === 0) {
+    return createInitialAiStrategyReflection();
+  }
+
+  const recentTrades = trades.slice(0, 12);
+  const adjustments = neutralAdjustments();
+  const preferredSetups: string[] = [];
+  const avoidSetups: string[] = [];
+
+  const quickLosses = recentTrades.filter((trade) => trade.realizedPnlPercent < 0 && holdingMinutesFromTrade(trade) <= 6).length;
+  const staleLosses = recentTrades.filter((trade) => trade.realizedPnlPercent < 0 && isStaleExit(trade.exitReason)).length;
+  const stopLosses = recentTrades.filter((trade) => trade.realizedPnlPercent < 0 && isStopLossExit(trade.exitReason)).length;
+  const profitFades = recentTrades.filter((trade) => isProfitFadeExit(trade.exitReason)).length;
+  const slowFlatLosses = recentTrades.filter((trade) => trade.realizedPnlPercent <= 0.04 && holdingMinutesFromTrade(trade) >= 22).length;
+
+  if (performanceSnapshot.regime === 'CAUTIOUS') {
+    adjustments.expectancyOffsetPct += 0.02;
+    adjustments.minWinRateOffset += 1;
+    adjustments.riskRewardOffset += 0.06;
+    adjustments.spreadMultiplier *= 0.9;
+    adjustments.gapMultiplier *= 0.9;
+    adjustments.crowdFlowOffset += 4;
+    adjustments.minBuyConfidenceOffset += 0.03;
+    adjustments.finalistLimitOffset -= 1;
+    adjustments.maxHoldingMinutesOffset -= 4;
+    preferredSetups.push('거래대금 상위 · 체결 빠른 메이저 우선');
+  } else if (performanceSnapshot.regime === 'DEFENSIVE') {
+    adjustments.expectancyOffsetPct += 0.04;
+    adjustments.minWinRateOffset += 2.5;
+    adjustments.riskRewardOffset += 0.12;
+    adjustments.spreadMultiplier *= 0.82;
+    adjustments.gapMultiplier *= 0.8;
+    adjustments.crowdFlowOffset += 8;
+    adjustments.minBuyConfidenceOffset += 0.06;
+    adjustments.finalistLimitOffset -= 2;
+    adjustments.maxHoldingMinutesOffset -= 8;
+    adjustments.earlyExitPnlFloorOffset += 0.05;
+    adjustments.staleLossMinutesOffset -= 2;
+    adjustments.staleFlatMinutesOffset -= 4;
+    preferredSetups.push('최상위 유동성 · spread 얕은 후보만 우선');
+  } else if (
+    performanceSnapshot.recentTradeCount >= 4 &&
+    performanceSnapshot.recentNetPnlKrw > 0 &&
+    performanceSnapshot.recentAvgPnlPercent >= 0.10
+  ) {
+    adjustments.expectancyOffsetPct -= 0.01;
+    adjustments.minBuyConfidenceOffset -= 0.02;
+    adjustments.finalistLimitOffset += 1;
+    preferredSetups.push('최근 먹힌 follow-through 패턴은 조금 더 넓게 검토');
+  }
+
+  if (quickLosses >= 2 || stopLosses >= 2) {
+    adjustments.spreadMultiplier *= 0.86;
+    adjustments.gapMultiplier *= 0.8;
+    adjustments.expectancyOffsetPct += 0.02;
+    adjustments.minBuyConfidenceOffset += 0.03;
+    avoidSetups.push('초기 5분 안에 흔들리는 추격 진입');
+  }
+
+  if (staleLosses >= 2 || slowFlatLosses >= 2) {
+    adjustments.maxHoldingMinutesOffset -= 6;
+    adjustments.earlyExitPnlFloorOffset += 0.04;
+    adjustments.staleLossMinutesOffset -= 3;
+    adjustments.staleFlatMinutesOffset -= 5;
+    avoidSetups.push('20분 넘게 수익 전개 없는 플랫 보유');
+  }
+
+  if (profitFades >= 2) {
+    adjustments.earlyExitPnlFloorOffset += 0.02;
+    preferredSetups.push('초반 수익 발생 시 이익 반납 전에 빨리 회수');
+  }
+
+  const marketScores = new Map<string, { pnlPercent: number; pnlKrw: number; wins: number; losses: number; trades: number }>();
+  for (const trade of recentTrades) {
+    const current = marketScores.get(trade.market) ?? { pnlPercent: 0, pnlKrw: 0, wins: 0, losses: 0, trades: 0 };
+    current.pnlPercent += trade.realizedPnlPercent;
+    current.pnlKrw += trade.realizedPnl;
+    current.trades += 1;
+    if (trade.realizedPnl >= 0) {
+      current.wins += 1;
+    } else {
+      current.losses += 1;
+    }
+    marketScores.set(trade.market, current);
+  }
+
+  const focusMarkets = topMarketsByScore(
+    [...marketScores.entries()].map(([market, value]) => ({ market, score: value.pnlPercent + value.wins * 0.18 + value.pnlKrw / 1000 })),
+    (entry) => entry.score > 0,
+  );
+  const avoidMarkets = topMarketsByScore(
+    [...marketScores.entries()].map(([market, value]) => ({ market, score: -(value.pnlPercent - value.losses * 0.2 - value.pnlKrw / 1000) })),
+    (entry) => entry.score > 0.24,
+  );
+
+  if (focusMarkets.length > 0) {
+    preferredSetups.push(`최근 성과 우위 시장: ${focusMarkets.map((market) => market.replace('KRW-', '')).join(', ')}`);
+  }
+  if (avoidMarkets.length > 0) {
+    avoidSetups.push(`최근 손실 반복 시장: ${avoidMarkets.map((market) => market.replace('KRW-', '')).join(', ')}`);
+  }
+
+  const headline = performanceSnapshot.recentNetPnlKrw < 0
+    ? quickLosses + stopLosses >= staleLosses + slowFlatLosses
+      ? '추격 진입 축소 · 체결 좋은 후보 우선'
+      : '느린 포지션 축소 · 빠른 전개 우선'
+    : performanceSnapshot.recentNetPnlKrw > 0
+      ? '먹히는 시장과 전개에 집중'
+      : '균형 유지 · 추가 거래 복기 대기';
+
+  const summary = [
+    `최근 ${performanceSnapshot.recentTradeCount}건 ${performanceSnapshot.recentNetPnlKrw >= 0 ? '+' : ''}${Math.round(performanceSnapshot.recentNetPnlKrw).toLocaleString()}원`,
+    `평균 ${performanceSnapshot.recentAvgPnlPercent.toFixed(2)}%`,
+    `연속 손실 ${performanceSnapshot.consecutiveLosses}`,
+    quickLosses > 0 ? `빠른 손실 ${quickLosses}` : null,
+    staleLosses + slowFlatLosses > 0 ? `정체 손실 ${staleLosses + slowFlatLosses}` : null,
+  ].filter(Boolean).join(' · ');
+
+  return {
+    status: 'READY',
+    source: 'AUTO',
+    updatedAt: Date.now(),
+    basedOnTradeCount: recentTrades.length,
+    basedOnNetPnlKrw: recentTrades.reduce((sum, trade) => sum + trade.realizedPnl, 0),
+    headline,
+    summary,
+    focusMarkets,
+    avoidMarkets,
+    preferredSetups: preferredSetups.slice(0, 4),
+    avoidSetups: avoidSetups.slice(0, 4),
+    adjustments: sanitizeStrategyReviewAdjustments(adjustments),
+  };
+}
+
+export function sanitizeStrategyReviewAdjustments(adjustments: Partial<AiStrategyReviewAdjustments>): AiStrategyReviewAdjustments {
+  return {
+    expectancyOffsetPct: clampNumber(adjustments.expectancyOffsetPct ?? 0, -0.03, 0.08),
+    minWinRateOffset: clampNumber(adjustments.minWinRateOffset ?? 0, -2, 4),
+    riskRewardOffset: clampNumber(adjustments.riskRewardOffset ?? 0, -0.08, 0.2),
+    spreadMultiplier: clampNumber(adjustments.spreadMultiplier ?? 1, 0.72, 1.2),
+    gapMultiplier: clampNumber(adjustments.gapMultiplier ?? 1, 0.72, 1.2),
+    crowdFlowOffset: clampNumber(adjustments.crowdFlowOffset ?? 0, -8, 12),
+    minBuyConfidenceOffset: clampNumber(adjustments.minBuyConfidenceOffset ?? 0, -0.06, 0.1),
+    finalistLimitOffset: Math.round(clampNumber(adjustments.finalistLimitOffset ?? 0, -3, 2)),
+    maxHoldingMinutesOffset: Math.round(clampNumber(adjustments.maxHoldingMinutesOffset ?? 0, -12, 8)),
+    earlyExitPnlFloorOffset: clampNumber(adjustments.earlyExitPnlFloorOffset ?? 0, -0.05, 0.08),
+    staleLossMinutesOffset: Math.round(clampNumber(adjustments.staleLossMinutesOffset ?? 0, -6, 6)),
+    staleFlatMinutesOffset: Math.round(clampNumber(adjustments.staleFlatMinutesOffset ?? 0, -8, 8)),
+  };
+}
+
+export function mergeStrategyReflection(
+  base: AiStrategyReflection,
+  overlay: Partial<AiStrategyReflection>,
+): AiStrategyReflection {
+  return {
+    ...base,
+    ...overlay,
+    status: overlay.status ?? base.status,
+    source: overlay.source ?? base.source,
+    updatedAt: overlay.updatedAt ?? Date.now(),
+    focusMarkets: overlay.focusMarkets?.slice(0, 4) ?? base.focusMarkets,
+    avoidMarkets: overlay.avoidMarkets?.slice(0, 4) ?? base.avoidMarkets,
+    preferredSetups: overlay.preferredSetups?.slice(0, 4) ?? base.preferredSetups,
+    avoidSetups: overlay.avoidSetups?.slice(0, 4) ?? base.avoidSetups,
+    adjustments: sanitizeStrategyReviewAdjustments({
+      ...base.adjustments,
+      ...(overlay.adjustments ?? {}),
+    }),
+  };
+}
+
 export function buildEntryAggressionProfile(
   selectedAggression: AiEntryAggression,
   regime: AiPerformanceRegime
 ): AiEntryAggressionProfile {
   const effectiveAggression = resolveEffectiveAggression(selectedAggression, regime);
   return ENTRY_AGGRESSION_PROFILES[effectiveAggression] ?? ENTRY_AGGRESSION_PROFILES.BALANCED;
+}
+
+export function applyStrategyReflectionToAggressionProfile(
+  profile: AiEntryAggressionProfile,
+  reflection: AiStrategyReflection | null | undefined,
+): AiEntryAggressionProfile {
+  if (!reflection) return profile;
+  const adjustments = reflection.adjustments;
+  return {
+    ...profile,
+    finalistLimit: Math.round(clampNumber(profile.finalistLimit + adjustments.finalistLimitOffset, 3, 8)),
+    minBuyConfidence: clampNumber(profile.minBuyConfidence + adjustments.minBuyConfidenceOffset, 0.44, 0.78),
+    expectancyOffset: clampNumber(profile.expectancyOffset + adjustments.expectancyOffsetPct, -0.05, 0.18),
+    winRateOffset: clampNumber(profile.winRateOffset + adjustments.minWinRateOffset, -2.5, 6),
+    riskRewardOffset: clampNumber(profile.riskRewardOffset + adjustments.riskRewardOffset, -0.12, 0.28),
+    gapMultiplier: clampNumber(profile.gapMultiplier * adjustments.gapMultiplier, 0.6, 1.35),
+    spreadMultiplier: clampNumber(profile.spreadMultiplier * adjustments.spreadMultiplier, 0.6, 1.35),
+    crowdFlowOffset: clampNumber(profile.crowdFlowOffset + adjustments.crowdFlowOffset, -12, 18),
+  };
+}
+
+export function applyStrategyReflectionToTempoProfile(
+  profile: AiTempoProfile,
+  reflection: AiStrategyReflection | null | undefined,
+): AiTempoProfile {
+  if (!reflection) return profile;
+  const adjustments = reflection.adjustments;
+  return {
+    ...profile,
+    earlyExitPnlFloor: clampNumber(profile.earlyExitPnlFloor + adjustments.earlyExitPnlFloorOffset, -0.62, -0.04),
+    staleLossMinutes: Math.round(clampNumber(profile.staleLossMinutes + adjustments.staleLossMinutesOffset, 6, 34)),
+    staleFlatMinutes: Math.round(clampNumber(profile.staleFlatMinutes + adjustments.staleFlatMinutesOffset, 10, 46)),
+  };
 }
 
 function resolveEffectiveAggression(
@@ -377,8 +657,8 @@ export function evaluateDeterministicExit(
 ): AiDeterministicExitDecision | null {
   const netPnlPercent = position.unrealizedPnlPercent;
   const giveBack = peakNetPnl - netPnlPercent;
-  const staleLossMinutes = tempoProfile.key === 'DOLLAR_PEG' ? 18 : 10;
-  const staleFlatMinutes = tempoProfile.key === 'DOLLAR_PEG' ? 30 : 18;
+  const staleLossMinutes = tempoProfile.staleLossMinutes;
+  const staleFlatMinutes = tempoProfile.staleFlatMinutes;
 
   if (netPnlPercent <= -0.62 && holdingMinutes >= 1.0) {
     return {

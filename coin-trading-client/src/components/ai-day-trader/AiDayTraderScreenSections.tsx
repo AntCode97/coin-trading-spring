@@ -11,6 +11,7 @@ import {
 import {
   ConfigField,
   EmptyState,
+  formatClock,
   JournalItem,
   KpiCard,
   MiniStat,
@@ -44,6 +45,7 @@ import type {
 import {
   ZAI_MODELS,
 } from '../../lib/llmService';
+import type { AiStrategyReflection } from '../../lib/ai-day-trader/AiDayTraderModel';
 
 interface SessionBarProps {
   config: AiDayTraderConfig;
@@ -91,6 +93,7 @@ export function AiDayTraderSessionBar({
   onToggleMonitor,
   isMonitorOpen,
 }: SessionBarProps) {
+  const reflection = state.strategyReflection;
   return (
     <header className="ai-scalp-sessionbar">
       <div className="ai-scalp-sessionbar__identity">
@@ -122,6 +125,12 @@ export function AiDayTraderSessionBar({
         )}
         {state.blockedReason && (
           <div className="ai-scalp-sessionbar__blocked">{state.blockedReason}</div>
+        )}
+        {(reflection.status === 'ANALYZING' || reflection.updatedAt) && (
+          <div className="ai-scalp-sessionbar__notice ai-scalp-sessionbar__notice--review">
+            <strong>복기 전략</strong> {reflection.headline}
+            <span>{reflection.summary}</span>
+          </div>
         )}
       </div>
 
@@ -155,6 +164,109 @@ export function AiDayTraderSessionBar({
         </button>
       </div>
     </header>
+  );
+}
+
+function renderStrategyAdjustmentChips(reflection: AiStrategyReflection) {
+  const chips: string[] = [];
+  const adjustments = reflection.adjustments;
+  if (adjustments.minBuyConfidenceOffset !== 0) {
+    chips.push(`conf ${adjustments.minBuyConfidenceOffset > 0 ? '+' : ''}${Math.round(adjustments.minBuyConfidenceOffset * 100)}%`);
+  }
+  if (adjustments.expectancyOffsetPct !== 0) {
+    chips.push(`exp ${adjustments.expectancyOffsetPct > 0 ? '+' : ''}${adjustments.expectancyOffsetPct.toFixed(2)}%`);
+  }
+  if (adjustments.minWinRateOffset !== 0) {
+    chips.push(`win ${adjustments.minWinRateOffset > 0 ? '+' : ''}${adjustments.minWinRateOffset.toFixed(1)}`);
+  }
+  if (adjustments.riskRewardOffset !== 0) {
+    chips.push(`RR ${adjustments.riskRewardOffset > 0 ? '+' : ''}${adjustments.riskRewardOffset.toFixed(2)}`);
+  }
+  if (adjustments.spreadMultiplier !== 1) {
+    chips.push(`spread x${adjustments.spreadMultiplier.toFixed(2)}`);
+  }
+  if (adjustments.gapMultiplier !== 1) {
+    chips.push(`gap x${adjustments.gapMultiplier.toFixed(2)}`);
+  }
+  if (adjustments.maxHoldingMinutesOffset !== 0) {
+    chips.push(`hold ${adjustments.maxHoldingMinutesOffset > 0 ? '+' : ''}${adjustments.maxHoldingMinutesOffset}m`);
+  }
+  return chips;
+}
+
+export function AiDayTraderStrategyPanel({ reflection }: { reflection: AiStrategyReflection }) {
+  const adjustmentChips = renderStrategyAdjustmentChips(reflection);
+
+  return (
+    <section className="ai-scalp-panel ai-scalp-panel--strategy">
+      <PanelHeader
+        title="전략 복기"
+        subtitle="오늘 거래를 복기해 진입/청산 기준을 자동 조정"
+        right={reflection.updatedAt ? formatClock(reflection.updatedAt) : reflection.status}
+      />
+      <div className="ai-scalp-panel__body ai-scalp-strategy">
+        <div className="ai-scalp-strategy__summary">
+          <div className="ai-scalp-strategy__headline-row">
+            <strong>{reflection.headline}</strong>
+            <span className={`ai-scalp-strategy__pill ${reflection.source.toLowerCase()} ${reflection.status.toLowerCase()}`}>
+              {reflection.source === 'LLM' ? 'LLM 강화' : '자동 복기'} · {reflection.status}
+            </span>
+          </div>
+          <p>{reflection.summary}</p>
+          <div className="ai-scalp-strategy__meta">
+            <span>표본 {reflection.basedOnTradeCount}건</span>
+            <span>기준 손익 {formatKrw(reflection.basedOnNetPnlKrw)}</span>
+          </div>
+        </div>
+
+        <div className="ai-scalp-strategy__blocks">
+          <div className="ai-scalp-strategy__block">
+            <div className="ai-scalp-strategy__label">집중 시장</div>
+            <div className="ai-scalp-strategy__chips">
+              {reflection.focusMarkets.length > 0
+                ? reflection.focusMarkets.map((market) => <span key={market}>{market.replace('KRW-', '')}</span>)
+                : <span className="empty">없음</span>}
+            </div>
+          </div>
+          <div className="ai-scalp-strategy__block">
+            <div className="ai-scalp-strategy__label">회피 시장</div>
+            <div className="ai-scalp-strategy__chips danger">
+              {reflection.avoidMarkets.length > 0
+                ? reflection.avoidMarkets.map((market) => <span key={market}>{market.replace('KRW-', '')}</span>)
+                : <span className="empty">없음</span>}
+            </div>
+          </div>
+        </div>
+
+        <div className="ai-scalp-strategy__blocks">
+          <div className="ai-scalp-strategy__block">
+            <div className="ai-scalp-strategy__label">선호 셋업</div>
+            <ul className="ai-scalp-strategy__list">
+              {reflection.preferredSetups.length > 0
+                ? reflection.preferredSetups.map((item) => <li key={item}>{item}</li>)
+                : <li>최근 확실한 우위 셋업이 아직 없습니다.</li>}
+            </ul>
+          </div>
+          <div className="ai-scalp-strategy__block">
+            <div className="ai-scalp-strategy__label">회피 셋업</div>
+            <ul className="ai-scalp-strategy__list danger">
+              {reflection.avoidSetups.length > 0
+                ? reflection.avoidSetups.map((item) => <li key={item}>{item}</li>)
+                : <li>회피 셋업이 아직 지정되지 않았습니다.</li>}
+            </ul>
+          </div>
+        </div>
+
+        <div className="ai-scalp-strategy__block">
+          <div className="ai-scalp-strategy__label">현재 적용 조정</div>
+          <div className="ai-scalp-strategy__chips">
+            {adjustmentChips.length > 0
+              ? adjustmentChips.map((chip) => <span key={chip}>{chip}</span>)
+              : <span className="empty">조정 없음</span>}
+          </div>
+        </div>
+      </div>
+    </section>
   );
 }
 

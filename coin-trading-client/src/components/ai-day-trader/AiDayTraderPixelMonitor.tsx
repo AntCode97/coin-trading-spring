@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { type CSSProperties, type ReactNode, useEffect, useMemo, useRef, useState } from 'react';
 import type { GuidedClosedTradeView } from '../../api';
 import type {
   AiMonitorActor,
@@ -44,6 +44,7 @@ interface PositionedActor {
   actor: AiMonitorActor;
   x: number;
   y: number;
+  spriteVariant: number;
 }
 
 interface RoomSummary {
@@ -54,6 +55,30 @@ interface RoomSummary {
   counter?: string;
 }
 
+interface QuickFocusItem {
+  roomId: RoomId;
+  label: string;
+  detail: string;
+  selection: MonitorSelection;
+  statusLabel?: string;
+}
+
+interface WorkflowLink {
+  id: string;
+  from: RoomId;
+  to: RoomId;
+  path: string;
+  tone: 'idle' | 'live' | 'success' | 'alert';
+  duration: number;
+  packetCount: number;
+}
+
+interface MarketPulseItem {
+  id: string;
+  tone: 'neutral' | 'positive' | 'negative' | 'active';
+  label: string;
+}
+
 interface AiDayTraderPixelMonitorProps {
   open: boolean;
   state: AiTraderState;
@@ -62,7 +87,7 @@ interface AiDayTraderPixelMonitorProps {
   onFocusActor: (actorId: string | null) => void;
 }
 
-const LAYOUT_KEY = 'ai-scalp-pixel-monitor.layout.v1';
+const LAYOUT_KEY = 'ai-scalp-pixel-monitor.layout.v2';
 const WORLD_WIDTH = 1680;
 const WORLD_HEIGHT = 1040;
 const GRID_SIZE = 16;
@@ -116,7 +141,7 @@ function loadLayout(): MonitorLayoutState {
     const raw = window.localStorage.getItem(LAYOUT_KEY);
     if (!raw) return DEFAULT_LAYOUT;
     const parsed = JSON.parse(raw) as Partial<MonitorLayoutState>;
-    return {
+    return sanitizeLayout({
       zoom: clamp(typeof parsed.zoom === 'number' ? parsed.zoom : DEFAULT_LAYOUT.zoom, 0.6, 1.4),
       panX: typeof parsed.panX === 'number' ? parsed.panX : DEFAULT_LAYOUT.panX,
       panY: typeof parsed.panY === 'number' ? parsed.panY : DEFAULT_LAYOUT.panY,
@@ -129,14 +154,81 @@ function loadLayout(): MonitorLayoutState {
         subagent: { ...DEFAULT_ROOMS.subagent, ...(parsed.rooms?.subagent ?? {}) },
         market: { ...DEFAULT_ROOMS.market, ...(parsed.rooms?.market ?? {}) },
       },
-    };
+    });
   } catch {
     return DEFAULT_LAYOUT;
   }
 }
 
 function saveLayout(layout: MonitorLayoutState) {
-  window.localStorage.setItem(LAYOUT_KEY, JSON.stringify(layout));
+  window.localStorage.setItem(LAYOUT_KEY, JSON.stringify(sanitizeLayout(layout)));
+}
+
+function sanitizeLayout(layout: MonitorLayoutState): MonitorLayoutState {
+  return {
+    ...layout,
+    zoom: clamp(layout.zoom, 0.6, 1.4),
+    rooms: {
+      scanner: sanitizeRoom(layout.rooms.scanner, DEFAULT_ROOMS.scanner),
+      ranking: sanitizeRoom(layout.rooms.ranking, DEFAULT_ROOMS.ranking),
+      entry: sanitizeRoom(layout.rooms.entry, DEFAULT_ROOMS.entry),
+      manage: sanitizeRoom(layout.rooms.manage, DEFAULT_ROOMS.manage),
+      execution: sanitizeRoom(layout.rooms.execution, DEFAULT_ROOMS.execution),
+      subagent: sanitizeRoom(layout.rooms.subagent, DEFAULT_ROOMS.subagent),
+      market: sanitizeRoom(layout.rooms.market, DEFAULT_ROOMS.market),
+    },
+  };
+}
+
+function sanitizeRoom(room: MonitorRoom | undefined, fallback: MonitorRoom): MonitorRoom {
+  const width = clamp(room?.width ?? fallback.width, 200, WORLD_WIDTH);
+  const height = clamp(room?.height ?? fallback.height, 140, WORLD_HEIGHT);
+  return {
+    ...fallback,
+    ...room,
+    width,
+    height,
+    x: clamp(snap(room?.x ?? fallback.x), 0, WORLD_WIDTH - width),
+    y: clamp(snap(room?.y ?? fallback.y), 0, WORLD_HEIGHT - height),
+  };
+}
+
+function getRoomsBounds(rooms: Record<RoomId, MonitorRoom>) {
+  const entries = Object.values(rooms);
+  const minX = Math.min(...entries.map((room) => room.x));
+  const minY = Math.min(...entries.map((room) => room.y));
+  const maxX = Math.max(...entries.map((room) => room.x + room.width));
+  const maxY = Math.max(...entries.map((room) => room.y + room.height));
+  return {
+    minX,
+    minY,
+    maxX,
+    maxY,
+    width: maxX - minX,
+    height: maxY - minY,
+  };
+}
+
+function fitLayoutToViewport(layout: MonitorLayoutState, viewportWidth: number, viewportHeight: number): MonitorLayoutState {
+  const bounds = getRoomsBounds(layout.rooms);
+  const horizontalPadding = 40;
+  const topPadding = 118;
+  const bottomPadding = 42;
+  const availableWidth = Math.max(viewportWidth - horizontalPadding * 2, 320);
+  const availableHeight = Math.max(viewportHeight - topPadding - bottomPadding, 240);
+  const nextZoom = clamp(
+    Math.min(availableWidth / bounds.width, availableHeight / bounds.height, 1.05),
+    0.64,
+    1.18,
+  );
+  const panX = horizontalPadding + (availableWidth - bounds.width * nextZoom) / 2 - bounds.minX * nextZoom;
+  const panY = topPadding + (availableHeight - bounds.height * nextZoom) / 2 - bounds.minY * nextZoom;
+  return {
+    ...layout,
+    zoom: Number(nextZoom.toFixed(2)),
+    panX: Math.round(panX),
+    panY: Math.round(panY),
+  };
 }
 
 function roomCenter(room: MonitorRoom): { x: number; y: number } {
@@ -169,12 +261,14 @@ function buildPositionedActors(actors: AiMonitorActor[], rooms: Record<RoomId, M
   return actors.map((actor) => {
     const room = rooms[ROOM_BY_ROLE[actor.role]];
     const center = roomCenter(room);
+    const spriteVariant = getActorSpriteVariant(actor, subagents.findIndex((item) => item.id === actor.id));
     if (actor.kind === 'CORE') {
       const offset = coreActorOffset(actor.role);
       return {
         actor,
         x: center.x + offset.x,
         y: center.y + offset.y,
+        spriteVariant,
       };
     }
     const index = subagents.findIndex((item) => item.id === actor.id);
@@ -184,8 +278,30 @@ function buildPositionedActors(actors: AiMonitorActor[], rooms: Record<RoomId, M
       actor,
       x: room.x + 72 + col * 98,
       y: room.y + 78 + row * 52,
+      spriteVariant,
     };
   });
+}
+
+function getActorSpriteVariant(actor: AiMonitorActor, subagentIndex = 0): number {
+  if (actor.kind === 'SUBAGENT') {
+    return Math.abs(subagentIndex) % 5;
+  }
+  switch (actor.role) {
+    case 'SCAN':
+      return 2;
+    case 'RANK':
+      return 4;
+    case 'ENTRY':
+      return 0;
+    case 'MANAGE':
+      return 3;
+    case 'EXECUTION':
+      return 1;
+    case 'DELEGATE':
+    default:
+      return 2;
+  }
 }
 
 function getRelatedEvents(events: AiTraderEvent[], selection: MonitorSelection, actor?: AiMonitorActor): AiTraderEvent[] {
@@ -200,7 +316,7 @@ function getRelatedEvents(events: AiTraderEvent[], selection: MonitorSelection, 
         case 'SCAN':
           return event.type === 'SCAN';
         case 'RANK':
-          return event.type === 'RANK';
+          return event.type === 'RANK' || event.type === 'REVIEW';
         case 'ENTRY':
           return event.type === 'BUY_DECISION';
         case 'MANAGE':
@@ -233,6 +349,43 @@ function getRelatedTrades(trades: GuidedClosedTradeView[], selection: MonitorSel
     return trades.filter((trade) => trade.market === actor.market).slice(0, 6);
   }
   return trades.slice(0, 6);
+}
+
+function getRoomEvents(roomId: RoomId, events: AiTraderEvent[]): AiTraderEvent[] {
+  switch (roomId) {
+    case 'scanner':
+      return events.filter((event) => event.type === 'SCAN').slice(0, 6);
+    case 'ranking':
+      return events.filter((event) => event.type === 'RANK' || event.type === 'REVIEW').slice(0, 6);
+    case 'entry':
+      return events.filter((event) => event.type === 'BUY_DECISION').slice(0, 6);
+    case 'manage':
+      return events.filter((event) => event.type === 'MANAGE_DECISION' || event.type === 'SELL_EXECUTION').slice(0, 6);
+    case 'execution':
+      return events.filter((event) =>
+        event.type === 'BUY_EXECUTION' || event.type === 'SELL_EXECUTION' || event.type === 'ERROR').slice(0, 6);
+    case 'subagent':
+      return events.filter((event) => event.type === 'ERROR' || event.type === 'RANK' || event.type === 'REVIEW' || event.type === 'BUY_DECISION').slice(0, 6);
+    case 'market':
+      return events.slice(0, 6);
+    default:
+      return events.slice(0, 6);
+  }
+}
+
+function getRoomTrades(roomId: RoomId, state: AiTraderState, trades: GuidedClosedTradeView[]): GuidedClosedTradeView[] {
+  switch (roomId) {
+    case 'manage':
+    case 'execution':
+    case 'market':
+      return trades.slice(0, 6);
+    case 'entry': {
+      const markets = new Set(state.queue.slice(0, 4).map((item) => item.market));
+      return trades.filter((trade) => markets.has(trade.market)).slice(0, 6);
+    }
+    default:
+      return [];
+  }
 }
 
 function summarizeRoom(roomId: RoomId, state: AiTraderState): RoomSummary | null {
@@ -330,6 +483,318 @@ function todayTradesCountFromState(state: AiTraderState): number {
   return state.closedTrades.length;
 }
 
+function focusSelectionForRoom(roomId: RoomId, actors: AiMonitorActor[]): MonitorSelection {
+  if (roomId === 'market') {
+    return { kind: 'room', roomId };
+  }
+  if (roomId === 'subagent') {
+    const subagent = actors.find((actor) => actor.kind === 'SUBAGENT');
+    return subagent ? { kind: 'actor', actorId: subagent.id } : { kind: 'room', roomId };
+  }
+  const coreActor = actors.find((actor) => actor.kind === 'CORE' && ROOM_BY_ROLE[actor.role] === roomId);
+  return coreActor ? { kind: 'actor', actorId: coreActor.id } : { kind: 'room', roomId };
+}
+
+function isSameSelection(left: MonitorSelection, right: MonitorSelection): boolean {
+  if (!left || !right || left.kind !== right.kind) {
+    return false;
+  }
+  switch (left.kind) {
+    case 'actor':
+      return left.actorId === (right as Extract<MonitorSelection, { kind: 'actor' }>).actorId;
+    case 'room':
+      return left.roomId === (right as Extract<MonitorSelection, { kind: 'room' }>).roomId;
+    case 'market':
+      return left.market === (right as Extract<MonitorSelection, { kind: 'market' }>).market;
+    case 'position':
+      return left.tradeId === (right as Extract<MonitorSelection, { kind: 'position' }>).tradeId;
+    default:
+      return true;
+  }
+}
+
+function renderRoomDecor(roomId: RoomId, summary: RoomSummary | null): ReactNode {
+  switch (roomId) {
+    case 'scanner':
+      return (
+        <div className="ai-pixel-room__decor ai-pixel-room__decor--scanner" aria-hidden="true">
+          <div className="ai-pixel-furniture ai-pixel-furniture--bookshelf left" />
+          <div className="ai-pixel-furniture ai-pixel-furniture--bookshelf right" />
+          <div className="ai-pixel-furniture ai-pixel-furniture--plant corner" />
+          <div className="ai-pixel-furniture ai-pixel-furniture--desk wide" />
+          <div className="ai-pixel-furniture ai-pixel-furniture--chair center" />
+          <div className="ai-pixel-room__speech">
+            <span className="ai-pixel-room__speech-tag">{summary?.statusLabel ?? 'SCAN'}</span>
+            <span className="ai-pixel-room__speech-text">{summary?.headline ?? '시장 순환 스캔'}</span>
+          </div>
+        </div>
+      );
+    case 'ranking':
+      return (
+        <div className="ai-pixel-room__decor ai-pixel-room__decor--ranking" aria-hidden="true">
+          <div className="ai-pixel-furniture ai-pixel-furniture--bookshelf left" />
+          <div className="ai-pixel-furniture ai-pixel-furniture--bookshelf right" />
+          <div className="ai-pixel-furniture ai-pixel-furniture--desk dual" />
+          <div className="ai-pixel-furniture ai-pixel-furniture--monitor-cluster" />
+          <div className="ai-pixel-room__speech">
+            <span className="ai-pixel-room__speech-tag">{summary?.counter ?? 'shortlist'}</span>
+            <span className="ai-pixel-room__speech-text">{summary?.headline ?? '후보 압축'}</span>
+          </div>
+        </div>
+      );
+    case 'entry':
+      return (
+        <div className="ai-pixel-room__decor ai-pixel-room__decor--entry" aria-hidden="true">
+          <div className="ai-pixel-furniture ai-pixel-furniture--counter" />
+          <div className="ai-pixel-furniture ai-pixel-furniture--desk analyst" />
+          <div className="ai-pixel-furniture ai-pixel-furniture--lamp" />
+          <div className="ai-pixel-room__speech">
+            <span className="ai-pixel-room__speech-tag">{summary?.statusLabel ?? 'ENTRY'}</span>
+            <span className="ai-pixel-room__speech-text">{summary?.headline ?? '진입 검토 중'}</span>
+          </div>
+        </div>
+      );
+    case 'manage':
+      return (
+        <div className="ai-pixel-room__decor ai-pixel-room__decor--manage" aria-hidden="true">
+          <div className="ai-pixel-furniture ai-pixel-furniture--painting" />
+          <div className="ai-pixel-furniture ai-pixel-furniture--plant left" />
+          <div className="ai-pixel-furniture ai-pixel-furniture--plant right" />
+          <div className="ai-pixel-furniture ai-pixel-furniture--couch left" />
+          <div className="ai-pixel-furniture ai-pixel-furniture--couch right" />
+          <div className="ai-pixel-furniture ai-pixel-furniture--table coffee" />
+          <div className="ai-pixel-room__speech lounge">
+            <span className="ai-pixel-room__speech-tag">{summary?.counter ?? 'open'}</span>
+            <span className="ai-pixel-room__speech-text">{summary?.headline ?? '포지션 모니터링'}</span>
+          </div>
+        </div>
+      );
+    case 'execution':
+      return (
+        <div className="ai-pixel-room__decor ai-pixel-room__decor--execution" aria-hidden="true">
+          <div className="ai-pixel-furniture ai-pixel-furniture--fridge" />
+          <div className="ai-pixel-furniture ai-pixel-furniture--watercooler" />
+          <div className="ai-pixel-furniture ai-pixel-furniture--counter pantry" />
+          <div className="ai-pixel-furniture ai-pixel-furniture--trash" />
+          <div className="ai-pixel-room__speech compact">
+            <span className="ai-pixel-room__speech-tag">{summary?.statusLabel ?? 'EXEC'}</span>
+            <span className="ai-pixel-room__speech-text">{summary?.headline ?? '주문 대기'}</span>
+          </div>
+        </div>
+      );
+    case 'subagent':
+      return (
+        <div className="ai-pixel-room__decor ai-pixel-room__decor--subagent" aria-hidden="true">
+          <div className="ai-pixel-furniture ai-pixel-furniture--server left" />
+          <div className="ai-pixel-furniture ai-pixel-furniture--server center" />
+          <div className="ai-pixel-furniture ai-pixel-furniture--server right" />
+          <div className="ai-pixel-room__speech compact">
+            <span className="ai-pixel-room__speech-tag">{summary?.statusLabel ?? 'EMPTY'}</span>
+            <span className="ai-pixel-room__speech-text">{summary?.headline ?? 'delegate 대기'}</span>
+          </div>
+        </div>
+      );
+    case 'market':
+      return (
+        <div className="ai-pixel-room__decor ai-pixel-room__decor--market" aria-hidden="true">
+          <div className="ai-pixel-furniture ai-pixel-furniture--board-wall" />
+          <div className="ai-pixel-furniture ai-pixel-furniture--ticker-strip" />
+          <div className="ai-pixel-room__speech board">
+            <span className="ai-pixel-room__speech-tag">{summary?.counter ?? 'queue'}</span>
+            <span className="ai-pixel-room__speech-text">{summary?.headline ?? '후보 모니터'}</span>
+          </div>
+        </div>
+      );
+    default:
+      return null;
+  }
+}
+
+function statusTone(status: AiMonitorActor['status'] | undefined): WorkflowLink['tone'] {
+  switch (status) {
+    case 'BUSY':
+      return 'live';
+    case 'SUCCESS':
+      return 'success';
+    case 'ERROR':
+      return 'alert';
+    case 'WAITING':
+    case 'IDLE':
+    default:
+      return 'idle';
+  }
+}
+
+function createWorkflowPath(from: MonitorRoom, to: MonitorRoom): string {
+  const start = roomCenter(from);
+  const end = roomCenter(to);
+  const midX = start.x + (end.x - start.x) / 2;
+  return `M ${start.x} ${start.y} C ${midX} ${start.y}, ${midX} ${end.y}, ${end.x} ${end.y}`;
+}
+
+function buildWorkflowLinks(
+  rooms: Record<RoomId, MonitorRoom>,
+  state: AiTraderState,
+): WorkflowLink[] {
+  const coreByRole = new Map(
+    state.monitorActors
+      .filter((actor) => actor.kind === 'CORE')
+      .map((actor) => [actor.role, actor] as const),
+  );
+  const subagents = state.monitorActors.filter((actor) => actor.kind === 'SUBAGENT');
+  const latestEvent = state.events[0];
+  const hasExecutionError = latestEvent?.type === 'ERROR';
+
+  return [
+    {
+      id: 'scan-rank',
+      from: 'scanner',
+      to: 'ranking',
+      path: createWorkflowPath(rooms.scanner, rooms.ranking),
+      tone: coreByRole.get('SCAN')?.status === 'BUSY' || coreByRole.get('RANK')?.status === 'BUSY'
+        ? 'live'
+        : statusTone(coreByRole.get('RANK')?.status),
+      duration: 3.8,
+      packetCount: state.queue.length > 0 ? 2 : 1,
+    },
+    {
+      id: 'rank-entry',
+      from: 'ranking',
+      to: 'entry',
+      path: createWorkflowPath(rooms.ranking, rooms.entry),
+      tone: coreByRole.get('ENTRY')?.status === 'BUSY' || state.queue.length > 0
+        ? 'live'
+        : statusTone(coreByRole.get('ENTRY')?.status),
+      duration: 3.2,
+      packetCount: Math.max(1, Math.min(state.queue.length, 3)),
+    },
+    {
+      id: 'entry-manage',
+      from: 'entry',
+      to: 'manage',
+      path: createWorkflowPath(rooms.entry, rooms.manage),
+      tone: state.positions.length > 0 || coreByRole.get('MANAGE')?.status === 'BUSY'
+        ? 'live'
+        : statusTone(coreByRole.get('MANAGE')?.status),
+      duration: 4.4,
+      packetCount: Math.max(1, Math.min(state.positions.length, 3)),
+    },
+    {
+      id: 'entry-execution',
+      from: 'entry',
+      to: 'execution',
+      path: createWorkflowPath(rooms.entry, rooms.execution),
+      tone: hasExecutionError
+        ? 'alert'
+        : coreByRole.get('EXECUTION')?.status === 'BUSY' || latestEvent?.type === 'BUY_EXECUTION'
+          ? 'live'
+          : statusTone(coreByRole.get('EXECUTION')?.status),
+      duration: 2.8,
+      packetCount: Math.max(1, Math.min(state.buyExecutions, 3)),
+    },
+    {
+      id: 'manage-execution',
+      from: 'manage',
+      to: 'execution',
+      path: createWorkflowPath(rooms.manage, rooms.execution),
+      tone: hasExecutionError
+        ? 'alert'
+        : latestEvent?.type === 'SELL_EXECUTION'
+          ? 'success'
+          : statusTone(coreByRole.get('MANAGE')?.status),
+      duration: 3.4,
+      packetCount: state.positions.length > 0 ? 2 : 1,
+    },
+    {
+      id: 'rank-subagent',
+      from: 'ranking',
+      to: 'subagent',
+      path: createWorkflowPath(rooms.ranking, rooms.subagent),
+      tone: subagents.length > 0 || latestEvent?.type === 'REVIEW' ? 'live' : 'idle',
+      duration: 4.8,
+      packetCount: Math.max(1, Math.min(subagents.length, 3)),
+    },
+    {
+      id: 'entry-subagent',
+      from: 'entry',
+      to: 'subagent',
+      path: createWorkflowPath(rooms.entry, rooms.subagent),
+      tone: subagents.some((actor) => actor.market) ? 'live' : 'idle',
+      duration: 4.2,
+      packetCount: Math.max(1, Math.min(subagents.length, 2)),
+    },
+  ];
+}
+
+function buildMarketPulseItems(state: AiTraderState, todayTrades: GuidedClosedTradeView[]): MarketPulseItem[] {
+  const queueItems: MarketPulseItem[] = state.queue.slice(0, 4).map((item) => ({
+    id: `queue-${item.market}`,
+    tone: item.score >= 88 ? 'active' : 'neutral',
+    label: `${item.market.replace('KRW-', '')} score ${item.score}`,
+  }));
+  const positionItems: MarketPulseItem[] = state.positions.slice(0, 3).map((position) => ({
+    id: `position-${position.tradeId}`,
+    tone: position.unrealizedPnlPercent >= 0 ? 'positive' : 'negative',
+    label: `${position.market.replace('KRW-', '')} hold ${formatPercent(position.unrealizedPnlPercent)}`,
+  }));
+  const tradeItems: MarketPulseItem[] = todayTrades.slice(0, 4).map((trade) => ({
+    id: `trade-${trade.tradeId}`,
+    tone: trade.realizedPnl >= 0 ? 'positive' : 'negative',
+    label: `${trade.market.replace('KRW-', '')} ${formatPercent(trade.realizedPnlPercent)}`,
+  }));
+  const items = [...queueItems, ...positionItems, ...tradeItems];
+  return items.length > 0
+    ? items
+    : [{ id: 'pulse-empty', tone: 'neutral', label: '다음 스캔을 기다리는 중' }];
+}
+
+function buildLiveMomentItems(events: AiTraderEvent[]): MarketPulseItem[] {
+  const items: MarketPulseItem[] = events.slice(0, 4).map((event) => ({
+    id: event.id,
+    tone: event.type === 'ERROR' ? 'negative' : event.type === 'SELL_EXECUTION' ? 'positive' : 'active',
+    label: `${event.type} · ${event.market?.replace('KRW-', '') ?? 'SYSTEM'} · ${formatClock(event.timestamp)}`,
+  }));
+  return items.length > 0
+    ? items
+    : [{ id: 'moment-empty', tone: 'neutral', label: '아직 실시간 이벤트가 없습니다.' }];
+}
+
+function actorEmote(actor: AiMonitorActor): string | null {
+  if (actor.status === 'ERROR') return '!!';
+  if (actor.status === 'SUCCESS') return 'OK';
+  if (actor.status === 'WAITING') return '...';
+  if (actor.status !== 'BUSY') return null;
+  switch (actor.role) {
+    case 'SCAN':
+      return 'PING';
+    case 'RANK':
+      return 'SORT';
+    case 'ENTRY':
+      return 'BUY?';
+    case 'MANAGE':
+      return 'HOLD';
+    case 'EXECUTION':
+      return 'FILL';
+    case 'DELEGATE':
+      return 'TOOL';
+    default:
+      return 'LIVE';
+  }
+}
+
+function actorMotionStyle(actor: AiMonitorActor, x: number, y: number, index: number): CSSProperties {
+  const seed = [...actor.id].reduce((sum, char) => sum + char.charCodeAt(0), 0) + index;
+  const delay = `${-(seed % 7) * 0.21}s`;
+  const duration = `${1.65 + (seed % 4) * 0.24}s`;
+  const style: CSSProperties = {
+    left: x,
+    top: y,
+  };
+  (style as Record<string, string | number>)['--actor-delay'] = delay;
+  (style as Record<string, string | number>)['--actor-duration'] = duration;
+  return style;
+}
+
 export default function AiDayTraderPixelMonitor({
   open,
   state,
@@ -375,6 +840,18 @@ export default function AiDayTraderPixelMonitor({
       market: summarizeRoom('market', state),
     }),
     [state],
+  );
+  const selectedRoomSummary = useMemo(
+    () => (selection?.kind === 'room' ? roomSummaries[selection.roomId] : null),
+    [roomSummaries, selection],
+  );
+  const selectedRoomEvents = useMemo(
+    () => (selection?.kind === 'room' ? getRoomEvents(selection.roomId, state.events) : []),
+    [selection, state.events],
+  );
+  const selectedRoomTrades = useMemo(
+    () => (selection?.kind === 'room' ? getRoomTrades(selection.roomId, state, todayTrades) : []),
+    [selection, state, todayTrades],
   );
   const selectedPosition = useMemo(
     () => (selection?.kind === 'position'
@@ -434,6 +911,61 @@ export default function AiDayTraderPixelMonitor({
     }
   }, [onFocusActor, selection, state.monitorActors, state.monitorFocusId]);
 
+  useEffect(() => {
+    if (!open) return;
+    const viewport = viewportRef.current;
+    if (!viewport) return;
+    setLayout((current) => fitLayoutToViewport(current, viewport.clientWidth, viewport.clientHeight));
+  }, [open]);
+
+  const quickFocusItems = useMemo<QuickFocusItem[]>(
+    () => ([
+      {
+        roomId: 'scanner',
+        label: 'Scanner',
+        detail: roomSummaries.scanner?.counter ?? 'scan',
+        selection: focusSelectionForRoom('scanner', state.monitorActors),
+        statusLabel: roomSummaries.scanner?.statusLabel,
+      },
+      {
+        roomId: 'ranking',
+        label: 'Ranking',
+        detail: roomSummaries.ranking?.counter ?? 'rank',
+        selection: focusSelectionForRoom('ranking', state.monitorActors),
+        statusLabel: roomSummaries.ranking?.statusLabel,
+      },
+      {
+        roomId: 'entry',
+        label: 'Entry',
+        detail: roomSummaries.entry?.counter ?? 'entry',
+        selection: focusSelectionForRoom('entry', state.monitorActors),
+        statusLabel: roomSummaries.entry?.statusLabel,
+      },
+      {
+        roomId: 'manage',
+        label: 'Manage',
+        detail: roomSummaries.manage?.counter ?? 'manage',
+        selection: focusSelectionForRoom('manage', state.monitorActors),
+        statusLabel: roomSummaries.manage?.statusLabel,
+      },
+      {
+        roomId: 'execution',
+        label: 'Execution',
+        detail: roomSummaries.execution?.counter ?? 'exec',
+        selection: focusSelectionForRoom('execution', state.monitorActors),
+        statusLabel: roomSummaries.execution?.statusLabel,
+      },
+      {
+        roomId: 'market',
+        label: 'Market Board',
+        detail: `${state.queue.length} queue`,
+        selection: focusSelectionForRoom('market', state.monitorActors),
+        statusLabel: roomSummaries.market?.statusLabel,
+      },
+    ]),
+    [roomSummaries, state.monitorActors, state.queue.length],
+  );
+
   if (!open) {
     return null;
   }
@@ -492,13 +1024,41 @@ export default function AiDayTraderPixelMonitor({
     }));
   };
 
+  const fitWorldToViewport = () => {
+    const viewport = viewportRef.current;
+    if (!viewport) return;
+    setLayout((current) => fitLayoutToViewport(current, viewport.clientWidth, viewport.clientHeight));
+  };
+
+  const resetToSavedLayout = () => {
+    const viewport = viewportRef.current;
+    const saved = loadLayout();
+    if (!viewport) {
+      setLayout(saved);
+      return;
+    }
+    setLayout(fitLayoutToViewport(saved, viewport.clientWidth, viewport.clientHeight));
+  };
+
+  const restoreDefaultLayout = () => {
+    const viewport = viewportRef.current;
+    if (!viewport) {
+      setLayout(DEFAULT_LAYOUT);
+      return;
+    }
+    setLayout(fitLayoutToViewport(DEFAULT_LAYOUT, viewport.clientWidth, viewport.clientHeight));
+  };
+
   const handleViewportPointerDown = (event: React.PointerEvent<HTMLDivElement>) => {
     const target = event.target as HTMLElement;
     if (
       target.closest('[data-room-drag-handle="true"]') ||
-      target.closest('.ai-pixel-room') ||
-      target.closest('.ai-pixel-actor')
+      target.closest('.ai-pixel-actor') ||
+      target.closest('button')
     ) {
+      return;
+    }
+    if (editMode && target.closest('.ai-pixel-room')) {
       return;
     }
     dragRef.current = {
@@ -534,8 +1094,17 @@ export default function AiDayTraderPixelMonitor({
       }));
       return;
     }
-    const nextX = snap(drag.originX + (event.clientX - drag.startX) / layout.zoom);
-    const nextY = snap(drag.originY + (event.clientY - drag.startY) / layout.zoom);
+    const room = layout.rooms[drag.roomId];
+    const nextX = clamp(
+      snap(drag.originX + (event.clientX - drag.startX) / layout.zoom),
+      0,
+      WORLD_WIDTH - room.width,
+    );
+    const nextY = clamp(
+      snap(drag.originY + (event.clientY - drag.startY) / layout.zoom),
+      0,
+      WORLD_HEIGHT - room.height,
+    );
     setLayout((current) => ({
       ...current,
       rooms: {
@@ -555,6 +1124,27 @@ export default function AiDayTraderPixelMonitor({
 
   const activeQueueMarkets = state.queue.slice(0, 6);
   const activePositions = state.positions.slice(0, 6);
+  const workflowLinks = useMemo(
+    () => buildWorkflowLinks(layout.rooms, state),
+    [layout.rooms, state],
+  );
+  const marketPulseItems = useMemo(
+    () => buildMarketPulseItems(state, todayTrades),
+    [state, todayTrades],
+  );
+  const liveMomentItems = useMemo(
+    () => buildLiveMomentItems(state.events),
+    [state.events],
+  );
+
+  const handleViewportWheel = (event: React.WheelEvent<HTMLDivElement>) => {
+    event.preventDefault();
+    const delta = event.deltaY > 0 ? -0.06 : 0.06;
+    setLayout((current) => ({
+      ...current,
+      zoom: clamp(Number((current.zoom + delta).toFixed(2)), 0.6, 1.4),
+    }));
+  };
 
   return (
     <div className="ai-pixel-monitor" onClick={onClose}>
@@ -569,7 +1159,38 @@ export default function AiDayTraderPixelMonitor({
           onPointerMove={handlePointerMove}
           onPointerUp={endDrag}
           onPointerLeave={endDrag}
+          onWheel={handleViewportWheel}
+          onDoubleClick={fitWorldToViewport}
         >
+          <div className="ai-pixel-monitor__hud">
+            <div className="ai-pixel-monitor__hud-copy">
+              <span className="ai-pixel-monitor__hud-eyebrow">AI Agent Monitor</span>
+              <strong className="ai-pixel-monitor__hud-title">{editMode ? '편집 모드' : '탐색 모드'}</strong>
+              <span className="ai-pixel-monitor__hud-hint">
+                {editMode
+                  ? '방 헤더를 드래그해 재배치하고 저장하면 다음에도 그대로 유지됩니다.'
+                  : '캐릭터, 큐, 포지션을 클릭해 상세를 보고 빈 공간 드래그로 이동하세요.'}
+              </span>
+              <div className="ai-pixel-monitor__hud-feed">
+                <div className="ai-pixel-monitor__hud-feed-track">
+                  {[...liveMomentItems, ...liveMomentItems].map((item, index) => (
+                    <span
+                      key={`${item.id}-${index}`}
+                      className={`ai-pixel-monitor__hud-feed-item is-${item.tone}`}
+                    >
+                      {item.label}
+                    </span>
+                  ))}
+                </div>
+              </div>
+            </div>
+            <div className="ai-pixel-monitor__hud-stats">
+              <span>활성 에이전트 {state.monitorActors.filter((actor) => actor.status === 'BUSY').length}</span>
+              <span>보유 {state.positions.length}</span>
+              <span>오늘 거래 {todayTrades.length}</span>
+              <span>줌 {(layout.zoom * 100).toFixed(0)}%</span>
+            </div>
+          </div>
           <div
             className="ai-pixel-monitor__world"
             style={{
@@ -579,42 +1200,86 @@ export default function AiDayTraderPixelMonitor({
               transformOrigin: 'top left',
             }}
           >
+            <svg
+              className="ai-pixel-monitor__network"
+              viewBox={`0 0 ${WORLD_WIDTH} ${WORLD_HEIGHT}`}
+              aria-hidden="true"
+            >
+              {workflowLinks.map((link) => (
+                <g
+                  key={link.id}
+                  className={`ai-pixel-monitor__flow is-${link.tone}`}
+                >
+                  <path className="ai-pixel-monitor__flow-base" d={link.path} />
+                  <path className="ai-pixel-monitor__flow-glow" d={link.path} />
+                  {Array.from({ length: link.packetCount }).map((_, packetIndex) => (
+                    <circle
+                      key={`${link.id}-${packetIndex}`}
+                      className="ai-pixel-monitor__flow-packet"
+                      r="4"
+                      cx="0"
+                      cy="0"
+                    >
+                      <animateMotion
+                        dur={`${link.duration}s`}
+                        begin={`${packetIndex * 0.58}s`}
+                        repeatCount="indefinite"
+                        path={link.path}
+                      />
+                    </circle>
+                  ))}
+                </g>
+              ))}
+            </svg>
             {Object.values(layout.rooms).map((room) => (
               <div
                 key={room.id}
                 className={`ai-pixel-room ai-pixel-room--${room.id} ${selection?.kind === 'room' && selection.roomId === room.id ? 'is-selected' : ''}`}
+                data-status={roomSummaries[room.id]?.status.toLowerCase() ?? 'idle'}
                 style={{
                   left: room.x,
                   top: room.y,
                   width: room.width,
                   height: room.height,
                 }}
-                onClick={() => handleSelect({ kind: 'room', roomId: room.id })}
+                onClick={() => {
+                  if (!editMode) return;
+                  handleSelect({ kind: 'room', roomId: room.id });
+                }}
                 >
                   <div
                     className={`ai-pixel-room__header ${editMode ? 'is-editable' : ''}`}
-                  onPointerDown={(event) => handleRoomPointerDown(room.id, event)}
-                  data-room-drag-handle="true"
-                >
+                    onPointerDown={(event) => handleRoomPointerDown(room.id, event)}
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      if (!editMode) return;
+                      handleSelect({ kind: 'room', roomId: room.id });
+                    }}
+                    data-room-drag-handle="true"
+                  >
                     <div className="ai-pixel-room__title">{room.title}</div>
                     <div className="ai-pixel-room__subtitle">{room.subtitle}</div>
                   </div>
 
-                  {roomSummaries[room.id] && (
-                    <div className={`ai-pixel-room__console ai-pixel-room__console--${roomSummaries[room.id]!.status.toLowerCase()}`}>
-                      <div className="ai-pixel-room__console-topline">
-                        <span className="ai-pixel-room__console-status">{roomSummaries[room.id]!.statusLabel}</span>
-                        {roomSummaries[room.id]!.counter && (
-                          <span className="ai-pixel-room__console-counter">{roomSummaries[room.id]!.counter}</span>
-                        )}
-                      </div>
-                      <div className="ai-pixel-room__console-headline">{roomSummaries[room.id]!.headline}</div>
-                      <div className="ai-pixel-room__console-detail">{roomSummaries[room.id]!.detail}</div>
-                    </div>
-                  )}
+                  {renderRoomDecor(room.id, roomSummaries[room.id])}
+                  <div className={`ai-pixel-room__signal ai-pixel-room__signal--${roomSummaries[room.id]?.status.toLowerCase() ?? 'idle'}`}>
+                    <span />
+                    <span />
+                    <span />
+                    <span />
+                  </div>
 
                 {room.id === 'market' && (
                   <div className="ai-pixel-room__board">
+                    <div className="ai-pixel-room__feed">
+                      <div className="ai-pixel-room__feed-track">
+                        {[...marketPulseItems, ...marketPulseItems].map((item, index) => (
+                          <span key={`${item.id}-${index}`} className={`ai-pixel-room__feed-item is-${item.tone}`}>
+                            {item.label}
+                          </span>
+                        ))}
+                      </div>
+                    </div>
                     <div className="ai-pixel-room__section">
                       <span>Queue</span>
                       <div className="ai-pixel-room__chips">
@@ -693,12 +1358,12 @@ export default function AiDayTraderPixelMonitor({
               </div>
             ))}
 
-            {positionedActors.map(({ actor, x, y }) => (
+            {positionedActors.map(({ actor, x, y, spriteVariant }, index) => (
               <button
                 key={actor.id}
                 type="button"
-                className={`ai-pixel-actor ai-pixel-actor--${actor.status.toLowerCase()} ${selection?.kind === 'actor' && selection.actorId === actor.id ? 'is-selected' : ''}`}
-                style={{ left: x, top: y }}
+                className={`ai-pixel-actor ai-pixel-actor--${actor.role.toLowerCase()} ai-pixel-actor--${actor.status.toLowerCase()} ${selection?.kind === 'actor' && selection.actorId === actor.id ? 'is-selected' : ''}`}
+                style={actorMotionStyle(actor, x, y, index)}
                 onClick={(event) => {
                   event.stopPropagation();
                   handleSelect({ kind: 'actor', actorId: actor.id });
@@ -706,7 +1371,12 @@ export default function AiDayTraderPixelMonitor({
                 title={`${actor.label} · ${actor.status}`}
               >
                 <span className="ai-pixel-actor__shadow" />
-                <span className={`ai-pixel-actor__sprite ai-pixel-actor__sprite--${actor.kind.toLowerCase()} ai-pixel-actor__sprite--${actor.role.toLowerCase()}`} />
+                <span className={`ai-pixel-actor__sprite ai-pixel-actor__sprite--${actor.role.toLowerCase()} ai-pixel-actor__sprite--variant-${spriteVariant}`} />
+                {actorEmote(actor) && (
+                  <span className={`ai-pixel-actor__emote ai-pixel-actor__emote--${actor.status.toLowerCase()}`}>
+                    {actorEmote(actor)}
+                  </span>
+                )}
                 <span className="ai-pixel-actor__label">{actor.market ? `${actor.label} · ${actor.market.replace('KRW-', '')}` : actor.label}</span>
               </button>
             ))}
@@ -714,6 +1384,28 @@ export default function AiDayTraderPixelMonitor({
         </div>
 
         <aside className="ai-pixel-monitor__detail">
+          <div className="ai-pixel-detail__section ai-pixel-detail__section--primary">
+            <div className="ai-pixel-detail__eyebrow">빠른 이동</div>
+            <div className="ai-pixel-detail__title">지금 바로 볼 곳</div>
+            <div className="ai-pixel-detail__nav">
+              {quickFocusItems.map((item) => {
+                const isSelected = isSameSelection(selection, item.selection);
+                return (
+                  <button
+                    key={item.roomId}
+                    type="button"
+                    className={`ai-pixel-detail__nav-button ai-pixel-detail__nav-button--${item.roomId} ${isSelected ? 'is-selected' : ''}`}
+                    onClick={() => handleSelect(item.selection)}
+                  >
+                    <strong>{item.label}</strong>
+                    <span>{item.detail}</span>
+                    {item.statusLabel && <em>{item.statusLabel}</em>}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+
           {selection?.kind === 'actor' && selectedActor ? (
             <>
               <div className="ai-pixel-detail__section">
@@ -839,16 +1531,60 @@ export default function AiDayTraderPixelMonitor({
               <div className="ai-pixel-detail__section">
                 <div className="ai-pixel-detail__eyebrow">Room</div>
                 <div className="ai-pixel-detail__title">{layout.rooms[selection.roomId].title}</div>
+                <div className="ai-pixel-detail__chips">
+                  {selectedRoomSummary?.statusLabel && <span>{selectedRoomSummary.statusLabel}</span>}
+                  {selectedRoomSummary?.counter && <span>{selectedRoomSummary.counter}</span>}
+                </div>
+                {selectedRoomSummary?.headline && (
+                  <p className="ai-pixel-detail__body">{selectedRoomSummary.headline}</p>
+                )}
+                {selectedRoomSummary?.detail && (
+                  <div className="ai-pixel-detail__result">{selectedRoomSummary.detail}</div>
+                )}
                 <p className="ai-pixel-detail__body">{ROOM_DESCRIPTIONS[selection.roomId]}</p>
               </div>
               <div className="ai-pixel-detail__section">
-                <div className="ai-pixel-detail__subtitle">좌표</div>
-                <div className="ai-pixel-detail__chips">
-                  <span>x {layout.rooms[selection.roomId].x}</span>
-                  <span>y {layout.rooms[selection.roomId].y}</span>
-                  <span>{layout.rooms[selection.roomId].width}×{layout.rooms[selection.roomId].height}</span>
+                <div className="ai-pixel-detail__subtitle">관련 저널</div>
+                <div className="ai-pixel-detail__list">
+                  {selectedRoomEvents.length === 0 ? (
+                    <div className="ai-pixel-detail__empty">관련 이벤트 없음</div>
+                  ) : (
+                    selectedRoomEvents.map((event) => (
+                      <article key={event.id} className="ai-pixel-detail__item">
+                        <div className="ai-pixel-detail__item-title">{event.message}</div>
+                        <div className="ai-pixel-detail__item-meta">{event.type} · {formatClock(event.timestamp)}</div>
+                      </article>
+                    ))
+                  )}
                 </div>
               </div>
+              {selectedRoomTrades.length > 0 && (
+                <div className="ai-pixel-detail__section">
+                  <div className="ai-pixel-detail__subtitle">관련 거래</div>
+                  <div className="ai-pixel-detail__list">
+                    {selectedRoomTrades.map((trade) => (
+                      <article key={trade.tradeId} className="ai-pixel-detail__item">
+                        <div className="ai-pixel-detail__item-title">
+                          {trade.market.replace('KRW-', '')} · {formatKrw(trade.realizedPnl)}
+                        </div>
+                        <div className="ai-pixel-detail__item-meta">
+                          {trade.closedAt ? formatDateTime(trade.closedAt) : '-'} · {formatExitReason(trade.exitReason)}
+                        </div>
+                      </article>
+                    ))}
+                  </div>
+                </div>
+              )}
+              {editMode && (
+                <div className="ai-pixel-detail__section">
+                  <div className="ai-pixel-detail__subtitle">좌표</div>
+                  <div className="ai-pixel-detail__chips">
+                    <span>x {layout.rooms[selection.roomId].x}</span>
+                    <span>y {layout.rooms[selection.roomId].y}</span>
+                    <span>{layout.rooms[selection.roomId].width}×{layout.rooms[selection.roomId].height}</span>
+                  </div>
+                </div>
+              )}
             </>
           ) : (
             <div className="ai-pixel-detail__empty">
@@ -858,6 +1594,16 @@ export default function AiDayTraderPixelMonitor({
         </aside>
 
         <footer className="ai-pixel-monitor__toolbar">
+          <div className="ai-pixel-toolbar__meta">
+            <span className={`ai-pixel-toolbar__mode ${editMode ? 'is-edit' : ''}`}>
+              {editMode ? '편집 모드' : '탐색 모드'}
+            </span>
+            <span className="ai-pixel-toolbar__hint">
+              {editMode
+                ? '방 헤더 드래그로 이동 · 저장 또는 기본 배치 복원'
+                : '드래그 이동 · 휠 줌 · 더블클릭 화면 맞춤 · 선택 포커스'}
+            </span>
+          </div>
           <div className="ai-pixel-toolbar__group">
             <button type="button" className="ai-pixel-toolbar__button" onClick={() => setEditMode((current) => !current)}>
               {editMode ? '편집 종료' : '편집 모드'}
@@ -865,10 +1611,10 @@ export default function AiDayTraderPixelMonitor({
             <button type="button" className="ai-pixel-toolbar__button" onClick={() => saveLayout(layout)}>
               저장
             </button>
-            <button type="button" className="ai-pixel-toolbar__button" onClick={() => setLayout(loadLayout())}>
+            <button type="button" className="ai-pixel-toolbar__button" onClick={resetToSavedLayout}>
               리셋
             </button>
-            <button type="button" className="ai-pixel-toolbar__button" onClick={() => setLayout(DEFAULT_LAYOUT)}>
+            <button type="button" className="ai-pixel-toolbar__button" onClick={restoreDefaultLayout}>
               기본 배치 복원
             </button>
           </div>
@@ -882,10 +1628,17 @@ export default function AiDayTraderPixelMonitor({
             <button
               type="button"
               className="ai-pixel-toolbar__button"
+              onClick={fitWorldToViewport}
+            >
+              화면 맞춤
+            </button>
+            <button
+              type="button"
+              className="ai-pixel-toolbar__button"
               onClick={() => centerOnSelection(selection)}
               disabled={!selection}
             >
-              포커스
+              선택 포커스
             </button>
             <button type="button" className="ai-pixel-toolbar__button danger" onClick={onClose}>
               닫기
