@@ -1002,10 +1002,13 @@
   flex-direction: column;
   align-items: center;
   gap: 6px;
+  width: 86px;
+  min-height: 96px;
   padding: 0;
   border: none;
   background: transparent;
   cursor: pointer;
+  overflow: visible;
   transform: translate(-50%, -50%);
   animation: ai-pixel-actor-drift var(--actor-duration, 1.9s) ease-in-out infinite;
   animation-delay: var(--actor-delay, 0s);
@@ -1022,13 +1025,14 @@
 
 .ai-pixel-actor__sprite {
   position: absolute;
-  top: -18px;
+  left: calc(50% - 32px);
+  top: -22px;
   width: 64px;
-  height: 72px;
+  height: 78px;
   background-image: var(--pixel-characters);
   background-repeat: no-repeat;
   background-size: 320px 72px;
-  background-position: 0 0;
+  background-position: 0 3px;
   image-rendering: pixelated;
   animation: ai-pixel-bob 1.25s steps(2) infinite;
   filter: drop-shadow(0 6px 10px rgba(0, 0, 0, 0.28));
@@ -1123,23 +1127,23 @@
 }
 
 .ai-pixel-actor__sprite--variant-0 {
-  background-position: 0 0;
+  background-position: 0 3px;
 }
 
 .ai-pixel-actor__sprite--variant-1 {
-  background-position: -64px 0;
+  background-position: -64px 3px;
 }
 
 .ai-pixel-actor__sprite--variant-2 {
-  background-position: -128px 0;
+  background-position: -128px 3px;
 }
 
 .ai-pixel-actor__sprite--variant-3 {
-  background-position: -192px 0;
+  background-position: -192px 3px;
 }
 
 .ai-pixel-actor__sprite--variant-4 {
-  background-position: -256px 0;
+  background-position: -256px 3px;
 }
 
 .ai-pixel-actor--busy .ai-pixel-actor__sprite {
