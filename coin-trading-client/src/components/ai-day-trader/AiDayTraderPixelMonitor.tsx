@@ -1,10 +1,12 @@
 import { type CSSProperties, type ReactNode, useEffect, useMemo, useRef, useState } from 'react';
 import type { GuidedClosedTradeView } from '../../api';
 import type {
+  AiDayTraderConfig,
   AiMonitorActor,
   AiTraderEvent,
   AiTraderState,
 } from '../../lib/ai-day-trader/AiDayTraderModel';
+import { requestOneShotTextWithMeta } from '../../lib/llmService';
 import {
   formatClock,
   formatDateTime,
@@ -83,6 +85,8 @@ interface AiDayTraderPixelMonitorProps {
   open: boolean;
   state: AiTraderState;
   todayTrades: GuidedClosedTradeView[];
+  config: AiDayTraderConfig;
+  providerConnected: boolean;
   onClose: () => void;
   onFocusActor: (actorId: string | null) => void;
 }
@@ -795,10 +799,90 @@ function actorMotionStyle(actor: AiMonitorActor, x: number, y: number, index: nu
   return style;
 }
 
+function buildActorStatusBrief(
+  actor: AiMonitorActor,
+  relatedEvents: AiTraderEvent[],
+  relatedTrades: GuidedClosedTradeView[],
+  state: AiTraderState,
+): string {
+  const latestEvent = relatedEvents[0];
+  const latestTrade = relatedTrades[0];
+  const eventPart = latestEvent ? `최근엔 ${latestEvent.type}로 ${latestEvent.message}` : '아직 최신 이벤트는 없습니다';
+  const tradePart = latestTrade
+    ? `가장 가까운 거래는 ${latestTrade.market.replace('KRW-', '')} ${formatExitReason(latestTrade.exitReason)}입니다`
+    : '연결된 거래는 아직 없습니다';
+  const marketPart = actor.market ? `${actor.market} 기준으로 보고 있고, ` : '';
+
+  switch (actor.role) {
+    case 'SCAN':
+      return `${marketPart}유동성 상위 ${state.queue.length}개 후보를 훑고 있습니다. ${eventPart}.`;
+    case 'RANK':
+      return `${marketPart}큐 ${state.queue.length}개를 추려 shortlist 우선순위를 매기고 있습니다. ${eventPart}.`;
+    case 'ENTRY':
+      return `${marketPart}최종 진입 검토 ${state.finalistsReviewed}건 중 무엇을 살지 거르고 있습니다. ${eventPart}.`;
+    case 'MANAGE':
+      return `${marketPart}현재 보유 ${state.positions.length}개를 감시하면서 시간 청산과 손실 방어를 보고 있습니다. ${eventPart}.`;
+    case 'EXECUTION':
+      return `${marketPart}주문 실행 ${state.buyExecutions}건 기준으로 체결과 실패를 감시합니다. ${eventPart}.`;
+    case 'DELEGATE':
+      return `${marketPart}${actor.taskSummary ?? '서브 태스크'}를 처리 중입니다. ${tradePart}.`;
+    default:
+      return actor.taskSummary ?? eventPart ?? tradePart;
+  }
+}
+
+function buildFallbackActorAnswer(
+  question: string,
+  actor: AiMonitorActor,
+  relatedEvents: AiTraderEvent[],
+  relatedTrades: GuidedClosedTradeView[],
+  state: AiTraderState,
+): string {
+  const normalized = question.trim();
+  const latestEvent = relatedEvents[0];
+  const latestTrade = relatedTrades[0];
+  const statusBrief = buildActorStatusBrief(actor, relatedEvents, relatedTrades, state);
+
+  if (!normalized || normalized.includes('뭐') || normalized.includes('무슨') || normalized.includes('하고')) {
+    return statusBrief;
+  }
+  if (normalized.includes('왜')) {
+    return actor.taskSummary
+      ? `${actor.taskSummary} 때문에 여기서 이 역할을 맡고 있습니다. ${latestEvent ? `지금 기준 근거는 ${latestEvent.message}입니다.` : '아직 추가 근거는 없습니다.'}`
+      : `${actor.role} 역할상 지금 필요한 판단을 처리하려고 여기 있습니다. ${latestEvent ? `최근 근거는 ${latestEvent.message}입니다.` : ''}`;
+  }
+  if (normalized.includes('다음') || normalized.includes('이후') || normalized.includes('뭘 할')) {
+    switch (actor.role) {
+      case 'SCAN':
+        return `다음 스캔에서 다시 후보를 채우거나, 큐가 있으면 Ranker로 넘깁니다.`;
+      case 'RANK':
+        return `다음엔 shortlist를 Entry로 넘겨서 실제 BUY/WAIT 판단을 받게 됩니다.`;
+      case 'ENTRY':
+        return `다음엔 BUY로 실행하거나 WAIT로 버립니다. ${latestEvent ? `현재 근거는 ${latestEvent.message}입니다.` : ''}`;
+      case 'MANAGE':
+        return `다음엔 HOLD를 유지하거나, 손실 방어/시간 청산/이익 반납 방지 조건이면 SELL 쪽으로 넘깁니다.`;
+      case 'EXECUTION':
+        return `다음엔 주문 체결 성공을 기록하거나 실패를 남기고 다시 제어 루프로 돌려보냅니다.`;
+      case 'DELEGATE':
+        return `이 서브 태스크가 끝나면 부모 에이전트로 결과를 돌려보냅니다.`;
+      default:
+        return statusBrief;
+    }
+  }
+  if (normalized.includes('위험') || normalized.includes('리스크')) {
+    return latestTrade
+      ? `최근 연결 거래 기준으론 ${latestTrade.market.replace('KRW-', '')}에서 ${formatPercent(latestTrade.realizedPnlPercent)} 결과가 있었습니다. 지금은 ${state.positions.length}개 포지션과 최신 이벤트를 기준으로 보수적으로 움직여야 합니다.`
+      : `가장 큰 리스크는 근거 약한 진입과 체결 후 반전입니다. 지금은 최신 이벤트와 포지션 수 ${state.positions.length}개를 보며 방어적으로 판단합니다.`;
+  }
+  return `${statusBrief} 질문 기준으로 보면 ${latestEvent ? `최근 핵심 이벤트는 ${latestEvent.message}` : '추가 이벤트는 아직 적고'} ${latestTrade ? `가장 가까운 거래는 ${latestTrade.market.replace('KRW-', '')} ${formatExitReason(latestTrade.exitReason)}입니다.` : '거래 기록은 아직 없습니다.'}`;
+}
+
 export default function AiDayTraderPixelMonitor({
   open,
   state,
   todayTrades,
+  config,
+  providerConnected,
   onClose,
   onFocusActor,
 }: AiDayTraderPixelMonitorProps) {
@@ -806,6 +890,9 @@ export default function AiDayTraderPixelMonitor({
   const [layout, setLayout] = useState<MonitorLayoutState>(() => loadLayout());
   const [editMode, setEditMode] = useState(false);
   const [selection, setSelection] = useState<MonitorSelection>(null);
+  const [agentQuestion, setAgentQuestion] = useState('');
+  const [agentAnswer, setAgentAnswer] = useState<{ question: string; answer: string; source: 'SYSTEM' | 'LLM' } | null>(null);
+  const [agentAnswerBusy, setAgentAnswerBusy] = useState(false);
   const dragRef = useRef<
     | null
     | { kind: 'pan'; startX: number; startY: number; panX: number; panY: number }
@@ -884,6 +971,21 @@ export default function AiDayTraderPixelMonitor({
       setSelection({ kind: 'actor', actorId: focusedActor.id });
     }
   }, [open, selection, state.monitorActors, state.monitorFocusId]);
+
+  useEffect(() => {
+    if (!selectedActor) {
+      setAgentAnswer(null);
+      setAgentQuestion('');
+      setAgentAnswerBusy(false);
+      return;
+    }
+    setAgentQuestion('');
+    setAgentAnswer({
+      question: '지금 뭐하고 있어?',
+      answer: buildActorStatusBrief(selectedActor, relatedEvents, relatedTrades, state),
+      source: 'SYSTEM',
+    });
+  }, [relatedEvents, relatedTrades, selectedActor, state]);
 
   useEffect(() => {
     if (!open) return;
@@ -1027,6 +1129,54 @@ export default function AiDayTraderPixelMonitor({
       onFocusActor(null);
     }
     centerOnSelection(nextSelection);
+  };
+
+  const askSelectedActor = async (rawQuestion: string) => {
+    if (!selectedActor) return;
+    const question = rawQuestion.trim();
+    if (!question) return;
+    const fallbackAnswer = buildFallbackActorAnswer(question, selectedActor, relatedEvents, relatedTrades, state);
+    if (!providerConnected) {
+      setAgentAnswer({ question, answer: fallbackAnswer, source: 'SYSTEM' });
+      return;
+    }
+
+    setAgentAnswerBusy(true);
+    try {
+      const prompt = [
+        `너는 데스크톱 AI 초단타 모니터 안의 ${selectedActor.label} 에이전트다.`,
+        `역할: ${selectedActor.role}`,
+        `상태: ${selectedActor.status}`,
+        selectedActor.market ? `시장: ${selectedActor.market}` : '',
+        selectedActor.taskSummary ? `현재 작업: ${selectedActor.taskSummary}` : '',
+        selectedActor.lastResult ? `최근 결과: ${selectedActor.lastResult}` : '',
+        `오픈 포지션 수: ${state.positions.length}`,
+        `대기 후보 수: ${state.queue.length}`,
+        `최근 이벤트: ${relatedEvents.slice(0, 3).map((event) => `${event.type} ${event.message}`).join(' | ') || '없음'}`,
+        `최근 거래: ${relatedTrades.slice(0, 2).map((trade) => `${trade.market} ${formatPercent(trade.realizedPnlPercent)} ${formatExitReason(trade.exitReason)}`).join(' | ') || '없음'}`,
+        '규칙: 한국어로 2~4문장, 과장 금지, 지금 화면에 있는 사실만 근거로 답하라. 모르면 모른다고 말하라. 투자 권유 말투보다 현재 작업 브리핑 말투를 써라.',
+        `사용자 질문: ${question}`,
+      ].filter(Boolean).join('\n');
+
+      const response = await requestOneShotTextWithMeta({
+        provider: config.provider,
+        model: config.model,
+        prompt,
+      });
+      setAgentAnswer({
+        question,
+        answer: response.text.trim() || fallbackAnswer,
+        source: 'LLM',
+      });
+    } catch {
+      setAgentAnswer({
+        question,
+        answer: fallbackAnswer,
+        source: 'SYSTEM',
+      });
+    } finally {
+      setAgentAnswerBusy(false);
+    }
   };
 
   const changeZoom = (delta: number) => {
@@ -1422,6 +1572,53 @@ export default function AiDayTraderPixelMonitor({
                 {selectedActor.lastResult && (
                   <div className="ai-pixel-detail__result">{selectedActor.lastResult}</div>
                 )}
+              </div>
+              <div className="ai-pixel-detail__section">
+                <div className="ai-pixel-detail__subtitle">에이전트 브리핑</div>
+                {agentAnswer && (
+                  <div className="ai-pixel-detail__reply">
+                    <div className="ai-pixel-detail__reply-meta">
+                      <span>{agentAnswer.source === 'LLM' ? 'LLM 답변' : '즉답 모드'}</span>
+                      <strong>{agentAnswer.question}</strong>
+                    </div>
+                    <div className="ai-pixel-detail__reply-body">{agentAnswer.answer}</div>
+                  </div>
+                )}
+                <div className="ai-pixel-detail__quick-asks">
+                  {['지금 뭐하고 있어?', '왜 이걸 보고 있어?', '다음엔 뭘 할 거야?'].map((question) => (
+                    <button
+                      key={question}
+                      type="button"
+                      className="ai-pixel-detail__ask-chip"
+                      onClick={() => void askSelectedActor(question)}
+                      disabled={agentAnswerBusy}
+                    >
+                      {question}
+                    </button>
+                  ))}
+                </div>
+                <div className="ai-pixel-detail__ask-row">
+                  <input
+                    className="ai-pixel-detail__ask-input"
+                    value={agentQuestion}
+                    onChange={(event) => setAgentQuestion(event.target.value)}
+                    placeholder="에이전트에게 질문하기"
+                    onKeyDown={(event) => {
+                      if (event.key === 'Enter') {
+                        event.preventDefault();
+                        void askSelectedActor(agentQuestion);
+                      }
+                    }}
+                  />
+                  <button
+                    type="button"
+                    className="ai-pixel-detail__ask-button"
+                    onClick={() => void askSelectedActor(agentQuestion)}
+                    disabled={agentAnswerBusy || agentQuestion.trim().length === 0}
+                  >
+                    {agentAnswerBusy ? '답변 중' : '질문'}
+                  </button>
+                </div>
               </div>
               <div className="ai-pixel-detail__section">
                 <div className="ai-pixel-detail__subtitle">관련 저널</div>

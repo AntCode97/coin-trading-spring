@@ -79,12 +79,26 @@ export function loadAiDayTraderPreferences(): AiDayTraderConfig {
     if (!raw) return DEFAULT_AI_DAY_TRADER_CONFIG;
     const parsed = JSON.parse(raw) as Partial<AiDayTraderConfig>;
     const provider = parsed.provider === 'zai' ? 'zai' : DEFAULT_AI_DAY_TRADER_CONFIG.provider;
+    const usesLegacyTimingDefaults =
+      (parsed.scanIntervalMs == null || parsed.scanIntervalMs === 10_000)
+      && (parsed.positionCheckMs == null || parsed.positionCheckMs === 5_000);
+    const usesLegacyEntryAggressionDefault =
+      parsed.entryAggression == null
+      || (parsed.entryAggression === 'BALANCED' && usesLegacyTimingDefaults);
     return {
       ...DEFAULT_AI_DAY_TRADER_CONFIG,
       ...parsed,
       provider,
-      entryAggression: normalizeEntryAggression(parsed.entryAggression),
+      entryAggression: usesLegacyEntryAggressionDefault
+        ? DEFAULT_AI_DAY_TRADER_CONFIG.entryAggression
+        : normalizeEntryAggression(parsed.entryAggression),
       model: normalizePreferredModel(provider, parsed.model),
+      scanIntervalMs: usesLegacyTimingDefaults
+        ? DEFAULT_AI_DAY_TRADER_CONFIG.scanIntervalMs
+        : parsed.scanIntervalMs ?? DEFAULT_AI_DAY_TRADER_CONFIG.scanIntervalMs,
+      positionCheckMs: usesLegacyTimingDefaults
+        ? DEFAULT_AI_DAY_TRADER_CONFIG.positionCheckMs
+        : parsed.positionCheckMs ?? DEFAULT_AI_DAY_TRADER_CONFIG.positionCheckMs,
       strategyCode: DEFAULT_AI_DAY_TRADER_CONFIG.strategyCode,
     };
   } catch {

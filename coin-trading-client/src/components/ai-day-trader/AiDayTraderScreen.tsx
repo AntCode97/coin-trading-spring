@@ -74,6 +74,8 @@ export default function AiDayTraderScreen() {
         open={screen.isMonitorOpen}
         state={screen.state}
         todayTrades={screen.history.todayTrades}
+        config={screen.config}
+        providerConnected={screen.provider.providerConnected}
         onClose={screen.closeMonitor}
         onFocusActor={screen.setMonitorFocus}
       />
