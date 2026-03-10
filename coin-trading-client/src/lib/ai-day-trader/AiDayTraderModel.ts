@@ -157,7 +157,7 @@ export const DEFAULT_AI_DAY_TRADER_CONFIG: AiDayTraderConfig = {
   scanIntervalMs: 60_000,
   positionCheckMs: 10_000,
   maxConcurrentPositions: 5,
-  amountKrw: 10_000,
+  amountKrw: 25_000,
   dailyLossLimitKrw: -20_000,
   universeLimit: 36,
   maxHoldingMinutes: 30,

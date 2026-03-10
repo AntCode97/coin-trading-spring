@@ -85,6 +85,9 @@ export function loadAiDayTraderPreferences(): AiDayTraderConfig {
     const usesLegacyEntryAggressionDefault =
       parsed.entryAggression == null
       || (parsed.entryAggression === 'BALANCED' && usesLegacyTimingDefaults);
+    const usesLegacyAmountDefault =
+      parsed.amountKrw == null
+      || (parsed.amountKrw === 10_000 && usesLegacyTimingDefaults && usesLegacyEntryAggressionDefault);
     return {
       ...DEFAULT_AI_DAY_TRADER_CONFIG,
       ...parsed,
@@ -99,6 +102,9 @@ export function loadAiDayTraderPreferences(): AiDayTraderConfig {
       positionCheckMs: usesLegacyTimingDefaults
         ? DEFAULT_AI_DAY_TRADER_CONFIG.positionCheckMs
         : parsed.positionCheckMs ?? DEFAULT_AI_DAY_TRADER_CONFIG.positionCheckMs,
+      amountKrw: usesLegacyAmountDefault
+        ? DEFAULT_AI_DAY_TRADER_CONFIG.amountKrw
+        : parsed.amountKrw ?? DEFAULT_AI_DAY_TRADER_CONFIG.amountKrw,
       strategyCode: DEFAULT_AI_DAY_TRADER_CONFIG.strategyCode,
     };
   } catch {

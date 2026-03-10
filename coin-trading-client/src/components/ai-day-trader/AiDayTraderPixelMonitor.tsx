@@ -81,6 +81,11 @@ interface MarketPulseItem {
   label: string;
 }
 
+interface ActorBubblePlacement {
+  style: CSSProperties;
+  side: 'left' | 'right';
+}
+
 interface AiDayTraderPixelMonitorProps {
   open: boolean;
   state: AiTraderState;
@@ -112,6 +117,8 @@ const DEFAULT_LAYOUT: MonitorLayoutState = {
   panY: 28,
   rooms: DEFAULT_ROOMS,
 };
+
+const ACTOR_QUICK_QUESTIONS = ['지금 뭐하고 있어?', '왜 이걸 보고 있어?', '다음엔 뭘 할 거야?'];
 
 const ROOM_BY_ROLE: Record<AiMonitorActor['role'], RoomId> = {
   SCAN: 'scanner',
@@ -763,6 +770,43 @@ function buildLiveMomentItems(events: AiTraderEvent[]): MarketPulseItem[] {
     : [{ id: 'moment-empty', tone: 'neutral', label: '아직 실시간 이벤트가 없습니다.' }];
 }
 
+function buildActorBubblePlacement(
+  actorX: number,
+  actorY: number,
+  viewportWidth: number,
+  viewportHeight: number,
+  zoom: number,
+  panX: number,
+  panY: number,
+): ActorBubblePlacement {
+  const bubbleWidth = 320;
+  const bubbleHeight = 248;
+  const gap = 30;
+  const actorScreenX = panX + actorX * zoom;
+  const actorScreenY = panY + actorY * zoom;
+  const side: 'left' | 'right' = actorScreenX > viewportWidth - bubbleWidth - 52 ? 'left' : 'right';
+  const left = clamp(
+    side === 'right' ? actorScreenX + gap : actorScreenX - bubbleWidth - gap,
+    18,
+    Math.max(18, viewportWidth - bubbleWidth - 18),
+  );
+  const top = clamp(
+    actorScreenY - bubbleHeight * 0.48,
+    82,
+    Math.max(82, viewportHeight - bubbleHeight - 22),
+  );
+  const tailTop = clamp(actorScreenY - top - 18, 28, bubbleHeight - 34);
+  return {
+    side,
+    style: {
+      left,
+      top,
+      width: bubbleWidth,
+      ['--bubble-tail-top' as string]: `${tailTop}px`,
+    },
+  };
+}
+
 function actorEmote(actor: AiMonitorActor): string | null {
   if (actor.status === 'ERROR') return '!!';
   if (actor.status === 'SUCCESS') return 'OK';
@@ -907,6 +951,10 @@ export default function AiDayTraderPixelMonitor({
   const selectedActor = useMemo(
     () => (selection?.kind === 'actor' ? state.monitorActors.find((actor) => actor.id === selection.actorId) ?? null : null),
     [selection, state.monitorActors],
+  );
+  const selectedPositionedActor = useMemo(
+    () => (selection?.kind === 'actor' ? positionedActors.find((item) => item.actor.id === selection.actorId) ?? null : null),
+    [positionedActors, selection],
   );
   const relatedEvents = useMemo(
     () => getRelatedEvents(state.events, selection, selectedActor ?? undefined),
@@ -1135,6 +1183,7 @@ export default function AiDayTraderPixelMonitor({
     if (!selectedActor) return;
     const question = rawQuestion.trim();
     if (!question) return;
+    setAgentQuestion('');
     const fallbackAnswer = buildFallbackActorAnswer(question, selectedActor, relatedEvents, relatedTrades, state);
     if (!providerConnected) {
       setAgentAnswer({ question, answer: fallbackAnswer, source: 'SYSTEM' });
@@ -1216,6 +1265,8 @@ export default function AiDayTraderPixelMonitor({
     if (
       target.closest('[data-room-drag-handle="true"]') ||
       target.closest('.ai-pixel-actor') ||
+      target.closest('[data-monitor-interactive="true"]') ||
+      target.closest('input') ||
       target.closest('button')
     ) {
       return;
@@ -1286,6 +1337,19 @@ export default function AiDayTraderPixelMonitor({
 
   const activeQueueMarkets = state.queue.slice(0, 6);
   const activePositions = state.positions.slice(0, 6);
+  const viewportWidth = viewportRef.current?.clientWidth ?? 0;
+  const viewportHeight = viewportRef.current?.clientHeight ?? 0;
+  const actorBubblePlacement = selectedPositionedActor && viewportWidth > 0 && viewportHeight > 0
+    ? buildActorBubblePlacement(
+        selectedPositionedActor.x,
+        selectedPositionedActor.y,
+        viewportWidth,
+        viewportHeight,
+        layout.zoom,
+        layout.panX,
+        layout.panY,
+      )
+    : null;
 
   const handleViewportWheel = (event: React.WheelEvent<HTMLDivElement>) => {
     event.preventDefault();
@@ -1530,6 +1594,84 @@ export default function AiDayTraderPixelMonitor({
                 <span className="ai-pixel-actor__label">{actor.market ? `${actor.label} · ${actor.market.replace('KRW-', '')}` : actor.label}</span>
               </button>
             ))}
+
+            {selection?.kind === 'actor' && selectedActor && actorBubblePlacement && (
+              <div
+                className={`ai-pixel-monitor__actor-bubble ai-pixel-monitor__actor-bubble--${actorBubblePlacement.side} ${agentAnswerBusy ? 'is-busy' : ''}`}
+                style={actorBubblePlacement.style}
+                data-monitor-interactive="true"
+                onClick={(event) => event.stopPropagation()}
+                onPointerDown={(event) => event.stopPropagation()}
+              >
+                <div className="ai-pixel-monitor__actor-bubble-head">
+                  <div className="ai-pixel-monitor__actor-bubble-id">
+                    <span className="ai-pixel-monitor__actor-bubble-role">{selectedActor.role}</span>
+                    <strong>{selectedActor.label}</strong>
+                  </div>
+                  <div className="ai-pixel-monitor__actor-bubble-state">
+                    <span>{selectedActor.status}</span>
+                    {selectedActor.market && <span>{selectedActor.market.replace('KRW-', '')}</span>}
+                  </div>
+                </div>
+                <div className="ai-pixel-monitor__actor-bubble-copy">
+                  {agentAnswerBusy ? (
+                    <div className="ai-pixel-monitor__actor-bubble-loading">
+                      <span className="ai-pixel-monitor__actor-bubble-dot" />
+                      <span className="ai-pixel-monitor__actor-bubble-dot" />
+                      <span className="ai-pixel-monitor__actor-bubble-dot" />
+                      <em>{selectedActor.label}가 답변 정리 중...</em>
+                    </div>
+                  ) : agentAnswer ? (
+                    <>
+                      <div className="ai-pixel-monitor__actor-bubble-question">{agentAnswer.question}</div>
+                      <div className="ai-pixel-monitor__actor-bubble-answer">{agentAnswer.answer}</div>
+                      <div className="ai-pixel-monitor__actor-bubble-source">
+                        {agentAnswer.source === 'LLM' ? 'LLM 답변' : '즉답 모드'}
+                      </div>
+                    </>
+                  ) : (
+                    <div className="ai-pixel-monitor__actor-bubble-answer">
+                      아직 답변이 없습니다. 바로 질문해 보세요.
+                    </div>
+                  )}
+                </div>
+                <div className="ai-pixel-monitor__actor-bubble-quick-asks">
+                  {ACTOR_QUICK_QUESTIONS.map((question) => (
+                    <button
+                      key={question}
+                      type="button"
+                      className="ai-pixel-monitor__actor-bubble-chip"
+                      onClick={() => void askSelectedActor(question)}
+                      disabled={agentAnswerBusy}
+                    >
+                      {question}
+                    </button>
+                  ))}
+                </div>
+                <div className="ai-pixel-monitor__actor-bubble-form">
+                  <input
+                    className="ai-pixel-monitor__actor-bubble-input"
+                    value={agentQuestion}
+                    onChange={(event) => setAgentQuestion(event.target.value)}
+                    placeholder={`${selectedActor.label}에게 물어보기`}
+                    onKeyDown={(event) => {
+                      if (event.key === 'Enter') {
+                        event.preventDefault();
+                        void askSelectedActor(agentQuestion);
+                      }
+                    }}
+                  />
+                  <button
+                    type="button"
+                    className="ai-pixel-monitor__actor-bubble-send"
+                    onClick={() => void askSelectedActor(agentQuestion)}
+                    disabled={agentAnswerBusy || agentQuestion.trim().length === 0}
+                  >
+                    {agentAnswerBusy ? '...' : '질문'}
+                  </button>
+                </div>
+              </div>
+            )}
           </div>
         </div>
 
@@ -1574,7 +1716,7 @@ export default function AiDayTraderPixelMonitor({
                 )}
               </div>
               <div className="ai-pixel-detail__section">
-                <div className="ai-pixel-detail__subtitle">에이전트 브리핑</div>
+                <div className="ai-pixel-detail__subtitle">말풍선 대화</div>
                 {agentAnswer && (
                   <div className="ai-pixel-detail__reply">
                     <div className="ai-pixel-detail__reply-meta">
@@ -1584,40 +1726,8 @@ export default function AiDayTraderPixelMonitor({
                     <div className="ai-pixel-detail__reply-body">{agentAnswer.answer}</div>
                   </div>
                 )}
-                <div className="ai-pixel-detail__quick-asks">
-                  {['지금 뭐하고 있어?', '왜 이걸 보고 있어?', '다음엔 뭘 할 거야?'].map((question) => (
-                    <button
-                      key={question}
-                      type="button"
-                      className="ai-pixel-detail__ask-chip"
-                      onClick={() => void askSelectedActor(question)}
-                      disabled={agentAnswerBusy}
-                    >
-                      {question}
-                    </button>
-                  ))}
-                </div>
-                <div className="ai-pixel-detail__ask-row">
-                  <input
-                    className="ai-pixel-detail__ask-input"
-                    value={agentQuestion}
-                    onChange={(event) => setAgentQuestion(event.target.value)}
-                    placeholder="에이전트에게 질문하기"
-                    onKeyDown={(event) => {
-                      if (event.key === 'Enter') {
-                        event.preventDefault();
-                        void askSelectedActor(agentQuestion);
-                      }
-                    }}
-                  />
-                  <button
-                    type="button"
-                    className="ai-pixel-detail__ask-button"
-                    onClick={() => void askSelectedActor(agentQuestion)}
-                    disabled={agentAnswerBusy || agentQuestion.trim().length === 0}
-                  >
-                    {agentAnswerBusy ? '답변 중' : '질문'}
-                  </button>
+                <div className="ai-pixel-detail__empty">
+                  캐릭터 옆 말풍선에서 바로 질문할 수 있습니다. 우측 패널은 최근 답변과 기록만 보여줍니다.
                 </div>
               </div>
               <div className="ai-pixel-detail__section">
