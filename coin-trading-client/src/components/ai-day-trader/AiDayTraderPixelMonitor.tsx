@@ -129,16 +129,6 @@ const ROOM_BY_ROLE: Record<AiMonitorActor['role'], RoomId> = {
   DELEGATE: 'subagent',
 };
 
-const ROOM_DESCRIPTIONS: Record<RoomId, string> = {
-  scanner: '시장 스캔 루프가 도는 공간이다. 유니버스 조회, 후보 필터링, 다음 스캔 대기를 본다.',
-  ranking: 'LLM이 상위 후보를 압축하는 구간이다. shortlist 실패/폴백도 여기서 보인다.',
-  entry: '후보별 진입 컨텍스트 조회와 BUY/WAIT 판단이 발생하는 구간이다.',
-  manage: '보유 포지션 재평가, 정체 청산, 시간 청산, 손실 방어가 모이는 공간이다.',
-  execution: '시장가 매수/매도와 체결 성공, 주문 실패를 보는 공간이다.',
-  subagent: 'delegate_to_zai_agent 또는 실제 tool call이 발생할 때만 서브 에이전트가 잠깐 생성된다.',
-  market: '현재 큐, 보유 포지션, 오늘 거래 내역을 묶어서 보는 보드다.',
-};
-
 function snap(value: number): number {
   return Math.round(value / GRID_SIZE) * GRID_SIZE;
 }
@@ -536,7 +526,7 @@ function renderRoomDecor(roomId: RoomId, summary: RoomSummary | null): ReactNode
           <div className="ai-pixel-furniture ai-pixel-furniture--chair center" />
           <div className="ai-pixel-room__speech">
             <span className="ai-pixel-room__speech-tag">{summary?.statusLabel ?? 'SCAN'}</span>
-            <span className="ai-pixel-room__speech-text">{summary?.headline ?? '시장 순환 스캔'}</span>
+            <span className="ai-pixel-room__speech-text">{summary?.counter ?? '순환 중'}</span>
           </div>
         </div>
       );
@@ -549,7 +539,7 @@ function renderRoomDecor(roomId: RoomId, summary: RoomSummary | null): ReactNode
           <div className="ai-pixel-furniture ai-pixel-furniture--monitor-cluster" />
           <div className="ai-pixel-room__speech">
             <span className="ai-pixel-room__speech-tag">{summary?.counter ?? 'shortlist'}</span>
-            <span className="ai-pixel-room__speech-text">{summary?.headline ?? '후보 압축'}</span>
+            <span className="ai-pixel-room__speech-text">우선순위</span>
           </div>
         </div>
       );
@@ -561,7 +551,7 @@ function renderRoomDecor(roomId: RoomId, summary: RoomSummary | null): ReactNode
           <div className="ai-pixel-furniture ai-pixel-furniture--lamp" />
           <div className="ai-pixel-room__speech">
             <span className="ai-pixel-room__speech-tag">{summary?.statusLabel ?? 'ENTRY'}</span>
-            <span className="ai-pixel-room__speech-text">{summary?.headline ?? '진입 검토 중'}</span>
+            <span className="ai-pixel-room__speech-text">진입 검토</span>
           </div>
         </div>
       );
@@ -576,7 +566,7 @@ function renderRoomDecor(roomId: RoomId, summary: RoomSummary | null): ReactNode
           <div className="ai-pixel-furniture ai-pixel-furniture--table coffee" />
           <div className="ai-pixel-room__speech lounge">
             <span className="ai-pixel-room__speech-tag">{summary?.counter ?? 'open'}</span>
-            <span className="ai-pixel-room__speech-text">{summary?.headline ?? '포지션 모니터링'}</span>
+            <span className="ai-pixel-room__speech-text">보유 감시</span>
           </div>
         </div>
       );
@@ -589,7 +579,7 @@ function renderRoomDecor(roomId: RoomId, summary: RoomSummary | null): ReactNode
           <div className="ai-pixel-furniture ai-pixel-furniture--trash" />
           <div className="ai-pixel-room__speech compact">
             <span className="ai-pixel-room__speech-tag">{summary?.statusLabel ?? 'EXEC'}</span>
-            <span className="ai-pixel-room__speech-text">{summary?.headline ?? '주문 대기'}</span>
+            <span className="ai-pixel-room__speech-text">체결 감시</span>
           </div>
         </div>
       );
@@ -601,7 +591,7 @@ function renderRoomDecor(roomId: RoomId, summary: RoomSummary | null): ReactNode
           <div className="ai-pixel-furniture ai-pixel-furniture--server right" />
           <div className="ai-pixel-room__speech compact">
             <span className="ai-pixel-room__speech-tag">{summary?.statusLabel ?? 'EMPTY'}</span>
-            <span className="ai-pixel-room__speech-text">{summary?.headline ?? 'delegate 대기'}</span>
+            <span className="ai-pixel-room__speech-text">서브태스크</span>
           </div>
         </div>
       );
@@ -612,7 +602,7 @@ function renderRoomDecor(roomId: RoomId, summary: RoomSummary | null): ReactNode
           <div className="ai-pixel-furniture ai-pixel-furniture--ticker-strip" />
           <div className="ai-pixel-room__speech board">
             <span className="ai-pixel-room__speech-tag">{summary?.counter ?? 'queue'}</span>
-            <span className="ai-pixel-room__speech-text">{summary?.headline ?? '후보 모니터'}</span>
+            <span className="ai-pixel-room__speech-text">후보 보드</span>
           </div>
         </div>
       );
@@ -778,9 +768,10 @@ function buildActorBubblePlacement(
   zoom: number,
   panX: number,
   panY: number,
+  expanded: boolean,
 ): ActorBubblePlacement {
-  const bubbleWidth = 320;
-  const bubbleHeight = 248;
+  const bubbleWidth = expanded ? 292 : 238;
+  const bubbleHeight = expanded ? 238 : 136;
   const gap = 30;
   const actorScreenX = panX + actorX * zoom;
   const actorScreenY = panY + actorY * zoom;
@@ -934,6 +925,8 @@ export default function AiDayTraderPixelMonitor({
   const [layout, setLayout] = useState<MonitorLayoutState>(() => loadLayout());
   const [editMode, setEditMode] = useState(false);
   const [selection, setSelection] = useState<MonitorSelection>(null);
+  const [bubbleOpen, setBubbleOpen] = useState(false);
+  const [bubbleExpanded, setBubbleExpanded] = useState(false);
   const [agentQuestion, setAgentQuestion] = useState('');
   const [agentAnswer, setAgentAnswer] = useState<{ question: string; answer: string; source: 'SYSTEM' | 'LLM' } | null>(null);
   const [agentAnswerBusy, setAgentAnswerBusy] = useState(false);
@@ -976,24 +969,59 @@ export default function AiDayTraderPixelMonitor({
     }),
     [state],
   );
-  const selectedRoomSummary = useMemo(
-    () => (selection?.kind === 'room' ? roomSummaries[selection.roomId] : null),
-    [roomSummaries, selection],
-  );
-  const selectedRoomEvents = useMemo(
-    () => (selection?.kind === 'room' ? getRoomEvents(selection.roomId, state.events) : []),
-    [selection, state.events],
-  );
-  const selectedRoomTrades = useMemo(
-    () => (selection?.kind === 'room' ? getRoomTrades(selection.roomId, state, todayTrades) : []),
-    [selection, state, todayTrades],
-  );
   const selectedPosition = useMemo(
     () => (selection?.kind === 'position'
       ? state.positions.find((position) => position.tradeId === selection.tradeId) ?? null
       : null),
     [selection, state.positions],
   );
+  const detailContextLabel = useMemo(() => {
+    if (!selection) return '최근 기록';
+    switch (selection.kind) {
+      case 'actor':
+        return selectedActor?.label ?? '에이전트';
+      case 'market':
+        return selection.market.replace('KRW-', '');
+      case 'position':
+        return selectedPosition?.market.replace('KRW-', '') ?? '포지션';
+      case 'room':
+        return layout.rooms[selection.roomId].title;
+      default:
+        return '최근 기록';
+    }
+  }, [layout.rooms, selectedActor, selectedPosition, selection]);
+  const detailEvents = useMemo(() => {
+    if (!selection) return state.events.slice(0, 6);
+    switch (selection.kind) {
+      case 'actor':
+      case 'market':
+        return relatedEvents;
+      case 'position':
+        return selectedPosition
+          ? state.events.filter((event) => event.market === selectedPosition.market).slice(0, 6)
+          : [];
+      case 'room':
+        return getRoomEvents(selection.roomId, state.events);
+      default:
+        return state.events.slice(0, 6);
+    }
+  }, [relatedEvents, selectedPosition, selection, state.events]);
+  const detailTrades = useMemo(() => {
+    if (!selection) return todayTrades.slice(0, 6);
+    switch (selection.kind) {
+      case 'actor':
+      case 'market':
+        return relatedTrades;
+      case 'position':
+        return selectedPosition
+          ? todayTrades.filter((trade) => trade.market === selectedPosition.market).slice(0, 6)
+          : [];
+      case 'room':
+        return getRoomTrades(selection.roomId, state, todayTrades);
+      default:
+        return todayTrades.slice(0, 6);
+    }
+  }, [relatedTrades, selectedPosition, selection, state, todayTrades]);
 
   useEffect(() => {
     if (!open) return;
@@ -1022,6 +1050,8 @@ export default function AiDayTraderPixelMonitor({
 
   useEffect(() => {
     if (!selectedActor) {
+      setBubbleOpen(false);
+      setBubbleExpanded(false);
       setAgentAnswer(null);
       setAgentQuestion('');
       setAgentAnswerBusy(false);
@@ -1172,8 +1202,12 @@ export default function AiDayTraderPixelMonitor({
   const handleSelect = (nextSelection: MonitorSelection) => {
     setSelection(nextSelection);
     if (nextSelection?.kind === 'actor') {
+      setBubbleOpen(true);
+      setBubbleExpanded(false);
       onFocusActor(nextSelection.actorId);
     } else {
+      setBubbleOpen(false);
+      setBubbleExpanded(false);
       onFocusActor(null);
     }
     centerOnSelection(nextSelection);
@@ -1274,6 +1308,10 @@ export default function AiDayTraderPixelMonitor({
     if (editMode && target.closest('.ai-pixel-room')) {
       return;
     }
+    if (bubbleOpen) {
+      setBubbleOpen(false);
+      setBubbleExpanded(false);
+    }
     dragRef.current = {
       kind: 'pan',
       startX: event.clientX,
@@ -1339,7 +1377,7 @@ export default function AiDayTraderPixelMonitor({
   const activePositions = state.positions.slice(0, 6);
   const viewportWidth = viewportRef.current?.clientWidth ?? 0;
   const viewportHeight = viewportRef.current?.clientHeight ?? 0;
-  const actorBubblePlacement = selectedPositionedActor && viewportWidth > 0 && viewportHeight > 0
+  const actorBubblePlacement = bubbleOpen && selectedPositionedActor && viewportWidth > 0 && viewportHeight > 0
     ? buildActorBubblePlacement(
         selectedPositionedActor.x,
         selectedPositionedActor.y,
@@ -1348,6 +1386,7 @@ export default function AiDayTraderPixelMonitor({
         layout.zoom,
         layout.panX,
         layout.panY,
+        bubbleExpanded,
       )
     : null;
 
@@ -1382,27 +1421,17 @@ export default function AiDayTraderPixelMonitor({
               <strong className="ai-pixel-monitor__hud-title">{editMode ? '편집 모드' : '탐색 모드'}</strong>
               <span className="ai-pixel-monitor__hud-hint">
                 {editMode
-                  ? '방 헤더를 드래그해 재배치하고 저장하면 다음에도 그대로 유지됩니다.'
-                  : '캐릭터, 큐, 포지션을 클릭해 상세를 보고 빈 공간 드래그로 이동하세요.'}
+                  ? '방 헤더를 드래그해 위치만 정리하세요.'
+                  : '캐릭터를 눌러 말풍선을 열고, 빈 공간은 드래그해 이동하세요.'}
               </span>
-              <div className="ai-pixel-monitor__hud-feed">
-                <div className="ai-pixel-monitor__hud-feed-track">
-                  {[...liveMomentItems, ...liveMomentItems].map((item, index) => (
-                    <span
-                      key={`${item.id}-${index}`}
-                      className={`ai-pixel-monitor__hud-feed-item is-${item.tone}`}
-                    >
-                      {item.label}
-                    </span>
-                  ))}
-                </div>
+              <div className="ai-pixel-monitor__hud-statusline">
+                {liveMomentItems[0]?.label ?? '최근 이벤트 없음'}
               </div>
             </div>
             <div className="ai-pixel-monitor__hud-stats">
               <span>활성 에이전트 {state.monitorActors.filter((actor) => actor.status === 'BUSY').length}</span>
               <span>보유 {state.positions.length}</span>
               <span>오늘 거래 {todayTrades.length}</span>
-              <span>줌 {(layout.zoom * 100).toFixed(0)}%</span>
             </div>
           </div>
           <div
@@ -1597,7 +1626,7 @@ export default function AiDayTraderPixelMonitor({
 
             {selection?.kind === 'actor' && selectedActor && actorBubblePlacement && (
               <div
-                className={`ai-pixel-monitor__actor-bubble ai-pixel-monitor__actor-bubble--${actorBubblePlacement.side} ${agentAnswerBusy ? 'is-busy' : ''}`}
+                className={`ai-pixel-monitor__actor-bubble ai-pixel-monitor__actor-bubble--${actorBubblePlacement.side} ${bubbleExpanded ? 'is-expanded' : 'is-collapsed'} ${agentAnswerBusy ? 'is-busy' : ''}`}
                 style={actorBubblePlacement.style}
                 data-monitor-interactive="true"
                 onClick={(event) => event.stopPropagation()}
@@ -1623,11 +1652,15 @@ export default function AiDayTraderPixelMonitor({
                     </div>
                   ) : agentAnswer ? (
                     <>
-                      <div className="ai-pixel-monitor__actor-bubble-question">{agentAnswer.question}</div>
-                      <div className="ai-pixel-monitor__actor-bubble-answer">{agentAnswer.answer}</div>
-                      <div className="ai-pixel-monitor__actor-bubble-source">
-                        {agentAnswer.source === 'LLM' ? 'LLM 답변' : '즉답 모드'}
+                      <div className="ai-pixel-monitor__actor-bubble-question">
+                        {bubbleExpanded ? agentAnswer.question : '작업 요약'}
                       </div>
+                      <div className="ai-pixel-monitor__actor-bubble-answer">{agentAnswer.answer}</div>
+                      {bubbleExpanded && (
+                        <div className="ai-pixel-monitor__actor-bubble-source">
+                          {agentAnswer.source === 'LLM' ? 'LLM 답변' : '즉답 모드'}
+                        </div>
+                      )}
                     </>
                   ) : (
                     <div className="ai-pixel-monitor__actor-bubble-answer">
@@ -1635,41 +1668,54 @@ export default function AiDayTraderPixelMonitor({
                     </div>
                   )}
                 </div>
-                <div className="ai-pixel-monitor__actor-bubble-quick-asks">
-                  {ACTOR_QUICK_QUESTIONS.map((question) => (
-                    <button
-                      key={question}
-                      type="button"
-                      className="ai-pixel-monitor__actor-bubble-chip"
-                      onClick={() => void askSelectedActor(question)}
-                      disabled={agentAnswerBusy}
-                    >
-                      {question}
-                    </button>
-                  ))}
-                </div>
-                <div className="ai-pixel-monitor__actor-bubble-form">
-                  <input
-                    className="ai-pixel-monitor__actor-bubble-input"
-                    value={agentQuestion}
-                    onChange={(event) => setAgentQuestion(event.target.value)}
-                    placeholder={`${selectedActor.label}에게 물어보기`}
-                    onKeyDown={(event) => {
-                      if (event.key === 'Enter') {
-                        event.preventDefault();
-                        void askSelectedActor(agentQuestion);
-                      }
-                    }}
-                  />
+                <div className="ai-pixel-monitor__actor-bubble-actions">
                   <button
                     type="button"
-                    className="ai-pixel-monitor__actor-bubble-send"
-                    onClick={() => void askSelectedActor(agentQuestion)}
-                    disabled={agentAnswerBusy || agentQuestion.trim().length === 0}
+                    className="ai-pixel-monitor__actor-bubble-toggle"
+                    onClick={() => setBubbleExpanded((current) => !current)}
                   >
-                    {agentAnswerBusy ? '...' : '질문'}
+                    {bubbleExpanded ? '접기' : '질문'}
                   </button>
                 </div>
+                {bubbleExpanded && (
+                  <>
+                    <div className="ai-pixel-monitor__actor-bubble-quick-asks">
+                      {ACTOR_QUICK_QUESTIONS.map((question) => (
+                        <button
+                          key={question}
+                          type="button"
+                          className="ai-pixel-monitor__actor-bubble-chip"
+                          onClick={() => void askSelectedActor(question)}
+                          disabled={agentAnswerBusy}
+                        >
+                          {question}
+                        </button>
+                      ))}
+                    </div>
+                    <div className="ai-pixel-monitor__actor-bubble-form">
+                      <input
+                        className="ai-pixel-monitor__actor-bubble-input"
+                        value={agentQuestion}
+                        onChange={(event) => setAgentQuestion(event.target.value)}
+                        placeholder={`${selectedActor.label}에게 물어보기`}
+                        onKeyDown={(event) => {
+                          if (event.key === 'Enter') {
+                            event.preventDefault();
+                            void askSelectedActor(agentQuestion);
+                          }
+                        }}
+                      />
+                      <button
+                        type="button"
+                        className="ai-pixel-monitor__actor-bubble-send"
+                        onClick={() => void askSelectedActor(agentQuestion)}
+                        disabled={agentAnswerBusy || agentQuestion.trim().length === 0}
+                      >
+                        {agentAnswerBusy ? '...' : '질문'}
+                      </button>
+                    </div>
+                  </>
+                )}
               </div>
             )}
           </div>
@@ -1697,207 +1743,42 @@ export default function AiDayTraderPixelMonitor({
               })}
             </div>
           </div>
-
-          {selection?.kind === 'actor' && selectedActor ? (
-            <>
-              <div className="ai-pixel-detail__section">
-                <div className="ai-pixel-detail__eyebrow">{selectedActor.kind === 'CORE' ? 'Core Agent' : 'Subagent'}</div>
-                <div className="ai-pixel-detail__title">{selectedActor.label}</div>
-                <div className="ai-pixel-detail__chips">
-                  <span>{selectedActor.role}</span>
-                  <span>{selectedActor.status}</span>
-                  {selectedActor.market && <span>{selectedActor.market}</span>}
-                </div>
-                {selectedActor.taskSummary && (
-                  <p className="ai-pixel-detail__body">{selectedActor.taskSummary}</p>
-                )}
-                {selectedActor.lastResult && (
-                  <div className="ai-pixel-detail__result">{selectedActor.lastResult}</div>
-                )}
-              </div>
-              <div className="ai-pixel-detail__section">
-                <div className="ai-pixel-detail__subtitle">말풍선 대화</div>
-                {agentAnswer && (
-                  <div className="ai-pixel-detail__reply">
-                    <div className="ai-pixel-detail__reply-meta">
-                      <span>{agentAnswer.source === 'LLM' ? 'LLM 답변' : '즉답 모드'}</span>
-                      <strong>{agentAnswer.question}</strong>
-                    </div>
-                    <div className="ai-pixel-detail__reply-body">{agentAnswer.answer}</div>
-                  </div>
-                )}
-                <div className="ai-pixel-detail__empty">
-                  캐릭터 옆 말풍선에서 바로 질문할 수 있습니다. 우측 패널은 최근 답변과 기록만 보여줍니다.
-                </div>
-              </div>
-              <div className="ai-pixel-detail__section">
-                <div className="ai-pixel-detail__subtitle">관련 저널</div>
-                <div className="ai-pixel-detail__list">
-                  {relatedEvents.map((event) => (
-                    <article key={event.id} className="ai-pixel-detail__item">
-                      <div className="ai-pixel-detail__item-title">{event.message}</div>
-                      <div className="ai-pixel-detail__item-meta">{event.type} · {formatClock(event.timestamp)}</div>
-                    </article>
-                  ))}
-                </div>
-              </div>
-              <div className="ai-pixel-detail__section">
-                <div className="ai-pixel-detail__subtitle">관련 거래</div>
-                <div className="ai-pixel-detail__list">
-                  {relatedTrades.length === 0 ? (
-                    <div className="ai-pixel-detail__empty">관련 거래 없음</div>
-                  ) : (
-                    relatedTrades.map((trade) => (
-                      <article key={trade.tradeId} className="ai-pixel-detail__item">
-                        <div className="ai-pixel-detail__item-title">
-                          {trade.market.replace('KRW-', '')} · {formatKrw(trade.realizedPnl)}
-                        </div>
-                        <div className="ai-pixel-detail__item-meta">
-                          {formatDateTime(trade.createdAt)} → {trade.closedAt ? formatDateTime(trade.closedAt) : '-'} · {formatExitReason(trade.exitReason)}
-                        </div>
-                      </article>
-                    ))
-                  )}
-                </div>
-              </div>
-            </>
-          ) : selection?.kind === 'market' ? (
-            <>
-              <div className="ai-pixel-detail__section">
-                <div className="ai-pixel-detail__eyebrow">Market Focus</div>
-                <div className="ai-pixel-detail__title">{selection.market}</div>
-                <div className="ai-pixel-detail__chips">
-                  <span>Queue / Trade Filter</span>
-                </div>
-              </div>
-              <div className="ai-pixel-detail__section">
-                <div className="ai-pixel-detail__subtitle">관련 저널</div>
-                <div className="ai-pixel-detail__list">
-                  {relatedEvents.map((event) => (
-                    <article key={event.id} className="ai-pixel-detail__item">
-                      <div className="ai-pixel-detail__item-title">{event.message}</div>
-                      <div className="ai-pixel-detail__item-meta">{event.type} · {formatClock(event.timestamp)}</div>
-                    </article>
-                  ))}
-                </div>
-              </div>
-              <div className="ai-pixel-detail__section">
-                <div className="ai-pixel-detail__subtitle">오늘 거래</div>
-                <div className="ai-pixel-detail__list">
-                  {relatedTrades.length === 0 ? (
-                    <div className="ai-pixel-detail__empty">오늘 거래 없음</div>
-                  ) : (
-                    relatedTrades.map((trade) => (
-                      <article key={trade.tradeId} className="ai-pixel-detail__item">
-                        <div className="ai-pixel-detail__item-title">
-                          {formatKrw(trade.realizedPnl)} / {formatPercent(trade.realizedPnlPercent)}
-                        </div>
-                        <div className="ai-pixel-detail__item-meta">
-                          {formatDateTime(trade.createdAt)} → {trade.closedAt ? formatDateTime(trade.closedAt) : '-'} · {formatExitReason(trade.exitReason)}
-                        </div>
-                      </article>
-                    ))
-                  )}
-                </div>
-              </div>
-            </>
-          ) : selection?.kind === 'position' && selectedPosition ? (
-            <>
-              <div className="ai-pixel-detail__section">
-                <div className="ai-pixel-detail__eyebrow">Open Position</div>
-                <div className="ai-pixel-detail__title">{selectedPosition.market}</div>
-                <div className="ai-pixel-detail__chips">
-                  <span>{formatPercent(selectedPosition.unrealizedPnlPercent)}</span>
-                  <span>entry {selectedPosition.averageEntryPrice.toLocaleString()}</span>
-                  <span>now {selectedPosition.currentPrice.toLocaleString()}</span>
-                </div>
-              </div>
-              <div className="ai-pixel-detail__section">
-                <div className="ai-pixel-detail__subtitle">보호 가격</div>
-                <div className="ai-pixel-detail__body">
-                  손절 {selectedPosition.stopLossPrice.toLocaleString()} · 익절 {selectedPosition.takeProfitPrice.toLocaleString()}
-                </div>
-              </div>
-              <div className="ai-pixel-detail__section">
-                <div className="ai-pixel-detail__subtitle">최근 이벤트</div>
-                <div className="ai-pixel-detail__list">
-                  {state.events
-                    .filter((event) => event.market === selectedPosition.market)
-                    .slice(0, 6)
-                    .map((event) => (
-                      <article key={event.id} className="ai-pixel-detail__item">
-                        <div className="ai-pixel-detail__item-title">{event.message}</div>
-                        <div className="ai-pixel-detail__item-meta">{event.type} · {formatClock(event.timestamp)}</div>
-                      </article>
-                    ))}
-                </div>
-              </div>
-            </>
-          ) : selection?.kind === 'room' ? (
-            <>
-              <div className="ai-pixel-detail__section">
-                <div className="ai-pixel-detail__eyebrow">Room</div>
-                <div className="ai-pixel-detail__title">{layout.rooms[selection.roomId].title}</div>
-                <div className="ai-pixel-detail__chips">
-                  {selectedRoomSummary?.statusLabel && <span>{selectedRoomSummary.statusLabel}</span>}
-                  {selectedRoomSummary?.counter && <span>{selectedRoomSummary.counter}</span>}
-                </div>
-                {selectedRoomSummary?.headline && (
-                  <p className="ai-pixel-detail__body">{selectedRoomSummary.headline}</p>
-                )}
-                {selectedRoomSummary?.detail && (
-                  <div className="ai-pixel-detail__result">{selectedRoomSummary.detail}</div>
-                )}
-                <p className="ai-pixel-detail__body">{ROOM_DESCRIPTIONS[selection.roomId]}</p>
-              </div>
-              <div className="ai-pixel-detail__section">
-                <div className="ai-pixel-detail__subtitle">관련 저널</div>
-                <div className="ai-pixel-detail__list">
-                  {selectedRoomEvents.length === 0 ? (
-                    <div className="ai-pixel-detail__empty">관련 이벤트 없음</div>
-                  ) : (
-                    selectedRoomEvents.map((event) => (
-                      <article key={event.id} className="ai-pixel-detail__item">
-                        <div className="ai-pixel-detail__item-title">{event.message}</div>
-                        <div className="ai-pixel-detail__item-meta">{event.type} · {formatClock(event.timestamp)}</div>
-                      </article>
-                    ))
-                  )}
-                </div>
-              </div>
-              {selectedRoomTrades.length > 0 && (
-                <div className="ai-pixel-detail__section">
-                  <div className="ai-pixel-detail__subtitle">관련 거래</div>
-                  <div className="ai-pixel-detail__list">
-                    {selectedRoomTrades.map((trade) => (
-                      <article key={trade.tradeId} className="ai-pixel-detail__item">
-                        <div className="ai-pixel-detail__item-title">
-                          {trade.market.replace('KRW-', '')} · {formatKrw(trade.realizedPnl)}
-                        </div>
-                        <div className="ai-pixel-detail__item-meta">
-                          {trade.closedAt ? formatDateTime(trade.closedAt) : '-'} · {formatExitReason(trade.exitReason)}
-                        </div>
-                      </article>
-                    ))}
-                  </div>
-                </div>
+          <div className="ai-pixel-detail__section">
+            <div className="ai-pixel-detail__eyebrow">관련 저널</div>
+            <div className="ai-pixel-detail__subtitle">{detailContextLabel}</div>
+            <div className="ai-pixel-detail__list">
+              {detailEvents.length === 0 ? (
+                <div className="ai-pixel-detail__empty">관련 이벤트 없음</div>
+              ) : (
+                detailEvents.map((event) => (
+                  <article key={event.id} className="ai-pixel-detail__item">
+                    <div className="ai-pixel-detail__item-title">{event.message}</div>
+                    <div className="ai-pixel-detail__item-meta">{event.type} · {formatClock(event.timestamp)}</div>
+                  </article>
+                ))
               )}
-              {editMode && (
-                <div className="ai-pixel-detail__section">
-                  <div className="ai-pixel-detail__subtitle">좌표</div>
-                  <div className="ai-pixel-detail__chips">
-                    <span>x {layout.rooms[selection.roomId].x}</span>
-                    <span>y {layout.rooms[selection.roomId].y}</span>
-                    <span>{layout.rooms[selection.roomId].width}×{layout.rooms[selection.roomId].height}</span>
-                  </div>
-                </div>
-              )}
-            </>
-          ) : (
-            <div className="ai-pixel-detail__empty">
-              에이전트나 시장을 클릭하면 여기서 상세 내용을 볼 수 있습니다.
             </div>
-          )}
+          </div>
+          <div className="ai-pixel-detail__section">
+            <div className="ai-pixel-detail__eyebrow">관련 거래</div>
+            <div className="ai-pixel-detail__subtitle">{detailContextLabel}</div>
+            <div className="ai-pixel-detail__list">
+              {detailTrades.length === 0 ? (
+                <div className="ai-pixel-detail__empty">관련 거래 없음</div>
+              ) : (
+                detailTrades.map((trade) => (
+                  <article key={trade.tradeId} className="ai-pixel-detail__item">
+                    <div className="ai-pixel-detail__item-title">
+                      {trade.market.replace('KRW-', '')} · {formatKrw(trade.realizedPnl)}
+                    </div>
+                    <div className="ai-pixel-detail__item-meta">
+                      {formatDateTime(trade.createdAt)} → {trade.closedAt ? formatDateTime(trade.closedAt) : '-'} · {formatExitReason(trade.exitReason)}
+                    </div>
+                  </article>
+                ))
+              )}
+            </div>
+          </div>
         </aside>
 
         <footer className="ai-pixel-monitor__toolbar">
