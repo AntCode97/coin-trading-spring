@@ -29,6 +29,11 @@ import {
   loadAiDayTraderPreferences,
   normalizePreferredModel,
 } from './AiDayTraderScreenConfig';
+import {
+  useAiDayTraderDesktopReview,
+  type AiDayTraderDesktopReviewView,
+} from './useAiDayTraderDesktopReview';
+export type { AiDayTraderDesktopReviewView } from './useAiDayTraderDesktopReview';
 
 export interface AiDayTraderHistoryMarketSummary {
   market: string;
@@ -88,6 +93,7 @@ export interface AiDayTraderScreenViewModel {
   state: AiTraderState;
   session: AiDayTraderSessionView;
   provider: AiDayTraderProviderView;
+  review: AiDayTraderDesktopReviewView;
   journal: AiDayTraderJournalView;
   history: AiDayTraderHistoryView;
   isMonitorOpen: boolean;
@@ -293,6 +299,12 @@ export function useAiDayTraderScreen(): AiDayTraderScreenViewModel {
     setConfig((current) => ({ ...current, ...patch }));
   };
 
+  const review = useAiDayTraderDesktopReview({
+    config,
+    provider,
+    updateConfig,
+  });
+
   const setMonitorFocus = (actorId: string | null) => {
     engineRef.current?.setMonitorFocus(actorId);
   };
@@ -440,6 +452,7 @@ export function useAiDayTraderScreen(): AiDayTraderScreenViewModel {
     state,
     session,
     provider,
+    review,
     journal,
     history,
     isMonitorOpen,

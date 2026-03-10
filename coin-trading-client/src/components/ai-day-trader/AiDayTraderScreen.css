@@ -257,6 +257,12 @@
   background: rgba(10, 20, 36, 0.82);
 }
 
+.ai-scalp-action.subtle {
+  color: var(--ai-scalp-text-dim);
+  border-color: rgba(120, 167, 255, 0.12);
+  background: rgba(7, 16, 28, 0.68);
+}
+
 .ai-scalp-layout {
   min-height: 0;
   flex: 1;
@@ -706,6 +712,127 @@
   font-size: 0.84rem;
   line-height: 1.45;
   color: var(--ai-scalp-text-dim);
+}
+
+.ai-scalp-desktop-review {
+  display: grid;
+  gap: 14px;
+}
+
+.ai-scalp-desktop-review__topline {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.ai-scalp-desktop-review__pill {
+  border: 1px solid rgba(122, 167, 255, 0.28);
+  border-radius: 999px;
+  padding: 5px 10px;
+  font-size: 12px;
+  color: #b9d5ff;
+  background: rgba(14, 27, 51, 0.72);
+}
+
+.ai-scalp-desktop-review__pill.ok {
+  border-color: rgba(77, 205, 162, 0.42);
+  color: #7ef7c3;
+}
+
+.ai-scalp-desktop-review__pill.bad {
+  border-color: rgba(255, 116, 116, 0.4);
+  color: #ff9a9a;
+}
+
+.ai-scalp-desktop-review__pill.dim {
+  opacity: 0.72;
+}
+
+.ai-scalp-desktop-review__pill.status-ready {
+  border-color: rgba(102, 222, 166, 0.5);
+  color: #9ef0ba;
+}
+
+.ai-scalp-desktop-review__pill.status-error {
+  border-color: rgba(255, 116, 116, 0.45);
+  color: #ff9d9d;
+}
+
+.ai-scalp-desktop-review__pill.status-connecting,
+.ai-scalp-desktop-review__pill.status-analyzing,
+.ai-scalp-desktop-review__pill.status-applying {
+  border-color: rgba(255, 198, 109, 0.45);
+  color: #ffd495;
+}
+
+.ai-scalp-desktop-review__actions {
+  display: flex;
+  gap: 10px;
+}
+
+.ai-scalp-desktop-review__summary {
+  border: 1px solid rgba(122, 167, 255, 0.14);
+  border-radius: 16px;
+  padding: 14px;
+  background: rgba(8, 19, 38, 0.78);
+}
+
+.ai-scalp-desktop-review__summary strong {
+  display: block;
+  font-size: 15px;
+  margin-bottom: 8px;
+}
+
+.ai-scalp-desktop-review__summary p {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.6;
+  color: rgba(222, 236, 255, 0.88);
+}
+
+.ai-scalp-desktop-review__meta {
+  margin-top: 10px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  font-size: 12px;
+  color: rgba(170, 196, 232, 0.76);
+}
+
+.ai-scalp-desktop-review__error {
+  margin-top: 10px;
+  color: #ff9d9d;
+  font-size: 12px;
+}
+
+.ai-scalp-desktop-review__blocks {
+  display: grid;
+  gap: 12px;
+}
+
+.ai-scalp-desktop-review__block {
+  border: 1px solid rgba(122, 167, 255, 0.14);
+  border-radius: 16px;
+  padding: 12px 14px;
+  background: rgba(8, 19, 38, 0.72);
+}
+
+.ai-scalp-desktop-review__label {
+  margin-bottom: 10px;
+  font-size: 12px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: rgba(170, 196, 232, 0.74);
+}
+
+.ai-scalp-desktop-review__slack {
+  margin-top: 10px;
+  padding: 10px 12px;
+  border-radius: 12px;
+  background: rgba(31, 49, 82, 0.6);
+  font-size: 12px;
+  line-height: 1.5;
+  color: rgba(219, 233, 255, 0.9);
 }
 
 .ai-scalp-provider-card__header,

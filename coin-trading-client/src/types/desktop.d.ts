@@ -88,6 +88,114 @@ declare global {
     error?: string;
   }
 
+  interface DesktopMysqlStatus {
+    connected: boolean;
+    hostLabel: string | null;
+    database: string | null;
+    infoPath?: string | null;
+    error?: string;
+  }
+
+  interface DesktopAiReviewTrade {
+    tradeId: number;
+    market: string;
+    status: string;
+    averageEntryPrice: number;
+    averageExitPrice: number;
+    entryQuantity: number;
+    targetAmountKrw: number;
+    realizedPnl: number;
+    realizedPnlPercent: number;
+    recommendationReason?: string | null;
+    exitReason?: string | null;
+    strategyCode?: string | null;
+    createdAt: string | null;
+    closedAt?: string | null;
+    holdingMinutes: number;
+    tradeDateKst: string;
+  }
+
+  interface DesktopAiReviewBundle {
+    generatedAt: string;
+    targetDate: string;
+    strategyCodePrefix: string;
+    summary: {
+      totalTrades: number;
+      wins: number;
+      losses: number;
+      totalPnlKrw: number;
+      avgPnlPercent: number;
+      winRate: number;
+      avgHoldingMinutes: number;
+    };
+    targetTrades: DesktopAiReviewTrade[];
+    historyTrades: DesktopAiReviewTrade[];
+    openPositions: Array<{
+      tradeId: number;
+      market: string;
+      status: string;
+      averageEntryPrice: number;
+      remainingQuantity: number;
+      stopLossPrice: number;
+      takeProfitPrice: number;
+      createdAt: string | null;
+    }>;
+    dailyTrend: Array<{
+      tradeDate: string;
+      totalTrades: number;
+      wins: number;
+      losses: number;
+      totalPnlKrw: number;
+      avgPnlPercent: number;
+      winRate: number;
+      avgHoldingMinutes: number;
+    }>;
+    marketBreakdown: Array<{
+      market: string;
+      totalTrades: number;
+      wins: number;
+      losses: number;
+      totalPnlKrw: number;
+      avgPnlPercent: number;
+      winRate: number;
+      avgHoldingMinutes: number;
+    }>;
+    exitReasonBreakdown: Array<{
+      exitReason: string;
+      totalTrades: number;
+      wins: number;
+      losses: number;
+      totalPnlKrw: number;
+      avgPnlPercent: number;
+      winRate: number;
+      avgHoldingMinutes: number;
+    }>;
+    keyValues: Array<{
+      key: string;
+      value: string;
+      category?: string | null;
+      updatedAt?: string | null;
+    }>;
+    prompts: Array<{
+      promptName: string;
+      promptType: string;
+      version: number;
+      isActive: boolean;
+      createdBy: string;
+      performanceScore?: number | null;
+      usageCount: number;
+      updatedAt?: string | null;
+    }>;
+    auditLogs: Array<{
+      eventType: string;
+      action: string;
+      triggeredBy?: string | null;
+      reason?: string | null;
+      outputPreview?: string | null;
+      createdAt?: string | null;
+    }>;
+  }
+
   interface Window {
     desktopEnv?: {
       platform: string;
@@ -110,6 +218,17 @@ declare global {
       playwrightStart: (config?: { port?: number; host?: string; cdpEndpoint?: string }) => Promise<PlaywrightMcpStatus>;
       playwrightStop: () => Promise<PlaywrightMcpStatus>;
       playwrightStatus: () => Promise<PlaywrightMcpStatus>;
+    };
+    desktopMysql?: {
+      status: () => Promise<DesktopMysqlStatus>;
+      getReviewBundle: (
+        options?: {
+          strategyCodePrefix?: string;
+          targetDate?: string;
+          lookbackDays?: number;
+          recentLimit?: number;
+        }
+      ) => Promise<{ ok: boolean; bundle?: DesktopAiReviewBundle; error?: string }>;
     };
     desktopZai?: {
       setApiKey: (apiKey: string) => Promise<{ ok: boolean; error?: string }>;

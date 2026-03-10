@@ -23,6 +23,11 @@ contextBridge.exposeInMainWorld('desktopMcp', {
   playwrightStatus: () => ipcRenderer.invoke('playwright:status'),
 });
 
+contextBridge.exposeInMainWorld('desktopMysql', {
+  status: () => ipcRenderer.invoke('mysql:status'),
+  getReviewBundle: (options) => ipcRenderer.invoke('mysql:get-review-bundle', options),
+});
+
 contextBridge.exposeInMainWorld('desktopZai', {
   setApiKey: (apiKey) => ipcRenderer.invoke('zai:set-api-key', apiKey),
   clearApiKey: () => ipcRenderer.invoke('zai:clear-api-key'),

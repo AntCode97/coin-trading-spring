@@ -8,10 +8,12 @@ const { saveToken, loadToken, deleteToken, isTokenExpired } = require('./oauth/t
 const { saveZaiApiKey, loadZaiApiKey, clearZaiApiKey } = require('./llm/zai-store.cjs');
 const { McpHub } = require('./mcp/mcp-hub.cjs');
 const { PlaywrightMcpManager } = require('./mcp/playwright-manager.cjs');
+const { DesktopReviewDbClient } = require('./mysql/review-client.cjs');
 
 let staticServer = null;
 const mcpHub = new McpHub();
 const playwrightManager = new PlaywrightMcpManager();
+const reviewDbClient = new DesktopReviewDbClient(app);
 const ELECTRON_CDP_PORT = Number(process.env.ELECTRON_CDP_PORT || 9333);
 const ELECTRON_CDP_HOST = '127.0.0.1';
 const ZAI_CHAT_ENDPOINTS = {
@@ -112,6 +114,26 @@ function registerMcpIpc() {
 
   ipcMain.handle('playwright:status', async () => {
     return playwrightManager.getStatus();
+  });
+}
+
+function registerMysqlIpc() {
+  ipcMain.handle('mysql:status', async () => {
+    return reviewDbClient.getStatus();
+  });
+
+  ipcMain.handle('mysql:get-review-bundle', async (_event, options) => {
+    try {
+      return {
+        ok: true,
+        bundle: await reviewDbClient.getAiReviewBundle(options || {}),
+      };
+    } catch (error) {
+      return {
+        ok: false,
+        error: error instanceof Error ? error.message : 'MySQL review bundle 조회 실패',
+      };
+    }
   });
 }
 
@@ -338,6 +360,7 @@ app.whenReady().then(() => {
   registerOAuthIpc();
   registerZaiIpc();
   registerMcpIpc();
+  registerMysqlIpc();
   void createWindow();
 
   app.on('activate', () => {

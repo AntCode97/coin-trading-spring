@@ -4,6 +4,7 @@ import {
   AiDayTraderJournalPanel,
   AiDayTraderPositionsPanel,
   AiDayTraderQueuePanel,
+  AiDayTraderReviewAgentPanel,
   AiDayTraderSessionBar,
   AiDayTraderStrategyPanel,
 } from './AiDayTraderScreenSections';
@@ -48,6 +49,10 @@ export default function AiDayTraderScreen() {
 
           <AiDayTraderStrategyPanel
             reflection={screen.state.strategyReflection}
+          />
+
+          <AiDayTraderReviewAgentPanel
+            review={screen.review}
           />
 
           <AiDayTraderConfigPanel

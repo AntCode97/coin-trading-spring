@@ -36,6 +36,7 @@ import {
   normalizePreferredModel,
 } from './AiDayTraderScreenConfig';
 import type {
+  AiDayTraderDesktopReviewView,
   AiDayTraderHistoryMarketSummary,
   AiDayTraderHistoryView,
   AiDayTraderJournalView,
@@ -263,6 +264,132 @@ export function AiDayTraderStrategyPanel({ reflection }: { reflection: AiStrateg
             {adjustmentChips.length > 0
               ? adjustmentChips.map((chip) => <span key={chip}>{chip}</span>)
               : <span className="empty">조정 없음</span>}
+          </div>
+        </div>
+      </div>
+    </section>
+  );
+}
+
+function reviewStatusLabel(status: AiDayTraderDesktopReviewView['state']['status']): string {
+  switch (status) {
+    case 'CONNECTING':
+      return '연결 중';
+    case 'ANALYZING':
+      return '분석 중';
+    case 'APPLYING':
+      return '적용 중';
+    case 'READY':
+      return '완료';
+    case 'SKIPPED':
+      return '건너뜀';
+    case 'ERROR':
+      return '오류';
+    default:
+      return '대기';
+  }
+}
+
+export function AiDayTraderReviewAgentPanel({ review }: { review: AiDayTraderDesktopReviewView }) {
+  const state = review.state;
+  const configPatchChips = state.appliedConfigPatch
+    ? Object.entries(state.appliedConfigPatch).map(([key, value]) => `${key}: ${String(value)}`)
+    : [];
+
+  return (
+    <section className="ai-scalp-panel ai-scalp-panel--desktop-review">
+      <PanelHeader
+        title="데스크톱 복기 에이전트"
+        subtitle="MySQL 직접 복기 + MCP 툴 호출 + 로컬 설정 자동 튜닝"
+        right={state.lastRunAt ? formatClock(state.lastRunAt) : reviewStatusLabel(state.status)}
+      />
+      <div className="ai-scalp-panel__body ai-scalp-desktop-review">
+        <div className="ai-scalp-desktop-review__topline">
+          <span className={`ai-scalp-desktop-review__pill status-${state.status.toLowerCase()}`}>{reviewStatusLabel(state.status)}</span>
+          <span className={`ai-scalp-desktop-review__pill ${state.mysqlConnected ? 'ok' : 'bad'}`}>MySQL {state.mysqlConnected ? '연결' : '오류'}</span>
+          <span className={`ai-scalp-desktop-review__pill ${state.mcpConnected ? 'ok' : 'dim'}`}>MCP {state.mcpConnected ? '연결' : '대기'}</span>
+          <span className={`ai-scalp-desktop-review__pill ${state.autoEnabled ? 'ok' : 'dim'}`}>야간 자동 {state.autoEnabled ? 'ON' : 'OFF'}</span>
+        </div>
+
+        <div className="ai-scalp-desktop-review__actions">
+          <button
+            type="button"
+            className="ai-scalp-action secondary"
+            onClick={() => void review.runNow()}
+            disabled={state.status === 'CONNECTING' || state.status === 'ANALYZING' || state.status === 'APPLYING'}
+          >
+            지금 복기
+          </button>
+          <button
+            type="button"
+            className="ai-scalp-action subtle"
+            onClick={review.toggleAutoEnabled}
+          >
+            {state.autoEnabled ? '야간 자동 끄기' : '야간 자동 켜기'}
+          </button>
+        </div>
+
+        <div className="ai-scalp-desktop-review__summary">
+          <strong>{state.headline}</strong>
+          <p>{state.summary}</p>
+          <div className="ai-scalp-desktop-review__meta">
+            <span>대상일 {state.lastTargetDate ?? '-'}</span>
+            <span>다음 예약 {state.nextRunAt ? formatDateTime(new Date(state.nextRunAt).toISOString()) : '-'}</span>
+          </div>
+          {state.lastError && (
+            <div className="ai-scalp-desktop-review__error">{state.lastError}</div>
+          )}
+        </div>
+
+        <div className="ai-scalp-desktop-review__blocks">
+          <div className="ai-scalp-desktop-review__block">
+            <div className="ai-scalp-desktop-review__label">로컬 설정 조정</div>
+            <div className="ai-scalp-strategy__chips">
+              {configPatchChips.length > 0
+                ? configPatchChips.map((chip) => <span key={chip}>{chip}</span>)
+                : <span className="empty">이번 실행에서 로컬 설정 변경 없음</span>}
+            </div>
+          </div>
+
+          <div className="ai-scalp-desktop-review__block">
+            <div className="ai-scalp-desktop-review__label">집중 / 회피 시장</div>
+            <div className="ai-scalp-strategy__chips">
+              {state.focusMarkets.length > 0
+                ? state.focusMarkets.map((market: string) => <span key={market}>{market.replace('KRW-', '')}</span>)
+                : <span className="empty">집중 시장 없음</span>}
+            </div>
+            <div className="ai-scalp-strategy__chips danger">
+              {state.avoidMarkets.length > 0
+                ? state.avoidMarkets.map((market: string) => <span key={market}>{market.replace('KRW-', '')}</span>)
+                : <span className="empty">회피 시장 없음</span>}
+            </div>
+          </div>
+        </div>
+
+        <div className="ai-scalp-desktop-review__blocks">
+          <div className="ai-scalp-desktop-review__block">
+            <div className="ai-scalp-desktop-review__label">서버/MCP 조치</div>
+            <ul className="ai-scalp-strategy__list">
+              {state.serverActionSummary.length > 0
+                ? state.serverActionSummary.map((item: string) => <li key={item}>{item}</li>)
+                : <li>실행된 서버 조치 없음</li>}
+            </ul>
+            {state.slackSummary && (
+              <div className="ai-scalp-desktop-review__slack">{state.slackSummary}</div>
+            )}
+          </div>
+
+          <div className="ai-scalp-desktop-review__block">
+            <div className="ai-scalp-desktop-review__label">최근 MCP 도구 호출</div>
+            <ul className="ai-scalp-strategy__list">
+              {state.toolActions.length > 0
+                ? state.toolActions.slice(0, 5).map((action: AiDayTraderDesktopReviewView['state']['toolActions'][number]) => (
+                  <li key={action.id}>
+                    <strong>{action.toolName}</strong> {action.ok === false ? '실패' : action.result ? '완료' : '호출'}
+                  </li>
+                ))
+                : <li>이번 실행에서 MCP 도구 호출 없음</li>}
+            </ul>
           </div>
         </div>
       </div>

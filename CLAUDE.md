@@ -169,6 +169,8 @@ coin-trading-spring/
 - 설정은 `스캔 주기/포지션 점검 최대 3분`, `1회 금액 5,000원 단위`, `오늘 거래내역 전체/코인별 필터`를 제공.
 - `모니터 열기` 오버레이는 코어 에이전트(`SCAN/RANK/ENTRY/MANAGE/EXECUTION`)와 실제 delegate/tool 호출 기반 서브 에이전트를 도트 그래픽으로 보여주며, 클릭 상세 패널과 로컬 레이아웃 편집(방 이동/줌/팬/저장/리셋)을 지원.
 - 엔진은 `/stats/today` 거래를 계속 복기해 deterministic 전략 메모를 먼저 만들고, 일정 간격으로 `REVIEW` LLM 패스를 돌려 `집중 시장`, `회피 시장`, `선호/회피 셋업`, `confidence/spread/gap/max hold` 조정을 스스로 갱신한다. 이 상태는 세션 바와 `전략 복기` 패널에 표시된다.
+- 별도 `데스크톱 복기 에이전트`는 Electron 메인 프로세스의 MySQL IPC를 통해 `.mysql_info` 기반 DB에 직접 접속하고, 전일 `guided_trades`, `key_value_store`, `llm_prompts`, `audit_logs`를 읽어 복기한다.
+- 데스크톱 복기 에이전트는 기존 MCP 허브를 재사용해 서버 도구를 직접 호출할 수 있다. Slack 보고, 프롬프트 조정, 서버 설정 점검은 MCP tool-calling으로 수행하고, 로컬 초단타 설정 변경만 데스크톱 로컬 설정 패치로 자동 반영한다.
 
 ### 데스크톱 OpenAI + z.ai 멀티-프로바이더 통합
 
