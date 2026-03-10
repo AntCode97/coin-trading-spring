@@ -965,6 +965,18 @@ export default function AiDayTraderPixelMonitor({
     ]),
     [roomSummaries, state.monitorActors, state.queue.length],
   );
+  const workflowLinks = useMemo(
+    () => buildWorkflowLinks(layout.rooms, state),
+    [layout.rooms, state],
+  );
+  const marketPulseItems = useMemo(
+    () => buildMarketPulseItems(state, todayTrades),
+    [state, todayTrades],
+  );
+  const liveMomentItems = useMemo(
+    () => buildLiveMomentItems(state.events),
+    [state.events],
+  );
 
   if (!open) {
     return null;
@@ -1124,18 +1136,6 @@ export default function AiDayTraderPixelMonitor({
 
   const activeQueueMarkets = state.queue.slice(0, 6);
   const activePositions = state.positions.slice(0, 6);
-  const workflowLinks = useMemo(
-    () => buildWorkflowLinks(layout.rooms, state),
-    [layout.rooms, state],
-  );
-  const marketPulseItems = useMemo(
-    () => buildMarketPulseItems(state, todayTrades),
-    [state, todayTrades],
-  );
-  const liveMomentItems = useMemo(
-    () => buildLiveMomentItems(state.events),
-    [state.events],
-  );
 
   const handleViewportWheel = (event: React.WheelEvent<HTMLDivElement>) => {
     event.preventDefault();
