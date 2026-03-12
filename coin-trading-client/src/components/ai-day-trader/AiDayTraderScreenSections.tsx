@@ -2,8 +2,10 @@ import { useMemo, useState } from 'react';
 import type { GuidedClosedTradeView, GuidedDailyStats } from '../../api';
 import {
   AI_ENTRY_AGGRESSION_OPTIONS,
+  AI_TRADE_BIAS_OPTIONS,
   type AiDayTraderConfig,
   type AiEntryAggression,
+  type AiTradeBiasMode,
   type AiTraderState,
 } from '../../lib/ai-day-trader/AiDayTraderEngine';
 import {
@@ -88,12 +90,14 @@ interface WatchlistPanelProps {
   toggleSelectedMarket: (market: string) => void;
   clearSelectedMarkets: () => void;
   setSeedMarket: (market: string) => void;
+  setSeedTradeBias: (tradeBias: AiTradeBiasMode) => void;
   setSeedOrderType: (orderType: 'MARKET' | 'LIMIT') => void;
   setSeedLimitPrice: (value: string) => void;
   setSeedStopLossPrice: (value: string) => void;
   setSeedTakeProfitPrice: (value: string) => void;
   setSeedMaxDcaCount: (value: number) => void;
   setSeedDcaStepPercent: (value: number) => void;
+  setSeedLeverage: (value: number) => void;
   startSeedPosition: () => void;
 }
 
@@ -120,7 +124,7 @@ export function AiDayTraderSessionBar({
           <div>
             <div className="ai-scalp-sessionbar__title">AI Scalp Trader</div>
             <div className="ai-scalp-sessionbar__subtitle">
-              LLM-first · 5-30분 보유 · 전략코드 {config.strategyCode}
+              LLM-first · 5-30분 보유 · {config.tradeBias === 'SHORT_ONLY' ? '바이낸스 숏' : config.tradeBias === 'REGIME_AUTO' ? '레짐 자동' : '현물 롱'} · 전략코드 {config.strategyCode}
             </div>
           </div>
         </div>
@@ -134,6 +138,7 @@ export function AiDayTraderSessionBar({
           <span>상태 {statusLabel(state.status)}</span>
           <span>오픈 포지션 {state.positions.length}/{config.maxConcurrentPositions}</span>
           <span>신규 진입 {session.entryEnabled ? '활성' : '중지'}</span>
+          <span>방향 {config.tradeBias === 'SHORT_ONLY' ? '숏만' : config.tradeBias === 'REGIME_AUTO' ? '자동' : '롱만'}</span>
           <span>감시 {config.selectedMarkets.length > 0 ? `${config.selectedMarkets.length}개 선택` : `상위 ${config.universeLimit}개 자동`}</span>
           <span>세션 실현 {formatKrw(state.dailyPnl)}</span>
           <span>최근 스캔 {session.lastScanLabel}</span>
@@ -542,12 +547,14 @@ export function AiDayTraderWatchlistPanel({
   toggleSelectedMarket,
   clearSelectedMarkets,
   setSeedMarket,
+  setSeedTradeBias,
   setSeedOrderType,
   setSeedLimitPrice,
   setSeedStopLossPrice,
   setSeedTakeProfitPrice,
   setSeedMaxDcaCount,
   setSeedDcaStepPercent,
+  setSeedLeverage,
   startSeedPosition,
 }: WatchlistPanelProps) {
   const [marketQuery, setMarketQuery] = useState('');
@@ -670,9 +677,23 @@ export function AiDayTraderWatchlistPanel({
               <span>손절 {Math.round(watchlist.seedRecommendation.stopLossPrice).toLocaleString()}</span>
               <span>익절 {Math.round(watchlist.seedRecommendation.takeProfitPrice).toLocaleString()}</span>
               <span>RR {watchlist.seedRecommendation.riskRewardRatio.toFixed(2)}</span>
+              {watchlist.seedRecommendation.marketRegime && (
+                <span>레짐 {watchlist.seedRecommendation.marketRegime}</span>
+              )}
             </div>
           )}
           <div className="ai-scalp-config ai-scalp-config--seed">
+            <ConfigField label="방향">
+              <select
+                value={watchlist.seedTradeBias}
+                onChange={(event) => setSeedTradeBias(event.target.value as AiTradeBiasMode)}
+              >
+                <option value="LONG_ONLY">현물 롱 시작</option>
+                <option value="SHORT_ONLY">바이낸스 숏 시작</option>
+                <option value="REGIME_AUTO">레짐 자동</option>
+              </select>
+            </ConfigField>
+
             <ConfigField label="주문 방식">
               <select
                 value={watchlist.seedOrderType}
@@ -734,10 +755,30 @@ export function AiDayTraderWatchlistPanel({
                 onChange={(event) => setSeedDcaStepPercent(Number(event.target.value))}
               />
             </ConfigField>
+
+            <ConfigField label="숏 레버리지">
+              <select
+                value={watchlist.seedLeverage}
+                disabled={watchlist.seedTradeBias !== 'SHORT_ONLY'}
+                onChange={(event) => setSeedLeverage(Number(event.target.value))}
+              >
+                <option value={1}>1x</option>
+                <option value={2}>2x</option>
+                <option value={3}>3x</option>
+                <option value={4}>4x</option>
+                <option value={5}>5x</option>
+              </select>
+            </ConfigField>
           </div>
 
           <div className="ai-scalp-control__seed-footer">
-            <span>1회 금액 {formatKrw(config.amountKrw)} · 전략코드 {config.strategyCode}</span>
+            <span>
+              1회 금액 {formatKrw(config.amountKrw)}
+              {' · '}
+              {watchlist.seedTradeBias === 'SHORT_ONLY' ? `숏 ${watchlist.seedLeverage}x` : '현물'}
+              {' · 전략코드 '}
+              {config.strategyCode}
+            </span>
             <button
               type="button"
               className="ai-scalp-action primary"
@@ -890,6 +931,18 @@ export function AiDayTraderConfigPanel({
             onChange={(event) => updateConfig({ entryAggression: event.target.value as AiEntryAggression })}
           >
             {AI_ENTRY_AGGRESSION_OPTIONS.map((option) => (
+              <option key={option.value} value={option.value}>{option.label}</option>
+            ))}
+          </select>
+        </ConfigField>
+
+        <ConfigField label="시장 방향">
+          <select
+            value={config.tradeBias}
+            disabled={running}
+            onChange={(event) => updateConfig({ tradeBias: event.target.value as AiTradeBiasMode })}
+          >
+            {AI_TRADE_BIAS_OPTIONS.map((option) => (
               <option key={option.value} value={option.value}>{option.label}</option>
             ))}
           </select>

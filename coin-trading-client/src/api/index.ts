@@ -576,6 +576,8 @@ export interface GuidedRecommendation {
   recommendedEntryWinRate: number;
   marketEntryWinRate: number;
   riskRewardRatio: number;
+  marketRegime?: string | null;
+  regimeConfidence?: number | null;
   winRateBreakdown: {
     trend: number;
     pullback: number;
@@ -603,6 +605,11 @@ export interface GuidedTradePosition {
   status: string;
   entryOrderType: string;
   entryOrderId?: string | null;
+  executionVenue?: string;
+  positionSide?: string;
+  externalSymbol?: string | null;
+  leverage?: number | null;
+  marketRegime?: string | null;
   averageEntryPrice: number;
   currentPrice: number;
   entryQuantity: number;
@@ -700,6 +707,8 @@ export interface GuidedDailyStats {
 export interface GuidedClosedTradeView {
   tradeId: number;
   market: string;
+  executionVenue?: string;
+  positionSide?: string;
   averageEntryPrice: number;
   averageExitPrice: number;
   entryQuantity: number;
@@ -790,6 +799,8 @@ export interface AiScalpScanRecommendationSummary {
   recommendedEntryWinRate: number;
   marketEntryWinRate: number;
   riskRewardRatio: number;
+  marketRegime?: string | null;
+  regimeConfidence?: number | null;
   confidence: number;
   suggestedOrderType: string;
   rationale: string[];
@@ -819,6 +830,7 @@ export interface AiScalpScanMarket {
   changeRate: number;
   turnover: number;
   liquidityRank: number;
+  shortAvailable: boolean;
   recommendation: AiScalpScanRecommendationSummary;
   featurePack: AiScalpScanFeaturePack;
   crowd?: GuidedCrowdFeaturePack | null;
@@ -994,6 +1006,8 @@ export interface GuidedStartRequest {
   mode?: string;
   entrySource?: string;
   strategyCode?: string;
+  tradeBias?: 'LONG_ONLY' | 'SHORT_ONLY' | 'REGIME_AUTO';
+  leverage?: number;
 }
 
 export interface GuidedAdoptRequest {

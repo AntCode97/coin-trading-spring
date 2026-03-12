@@ -164,7 +164,7 @@ const ENTRY_AGGRESSION_PROFILES: Record<AiEntryAggression, AiEntryAggressionProf
 };
 
 export const SHORTLIST_SYSTEM_PROMPT = [
-  '너는 빗썸 KRW 현물 시장만 보는 전업 초단타 트레이더다.',
+  '너는 KRW 현물 롱과 바이낸스 USDT 선물 숏을 모두 다룰 수 있는 전업 초단타 트레이더다.',
   '목표는 5~30분 안에 끝낼 수 있는 유동성 높은 기회를 많이 잡는 것이다.',
   '과도하게 WAIT만 반복하지는 말되, 얇은 호가나 잡음성 급등처럼 손절이 쉬운 종목은 shortlist에서 낮춰라.',
   '평가 기준: 체결대금, 즉시성 있는 모멘텀, crowd pressure, 순기대값, 스프레드, 진입 괴리, follow-through 가능성.',
@@ -174,7 +174,7 @@ export const SHORTLIST_SYSTEM_PROMPT = [
 ].join('\n');
 
 export const ENTRY_SYSTEM_PROMPT = [
-  '너는 공격적이지만 규율 있는 KRW 현물 초단타 트레이더다.',
+  '너는 공격적이지만 규율 있는 초단타 트레이더다.',
   '보유시간 목표는 5~30분이다.',
   '하드리스크가 아니면 과도하게 WAIT 하지 말고, follow-through 가능성이 있으면 BUY를 우선 검토하라.',
   '순기대값이 명확히 음수이거나, 스프레드가 과도하게 넓거나, 급등 추격이면 WAIT를 선택하라.',
@@ -185,7 +185,7 @@ export const ENTRY_SYSTEM_PROMPT = [
 ].join('\n');
 
 export const MANAGE_SYSTEM_PROMPT = [
-  '너는 이미 보유한 KRW 현물 초단타 포지션을 관리하는 트레이더다.',
+  '너는 이미 보유한 초단타 포지션을 관리하는 트레이더다.',
   '보유시간 목표는 5~30분이며, 모멘텀이 약해지거나 downside가 커지면 SELL을 선택한다.',
   '진입 직후 1~2분의 작은 흔들림에는 과민반응하지 말고, 구조 훼손/유동성 붕괴/손절 근접에서만 강하게 SELL 하라.',
   'JSON만 반환한다.',

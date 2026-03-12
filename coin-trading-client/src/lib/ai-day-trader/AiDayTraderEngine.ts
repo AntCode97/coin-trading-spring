@@ -19,6 +19,7 @@ import {
   type AiMonitorActorStatus,
   type AiRankedOpportunity,
   type AiStrategyReflection,
+  type AiTradeBiasMode,
   type AiTraderEvent,
   type AiTraderEventType,
   type AiTraderState,
@@ -49,6 +50,7 @@ import {
   normalizePosition as normalizeAiPosition,
 } from './AiDayTraderPositionMath';
 export {
+  AI_TRADE_BIAS_OPTIONS,
   AI_ENTRY_AGGRESSION_OPTIONS,
   DEFAULT_AI_DAY_TRADER_CONFIG,
   createInitialAiTraderState,
@@ -64,6 +66,7 @@ export {
   type AiStrategyReflection,
   type AiStrategyReviewAdjustments,
   type AiStrategyReviewStatus,
+  type AiTradeBiasMode,
   type AiTraderEvent,
   type AiTraderEventType,
   type AiTraderState,
@@ -155,6 +158,13 @@ function normalizeSelectedMarkets(markets: string[] | undefined): string[] {
     .filter((market) => market.startsWith('KRW-'))
     .filter((market, index, values) => values.indexOf(market) === index)
     .slice(0, 24);
+}
+
+function normalizeTradeBiasMode(value: string | undefined): AiTradeBiasMode {
+  if (value === 'LONG_ONLY' || value === 'SHORT_ONLY') {
+    return value;
+  }
+  return 'REGIME_AUTO';
 }
 
 function cloneState(state: AiTraderState): AiTraderState {
@@ -609,9 +619,10 @@ export class AiDayTraderEngine {
       this.state.lastScanAt = Date.now();
       this.setStatus('SCANNING');
       const selectedMarkets = normalizeSelectedMarkets(this.config.selectedMarkets);
+      const configuredTradeBias = this.getConfiguredTradeBias();
       const scanLabel = selectedMarkets.length > 0
-        ? `선택 코인 ${selectedMarkets.length}개 스캔`
-        : `유동성 상위 ${this.config.universeLimit}개 시장 스캔`;
+        ? `선택 코인 ${selectedMarkets.length}개 ${configuredTradeBias === 'SHORT_ONLY' ? '숏' : '진입'} 스캔`
+        : `${configuredTradeBias === 'SHORT_ONLY' ? '숏용 ' : ''}유동성 상위 ${this.config.universeLimit}개 시장 스캔`;
       this.setCoreActorState('SCAN', 'BUSY', { taskSummary: scanLabel });
       this.pushEvent('SCAN', scanLabel);
 
@@ -632,7 +643,11 @@ export class AiDayTraderEngine {
       this.emit();
 
       const openMarkets = new Set(this.state.positions.map((position) => position.market));
-      const candidates = scan.markets.filter((market) => !openMarkets.has(market.market) && !this.isCoolingDown(market.market));
+      const candidates = scan.markets.filter((market) => {
+        if (openMarkets.has(market.market) || this.isCoolingDown(market.market)) return false;
+        if (configuredTradeBias === 'SHORT_ONLY' && !market.shortAvailable) return false;
+        return true;
+      });
       if (candidates.length === 0) {
         this.state.queue = [];
         this.emit();
@@ -740,7 +755,8 @@ export class AiDayTraderEngine {
           continue;
         }
 
-        const protectivePrices = this.resolveProtectivePrices(scanMarket, decision, tempoProfile);
+        const tradeBias = this.resolveTradeBiasForMarket(scanMarket);
+        const protectivePrices = this.resolveProtectivePrices(scanMarket, decision, tempoProfile, tradeBias);
 
         try {
           this.setStatus('EXECUTING');
@@ -756,6 +772,8 @@ export class AiDayTraderEngine {
             stopLossPrice: protectivePrices.stopLoss,
             takeProfitPrice: protectivePrices.takeProfit,
             maxDcaCount: 0,
+            tradeBias,
+            leverage: tradeBias === 'SHORT_ONLY' ? 2 : undefined,
           });
 
           this.state.buyExecutions += 1;
@@ -773,7 +791,7 @@ export class AiDayTraderEngine {
           }, { transient: true });
           this.pushEvent(
             'BUY_EXECUTION',
-            `${position.market} 매수 실행`,
+            `${position.market} ${position.positionSide === 'SHORT' ? '숏 진입' : '매수 실행'}`,
             `stop ${this.formatPrice(protectivePrices.stopLoss)} · take ${this.formatPrice(protectivePrices.takeProfit)} · ${decision.reasoning}`,
             position.market,
             decision.confidence,
@@ -929,6 +947,10 @@ export class AiDayTraderEngine {
       recommendedEntryWinRate: market.recommendation.recommendedEntryWinRate,
       marketEntryWinRate: market.recommendation.marketEntryWinRate,
       riskRewardRatio: market.recommendation.riskRewardRatio,
+      marketRegime: market.recommendation.marketRegime,
+      regimeConfidence: market.recommendation.regimeConfidence,
+      shortAvailable: market.shortAvailable,
+      desiredTradeBias: this.resolveTradeBiasForMarket(market),
       entryGapPct: market.featurePack.entryGapPct,
       confidence: market.featurePack.confidence,
       flowScore: market.crowd?.flowScore ?? market.featurePack.crowdFlowScore ?? 0,
@@ -1015,6 +1037,7 @@ export class AiDayTraderEngine {
         prompt: [
           ENTRY_SYSTEM_PROMPT,
           '',
+          this.buildTradeBiasPromptBlock(scanMarket),
           `진입 강도: ${aggressionProfile.label}. finalist ${aggressionProfile.finalistLimit}개, BUY confidence 하한 ${Math.round(aggressionProfile.minBuyConfidence * 100)}%.`,
           `템포 프로필: ${tempoProfile.label}. ${tempoProfile.manageNote}`,
           this.buildStrategyReflectionPromptBlock(scanMarket.market),
@@ -1029,6 +1052,7 @@ export class AiDayTraderEngine {
             recommendation: scanMarket.recommendation,
             featurePack: scanMarket.featurePack,
             crowd: scanMarket.crowd,
+            shortAvailable: scanMarket.shortAvailable,
           })}`,
         ].join('\n'),
         provider: this.config.provider,
@@ -1087,6 +1111,7 @@ export class AiDayTraderEngine {
         prompt: [
           MANAGE_SYSTEM_PROMPT,
           '',
+          this.buildPositionSidePromptBlock(position),
           `템포 프로필: ${tempoProfile.label}. ${tempoProfile.manageNote}`,
           this.buildStrategyReflectionPromptBlock(position.market),
           `포지션 요약: ${JSON.stringify({
@@ -1098,6 +1123,8 @@ export class AiDayTraderEngine {
             unrealizedPnlPercent: position.unrealizedPnlPercent,
             createdAt: position.createdAt,
             strategyCode: position.strategyCode,
+            positionSide: position.positionSide,
+            executionVenue: position.executionVenue,
             effectiveMaxHoldingMinutes,
           })}`,
         ].join('\n'),
@@ -1145,13 +1172,18 @@ export class AiDayTraderEngine {
   private resolveProtectivePrices(
     scanMarket: AiScalpScanMarket,
     decision: AiEntryDecision,
-    tempoProfile: AiTempoProfile
+    tempoProfile: AiTempoProfile,
+    tradeBias: AiTradeBiasMode
   ) {
     const currentPrice = scanMarket.tradePrice > 0 ? scanMarket.tradePrice : scanMarket.recommendation.currentPrice;
     const spreadPercent = scanMarket.crowd?.spreadPercent ?? scanMarket.featurePack.spreadPercent ?? 0;
     const entryGapPct = Math.max(0, scanMarket.featurePack.entryGapPct ?? 0);
-    const recommendationStopDistance = this.calculateDownsideDistancePercent(currentPrice, scanMarket.recommendation.stopLossPrice);
-    const llmStopDistance = this.calculateDownsideDistancePercent(currentPrice, decision.stopLoss);
+    const recommendationStopDistance = tradeBias === 'SHORT_ONLY'
+      ? this.calculateUpsideDistancePercent(currentPrice, scanMarket.recommendation.stopLossPrice)
+      : this.calculateDownsideDistancePercent(currentPrice, scanMarket.recommendation.stopLossPrice);
+    const llmStopDistance = tradeBias === 'SHORT_ONLY'
+      ? this.calculateUpsideDistancePercent(currentPrice, decision.stopLoss)
+      : this.calculateDownsideDistancePercent(currentPrice, decision.stopLoss);
     const rawStopDistance = Math.max(
       recommendationStopDistance,
       llmStopDistance,
@@ -1161,8 +1193,12 @@ export class AiDayTraderEngine {
     );
     const stopDistancePercent = clamp(rawStopDistance, tempoProfile.minStopDistancePct, tempoProfile.maxStopDistancePct);
 
-    const recommendationTakeDistance = this.calculateUpsideDistancePercent(currentPrice, scanMarket.recommendation.takeProfitPrice);
-    const llmTakeDistance = this.calculateUpsideDistancePercent(currentPrice, decision.takeProfit);
+    const recommendationTakeDistance = tradeBias === 'SHORT_ONLY'
+      ? this.calculateDownsideDistancePercent(currentPrice, scanMarket.recommendation.takeProfitPrice)
+      : this.calculateUpsideDistancePercent(currentPrice, scanMarket.recommendation.takeProfitPrice);
+    const llmTakeDistance = tradeBias === 'SHORT_ONLY'
+      ? this.calculateDownsideDistancePercent(currentPrice, decision.takeProfit)
+      : this.calculateUpsideDistancePercent(currentPrice, decision.takeProfit);
     const rawTakeDistance = Math.max(
       recommendationTakeDistance,
       llmTakeDistance,
@@ -1173,8 +1209,12 @@ export class AiDayTraderEngine {
     const minTakeDistance = Math.max(tempoProfile.minTakeDistancePct, stopDistancePercent * tempoProfile.minTargetRiskReward);
     const takeDistancePercent = clamp(rawTakeDistance, minTakeDistance, tempoProfile.maxTakeDistancePct);
 
-    const stopLoss = currentPrice * (1 - stopDistancePercent / 100);
-    const takeProfit = currentPrice * (1 + takeDistancePercent / 100);
+    const stopLoss = tradeBias === 'SHORT_ONLY'
+      ? currentPrice * (1 + stopDistancePercent / 100)
+      : currentPrice * (1 - stopDistancePercent / 100);
+    const takeProfit = tradeBias === 'SHORT_ONLY'
+      ? currentPrice * (1 - takeDistancePercent / 100)
+      : currentPrice * (1 + takeDistancePercent / 100);
 
     return {
       stopLoss,
@@ -1185,7 +1225,11 @@ export class AiDayTraderEngine {
   private buildDeterministicShortlist(markets: AiScalpScanMarket[]): AiRankedOpportunity[] {
     return [...markets]
       .sort((left, right) => {
-        const expectancyGap = right.recommendation.expectancyPct - left.recommendation.expectancyPct;
+        const rightTradeBias = this.resolveTradeBiasForMarket(right);
+        const leftTradeBias = this.resolveTradeBiasForMarket(left);
+        const expectancyGap = rightTradeBias === 'SHORT_ONLY' || leftTradeBias === 'SHORT_ONLY'
+          ? Number(right.recommendation.marketRegime === 'BEAR_TREND') - Number(left.recommendation.marketRegime === 'BEAR_TREND')
+          : right.recommendation.expectancyPct - left.recommendation.expectancyPct;
         if (Math.abs(expectancyGap) > 1e-9) return expectancyGap;
         const flowGap =
           (right.crowd?.flowScore ?? right.featurePack.crowdFlowScore ?? -Infinity) -
@@ -1195,14 +1239,24 @@ export class AiDayTraderEngine {
       })
       .slice(0, Math.min(SHORTLIST_LIMIT, markets.length))
       .map((market, index) => {
+        const tradeBias = this.resolveTradeBiasForMarket(market);
         const crowdFlow = market.crowd?.flowScore ?? market.featurePack.crowdFlowScore ?? 0;
         const score = clamp(
-          62 +
-            market.recommendation.expectancyPct * 120 +
-            crowdFlow * 0.18 +
-            market.recommendation.riskRewardRatio * 4 -
-            market.featurePack.entryGapPct * 3 -
-            index * 1.5,
+          tradeBias === 'SHORT_ONLY'
+            ? 64 +
+              (market.recommendation.marketRegime === 'BEAR_TREND' ? 10 : -4) +
+              (market.shortAvailable ? 8 : -20) +
+              crowdFlow * 0.12 +
+              Math.max(0, -market.changeRate) * 18 +
+              market.recommendation.riskRewardRatio * 4 -
+              market.featurePack.entryGapPct * 3 -
+              index * 1.5
+            : 62 +
+              market.recommendation.expectancyPct * 120 +
+              crowdFlow * 0.18 +
+              market.recommendation.riskRewardRatio * 4 -
+              market.featurePack.entryGapPct * 3 -
+              index * 1.5,
           0,
           100
         );
@@ -1247,14 +1301,20 @@ export class AiDayTraderEngine {
   }
 
   private buildDeterministicReason(market: AiScalpScanMarket): string {
+    const tradeBias = this.resolveTradeBiasForMarket(market);
     const parts = [
-      `exp ${market.recommendation.expectancyPct.toFixed(2)}%`,
+      tradeBias === 'SHORT_ONLY'
+        ? `regime ${market.recommendation.marketRegime ?? 'UNKNOWN'}`
+        : `exp ${market.recommendation.expectancyPct.toFixed(2)}%`,
       `RR ${market.recommendation.riskRewardRatio.toFixed(2)}`,
       `spread ${(market.crowd?.spreadPercent ?? market.featurePack.spreadPercent ?? 0).toFixed(2)}%`,
     ];
     const flowScore = market.crowd?.flowScore ?? market.featurePack.crowdFlowScore;
     if (typeof flowScore === 'number' && Number.isFinite(flowScore)) {
       parts.push(`flow ${flowScore.toFixed(1)}`);
+    }
+    if (tradeBias === 'SHORT_ONLY') {
+      parts.push(market.shortAvailable ? 'binance short' : 'short unavailable');
     }
     return parts.join(' · ');
   }
@@ -1280,7 +1340,7 @@ export class AiDayTraderEngine {
 
       this.pushEvent(
         'SELL_EXECUTION',
-        `${position.market} 매도 실행`,
+        `${position.market} ${position.positionSide === 'SHORT' ? '숏 청산' : '매도 실행'}`,
         `${reason} · 실현 ${this.formatKrw(pnlKrw)} / ${this.formatPercent(pnlPercent)}`,
         position.market,
         decision?.confidence,
@@ -1370,7 +1430,42 @@ export class AiDayTraderEngine {
     tempoProfile: AiTempoProfile,
     aggressionProfile: AiEntryAggressionProfile
   ): string | null {
+    if (this.resolveTradeBiasForMarket(scanMarket) === 'SHORT_ONLY') {
+      return this.evaluateShortEntryGate(scanMarket, tempoProfile, aggressionProfile);
+    }
     return evaluatePolicyEntryGate(scanMarket, tempoProfile, aggressionProfile);
+  }
+
+  private evaluateShortEntryGate(
+    scanMarket: AiScalpScanMarket,
+    tempoProfile: AiTempoProfile,
+    aggressionProfile: AiEntryAggressionProfile
+  ): string | null {
+    if (!scanMarket.shortAvailable) {
+      return '바이낸스 숏 불가 종목';
+    }
+    if (this.getConfiguredTradeBias() !== 'SHORT_ONLY' && scanMarket.recommendation.marketRegime !== 'BEAR_TREND') {
+      return `레짐 ${scanMarket.recommendation.marketRegime ?? 'UNKNOWN'}로 숏 비선호`;
+    }
+
+    const spreadPercent = scanMarket.crowd?.spreadPercent ?? scanMarket.featurePack.spreadPercent ?? 0;
+    const entryGapPct = Math.max(0, scanMarket.featurePack.entryGapPct ?? 0);
+    const maxSpreadPct = tempoProfile.maxEntrySpreadPct * aggressionProfile.spreadMultiplier;
+    const maxEntryGapPct = tempoProfile.maxEntryGapPct * aggressionProfile.gapMultiplier;
+
+    if (spreadPercent > maxSpreadPct * 1.8) {
+      return `스프레드 ${spreadPercent.toFixed(2)}% 과다`;
+    }
+    if (entryGapPct > maxEntryGapPct * 2.0) {
+      return `진입 괴리 ${entryGapPct.toFixed(2)}% 과다`;
+    }
+    if (scanMarket.recommendation.riskRewardRatio < 0.95) {
+      return `RR ${scanMarket.recommendation.riskRewardRatio.toFixed(2)} 과소`;
+    }
+    if (scanMarket.changeRate <= -7.0 && entryGapPct >= 0.18) {
+      return `급락 추격 구간 ${scanMarket.changeRate.toFixed(2)}%`;
+    }
+    return null;
   }
 
   private shouldDeferEarlySell(
@@ -1400,6 +1495,58 @@ export class AiDayTraderEngine {
   private getEffectiveMaxHoldingMinutes(tempoProfile: AiTempoProfile): number {
     const baseHoldingMinutes = getPolicyEffectiveMaxHoldingMinutes(this.config.maxHoldingMinutes, tempoProfile);
     return Math.round(clamp(baseHoldingMinutes + this.getStrategyReflection().adjustments.maxHoldingMinutesOffset, 8, 45));
+  }
+
+  private getConfiguredTradeBias(): AiTradeBiasMode {
+    return normalizeTradeBiasMode(this.config.tradeBias);
+  }
+
+  private resolveTradeBiasForMarket(scanMarket: AiScalpScanMarket): AiTradeBiasMode {
+    const configured = this.getConfiguredTradeBias();
+    if (configured === 'SHORT_ONLY') {
+      return 'SHORT_ONLY';
+    }
+    if (
+      configured === 'REGIME_AUTO'
+      && scanMarket.shortAvailable
+      && scanMarket.recommendation.marketRegime === 'BEAR_TREND'
+    ) {
+      return 'SHORT_ONLY';
+    }
+    return 'LONG_ONLY';
+  }
+
+  private buildTradeBiasPromptBlock(scanMarket: AiScalpScanMarket): string {
+    const tradeBias = this.resolveTradeBiasForMarket(scanMarket);
+    if (tradeBias === 'SHORT_ONLY') {
+      return [
+        '이번 후보는 바이낸스 USDT 선물 숏 진입을 검토한다.',
+        'BUY는 신규 숏 포지션 진입을 뜻한다.',
+        'stopLoss는 현재가보다 높아야 하고 takeProfit은 현재가보다 낮아야 한다.',
+        `레짐: ${scanMarket.recommendation.marketRegime ?? 'UNKNOWN'} · shortAvailable=${scanMarket.shortAvailable ? 'YES' : 'NO'}`,
+      ].join('\n');
+    }
+    return [
+      '이번 후보는 빗썸 현물 롱 진입을 검토한다.',
+      'BUY는 현물 매수를 뜻한다.',
+      'stopLoss는 현재가보다 낮아야 하고 takeProfit은 현재가보다 높아야 한다.',
+      `레짐: ${scanMarket.recommendation.marketRegime ?? 'UNKNOWN'}`,
+    ].join('\n');
+  }
+
+  private buildPositionSidePromptBlock(position: GuidedTradePosition): string {
+    if (position.positionSide === 'SHORT') {
+      return [
+        '현재 포지션은 바이낸스 USDT 선물 숏이다.',
+        'SELL은 숏 포지션 청산을 뜻한다.',
+        '가격이 내려가면 이익, 올라가면 손실이다.',
+      ].join('\n');
+    }
+    return [
+      '현재 포지션은 빗썸 현물 롱이다.',
+      'SELL은 현물 포지션 청산을 뜻한다.',
+      '가격이 올라가면 이익, 내려가면 손실이다.',
+    ].join('\n');
   }
 
   private buildStrategyReflectionPromptBlock(market?: string): string {

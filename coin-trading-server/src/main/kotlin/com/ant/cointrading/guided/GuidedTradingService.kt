@@ -8,6 +8,11 @@ import com.ant.cointrading.api.bithumb.BithumbMarketWebSocketFeed
 import com.ant.cointrading.api.bithumb.OrderResponse
 import com.ant.cointrading.api.bithumb.RealtimeMarketPulse
 import com.ant.cointrading.api.bithumb.TradeResponse
+import com.ant.cointrading.api.binance.BinanceFuturesApi
+import com.ant.cointrading.api.binance.BinanceFuturesPrivateApi
+import com.ant.cointrading.model.Candle
+import com.ant.cointrading.model.MarketRegime
+import com.ant.cointrading.regime.RegimeDetector
 import com.ant.cointrading.repository.GuidedAutopilotDecisionEntity
 import com.ant.cointrading.repository.GuidedAutopilotDecisionRepository
 import com.ant.cointrading.repository.OrderLifecycleStrategyGroup
@@ -49,6 +54,27 @@ private data class GuidedStopExecutionResult(
     val hasEffectiveBalance: Boolean
 )
 
+private data class GuidedResolvedExecutionPlan(
+    val executionVenue: String,
+    val positionSide: String,
+    val externalSymbol: String?,
+    val leverage: Int?,
+    val marketRegime: String?,
+    val regimeConfidence: Double?
+)
+
+enum class GuidedTradeBias {
+    LONG_ONLY,
+    SHORT_ONLY,
+    REGIME_AUTO;
+
+    companion object {
+        fun fromString(value: String?): GuidedTradeBias {
+            return entries.firstOrNull { it.name.equals(value?.trim(), ignoreCase = true) } ?: LONG_ONLY
+        }
+    }
+}
+
 @Service
 class GuidedTradingService(
     private val bithumbPublicApi: BithumbPublicApi,
@@ -58,11 +84,15 @@ class GuidedTradingService(
     private val orderLifecycleTelemetryService: OrderLifecycleTelemetryService,
     private val guidedAutopilotDecisionRepository: GuidedAutopilotDecisionRepository,
     private val marketWebSocketFeed: BithumbMarketWebSocketFeed? = null,
+    private val binanceFuturesApi: BinanceFuturesApi? = null,
+    private val binanceFuturesPrivateApi: BinanceFuturesPrivateApi? = null,
+    private val regimeDetector: RegimeDetector? = null,
 ) {
     private val log = LoggerFactory.getLogger(javaClass)
     private val objectMapper = jacksonObjectMapper()
     private val marketWinRateExecutor: ExecutorService = Executors.newFixedThreadPool(WIN_RATE_CALC_CONCURRENCY)
     private val opportunityRecommendationCache = ConcurrentHashMap<OpportunityRecommendationCacheKey, CachedOpportunityRecommendation>()
+    private val shortAvailabilityCache = ConcurrentHashMap<String, Pair<Long, Boolean>>()
 
     private data class OpportunityRecommendationCacheKey(
         val market: String,
@@ -86,8 +116,10 @@ class GuidedTradingService(
         const val GUIDED_STRATEGY_CODE = "GUIDED_TRADING"
         const val GUIDED_AUTOPILOT_STRATEGY_CODE = "GUIDED_AUTOPILOT"
         const val AI_SCALP_TRADER_STRATEGY_CODE = "AI_SCALP_TRADER"
+        const val AI_SCALP_SHORT_LEVERAGE = 2
         const val AUTOPILOT_OPPORTUNITY_UNIVERSE_LIMIT = 25
         const val AUTOPILOT_OPPORTUNITY_CACHE_TTL_MILLIS = 30_000L
+        const val BINANCE_SHORT_AVAILABILITY_CACHE_TTL_MILLIS = 6 * 60 * 60_000L
         const val AUTOPILOT_PROMOTION_SHARPE_GATE = 1.2
         const val AUTOPILOT_PROMOTION_MAX_DD_GATE = 4.0
         const val AUTOPILOT_PROMOTION_WIN_RATE_GATE = 52.0
@@ -340,16 +372,20 @@ class GuidedTradingService(
 
     fun getActivePosition(market: String): GuidedTradeView? {
         val trade = getActiveTrade(market) ?: return null
-        val currentPrice = bithumbPublicApi.getCurrentPrice(market)?.firstOrNull()?.tradePrice
+        val currentPrice = resolveTradeCurrentPrice(trade)
         val balancesByCurrency = fetchBalancesByCurrency()
         if (
             trade.status == GuidedTradeEntity.STATUS_OPEN &&
-            getActualHoldingQuantity(market, currentPrice, balancesByCurrency) <= BigDecimal.ZERO
+            resolveTradeActualQuantity(trade, currentPrice, balancesByCurrency) <= BigDecimal.ZERO
         ) {
             return null
         }
         val current = currentPrice?.toDouble()
-        val effectiveEntryPrice = resolveEffectiveEntryPrice(trade, currentPrice, balancesByCurrency)
+        val effectiveEntryPrice = if (trade.executionVenue == GuidedTradeEntity.EXECUTION_VENUE_BINANCE_FUTURES) {
+            trade.averageEntryPrice
+        } else {
+            resolveEffectiveEntryPrice(trade, currentPrice, balancesByCurrency)
+        }
         return trade.toView(current, effectiveEntryPrice.toDouble())
     }
 
@@ -359,15 +395,20 @@ class GuidedTradingService(
         val markets = trades.map { it.market }.distinct()
         val tickerMap = fetchTickerMap(markets)
         val balancesByCurrency = fetchBalancesByCurrency()
+        val usdtKrw = getUsdtKrwPrice()
         return trades.mapNotNull { trade ->
-            val marketPrice = tickerMap[trade.market]?.tradePrice
+            val marketPrice = resolveTradeCurrentPrice(trade, tickerMap[trade.market]?.tradePrice, usdtKrw)
             if (
                 trade.status == GuidedTradeEntity.STATUS_OPEN &&
-                getActualHoldingQuantity(trade.market, marketPrice, balancesByCurrency) <= BigDecimal.ZERO
+                resolveTradeActualQuantity(trade, marketPrice, balancesByCurrency) <= BigDecimal.ZERO
             ) {
                 return@mapNotNull null
             }
-            val effectiveEntryPrice = resolveEffectiveEntryPrice(trade, marketPrice, balancesByCurrency)
+            val effectiveEntryPrice = if (trade.executionVenue == GuidedTradeEntity.EXECUTION_VENUE_BINANCE_FUTURES) {
+                trade.averageEntryPrice
+            } else {
+                resolveEffectiveEntryPrice(trade, marketPrice, balancesByCurrency)
+            }
             trade.toView(marketPrice?.toDouble(), effectiveEntryPrice.toDouble())
         }
     }
@@ -497,6 +538,28 @@ class GuidedTradingService(
             ?.uppercase()
             ?.ifBlank { null }
             ?: if (entrySource == "AUTOPILOT") GUIDED_AUTOPILOT_STRATEGY_CODE else GUIDED_STRATEGY_CODE
+        val tradeBias = GuidedTradeBias.fromString(request.tradeBias)
+        val leverage = request.leverage?.coerceIn(1, 5) ?: AI_SCALP_SHORT_LEVERAGE
+        val executionPlan = resolveExecutionPlan(market, tradeBias, recommendation, leverage)
+        if (executionPlan.executionVenue == GuidedTradeEntity.EXECUTION_VENUE_BINANCE_FUTURES) {
+            return startBinanceShortTrade(
+                market = market,
+                orderType = orderType,
+                amountKrw = amountKrw,
+                requestedLimitPrice = requestedLimitPrice,
+                trailingTriggerPercent = trailingTriggerPercent,
+                trailingOffsetPercent = trailingOffsetPercent,
+                dcaStepPercent = dcaStepPercent,
+                maxDcaCount = maxDcaCount,
+                halfTakeProfitRatio = halfTakeProfitRatio,
+                requestStopLossPrice = request.stopLossPrice,
+                requestTakeProfitPrice = request.takeProfitPrice,
+                recommendation = recommendation,
+                entrySource = entrySource,
+                strategyCode = strategyCode,
+                executionPlan = executionPlan
+            )
+        }
         val requestedMessage = if (entrySource == "AUTOPILOT") "autopilot_entry_requested" else "guided_entry_requested"
 
         val submitted = try {
@@ -579,6 +642,11 @@ class GuidedTradingService(
             halfTakeProfitRatio = BigDecimal.valueOf(halfTakeProfitRatio),
             entrySource = entrySource,
             strategyCode = strategyCode,
+            executionVenue = executionPlan.executionVenue,
+            positionSide = executionPlan.positionSide,
+            externalSymbol = executionPlan.externalSymbol,
+            leverage = executionPlan.leverage,
+            marketRegime = executionPlan.marketRegime,
             recommendationReason = recommendation.rationale.joinToString(" | "),
             lastAction = "ENTRY_SUBMITTED"
         )
@@ -593,12 +661,206 @@ class GuidedTradingService(
         return saved.toView(referencePrice.toDouble())
     }
 
+    private fun resolveExecutionPlan(
+        market: String,
+        tradeBias: GuidedTradeBias,
+        recommendation: GuidedRecommendation,
+        leverage: Int
+    ): GuidedResolvedExecutionPlan {
+        val marketRegime = recommendation.marketRegime
+            ?: detectMarketRegimeForExecution(market)?.regime?.name
+        val regimeConfidence = recommendation.regimeConfidence
+            ?: detectMarketRegimeForExecution(market)?.confidence
+        val shortAvailable = canShortOnBinance(market)
+        val wantsShort = when (tradeBias) {
+            GuidedTradeBias.SHORT_ONLY -> true
+            GuidedTradeBias.REGIME_AUTO -> marketRegime == MarketRegime.BEAR_TREND.name && shortAvailable
+            GuidedTradeBias.LONG_ONLY -> false
+        }
+
+        if (tradeBias == GuidedTradeBias.SHORT_ONLY) {
+            require(shortAvailable) { "[$market] 바이낸스 USDT 선물 숏을 지원하지 않습니다." }
+        }
+
+        return if (wantsShort) {
+            GuidedResolvedExecutionPlan(
+                executionVenue = GuidedTradeEntity.EXECUTION_VENUE_BINANCE_FUTURES,
+                positionSide = GuidedTradeEntity.POSITION_SIDE_SHORT,
+                externalSymbol = toBinanceSymbol(market),
+                leverage = leverage.coerceIn(1, 5),
+                marketRegime = marketRegime,
+                regimeConfidence = regimeConfidence
+            )
+        } else {
+            GuidedResolvedExecutionPlan(
+                executionVenue = GuidedTradeEntity.EXECUTION_VENUE_BITHUMB_SPOT,
+                positionSide = GuidedTradeEntity.POSITION_SIDE_LONG,
+                externalSymbol = null,
+                leverage = null,
+                marketRegime = marketRegime,
+                regimeConfidence = regimeConfidence
+            )
+        }
+    }
+
+    private fun startBinanceShortTrade(
+        market: String,
+        orderType: String,
+        amountKrw: BigDecimal,
+        requestedLimitPrice: BigDecimal?,
+        trailingTriggerPercent: Double,
+        trailingOffsetPercent: Double,
+        dcaStepPercent: Double,
+        maxDcaCount: Int,
+        halfTakeProfitRatio: Double,
+        requestStopLossPrice: Double?,
+        requestTakeProfitPrice: Double?,
+        recommendation: GuidedRecommendation,
+        entrySource: String,
+        strategyCode: String,
+        executionPlan: GuidedResolvedExecutionPlan
+    ): GuidedTradeView {
+        val symbol = executionPlan.externalSymbol ?: error("바이낸스 심볼을 결정할 수 없습니다.")
+        val binancePublicApi = binanceFuturesApi ?: error("Binance Futures public API 미구성")
+        val binancePrivateApi = binanceFuturesPrivateApi ?: error("Binance Futures private API 미구성")
+        val usdtKrw = getUsdtKrwPrice() ?: error("KRW-USDT 환율 조회 실패")
+        val markPriceUsdt = binancePublicApi.getMarkPrice(symbol)?.markPrice?.takeIf { it > BigDecimal.ZERO }
+            ?: error("[$symbol] Binance 선물 가격 조회 실패")
+        val selectedLimitPriceUsdt = if (orderType == GuidedTradeEntity.ORDER_TYPE_LIMIT) {
+            normalizeBinanceLimitPrice(
+                convertKrwPriceToUsdt(
+                    requestedLimitPrice ?: BigDecimal.valueOf(recommendation.currentPrice),
+                    usdtKrw
+                )
+            ).takeIf { it > BigDecimal.ZERO } ?: error("[$market] 바이낸스 지정가 변환 실패")
+        } else {
+            null
+        }
+        val referencePriceUsdt = selectedLimitPriceUsdt ?: markPriceUsdt
+        val notionalUsdt = amountKrw.divide(usdtKrw, 8, RoundingMode.DOWN)
+        val quantity = notionalUsdt.divide(referencePriceUsdt, 8, RoundingMode.DOWN)
+        require(quantity > BigDecimal.ZERO) { "[$market] 주문 수량이 0입니다." }
+
+        binancePrivateApi.changeInitialLeverage(symbol, executionPlan.leverage ?: AI_SCALP_SHORT_LEVERAGE)
+        val submitted = binancePrivateApi.placeOrderWithPartialFill(
+            symbol = symbol,
+            side = "SELL",
+            quantity = quantity,
+            orderType = orderType,
+            price = selectedLimitPriceUsdt,
+            reduceOnly = false,
+        ) ?: throw IllegalArgumentException("[$market] 바이낸스 숏 진입 주문 실패")
+
+        val orderId = submitted.orderIds.firstOrNull()?.toString()
+        val positionRisk = binancePrivateApi.getPositionRisk(symbol)
+        val executedQty = positionRisk?.positionAmt
+            ?.takeIf { it < BigDecimal.ZERO }
+            ?.abs()
+            ?.setScale(8, RoundingMode.HALF_UP)
+            ?: submitted.totalExecutedQty
+        val entryPriceUsdt = positionRisk?.entryPrice
+            ?.takeIf { it > BigDecimal.ZERO }
+            ?: selectedLimitPriceUsdt
+            ?: markPriceUsdt
+        val entryPriceKrw = convertUsdtPriceToKrw(entryPriceUsdt, usdtKrw)
+        val shortRiskDistances = resolveShortRiskDistances(entryPriceKrw.toDouble(), recommendation)
+        val stopLossPrice = BigDecimal.valueOf(
+            requestStopLossPrice ?: (entryPriceKrw.toDouble() * (1.0 + shortRiskDistances.stopDistancePercent / 100.0))
+        )
+        val takeProfitPrice = BigDecimal.valueOf(
+            requestTakeProfitPrice ?: (entryPriceKrw.toDouble() * (1.0 - shortRiskDistances.takeDistancePercent / 100.0))
+        )
+        val recommendationReason = buildList {
+            add("Binance Futures SHORT")
+            addAll(recommendation.rationale)
+            executionPlan.marketRegime?.let {
+                add("regime=$it${executionPlan.regimeConfidence?.let { confidence -> "(${String.format("%.0f", confidence)})" } ?: ""}")
+            }
+        }.joinToString(" | ")
+
+        val trade = GuidedTradeEntity(
+            market = market,
+            status = if (executedQty > BigDecimal.ZERO) GuidedTradeEntity.STATUS_OPEN else GuidedTradeEntity.STATUS_PENDING_ENTRY,
+            entryOrderType = orderType,
+            entryOrderId = orderId,
+            targetAmountKrw = amountKrw,
+            averageEntryPrice = entryPriceKrw,
+            entryQuantity = executedQty,
+            remainingQuantity = executedQty,
+            stopLossPrice = stopLossPrice,
+            takeProfitPrice = takeProfitPrice,
+            trailingTriggerPercent = BigDecimal.valueOf(trailingTriggerPercent),
+            trailingOffsetPercent = BigDecimal.valueOf(trailingOffsetPercent),
+            trailingActive = false,
+            dcaStepPercent = BigDecimal.valueOf(dcaStepPercent),
+            maxDcaCount = maxDcaCount,
+            halfTakeProfitRatio = BigDecimal.valueOf(halfTakeProfitRatio),
+            entrySource = entrySource,
+            strategyCode = strategyCode,
+            executionVenue = GuidedTradeEntity.EXECUTION_VENUE_BINANCE_FUTURES,
+            positionSide = GuidedTradeEntity.POSITION_SIDE_SHORT,
+            externalSymbol = symbol,
+            leverage = executionPlan.leverage,
+            marketRegime = executionPlan.marketRegime,
+            recommendationReason = recommendationReason,
+            lastAction = "SHORT_ENTRY_SUBMITTED"
+        )
+
+        val saved = guidedTradeRepository.save(trade)
+        orderLifecycleTelemetryService.recordRequested(
+            strategyGroup = OrderLifecycleStrategyGroup.GUIDED,
+            market = market,
+            side = "SELL",
+            orderId = orderId,
+            strategyCode = strategyCode,
+            quantity = executedQty.takeIf { it > BigDecimal.ZERO } ?: quantity,
+            price = entryPriceKrw.takeIf { it > BigDecimal.ZERO },
+            message = if (entrySource == "AUTOPILOT") "autopilot_short_entry_requested" else "guided_short_entry_requested"
+        )
+        appendEvent(saved.id!!, "ENTRY_SUBMITTED", entryPriceKrw, executedQty, "바이낸스 숏 주문 접수: $orderType")
+        if (saved.status == GuidedTradeEntity.STATUS_OPEN) {
+            appendEvent(saved.id!!, "ENTRY_FILLED", entryPriceKrw, executedQty, "바이낸스 숏 진입 체결")
+        }
+        return saved.toView(resolveTradeCurrentPrice(saved)?.toDouble() ?: entryPriceKrw.toDouble())
+    }
+
+    private data class ShortRiskDistances(
+        val stopDistancePercent: Double,
+        val takeDistancePercent: Double
+    )
+
+    private fun resolveShortRiskDistances(entryPrice: Double, recommendation: GuidedRecommendation): ShortRiskDistances {
+        if (entryPrice <= 0.0) {
+            return ShortRiskDistances(stopDistancePercent = 0.9, takeDistancePercent = 1.4)
+        }
+        val longEntry = recommendation.recommendedEntryPrice.takeIf { it > 0.0 } ?: entryPrice
+        val stopDistance = if (recommendation.stopLossPrice > 0.0 && longEntry > 0.0) {
+            ((longEntry - recommendation.stopLossPrice) / longEntry * 100.0).coerceIn(0.45, 3.0)
+        } else {
+            0.9
+        }
+        val takeDistance = if (recommendation.takeProfitPrice > 0.0 && longEntry > 0.0) {
+            ((recommendation.takeProfitPrice - longEntry) / longEntry * 100.0).coerceIn(0.7, 4.5)
+        } else {
+            1.4
+        }
+        return ShortRiskDistances(
+            stopDistancePercent = stopDistance,
+            takeDistancePercent = takeDistance
+        )
+    }
+
     @Transactional
     fun stopAutoTrading(market: String, exitReason: String? = null): GuidedTradeView {
         val allTrades = guidedTradeRepository.findByMarketAndStatusIn(market, OPEN_STATUSES)
         require(allTrades.isNotEmpty()) { "진행 중인 포지션이 없습니다." }
 
         val resolvedExitReason = normalizeStopExitReason(exitReason)
+        if (allTrades.all { it.executionVenue == GuidedTradeEntity.EXECUTION_VENUE_BINANCE_FUTURES && it.positionSide == GuidedTradeEntity.POSITION_SIDE_SHORT }) {
+            allTrades.forEach { closeShortByMarket(it, resolvedExitReason) }
+            val primary = allTrades.first()
+            return primary.toView(resolveTradeCurrentPrice(primary)?.toDouble() ?: primary.averageEntryPrice.toDouble())
+        }
         val estimatedExitReason = "${resolvedExitReason}_ESTIMATED"
         val stopResult = executeGuidedStopOrder(market, allTrades, resolvedExitReason)
 
@@ -760,6 +1022,10 @@ class GuidedTradingService(
     }
 
     private fun reconcilePendingEntry(trade: GuidedTradeEntity) {
+        if (trade.executionVenue == GuidedTradeEntity.EXECUTION_VENUE_BINANCE_FUTURES && trade.positionSide == GuidedTradeEntity.POSITION_SIDE_SHORT) {
+            reconcilePendingShortEntry(trade)
+            return
+        }
         val orderId = trade.entryOrderId ?: return
         val order = bithumbPrivateApi.getOrder(orderId)
         if (order != null) {
@@ -818,7 +1084,64 @@ class GuidedTradingService(
         }
     }
 
+    private fun reconcilePendingShortEntry(trade: GuidedTradeEntity) {
+        val binancePrivateApi = binanceFuturesPrivateApi ?: error("Binance Futures private API 미구성")
+        val symbol = trade.externalSymbol ?: error("[${trade.market}] Binance 심볼 누락")
+        val usdtKrw = getUsdtKrwPrice() ?: BigDecimal.ONE
+        val positionRisk = binancePrivateApi.getPositionRisk(symbol)
+        val actualQty = positionRisk?.positionAmt
+            ?.takeIf { it < BigDecimal.ZERO }
+            ?.abs()
+            ?.setScale(8, RoundingMode.HALF_UP)
+            ?: BigDecimal.ZERO
+
+        if (actualQty > BigDecimal.ZERO) {
+            val entryPriceUsdt = positionRisk?.entryPrice?.takeIf { it > BigDecimal.ZERO }
+                ?: binanceFuturesApi?.getMarkPrice(symbol)?.markPrice
+                ?: BigDecimal.ZERO
+            val entryPriceKrw = convertUsdtPriceToKrw(entryPriceUsdt, usdtKrw).takeIf { it > BigDecimal.ZERO }
+                ?: trade.averageEntryPrice
+            trade.averageEntryPrice = entryPriceKrw
+            trade.entryQuantity = actualQty
+            trade.remainingQuantity = actualQty
+            trade.status = GuidedTradeEntity.STATUS_OPEN
+            trade.lastAction = "SHORT_ENTRY_FILLED"
+            guidedTradeRepository.save(trade)
+            appendEvent(trade.id!!, "ENTRY_FILLED", entryPriceKrw, actualQty, "바이낸스 숏 진입 체결")
+            return
+        }
+
+        val orderId = trade.entryOrderId?.toLongOrNull()
+        val orderStatus = orderId?.let { runCatching { binancePrivateApi.getOrderStatus(symbol, it) }.getOrNull() }
+        if (orderStatus != null && orderStatus.isRejected()) {
+            trade.status = GuidedTradeEntity.STATUS_CANCELLED
+            trade.closedAt = Instant.now()
+            trade.exitReason = "ENTRY_REJECTED"
+            trade.lastAction = "SHORT_ENTRY_REJECTED"
+            guidedTradeRepository.save(trade)
+            appendEvent(trade.id!!, "ENTRY_CANCELLED", null, null, "바이낸스 숏 진입 거절: ${orderStatus.status}")
+            return
+        }
+
+        val ageSec = Instant.now().epochSecond - trade.createdAt.epochSecond
+        if (ageSec > 900 && orderId != null) {
+            runCatching { binancePrivateApi.cancelOrder(symbol, orderId) }
+                .onFailure { log.warn("[$symbol] 바이낸스 숏 미체결 주문 취소 실패: ${it.message}") }
+
+            trade.status = GuidedTradeEntity.STATUS_CANCELLED
+            trade.closedAt = Instant.now()
+            trade.exitReason = "ENTRY_TIMEOUT"
+            trade.lastAction = "SHORT_ENTRY_CANCELLED"
+            guidedTradeRepository.save(trade)
+            appendEvent(trade.id!!, "ENTRY_CANCELLED", null, null, "바이낸스 숏 진입 대기 15분 초과로 취소")
+        }
+    }
+
     private fun manageOpenTrade(trade: GuidedTradeEntity) {
+        if (trade.executionVenue == GuidedTradeEntity.EXECUTION_VENUE_BINANCE_FUTURES && trade.positionSide == GuidedTradeEntity.POSITION_SIDE_SHORT) {
+            manageOpenShortTrade(trade)
+            return
+        }
         val currentPrice = bithumbPublicApi.getCurrentPrice(trade.market)?.firstOrNull()?.tradePrice ?: return
         val balancesByCurrency = fetchBalancesByCurrency()
         reconcileAverageEntryPriceWithBalance(trade, currentPrice, balancesByCurrency)
@@ -910,7 +1233,113 @@ class GuidedTradingService(
         }
     }
 
+    private fun manageOpenShortTrade(trade: GuidedTradeEntity) {
+        val currentPrice = resolveTradeCurrentPrice(trade) ?: return
+        val actualQty = resolveTradeActualQuantity(trade, currentPrice)
+        if (actualQty <= BigDecimal.ZERO && trade.remainingQuantity > BigDecimal.ZERO) {
+            applyExitFill(trade, trade.remainingQuantity, currentPrice, "NO_POSITION")
+            trade.remainingQuantity = BigDecimal.ZERO
+            trade.status = GuidedTradeEntity.STATUS_CLOSED
+            trade.closedAt = Instant.now()
+            trade.exitReason = "NO_POSITION"
+            trade.lastAction = "SHORT_AUTO_CLOSED_NO_POSITION"
+            trade.pnlConfidence = GuidedTradeEntity.PNL_CONFIDENCE_LOW
+            if (trade.averageExitPrice <= BigDecimal.ZERO) {
+                trade.averageExitPrice = currentPrice
+            }
+            guidedTradeRepository.save(trade)
+            appendEvent(trade.id!!, "MANUAL_INTERVENTION_CLOSE", currentPrice, null, "바이낸스 숏 실포지션 없음 추정 종료")
+            return
+        }
+
+        if (actualQty > BigDecimal.ZERO && actualQty < trade.remainingQuantity) {
+            val shrinkRatio = if (trade.remainingQuantity > BigDecimal.ZERO) {
+                actualQty.divide(trade.remainingQuantity, 8, RoundingMode.HALF_UP)
+            } else {
+                BigDecimal.ONE
+            }
+            if (shrinkRatio < BigDecimal("0.95")) {
+                trade.remainingQuantity = actualQty
+                trade.lastAction = "SHORT_POSITION_SYNC"
+                guidedTradeRepository.save(trade)
+                appendEvent(trade.id!!, "BALANCE_SYNC", currentPrice, actualQty, "바이낸스 숏 포지션 동기화")
+            }
+        }
+
+        if (trade.remainingQuantity <= BigDecimal.ZERO) {
+            trade.status = GuidedTradeEntity.STATUS_CLOSED
+            trade.closedAt = Instant.now()
+            trade.exitReason = trade.exitReason ?: "NO_REMAINING"
+            trade.lastAction = "SHORT_AUTO_CLOSE_FINALIZED"
+            guidedTradeRepository.save(trade)
+            return
+        }
+
+        val pnlPercent = calculatePnlPercent(
+            entry = trade.averageEntryPrice,
+            current = currentPrice,
+            positionSide = GuidedTradeEntity.POSITION_SIDE_SHORT,
+            executionVenue = GuidedTradeEntity.EXECUTION_VENUE_BINANCE_FUTURES
+        )
+
+        if (!trade.trailingActive && pnlPercent >= trade.trailingTriggerPercent.toDouble()) {
+            trade.trailingActive = true
+            trade.trailingPeakPrice = currentPrice
+            trade.trailingStopPrice = currentPrice.multiply(
+                BigDecimal.ONE.add(
+                    trade.trailingOffsetPercent.divide(BigDecimal(100), 8, RoundingMode.HALF_UP)
+                )
+            )
+            trade.lastAction = "SHORT_TRAILING_ACTIVATED"
+            guidedTradeRepository.save(trade)
+            appendEvent(trade.id!!, "TRAILING_ACTIVATED", currentPrice, null, "바이낸스 숏 트레일링 활성화")
+        }
+
+        if (trade.trailingActive) {
+            val bestPrice = trade.trailingPeakPrice ?: currentPrice
+            if (currentPrice < bestPrice) {
+                trade.trailingPeakPrice = currentPrice
+                trade.trailingStopPrice = currentPrice.multiply(
+                    BigDecimal.ONE.add(
+                        trade.trailingOffsetPercent.divide(BigDecimal(100), 8, RoundingMode.HALF_UP)
+                    )
+                )
+                guidedTradeRepository.save(trade)
+            }
+            val trailStop = trade.trailingStopPrice
+            if (trailStop != null && currentPrice >= trailStop) {
+                closeAllByMarket(trade, "TRAILING_STOP")
+                return
+            }
+        }
+
+        if (!trade.halfTakeProfitDone && currentPrice <= trade.takeProfitPrice) {
+            executeHalfTakeProfit(trade, currentPrice)
+        }
+
+        if (currentPrice >= trade.stopLossPrice) {
+            closeAllByMarket(trade, "STOP_LOSS")
+            return
+        }
+
+        if (trade.dcaCount < trade.maxDcaCount && canExecuteDcaNow(trade)) {
+            val nextTrigger = trade.averageEntryPrice.multiply(
+                BigDecimal.ONE.add(
+                    trade.dcaStepPercent.multiply(BigDecimal.valueOf((trade.dcaCount + 1).toLong()))
+                        .divide(BigDecimal(100), 8, RoundingMode.HALF_UP)
+                )
+            )
+            if (currentPrice >= nextTrigger) {
+                executeDcaBuy(trade, currentPrice)
+            }
+        }
+    }
+
     private fun executeHalfTakeProfit(trade: GuidedTradeEntity, currentPrice: BigDecimal) {
+        if (trade.executionVenue == GuidedTradeEntity.EXECUTION_VENUE_BINANCE_FUTURES && trade.positionSide == GuidedTradeEntity.POSITION_SIDE_SHORT) {
+            executeShortHalfTakeProfit(trade, currentPrice)
+            return
+        }
         val qty = trade.remainingQuantity.multiply(trade.halfTakeProfitRatio).setScale(8, RoundingMode.DOWN)
         if (qty <= BigDecimal.ZERO) return
 
@@ -956,7 +1385,51 @@ class GuidedTradingService(
         appendEvent(trade.id!!, "HALF_TAKE_PROFIT", execPrice, executedQty, "절반 익절 + 손절가를 본절로 상향")
     }
 
+    private fun executeShortHalfTakeProfit(trade: GuidedTradeEntity, currentPrice: BigDecimal) {
+        val binancePrivateApi = binanceFuturesPrivateApi ?: error("Binance Futures private API 미구성")
+        val symbol = trade.externalSymbol ?: error("[${trade.market}] Binance 심볼 누락")
+        val qty = trade.remainingQuantity.multiply(trade.halfTakeProfitRatio).setScale(8, RoundingMode.DOWN)
+        if (qty <= BigDecimal.ZERO) return
+
+        val result = binancePrivateApi.placeOrderWithPartialFill(
+            symbol = symbol,
+            side = "BUY",
+            quantity = qty,
+            orderType = "MARKET",
+            reduceOnly = true,
+        ) ?: throw IllegalStateException("[${trade.market}] 바이낸스 숏 절반 익절 주문 실패")
+
+        val executedQty = result.totalExecutedQty.min(trade.remainingQuantity)
+        orderLifecycleTelemetryService.recordRequested(
+            strategyGroup = OrderLifecycleStrategyGroup.GUIDED,
+            market = trade.market,
+            side = "BUY",
+            orderId = result.orderIds.firstOrNull()?.toString(),
+            strategyCode = trade.strategyCode ?: GUIDED_STRATEGY_CODE,
+            quantity = qty,
+            price = currentPrice,
+            message = "guided_short_half_tp_requested"
+        )
+        if (executedQty <= BigDecimal.ZERO) {
+            trade.lastAction = "SHORT_HALF_TP_NO_FILL"
+            guidedTradeRepository.save(trade)
+            appendEvent(trade.id!!, "HALF_TP_NO_FILL", currentPrice, BigDecimal.ZERO, "바이낸스 숏 절반 익절 주문 미체결")
+            return
+        }
+
+        applyExitFill(trade, executedQty, currentPrice, "HALF_TP")
+        trade.halfTakeProfitDone = true
+        trade.stopLossPrice = trade.averageEntryPrice
+        trade.lastAction = "SHORT_HALF_TAKE_PROFIT"
+        guidedTradeRepository.save(trade)
+        appendEvent(trade.id!!, "HALF_TAKE_PROFIT", currentPrice, executedQty, "바이낸스 숏 절반 익절 + 손절가를 본절로 하향")
+    }
+
     private fun executeDcaBuy(trade: GuidedTradeEntity, currentPrice: BigDecimal) {
+        if (trade.executionVenue == GuidedTradeEntity.EXECUTION_VENUE_BINANCE_FUTURES && trade.positionSide == GuidedTradeEntity.POSITION_SIDE_SHORT) {
+            executeShortDcaSell(trade, currentPrice)
+            return
+        }
         val maxExposure = trade.targetAmountKrw.multiply(BigDecimal("2.0"))
         val currentExposure = trade.averageEntryPrice.multiply(trade.entryQuantity)
         val remainingBudget = maxExposure.subtract(currentExposure)
@@ -1017,10 +1490,71 @@ class GuidedTradingService(
         appendEvent(trade.id!!, "DCA_BUY", execPrice, executedQty, "물타기 ${trade.dcaCount}/${trade.maxDcaCount}")
     }
 
+    private fun executeShortDcaSell(trade: GuidedTradeEntity, currentPrice: BigDecimal) {
+        val binancePrivateApi = binanceFuturesPrivateApi ?: error("Binance Futures private API 미구성")
+        val symbol = trade.externalSymbol ?: error("[${trade.market}] Binance 심볼 누락")
+        val maxExposure = trade.targetAmountKrw.multiply(BigDecimal("2.0"))
+        val currentExposure = trade.averageEntryPrice.multiply(trade.entryQuantity)
+        val remainingBudget = maxExposure.subtract(currentExposure)
+        if (remainingBudget <= BigDecimal.ZERO) {
+            trade.lastAction = "SHORT_DCA_BUDGET_LIMIT"
+            guidedTradeRepository.save(trade)
+            return
+        }
+
+        val addAmount = minOf(
+            trade.targetAmountKrw.multiply(BigDecimal("0.5")),
+            remainingBudget
+        ).setScale(0, RoundingMode.DOWN)
+        if (addAmount < BigDecimal(5100)) return
+
+        val quantity = addAmount.divide(currentPrice, 8, RoundingMode.DOWN)
+        if (quantity <= BigDecimal.ZERO) return
+
+        val result = binancePrivateApi.placeOrderWithPartialFill(
+            symbol = symbol,
+            side = "SELL",
+            quantity = quantity,
+            orderType = "MARKET",
+            reduceOnly = false,
+        ) ?: throw IllegalStateException("[${trade.market}] 바이낸스 숏 물타기 주문 실패")
+
+        val executedQty = result.totalExecutedQty
+        orderLifecycleTelemetryService.recordRequested(
+            strategyGroup = OrderLifecycleStrategyGroup.GUIDED,
+            market = trade.market,
+            side = "SELL",
+            orderId = result.orderIds.firstOrNull()?.toString(),
+            strategyCode = trade.strategyCode ?: GUIDED_STRATEGY_CODE,
+            quantity = quantity,
+            price = currentPrice,
+            message = "guided_short_dca_requested"
+        )
+        if (executedQty <= BigDecimal.ZERO) return
+
+        val prevValue = trade.averageEntryPrice.multiply(trade.entryQuantity)
+        val addValue = currentPrice.multiply(executedQty)
+        val newQty = trade.entryQuantity.add(executedQty)
+        val newAvg = if (newQty > BigDecimal.ZERO) {
+            prevValue.add(addValue).divide(newQty, 8, RoundingMode.HALF_UP)
+        } else {
+            trade.averageEntryPrice
+        }
+
+        trade.entryQuantity = newQty
+        trade.remainingQuantity = trade.remainingQuantity.add(executedQty)
+        trade.averageEntryPrice = newAvg
+        trade.dcaCount += 1
+        trade.lastAction = "SHORT_DCA_${trade.dcaCount}"
+        guidedTradeRepository.save(trade)
+        appendEvent(trade.id!!, "DCA_SELL", currentPrice, executedQty, "바이낸스 숏 물타기 ${trade.dcaCount}/${trade.maxDcaCount}")
+    }
+
     private fun canExecuteDcaNow(trade: GuidedTradeEntity): Boolean {
-        val lastDca = guidedTradeEventRepository
-            .findTopByTradeIdAndEventTypeOrderByCreatedAtDesc(trade.id ?: return true, "DCA_BUY")
-            ?: return true
+        val tradeId = trade.id ?: return true
+        val longDca = guidedTradeEventRepository.findTopByTradeIdAndEventTypeOrderByCreatedAtDesc(tradeId, "DCA_BUY")
+        val shortDca = guidedTradeEventRepository.findTopByTradeIdAndEventTypeOrderByCreatedAtDesc(tradeId, "DCA_SELL")
+        val lastDca = listOfNotNull(longDca, shortDca).maxByOrNull { it.createdAt } ?: return true
         val elapsed = Instant.now().epochSecond - lastDca.createdAt.epochSecond
         return elapsed >= DCA_MIN_INTERVAL_SECONDS
     }
@@ -1057,7 +1591,135 @@ class GuidedTradingService(
             .associateBy { it.currency.uppercase() }
     }
 
+    private fun detectMarketRegime(candles: List<GuidedCandle>): com.ant.cointrading.model.RegimeAnalysis? {
+        val detector = regimeDetector ?: return null
+        if (candles.size < 20) return null
+        return runCatching {
+            detector.detect(
+                candles.map {
+                    Candle(
+                        timestamp = Instant.ofEpochMilli(it.timestamp),
+                        open = BigDecimal.valueOf(it.open),
+                        high = BigDecimal.valueOf(it.high),
+                        low = BigDecimal.valueOf(it.low),
+                        close = BigDecimal.valueOf(it.close),
+                        volume = BigDecimal.valueOf(it.volume)
+                    )
+                }
+            )
+        }.getOrNull()
+    }
+
+    private fun detectMarketRegimeForExecution(
+        market: String,
+        interval: String = "minute30",
+        count: Int = 120
+    ): com.ant.cointrading.model.RegimeAnalysis? {
+        val candles = bithumbPublicApi.getOhlcv(market, interval, count.coerceIn(60, 180), null)
+            ?.sortedBy { it.timestamp }
+            ?.map {
+                GuidedCandle(
+                    timestamp = it.timestamp,
+                    open = it.openingPrice.toDouble(),
+                    high = it.highPrice.toDouble(),
+                    low = it.lowPrice.toDouble(),
+                    close = it.tradePrice.toDouble(),
+                    volume = it.candleAccTradeVolume.toDouble()
+                )
+            }
+            ?: return null
+        return detectMarketRegime(candles)
+    }
+
+    private fun toBinanceSymbol(market: String): String? {
+        val asset = market.trim().uppercase().removePrefix("KRW-").ifBlank { return null }
+        return "${asset}USDT"
+    }
+
+    private fun getUsdtKrwPrice(): BigDecimal? {
+        return bithumbPublicApi.getCurrentPrice("KRW-USDT")
+            ?.firstOrNull()
+            ?.tradePrice
+            ?.takeIf { it > BigDecimal.ZERO }
+    }
+
+    private fun convertUsdtPriceToKrw(priceUsdt: BigDecimal, usdtKrw: BigDecimal): BigDecimal {
+        return priceUsdt.multiply(usdtKrw).setScale(8, RoundingMode.HALF_UP)
+    }
+
+    private fun convertKrwPriceToUsdt(priceKrw: BigDecimal, usdtKrw: BigDecimal): BigDecimal {
+        if (priceKrw <= BigDecimal.ZERO || usdtKrw <= BigDecimal.ZERO) return BigDecimal.ZERO
+        return priceKrw.divide(usdtKrw, 8, RoundingMode.HALF_UP)
+    }
+
+    private fun normalizeBinanceLimitPrice(priceUsdt: BigDecimal): BigDecimal {
+        val scale = when {
+            priceUsdt >= BigDecimal("10000") -> 1
+            priceUsdt >= BigDecimal("1000") -> 2
+            priceUsdt >= BigDecimal("100") -> 3
+            priceUsdt >= BigDecimal("1") -> 4
+            else -> 5
+        }
+        return priceUsdt.setScale(scale, RoundingMode.HALF_UP)
+    }
+
+    private fun resolveBinancePriceKrw(symbol: String?, usdtKrwHint: BigDecimal? = null): BigDecimal? {
+        if (symbol.isNullOrBlank()) return null
+        val markPrice = binanceFuturesApi?.getMarkPrice(symbol)?.markPrice ?: return null
+        val usdtKrw = usdtKrwHint ?: getUsdtKrwPrice() ?: return null
+        return convertUsdtPriceToKrw(markPrice, usdtKrw)
+    }
+
+    private fun getBinanceShortQuantity(symbol: String?): BigDecimal {
+        if (symbol.isNullOrBlank()) return BigDecimal.ZERO
+        val positionRisk = binanceFuturesPrivateApi?.getPositionRisk(symbol) ?: return BigDecimal.ZERO
+        val positionAmt = positionRisk.positionAmt
+        if (positionAmt >= BigDecimal.ZERO) return BigDecimal.ZERO
+        return positionAmt.abs().setScale(8, RoundingMode.HALF_UP)
+    }
+
+    private fun resolveTradeCurrentPrice(
+        trade: GuidedTradeEntity,
+        marketPriceHint: BigDecimal? = null,
+        usdtKrwHint: BigDecimal? = null
+    ): BigDecimal? {
+        return when (trade.executionVenue) {
+            GuidedTradeEntity.EXECUTION_VENUE_BINANCE_FUTURES ->
+                resolveBinancePriceKrw(trade.externalSymbol, usdtKrwHint)
+                    ?: marketPriceHint
+                    ?: bithumbPublicApi.getCurrentPrice(trade.market)?.firstOrNull()?.tradePrice
+            else -> marketPriceHint ?: bithumbPublicApi.getCurrentPrice(trade.market)?.firstOrNull()?.tradePrice
+        }
+    }
+
+    private fun resolveTradeActualQuantity(
+        trade: GuidedTradeEntity,
+        referencePrice: BigDecimal? = null,
+        balancesByCurrency: Map<String, Balance>? = null
+    ): BigDecimal {
+        return when (trade.executionVenue) {
+            GuidedTradeEntity.EXECUTION_VENUE_BINANCE_FUTURES -> getBinanceShortQuantity(trade.externalSymbol)
+            else -> getActualHoldingQuantity(trade.market, referencePrice, balancesByCurrency)
+        }
+    }
+
+    private fun canShortOnBinance(market: String): Boolean {
+        val symbol = toBinanceSymbol(market) ?: return false
+        val now = System.currentTimeMillis()
+        val cached = shortAvailabilityCache[symbol]
+        if (cached != null && now - cached.first < BINANCE_SHORT_AVAILABILITY_CACHE_TTL_MILLIS) {
+            return cached.second
+        }
+        val available = binanceFuturesApi?.getMarkPrice(symbol) != null
+        shortAvailabilityCache[symbol] = now to available
+        return available
+    }
+
     private fun closeAllByMarket(trade: GuidedTradeEntity, reason: String) {
+        if (trade.executionVenue == GuidedTradeEntity.EXECUTION_VENUE_BINANCE_FUTURES && trade.positionSide == GuidedTradeEntity.POSITION_SIDE_SHORT) {
+            closeShortByMarket(trade, reason)
+            return
+        }
         if (trade.remainingQuantity <= BigDecimal.ZERO) {
             trade.status = GuidedTradeEntity.STATUS_CLOSED
             trade.closedAt = Instant.now()
@@ -1182,6 +1844,91 @@ class GuidedTradingService(
         }
     }
 
+    private fun closeShortByMarket(trade: GuidedTradeEntity, reason: String) {
+        if (trade.remainingQuantity <= BigDecimal.ZERO) {
+            trade.status = GuidedTradeEntity.STATUS_CLOSED
+            trade.closedAt = Instant.now()
+            trade.exitReason = reason
+            trade.lastAction = "SHORT_CLOSE_SKIPPED_EMPTY"
+            guidedTradeRepository.save(trade)
+            return
+        }
+
+        val binancePrivateApi = binanceFuturesPrivateApi ?: error("Binance Futures private API 미구성")
+        val symbol = trade.externalSymbol ?: error("[${trade.market}] Binance 심볼 누락")
+        val currentPrice = resolveTradeCurrentPrice(trade) ?: trade.averageEntryPrice
+        val actualQty = resolveTradeActualQuantity(trade, currentPrice)
+        if (actualQty <= BigDecimal.ZERO) {
+            applyExitFill(trade, trade.remainingQuantity, currentPrice, "${reason}_NO_POSITION")
+            trade.status = GuidedTradeEntity.STATUS_CLOSED
+            trade.closedAt = Instant.now()
+            trade.exitReason = "${reason}_NO_POSITION"
+            trade.lastAction = "SHORT_CLOSE_NO_POSITION"
+            trade.remainingQuantity = BigDecimal.ZERO
+            trade.pnlConfidence = GuidedTradeEntity.PNL_CONFIDENCE_LOW
+            if (trade.averageExitPrice <= BigDecimal.ZERO) {
+                trade.averageExitPrice = currentPrice
+            }
+            guidedTradeRepository.save(trade)
+            appendEvent(trade.id!!, "CLOSE_NO_POSITION", currentPrice, null, "바이낸스 숏 포지션 없음 추정 종료")
+            return
+        }
+
+        val result = binancePrivateApi.placeOrderWithPartialFill(
+            symbol = symbol,
+            side = "BUY",
+            quantity = actualQty,
+            orderType = "MARKET",
+            reduceOnly = true,
+        ) ?: throw IllegalStateException("[${trade.market}] 바이낸스 숏 청산 주문 실패")
+
+        val usdtKrw = getUsdtKrwPrice() ?: BigDecimal.ONE
+        val currentMarkPrice = binanceFuturesApi?.getMarkPrice(symbol)?.markPrice
+        val executedPriceKrw = convertUsdtPriceToKrw(
+            currentMarkPrice?.takeIf { it > BigDecimal.ZERO } ?: convertKrwPriceToUsdt(currentPrice, usdtKrw),
+            usdtKrw
+        )
+        val executedQty = result.totalExecutedQty.min(actualQty)
+
+        orderLifecycleTelemetryService.recordRequested(
+            strategyGroup = OrderLifecycleStrategyGroup.GUIDED,
+            market = trade.market,
+            side = "BUY",
+            orderId = result.orderIds.firstOrNull()?.toString(),
+            strategyCode = trade.strategyCode ?: GUIDED_STRATEGY_CODE,
+            quantity = actualQty,
+            price = executedPriceKrw,
+            message = "guided_short_close_requested:$reason"
+        )
+
+        if (executedQty <= BigDecimal.ZERO) {
+            trade.lastAction = "SHORT_CLOSE_NO_FILL_$reason"
+            trade.lastExitOrderId = result.orderIds.firstOrNull()?.toString()
+            guidedTradeRepository.save(trade)
+            appendEvent(trade.id!!, "CLOSE_NO_FILL", executedPriceKrw, BigDecimal.ZERO, "바이낸스 숏 청산 미체결: $reason")
+            return
+        }
+
+        applyExitFill(trade, executedQty, executedPriceKrw, reason)
+        trade.lastExitOrderId = result.orderIds.firstOrNull()?.toString()
+        val remainingActual = resolveTradeActualQuantity(trade)
+        if (remainingActual <= BigDecimal.ZERO || trade.remainingQuantity <= BigDecimal.ZERO) {
+            trade.remainingQuantity = BigDecimal.ZERO
+            trade.status = GuidedTradeEntity.STATUS_CLOSED
+            trade.closedAt = Instant.now()
+            trade.exitReason = reason
+            trade.lastAction = "SHORT_CLOSED_$reason"
+            guidedTradeRepository.save(trade)
+            appendEvent(trade.id!!, "CLOSE_ALL", executedPriceKrw, executedQty, "바이낸스 숏 청산: $reason")
+        } else {
+            trade.remainingQuantity = remainingActual
+            trade.status = GuidedTradeEntity.STATUS_OPEN
+            trade.lastAction = "SHORT_PARTIAL_CLOSE_$reason"
+            guidedTradeRepository.save(trade)
+            appendEvent(trade.id!!, "PARTIAL_CLOSE", executedPriceKrw, executedQty, "바이낸스 숏 부분 청산: $reason")
+        }
+    }
+
     private fun applyExitFill(trade: GuidedTradeEntity, quantity: BigDecimal, price: BigDecimal, reason: String) {
         val effectiveQty = quantity.min(trade.remainingQuantity)
         if (effectiveQty <= BigDecimal.ZERO) return
@@ -1197,7 +1944,9 @@ class GuidedTradingService(
         val pnl = calculateFeeAdjustedPnl(
             entryPrice = trade.averageEntryPrice,
             exitPrice = price,
-            quantity = effectiveQty
+            quantity = effectiveQty,
+            positionSide = trade.positionSide,
+            feeRate = guidedFeeRateForVenue(trade.executionVenue)
         )
         trade.realizedPnl = trade.realizedPnl.add(pnl.pnlAmount)
 
@@ -1422,6 +2171,7 @@ class GuidedTradingService(
     }
 
     private fun buildRecommendation(market: String, candles: List<GuidedCandle>, mode: TradingMode = TradingMode.SWING): GuidedRecommendation {
+        val regimeAnalysis = detectMarketRegime(candles)
         if (candles.size < 30) {
             val current = bithumbPublicApi.getCurrentPrice(market)?.firstOrNull()?.tradePrice?.toDouble() ?: 0.0
             val fallbackWinRate = 38.0
@@ -1437,6 +2187,8 @@ class GuidedTradingService(
                 recommendedEntryWinRate = calibration.calibrated,
                 marketEntryWinRate = calibration.calibrated,
                 riskRewardRatio = 2.0,
+                marketRegime = regimeAnalysis?.regime?.name,
+                regimeConfidence = regimeAnalysis?.confidence,
                 winRateBreakdown = GuidedWinRateBreakdown(
                     trend = 0.4,
                     pullback = 0.35,
@@ -1534,6 +2286,8 @@ class GuidedTradingService(
             recommendedEntryWinRate = calibratedRecommendedWinRate,
             marketEntryWinRate = calibratedMarketWinRate,
             riskRewardRatio = riskRewardRatio,
+            marketRegime = regimeAnalysis?.regime?.name,
+            regimeConfidence = regimeAnalysis?.confidence,
             winRateBreakdown = GuidedWinRateBreakdown(
                 trend = trendScore,
                 pullback = pullbackScore,
@@ -2546,6 +3300,7 @@ class GuidedTradingService(
         val recommendationWinRate = recommendation?.recommendedEntryWinRate?.takeIf { it.isFinite() } ?: 0.0
         val expectancyPct = (recommendationWinRate / 100.0) * profitPct - (1.0 - recommendationWinRate / 100.0) * lossPct
         val crowd = pulse?.toCrowdFeaturePack()
+        val shortAvailable = canShortOnBinance(marketItem.market)
 
         return GuidedAiScalpScanMarketView(
             market = marketItem.market,
@@ -2554,6 +3309,7 @@ class GuidedTradingService(
             changeRate = marketItem.changeRate,
             turnover = marketItem.accTradePrice,
             liquidityRank = rank,
+            shortAvailable = shortAvailable,
             recommendation = GuidedAiScalpRecommendationSummary(
                 currentPrice = currentPrice,
                 recommendedEntryPrice = recommendedEntryPrice,
@@ -2562,6 +3318,8 @@ class GuidedTradingService(
                 recommendedEntryWinRate = recommendation?.recommendedEntryWinRate ?: 0.0,
                 marketEntryWinRate = recommendation?.marketEntryWinRate ?: 0.0,
                 riskRewardRatio = recommendation?.riskRewardRatio ?: 0.0,
+                marketRegime = recommendation?.marketRegime,
+                regimeConfidence = recommendation?.regimeConfidence,
                 confidence = recommendation?.confidence ?: 0.0,
                 suggestedOrderType = recommendation?.suggestedOrderType ?: GuidedTradeEntity.ORDER_TYPE_MARKET,
                 rationale = recommendation?.rationale?.take(3) ?: emptyList(),
@@ -2757,7 +3515,7 @@ class GuidedTradingService(
     }
 
     private fun isEntryFillEvent(eventType: String): Boolean {
-        return eventType == "ENTRY_FILLED" || eventType == "DCA_BUY"
+        return eventType == "ENTRY_FILLED" || eventType == "DCA_BUY" || eventType == "DCA_SELL"
     }
 
     private fun isExitFillEvent(eventType: String): Boolean {
@@ -3016,8 +3774,18 @@ class GuidedTradingService(
         }.associateBy { it.market }
     }
 
-    private fun calculatePnlPercent(entry: BigDecimal, current: BigDecimal): Double {
-        return calculateFeeAdjustedReturnPercent(entry.toDouble(), current.toDouble())
+    private fun calculatePnlPercent(
+        entry: BigDecimal,
+        current: BigDecimal,
+        positionSide: String = GuidedTradeEntity.POSITION_SIDE_LONG,
+        executionVenue: String = GuidedTradeEntity.EXECUTION_VENUE_BITHUMB_SPOT
+    ): Double {
+        return calculateFeeAdjustedReturnPercent(
+            entry.toDouble(),
+            current.toDouble(),
+            positionSide = positionSide,
+            feeRate = guidedFeeRateForVenue(executionVenue)
+        )
     }
 
     private fun resolveBalanceAverageEntryPrice(
@@ -3183,7 +3951,12 @@ class GuidedTradingService(
     private fun GuidedTradeEntity.toView(currentPrice: Double?, entryPriceOverride: Double? = null): GuidedTradeView {
         val effectiveEntryPrice = entryPriceOverride?.takeIf { it > 0.0 } ?: this.averageEntryPrice.toDouble()
         val nowPrice = currentPrice ?: effectiveEntryPrice
-        val pnlPercent = calculateFeeAdjustedReturnPercent(effectiveEntryPrice, nowPrice)
+        val pnlPercent = calculateFeeAdjustedReturnPercent(
+            effectiveEntryPrice,
+            nowPrice,
+            positionSide = positionSide,
+            feeRate = guidedFeeRateForVenue(executionVenue)
+        )
 
         return GuidedTradeView(
             tradeId = id ?: 0,
@@ -3191,6 +3964,11 @@ class GuidedTradingService(
             status = status,
             entryOrderType = entryOrderType,
             entryOrderId = entryOrderId,
+            executionVenue = executionVenue,
+            positionSide = positionSide,
+            externalSymbol = externalSymbol,
+            leverage = leverage,
+            marketRegime = marketRegime,
             averageEntryPrice = effectiveEntryPrice,
             currentPrice = nowPrice,
             entryQuantity = entryQuantity.toDouble(),
@@ -3368,6 +4146,8 @@ data class GuidedRecommendation(
     val recommendedEntryWinRate: Double,
     val marketEntryWinRate: Double,
     val riskRewardRatio: Double,
+    val marketRegime: String? = null,
+    val regimeConfidence: Double? = null,
     val winRateBreakdown: GuidedWinRateBreakdown,
     val suggestedOrderType: String,
     val rationale: List<String>,
@@ -3414,6 +4194,11 @@ data class GuidedTradeView(
     val status: String,
     val entryOrderType: String,
     val entryOrderId: String?,
+    val executionVenue: String = GuidedTradeEntity.EXECUTION_VENUE_BITHUMB_SPOT,
+    val positionSide: String = GuidedTradeEntity.POSITION_SIDE_LONG,
+    val externalSymbol: String? = null,
+    val leverage: Int? = null,
+    val marketRegime: String? = null,
     val averageEntryPrice: Double,
     val currentPrice: Double,
     val entryQuantity: Double,
@@ -3526,6 +4311,7 @@ data class GuidedAiScalpScanMarketView(
     val changeRate: Double,
     val turnover: Double,
     val liquidityRank: Int,
+    val shortAvailable: Boolean = false,
     val recommendation: GuidedAiScalpRecommendationSummary,
     val featurePack: GuidedAiScalpFeaturePack,
     val crowd: GuidedCrowdFeaturePack? = null
@@ -3539,6 +4325,8 @@ data class GuidedAiScalpRecommendationSummary(
     val recommendedEntryWinRate: Double,
     val marketEntryWinRate: Double,
     val riskRewardRatio: Double,
+    val marketRegime: String? = null,
+    val regimeConfidence: Double? = null,
     val confidence: Double,
     val suggestedOrderType: String,
     val rationale: List<String>,
@@ -3695,6 +4483,8 @@ data class GuidedAutopilotPerformanceResponse(
 data class GuidedClosedTradeView(
     val tradeId: Long,
     val market: String,
+    val executionVenue: String = GuidedTradeEntity.EXECUTION_VENUE_BITHUMB_SPOT,
+    val positionSide: String = GuidedTradeEntity.POSITION_SIDE_LONG,
     val averageEntryPrice: Double,
     val averageExitPrice: Double,
     val entryQuantity: Double,
@@ -3789,6 +4579,8 @@ data class GuidedStartRequest(
     val mode: String? = null,
     val entrySource: String? = null,
     val strategyCode: String? = null,
+    val tradeBias: String? = null,
+    val leverage: Int? = null,
 )
 
 data class GuidedAdoptPositionRequest(
@@ -3854,7 +4646,9 @@ private fun GuidedTradeEntity.toClosedTradeView(): GuidedClosedTradeView {
         calculateFeeAdjustedPnl(
             entryPrice = averageEntryPrice,
             exitPrice = averageExitPrice,
-            quantity = effectiveClosedQty
+            quantity = effectiveClosedQty,
+            positionSide = positionSide,
+            feeRate = guidedFeeRateForVenue(executionVenue)
         )
     } else {
         FeeAdjustedTradePnl(
@@ -3866,6 +4660,8 @@ private fun GuidedTradeEntity.toClosedTradeView(): GuidedClosedTradeView {
     return GuidedClosedTradeView(
         tradeId = id ?: 0L,
         market = market,
+        executionVenue = executionVenue,
+        positionSide = positionSide,
         averageEntryPrice = averageEntryPrice.toDouble(),
         averageExitPrice = averageExitPrice.toDouble(),
         entryQuantity = entryQuantity.toDouble(),

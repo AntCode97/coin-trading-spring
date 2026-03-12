@@ -119,6 +119,21 @@ class GuidedTradeEntity(
     @Column(length = 50)
     var strategyCode: String? = null,
 
+    @Column(length = 30)
+    var executionVenue: String = EXECUTION_VENUE_BITHUMB_SPOT,
+
+    @Column(length = 16)
+    var positionSide: String = POSITION_SIDE_LONG,
+
+    @Column(length = 40)
+    var externalSymbol: String? = null,
+
+    @Column
+    var leverage: Int? = null,
+
+    @Column(length = 30)
+    var marketRegime: String? = null,
+
     @Column(columnDefinition = "TEXT")
     var recommendationReason: String? = null,
 
@@ -149,6 +164,12 @@ class GuidedTradeEntity(
 
         const val ORDER_TYPE_MARKET = "MARKET"
         const val ORDER_TYPE_LIMIT = "LIMIT"
+
+        const val EXECUTION_VENUE_BITHUMB_SPOT = "BITHUMB_SPOT"
+        const val EXECUTION_VENUE_BINANCE_FUTURES = "BINANCE_FUTURES"
+
+        const val POSITION_SIDE_LONG = "LONG"
+        const val POSITION_SIDE_SHORT = "SHORT"
     }
 }
 

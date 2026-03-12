@@ -47,12 +47,14 @@ export default function AiDayTraderScreen() {
             toggleSelectedMarket={screen.toggleSelectedMarket}
             clearSelectedMarkets={screen.clearSelectedMarkets}
             setSeedMarket={screen.setSeedMarket}
+            setSeedTradeBias={screen.setSeedTradeBias}
             setSeedOrderType={screen.setSeedOrderType}
             setSeedLimitPrice={screen.setSeedLimitPrice}
             setSeedStopLossPrice={screen.setSeedStopLossPrice}
             setSeedTakeProfitPrice={screen.setSeedTakeProfitPrice}
             setSeedMaxDcaCount={screen.setSeedMaxDcaCount}
             setSeedDcaStepPercent={screen.setSeedDcaStepPercent}
+            setSeedLeverage={screen.setSeedLeverage}
             startSeedPosition={() => void screen.startSeedPosition()}
           />
 

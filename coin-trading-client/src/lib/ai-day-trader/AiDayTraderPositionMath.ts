@@ -1,6 +1,7 @@
 import type { GuidedTradePosition } from '../../api';
 
 const BITHUMB_FEE_RATE = 0.0004;
+const BINANCE_FUTURES_FEE_RATE = 0.0005;
 
 export function isPlausiblePositionEntry(entryPrice: number, currentPrice: number): boolean {
   if (!Number.isFinite(entryPrice) || entryPrice <= 0 || !Number.isFinite(currentPrice) || currentPrice <= 0) {
@@ -35,28 +36,38 @@ export function estimatePositionEntryPrice(position: GuidedTradePosition): numbe
   return plausibleCandidate ?? currentPrice;
 }
 
-export function calculateFeeAdjustedReturnPercent(entryPrice: number, currentPrice: number): number {
+export function calculateFeeAdjustedReturnPercent(
+  entryPrice: number,
+  currentPrice: number,
+  positionSide = 'LONG',
+  executionVenue = 'BITHUMB_SPOT'
+): number {
   if (!Number.isFinite(entryPrice) || entryPrice <= 0 || !Number.isFinite(currentPrice) || currentPrice <= 0) {
     return 0;
   }
-  const grossReturn = (currentPrice - entryPrice) / entryPrice;
-  const feeReturn = BITHUMB_FEE_RATE * (1 + currentPrice / entryPrice);
+  const grossReturn = positionSide === 'SHORT'
+    ? (entryPrice - currentPrice) / entryPrice
+    : (currentPrice - entryPrice) / entryPrice;
+  const feeRate = executionVenue === 'BINANCE_FUTURES' ? BINANCE_FUTURES_FEE_RATE : BITHUMB_FEE_RATE;
+  const feeReturn = feeRate * (1 + currentPrice / entryPrice);
   return (grossReturn - feeReturn) * 100;
 }
 
 export function normalizePosition(position: GuidedTradePosition): GuidedTradePosition {
   const currentPrice = position.currentPrice;
   const entryPrice = position.averageEntryPrice;
+  const positionSide = position.positionSide ?? 'LONG';
+  const executionVenue = position.executionVenue ?? 'BITHUMB_SPOT';
   if (!isPlausiblePositionEntry(entryPrice, currentPrice)) {
     const estimatedEntryPrice = estimatePositionEntryPrice(position);
     return {
       ...position,
       averageEntryPrice: estimatedEntryPrice,
-      unrealizedPnlPercent: calculateFeeAdjustedReturnPercent(estimatedEntryPrice, currentPrice),
+      unrealizedPnlPercent: calculateFeeAdjustedReturnPercent(estimatedEntryPrice, currentPrice, positionSide, executionVenue),
     };
   }
   return {
     ...position,
-    unrealizedPnlPercent: calculateFeeAdjustedReturnPercent(entryPrice, currentPrice),
+    unrealizedPnlPercent: calculateFeeAdjustedReturnPercent(entryPrice, currentPrice, positionSide, executionVenue),
   };
 }

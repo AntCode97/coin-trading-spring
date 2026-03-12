@@ -28,19 +28,24 @@ class BinanceFuturesPrivateApi(
         side: String,
         quantity: BigDecimal,
         orderType: String = "MARKET",
-        price: BigDecimal? = null
+        price: BigDecimal? = null,
+        reduceOnly: Boolean = false
     ): OrderResult? {
         val requestBody = mutableMapOf(
             "symbol" to symbol,
             "side" to side,
             "type" to orderType,
             "quantity" to quantity.toPlainString(),
+            "newOrderRespType" to "RESULT",
             "timestamp" to System.currentTimeMillis().toString()
         )
 
         if (orderType == "LIMIT" && price != null) {
             requestBody["price"] = price.toPlainString()
             requestBody["timeInForce"] = "GTC"
+        }
+        if (reduceOnly) {
+            requestBody["reduceOnly"] = "true"
         }
 
         return executeWithRetry("place_order") {
@@ -111,9 +116,10 @@ class BinanceFuturesPrivateApi(
         quantity: BigDecimal,
         orderType: String = "MARKET",
         price: BigDecimal? = null,
+        reduceOnly: Boolean = false,
         maxReorderAttempts: Int = 3
     ): OrderResultWithReorder? {
-        val initialResult = placeOrder(symbol, side, quantity, orderType, price)
+        val initialResult = placeOrder(symbol, side, quantity, orderType, price, reduceOnly)
 
         if (initialResult == null) {
             log.error("[$symbol] 주문 실패: null response")
@@ -146,7 +152,7 @@ class BinanceFuturesPrivateApi(
         val remainingQty = initialResult.origQty.subtract(initialResult.executedQty)
 
         for (attempt in 1..maxReorderAttempts) {
-            val reorderId = placeOrder(symbol, side, remainingQty, orderType, price)
+            val reorderId = placeOrder(symbol, side, remainingQty, orderType, price, reduceOnly)
 
             if (reorderId == null) {
                 log.warn("[$symbol] 재주문 실패 (시도 $attempt/$maxReorderAttempts)")
@@ -186,6 +192,8 @@ class BinanceFuturesPrivateApi(
         val symbol: String,
         val status: String,
         val transactTime: Long,
+        val price: BigDecimal = BigDecimal.ZERO,
+        val avgPrice: BigDecimal = BigDecimal.ZERO,
         val origQty: BigDecimal = BigDecimal.ZERO,
         val executedQty: BigDecimal = BigDecimal.ZERO
     ) {
@@ -203,6 +211,64 @@ class BinanceFuturesPrivateApi(
         val orderIds: List<Long>,
         val errorMessage: String?
     )
+
+    data class LeverageChangeResult(
+        val leverage: Int,
+        val maxNotionalValue: String? = null,
+        val symbol: String? = null
+    )
+
+    data class PositionRisk(
+        val symbol: String,
+        val entryPrice: BigDecimal = BigDecimal.ZERO,
+        val markPrice: BigDecimal = BigDecimal.ZERO,
+        val positionAmt: BigDecimal = BigDecimal.ZERO,
+        val leverage: Int = 1,
+        val liquidationPrice: BigDecimal = BigDecimal.ZERO
+    )
+
+    fun changeInitialLeverage(symbol: String, leverage: Int): LeverageChangeResult? {
+        val requestBody = mapOf(
+            "symbol" to symbol,
+            "leverage" to leverage.coerceIn(1, 20),
+            "timestamp" to System.currentTimeMillis().toString()
+        )
+
+        return executeWithRetry("change_leverage") {
+            val signature = auth.generateSignature(buildQueryString(requestBody))
+            val queryString = buildQueryString(requestBody) + "&signature=$signature"
+
+            binanceRestClient.post()
+                .uri("${properties.baseUrl}/fapi/v1/leverage?$queryString")
+                .headers { headers ->
+                    headers.add("X-MBX-APIKEY", properties.apiKey)
+                    headers.add(HttpHeaders.CONTENT_TYPE, MediaType.APPLICATION_FORM_URLENCODED_VALUE)
+                }
+                .retrieve()
+                .body(LeverageChangeResult::class.java)
+        }
+    }
+
+    fun getPositionRisk(symbol: String): PositionRisk? {
+        val requestBody = mapOf(
+            "symbol" to symbol,
+            "timestamp" to System.currentTimeMillis().toString()
+        )
+
+        return executeWithRetry("get_position_risk") {
+            val signature = auth.generateSignature(buildQueryString(requestBody))
+            val queryString = buildQueryString(requestBody) + "&signature=$signature"
+
+            binanceRestClient.get()
+                .uri("${properties.baseUrl}/fapi/v2/positionRisk?$queryString")
+                .headers { headers ->
+                    headers.add("X-MBX-APIKEY", properties.apiKey)
+                }
+                .retrieve()
+                .body(Array<PositionRisk>::class.java)
+                ?.firstOrNull { it.symbol.equals(symbol, ignoreCase = true) }
+        }
+    }
 
     private fun <T> executeWithRetry(operationName: String, block: () -> T?): T? {
         var lastException: Exception? = null

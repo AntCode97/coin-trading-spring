@@ -11,6 +11,7 @@ export interface AiDayTraderConfig {
   provider: LlmProviderId;
   model: string;
   entryAggression: AiEntryAggression;
+  tradeBias: AiTradeBiasMode;
   selectedMarkets: string[];
   zaiEndpointMode?: ZaiEndpointMode;
   delegationMode?: DelegationMode;
@@ -27,6 +28,7 @@ export interface AiDayTraderConfig {
 
 export type AiTraderStatus = 'IDLE' | 'SCANNING' | 'RANKING' | 'ANALYZING' | 'EXECUTING' | 'PAUSED' | 'ERROR';
 export type AiEntryAggression = 'CONSERVATIVE' | 'BALANCED' | 'AGGRESSIVE';
+export type AiTradeBiasMode = 'LONG_ONLY' | 'SHORT_ONLY' | 'REGIME_AUTO';
 export type AiTraderEventType =
   | 'SCAN'
   | 'RANK'
@@ -147,11 +149,18 @@ export const AI_ENTRY_AGGRESSION_OPTIONS: Array<{ value: AiEntryAggression; labe
   { value: 'AGGRESSIVE', label: '공격적' },
 ];
 
+export const AI_TRADE_BIAS_OPTIONS: Array<{ value: AiTradeBiasMode; label: string }> = [
+  { value: 'LONG_ONLY', label: '현물 롱만' },
+  { value: 'SHORT_ONLY', label: '바이낸스 숏만' },
+  { value: 'REGIME_AUTO', label: '레짐 자동' },
+];
+
 export const DEFAULT_AI_DAY_TRADER_CONFIG: AiDayTraderConfig = {
   enabled: false,
   provider: 'openai',
   model: DEFAULT_OPENAI_MODEL,
   entryAggression: 'CONSERVATIVE',
+  tradeBias: 'REGIME_AUTO',
   selectedMarkets: [],
   zaiEndpointMode: 'coding',
   delegationMode: 'AUTO_AND_MANUAL',

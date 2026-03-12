@@ -11,6 +11,7 @@ import {
   AiDayTraderEngine,
   createInitialAiTraderState,
   type AiDayTraderConfig,
+  type AiTradeBiasMode,
   type AiTraderState,
 } from '../../lib/ai-day-trader/AiDayTraderEngine';
 import {
@@ -94,12 +95,14 @@ export interface AiDayTraderWatchlistView {
   catalog: GuidedMarketItem[];
   selectedMarkets: string[];
   seedMarket: string;
+  seedTradeBias: AiTradeBiasMode;
   seedOrderType: 'MARKET' | 'LIMIT';
   seedLimitPrice: string;
   seedStopLossPrice: string;
   seedTakeProfitPrice: string;
   seedMaxDcaCount: number;
   seedDcaStepPercent: number;
+  seedLeverage: number;
   selectedSeedMarket?: GuidedMarketItem;
   seedRecommendation?: GuidedRecommendation;
   isCatalogLoading: boolean;
@@ -125,12 +128,14 @@ export interface AiDayTraderScreenViewModel {
   toggleSelectedMarket: (market: string) => void;
   clearSelectedMarkets: () => void;
   setSeedMarket: (market: string) => void;
+  setSeedTradeBias: (tradeBias: AiTradeBiasMode) => void;
   setSeedOrderType: (orderType: 'MARKET' | 'LIMIT') => void;
   setSeedLimitPrice: (value: string) => void;
   setSeedStopLossPrice: (value: string) => void;
   setSeedTakeProfitPrice: (value: string) => void;
   setSeedMaxDcaCount: (value: number) => void;
   setSeedDcaStepPercent: (value: number) => void;
+  setSeedLeverage: (value: number) => void;
   startSeedPosition: () => Promise<void>;
   setZaiApiKeyInput: (value: string) => void;
   refreshConnectionStatus: () => Promise<{ openai: LlmConnectionStatus; zai: LlmConnectionStatus }>;
@@ -163,12 +168,14 @@ export function useAiDayTraderScreen(): AiDayTraderScreenViewModel {
   const [providerMessage, setProviderMessage] = useState<string | null>(null);
   const [zaiConcurrency, setZaiConcurrency] = useState<ZaiConcurrencyStatus>(getZaiConcurrencyStatus());
   const [seedMarket, setSeedMarketState] = useState('');
+  const [seedTradeBias, setSeedTradeBiasState] = useState<AiTradeBiasMode>('LONG_ONLY');
   const [seedOrderType, setSeedOrderTypeState] = useState<'MARKET' | 'LIMIT'>('LIMIT');
   const [seedLimitPrice, setSeedLimitPrice] = useState('');
   const [seedStopLossPrice, setSeedStopLossPrice] = useState('');
   const [seedTakeProfitPrice, setSeedTakeProfitPrice] = useState('');
   const [seedMaxDcaCount, setSeedMaxDcaCountState] = useState(1);
   const [seedDcaStepPercent, setSeedDcaStepPercentState] = useState(1.8);
+  const [seedLeverage, setSeedLeverageState] = useState(2);
   const [seedBusy, setSeedBusy] = useState(false);
   const [seedMessage, setSeedMessage] = useState<string | null>(null);
   const seedAutofillMarketRef = useRef<string | null>(null);
@@ -229,6 +236,10 @@ export function useAiDayTraderScreen(): AiDayTraderScreenViewModel {
       };
     });
   }, [config.provider]);
+
+  useEffect(() => {
+    setSeedTradeBiasState(config.tradeBias);
+  }, [config.tradeBias]);
 
   const todayStatsQuery = useQuery({
     queryKey: ['ai-scalp-today-stats', config.strategyCode],
@@ -301,15 +312,39 @@ export function useAiDayTraderScreen(): AiDayTraderScreenViewModel {
     if (!seedMarket) return;
     const recommendation = seedRecommendationQuery.data;
     if (!recommendation) return;
-    if (seedAutofillMarketRef.current === seedMarket) return;
-    seedAutofillMarketRef.current = seedMarket;
+    const autofillKey = `${seedMarket}:${seedTradeBias}`;
+    if (seedAutofillMarketRef.current === autofillKey) return;
+    seedAutofillMarketRef.current = autofillKey;
     const suggestedOrderType = recommendation.suggestedOrderType?.trim().toUpperCase() === 'LIMIT' ? 'LIMIT' : 'MARKET';
+    const entryPrice = Math.round(recommendation.recommendedEntryPrice);
+    const stopLossPrice = Math.round(recommendation.stopLossPrice);
+    const takeProfitPrice = Math.round(recommendation.takeProfitPrice);
+    const baseEntryPrice = recommendation.recommendedEntryPrice > 0
+      ? recommendation.recommendedEntryPrice
+      : recommendation.currentPrice;
+    const downsideDistance = baseEntryPrice > 0
+      ? Math.max(0.003, (baseEntryPrice - recommendation.stopLossPrice) / baseEntryPrice)
+      : 0.006;
+    const upsideDistance = baseEntryPrice > 0
+      ? Math.max(0.005, (recommendation.takeProfitPrice - baseEntryPrice) / baseEntryPrice)
+      : 0.01;
     setSeedOrderTypeState(suggestedOrderType);
-    setSeedLimitPrice(String(Math.round(recommendation.recommendedEntryPrice)));
-    setSeedStopLossPrice(String(Math.round(recommendation.stopLossPrice)));
-    setSeedTakeProfitPrice(String(Math.round(recommendation.takeProfitPrice)));
+    setSeedLimitPrice(String(entryPrice));
+    if (seedTradeBias === 'SHORT_ONLY') {
+      setSeedStopLossPrice(String(Math.round(baseEntryPrice * (1 + downsideDistance))));
+      setSeedTakeProfitPrice(String(Math.round(baseEntryPrice * (1 - upsideDistance))));
+    } else {
+      setSeedStopLossPrice(String(stopLossPrice));
+      setSeedTakeProfitPrice(String(takeProfitPrice));
+    }
     setSeedMessage(null);
-  }, [seedMarket, seedRecommendationQuery.data]);
+  }, [seedMarket, seedRecommendationQuery.data, seedTradeBias]);
+
+  useEffect(() => {
+    if (seedTradeBias !== 'SHORT_ONLY') {
+      setSeedLeverageState(2);
+    }
+  }, [seedTradeBias]);
 
   const journalPageCount = Math.max(1, Math.ceil(state.events.length / JOURNAL_PAGE_SIZE));
   const journalPageEvents = useMemo(() => {
@@ -381,12 +416,14 @@ export function useAiDayTraderScreen(): AiDayTraderScreenViewModel {
     catalog: marketCatalog,
     selectedMarkets: config.selectedMarkets,
     seedMarket,
+    seedTradeBias,
     seedOrderType,
     seedLimitPrice,
     seedStopLossPrice,
     seedTakeProfitPrice,
     seedMaxDcaCount,
     seedDcaStepPercent,
+    seedLeverage,
     selectedSeedMarket,
     seedRecommendation: seedRecommendationQuery.data,
     isCatalogLoading: marketsQuery.isLoading,
@@ -426,6 +463,11 @@ export function useAiDayTraderScreen(): AiDayTraderScreenViewModel {
     seedAutofillMarketRef.current = null;
   };
 
+  const setSeedTradeBias = (tradeBias: AiTradeBiasMode) => {
+    setSeedTradeBiasState(tradeBias);
+    seedAutofillMarketRef.current = null;
+  };
+
   const setSeedOrderType = (orderType: 'MARKET' | 'LIMIT') => {
     setSeedOrderTypeState(orderType);
   };
@@ -436,6 +478,10 @@ export function useAiDayTraderScreen(): AiDayTraderScreenViewModel {
 
   const setSeedDcaStepPercent = (value: number) => {
     setSeedDcaStepPercentState(Math.min(15, Math.max(0.5, Number.isFinite(value) ? value : 2)));
+  };
+
+  const setSeedLeverage = (value: number) => {
+    setSeedLeverageState(Math.min(5, Math.max(1, Math.round(value))));
   };
 
   const review = useAiDayTraderDesktopReview({
@@ -593,6 +639,8 @@ export function useAiDayTraderScreen(): AiDayTraderScreenViewModel {
         mode: 'SCALP',
         entrySource: 'AI_SCALP_SEED',
         strategyCode: nextConfig.strategyCode,
+        tradeBias: seedTradeBias,
+        leverage: seedTradeBias === 'SHORT_ONLY' ? seedLeverage : undefined,
       });
 
       if (nextSelectedMarkets !== config.selectedMarkets) {
@@ -604,11 +652,11 @@ export function useAiDayTraderScreen(): AiDayTraderScreenViewModel {
       if (!running && provider.providerConnected) {
         engineRef.current?.updateConfig(nextConfig);
         engineRef.current?.start();
-        setSeedMessage(`${seedMarket.replace('KRW-', '')} 시드 포지션 시작 완료 · AI 모니터링도 함께 시작했습니다.`);
+        setSeedMessage(`${seedMarket.replace('KRW-', '')} ${seedTradeBias === 'SHORT_ONLY' ? '숏' : '포지션'} 시작 완료 · AI 모니터링도 함께 시작했습니다.`);
       } else if (!running) {
-        setSeedMessage(`${seedMarket.replace('KRW-', '')} 포지션 시작 완료 · 서버 보호 규칙은 적용됐고, AI 모니터링은 로그인 후 시작할 수 있습니다.`);
+        setSeedMessage(`${seedMarket.replace('KRW-', '')} ${seedTradeBias === 'SHORT_ONLY' ? '숏' : '포지션'} 시작 완료 · 서버 보호 규칙은 적용됐고, AI 모니터링은 로그인 후 시작할 수 있습니다.`);
       } else {
-        setSeedMessage(`${seedMarket.replace('KRW-', '')} 포지션 시작 완료 · 현재 엔진이 이어서 관리합니다.`);
+        setSeedMessage(`${seedMarket.replace('KRW-', '')} ${seedTradeBias === 'SHORT_ONLY' ? '숏' : '포지션'} 시작 완료 · 현재 엔진이 이어서 관리합니다.`);
       }
     } catch (error) {
       setSeedMessage(error instanceof Error ? error.message : '시드 포지션 시작 실패');
@@ -666,12 +714,14 @@ export function useAiDayTraderScreen(): AiDayTraderScreenViewModel {
     toggleSelectedMarket,
     clearSelectedMarkets,
     setSeedMarket,
+    setSeedTradeBias,
     setSeedOrderType,
     setSeedLimitPrice,
     setSeedStopLossPrice,
     setSeedTakeProfitPrice,
     setSeedMaxDcaCount,
     setSeedDcaStepPercent,
+    setSeedLeverage,
     startSeedPosition,
     setZaiApiKeyInput,
     refreshConnectionStatus,

@@ -158,7 +158,7 @@ coin-trading-spring/
 - 신규 API `GET /api/guided-trading/ai-scalp/scan` 추가.
   - 쿼리: `interval`, `universeLimit`, `strategyCodePrefix`, optional `markets`
   - 응답: `generatedAt`, `interval`, `universeLimit`, `strategyCodePrefix`, `positions[]`, `markets[]`
-  - `markets[]`는 `recommendation`, `featurePack`, optional `crowd`를 포함한 LLM shortlist 압축 데이터.
+  - `markets[]`는 `shortAvailable`, `recommendation.marketRegime/regimeConfidence`, `featurePack`, optional `crowd`를 포함한 LLM shortlist 압축 데이터.
 - `AiDayTraderEngine` 재작성:
   - 스캔 루프: 상위 유동성 `36` -> LLM shortlist `12` -> finalist `4`
   - 진입 결정: `BUY | WAIT`
@@ -169,7 +169,8 @@ coin-trading-spring/
 - 새 UI는 상단 세션 바, 좌측 기회 큐, 중앙 결정 저널, 우측 포지션/설정의 3열 터미널 구조.
 - 설정은 `스캔 주기/포지션 점검 최대 3분`, `1회 금액 5,000원 단위`, `오늘 거래내역 전체/코인별 필터`를 제공.
 - 사용자는 `감시 코인` 목록을 직접 고를 수 있고, 선택 시 `GET /api/guided-trading/ai-scalp/scan?markets=...`로 그 코인만 스캔한다.
-- `수동 시드 진입` 패널에서 특정 코인을 시장가/지정가로 먼저 진입시키고, 손절/익절/DCA(`maxDcaCount`, `dcaStepPercent`)를 설정해 AI가 이후 관리를 이어받게 할 수 있다.
+- `수동 시드 진입` 패널에서 특정 코인을 시장가/지정가로 먼저 진입시키고, 방향(`LONG_ONLY | SHORT_ONLY | REGIME_AUTO`), 손절/익절/DCA(`maxDcaCount`, `dcaStepPercent`), optional `leverage`를 설정해 AI가 이후 관리를 이어받게 할 수 있다.
+- 데스크톱 설정에는 `현물 롱만 / 바이낸스 숏만 / 레짐 자동` 방향 모드가 있고, `REGIME_AUTO`는 `BEAR_TREND + shortAvailable`일 때 바이낸스 숏으로 분기한다.
 - `모니터 열기` 오버레이는 코어 에이전트(`SCAN/RANK/ENTRY/MANAGE/EXECUTION`)와 실제 delegate/tool 호출 기반 서브 에이전트를 도트 그래픽으로 보여주며, 클릭 상세 패널과 로컬 레이아웃 편집(방 이동/줌/팬/저장/리셋)을 지원.
 - 엔진은 `/stats/today` 거래를 계속 복기해 deterministic 전략 메모를 먼저 만들고, 일정 간격으로 `REVIEW` LLM 패스를 돌려 `집중 시장`, `회피 시장`, `선호/회피 셋업`, `confidence/spread/gap/max hold` 조정을 스스로 갱신한다. 이 상태는 세션 바와 `전략 복기` 패널에 표시된다.
 - 별도 `데스크톱 복기 에이전트`는 Electron 메인 프로세스의 MySQL IPC를 통해 `.mysql_info` 기반 DB에 직접 접속하고, 전일 `guided_trades`, `key_value_store`, `llm_prompts`, `audit_logs`를 읽어 복기한다.
@@ -306,7 +307,7 @@ coin-trading-spring/
 - `GET /api/guided-trading/ai-scalp/scan`
   - 쿼리: `interval`(default `minute1`), `universeLimit`(default `36`), `strategyCodePrefix`(default `AI_SCALP_TRADER`)
   - 응답: `generatedAt`, `interval`, `universeLimit`, `strategyCodePrefix`, `positions[]`, `markets[]`
-  - `markets[]` 필드: `market`, `koreanName`, `tradePrice`, `changeRate`, `turnover`, `liquidityRank`, `recommendation`, `featurePack`, optional `crowd`
+  - `markets[]` 필드: `market`, `koreanName`, `tradePrice`, `changeRate`, `turnover`, `liquidityRank`, `shortAvailable`, `recommendation.marketRegime/regimeConfidence`, `featurePack`, optional `crowd`
   - `recommendation.expectancyPct`는 빗썸 왕복 수수료 0.08%를 반영한 순기대값
   - `positions[].averageEntryPrice`는 저장값이 비정상적이면 잔고 `avgBuyPrice`로 자동 보정
   - AI 초단타 엔진은 `expectancyPct`, `recommendedEntryWinRate`, `riskRewardRatio`, `spreadPercent`, `entryGapPct` 기반 soft gate를 먼저 적용하고 `진입 강도` 설정에 따라 finalist `4/6/8`개까지 진입 분석
@@ -1506,3 +1507,6 @@ coin-trading-server/src/main/kotlin/com/ant/cointrading/
 ---
 
 *마지막 업데이트: 2026-01-13*
+- `POST /api/guided-trading/start`
+  - 요청 확장: optional `tradeBias(LONG_ONLY|SHORT_ONLY|REGIME_AUTO)`, optional `leverage`
+  - 응답 `GuidedTradeView` 확장: `executionVenue`, `positionSide`, `externalSymbol`, `leverage`, `marketRegime`

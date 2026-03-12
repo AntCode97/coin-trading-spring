@@ -202,7 +202,13 @@ export function PositionCard({ position }: { position: GuidedTradePosition }) {
       <div className="ai-scalp-position__header">
         <div>
           <div className="ai-scalp-position__market">{position.market.replace('KRW-', '')}</div>
-          <div className="ai-scalp-position__strategy">{position.strategyCode ?? 'AI_SCALP_TRADER'}</div>
+          <div className="ai-scalp-position__strategy">
+            {position.positionSide === 'SHORT' ? 'SHORT' : 'LONG'}
+            {' · '}
+            {position.executionVenue === 'BINANCE_FUTURES' ? 'BINANCE' : 'BITHUMB'}
+            {' · '}
+            {position.strategyCode ?? 'AI_SCALP_TRADER'}
+          </div>
         </div>
         <div className={`ai-scalp-position__pnl ${pnlClass}`}>
           {formatPercent(position.unrealizedPnlPercent)}

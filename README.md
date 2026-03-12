@@ -590,11 +590,22 @@ curl -X POST http://localhost:8080/api/settings/regime \
 `/api/guided-trading/ai-scalp/scan` 응답 핵심 필드:
 - `generatedAt`, `interval`, `universeLimit`, `strategyCodePrefix`
 - `positions[]`: `strategyCodePrefix`로 필터된 현재 AI 초단타 포지션
-- `markets[]`: `market`, `koreanName`, `tradePrice`, `changeRate`, `turnover`, `liquidityRank`, `recommendation`, `featurePack`, optional `crowd`
+- `markets[]`: `market`, `koreanName`, `tradePrice`, `changeRate`, `turnover`, `liquidityRank`, `shortAvailable`, `recommendation`, `featurePack`, optional `crowd`
+- `recommendation.marketRegime`, `recommendation.regimeConfidence`: 레짐 자동 모드에서 현물 롱/바이낸스 숏 분기에 사용하는 레짐 힌트
 - `recommendation.expectancyPct`, `positions[].unrealizedPnlPercent`, `/stats/today.trades[].realizedPnl(Percent)`는 모두 빗썸 편도 0.04%, 왕복 0.08% 수수료를 반영한 순손익 기준입니다.
 - AI 초단타 포지션의 저장된 `averageEntryPrice`가 현재가와 비정상적으로 벌어져 있으면, 서버는 잔고 `avgBuyPrice`를 사용해 진입가를 자동 보정합니다.
 - 데스크톱 `AiDayTraderEngine`는 이 응답을 받아 `36 -> 12 -> 4` LLM 초단타 루프를 수행합니다.
 - 데스크톱에서 `markets`를 넘기면 해당 코인들만 후보 큐/숏리스트/진입 검토 대상으로 사용합니다.
+
+`POST /api/guided-trading/start` 요청 확장:
+- `tradeBias`: optional. `LONG_ONLY | SHORT_ONLY | REGIME_AUTO`
+- `leverage`: optional. `SHORT_ONLY`일 때 바이낸스 USDT 선물 초기 레버리지(현재 1~5x 제한)
+- `REGIME_AUTO`는 `recommendation.marketRegime == BEAR_TREND`이고 `shortAvailable=true`인 경우 바이낸스 숏으로, 아니면 기존 빗썸 현물 롱으로 진입합니다.
+
+`GuidedTradeView`/`GuidedTradePosition` 확장:
+- `executionVenue`: `BITHUMB_SPOT | BINANCE_FUTURES`
+- `positionSide`: `LONG | SHORT`
+- `externalSymbol`, `leverage`, `marketRegime`
 
 `/api/guided-trading/stats/today` 쿼리 파라미터:
 - `strategyCodePrefix`: optional. 예: `AI_SCALP_TRADER`
@@ -616,11 +627,11 @@ curl -X POST http://localhost:8080/api/settings/regime \
 1. 데스크톱 기본 진입 화면을 `AiDayTraderScreen` 하나로 고정하고, 기존 `ManualTraderWorkspace` 중심 경로를 데스크톱 주 경로에서 제거했습니다.
 2. 신규 API `GET /api/guided-trading/ai-scalp/scan`를 추가해 거래대금 상위 KRW 시장, 추천 요약, featurePack, optional crowd 데이터를 한 번에 제공합니다.
 3. `AiDayTraderEngine`는 더 이상 `/autopilot/opportunities`의 `AUTO_PASS/BORDERLINE`를 하드 게이트로 쓰지 않고 `scan -> shortlist 12 -> finalist(진입 강도별 4/6/8) -> BUY|WAIT`, `HOLD|SELL`의 LLM-first 루프로 동작합니다.
-4. 데스크톱 앱은 `AI_SCALP_TRADER` prefix 포지션만 관리하며, 기본값은 `1분 스캔`, `10초 포지션 점검`, `보수적 진입`, `1회 금액 25,000원`, `최대 5포지션`, `최대 30분 보유`입니다.
+4. 데스크톱 앱은 `AI_SCALP_TRADER` prefix 포지션만 관리하며, 기본값은 `1분 스캔`, `10초 포지션 점검`, `보수적 진입`, `레짐 자동(상승/횡보는 현물 롱, 하락은 바이낸스 숏)`, `1회 금액 25,000원`, `최대 5포지션`, `최대 30분 보유`입니다.
 5. 새 터미널 UI는 상단 세션 바, 좌측 기회 큐, 중앙 결정 저널, 우측 포지션/설정의 3열 구조로 재정렬해 “지금 단타가 잘 돌고 있는지”를 한 화면에서 확인할 수 있게 했습니다.
 6. 설정 패널에서 `스캔 주기`와 `포지션 점검`을 최대 `3분`까지 선택할 수 있고, `1회 금액` 입력은 `5,000원` 단위로 조정됩니다.
 7. 사용자는 빗썸 KRW 코인 중 원하는 종목만 `감시 코인`으로 선택할 수 있고, 비워두면 기존처럼 상위 유동성 유니버스를 자동 사용합니다.
-8. `수동 시드 진입` 패널에서 특정 코인을 지정가/시장가로 먼저 시작할 수 있습니다. 이때 손절가, 익절가, `maxDcaCount`, `dcaStepPercent`를 같이 넣으면 이후 AI가 같은 전략코드 포지션을 이어받아 모니터링하며 관리합니다.
+8. `수동 시드 진입` 패널에서 특정 코인을 지정가/시장가로 먼저 시작할 수 있습니다. 이때 `현물 롱 / 바이낸스 숏 / 레짐 자동` 방향, 손절가, 익절가, `maxDcaCount`, `dcaStepPercent`, 숏 레버리지를 같이 넣으면 이후 AI가 같은 전략코드 포지션을 이어받아 모니터링하며 관리합니다.
 9. `중지`는 신규 진입만 끊고 기존 포지션 관리는 계속 유지합니다. 포지션이 모두 정리되면 엔진이 완전히 멈춥니다.
 8. `모니터 열기` 오버레이를 통해 AI 초단타 코어 에이전트(`SCAN/RANK/ENTRY/MANAGE/EXECUTION`)와 실제 delegate/tool 기반 서브 에이전트를 도트 그래픽으로 모니터링할 수 있습니다. 클릭 시 관련 저널/거래내역이 우측 상세 패널에 연동되고, 방 배치/줌/팬은 로컬 저장됩니다.
 8. 하단 `오늘 거래내역` 패널에서 금일 거래를 전체/코인별로 필터링해 볼 수 있습니다.

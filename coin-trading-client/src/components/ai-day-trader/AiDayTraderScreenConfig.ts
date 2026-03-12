@@ -2,6 +2,7 @@ import {
   DEFAULT_AI_DAY_TRADER_CONFIG,
   type AiDayTraderConfig,
   type AiEntryAggression,
+  type AiTradeBiasMode,
 } from '../../lib/ai-day-trader/AiDayTraderEngine';
 import {
   CODEX_MODELS,
@@ -62,6 +63,13 @@ export function normalizeEntryAggression(value?: string): AiEntryAggression {
   return 'BALANCED';
 }
 
+export function normalizeTradeBias(value?: string): AiTradeBiasMode {
+  if (value === 'LONG_ONLY' || value === 'SHORT_ONLY') {
+    return value;
+  }
+  return 'REGIME_AUTO';
+}
+
 export function normalizePreferredModel(provider: LlmProviderId, model?: string): string {
   const catalog = provider === 'zai' ? ZAI_MODELS : OPENAI_TRADER_MODELS;
   const normalized = model?.trim();
@@ -95,6 +103,7 @@ export function loadAiDayTraderPreferences(): AiDayTraderConfig {
       entryAggression: usesLegacyEntryAggressionDefault
         ? DEFAULT_AI_DAY_TRADER_CONFIG.entryAggression
         : normalizeEntryAggression(parsed.entryAggression),
+      tradeBias: normalizeTradeBias(parsed.tradeBias),
       model: normalizePreferredModel(provider, parsed.model),
       scanIntervalMs: usesLegacyTimingDefaults
         ? DEFAULT_AI_DAY_TRADER_CONFIG.scanIntervalMs
