@@ -922,8 +922,14 @@ export default function AiDayTraderPixelMonitor({
   onFocusActor,
 }: AiDayTraderPixelMonitorProps) {
   const viewportRef = useRef<HTMLDivElement | null>(null);
+  const previousSelectedActorIdRef = useRef<string | null>(null);
+  const layoutRef = useRef<MonitorLayoutState>(loadLayout());
+  const pendingLayoutRef = useRef<MonitorLayoutState | null>(null);
+  const layoutFrameRef = useRef<number | null>(null);
+  const interactionTimeoutRef = useRef<number | null>(null);
   const [layout, setLayout] = useState<MonitorLayoutState>(() => loadLayout());
   const [editMode, setEditMode] = useState(false);
+  const [isInteracting, setIsInteracting] = useState(false);
   const [selection, setSelection] = useState<MonitorSelection>(null);
   const [bubbleOpen, setBubbleOpen] = useState(false);
   const [bubbleExpanded, setBubbleExpanded] = useState(false);
@@ -975,6 +981,19 @@ export default function AiDayTraderPixelMonitor({
       : null),
     [selection, state.positions],
   );
+
+  useEffect(() => {
+    layoutRef.current = layout;
+  }, [layout]);
+
+  useEffect(() => () => {
+    if (layoutFrameRef.current !== null) {
+      window.cancelAnimationFrame(layoutFrameRef.current);
+    }
+    if (interactionTimeoutRef.current !== null) {
+      window.clearTimeout(interactionTimeoutRef.current);
+    }
+  }, []);
   const detailContextLabel = useMemo(() => {
     if (!selection) return '최근 기록';
     switch (selection.kind) {
@@ -1040,16 +1059,18 @@ export default function AiDayTraderPixelMonitor({
 
   useEffect(() => {
     if (!open || !state.monitorFocusId) return;
+    if (bubbleOpen || agentQuestion.trim().length > 0 || agentAnswerBusy) return;
     const focusedActor = state.monitorActors.find((actor) => actor.id === state.monitorFocusId);
     if (!focusedActor) return;
     if (selection?.kind === 'actor' && selection.actorId === focusedActor.id) return;
     if (focusedActor.kind === 'SUBAGENT' || focusedActor.status === 'BUSY') {
       setSelection({ kind: 'actor', actorId: focusedActor.id });
     }
-  }, [open, selection, state.monitorActors, state.monitorFocusId]);
+  }, [agentAnswerBusy, agentQuestion, bubbleOpen, open, selection, state.monitorActors, state.monitorFocusId]);
 
   useEffect(() => {
     if (!selectedActor) {
+      previousSelectedActorIdRef.current = null;
       setBubbleOpen(false);
       setBubbleExpanded(false);
       setAgentAnswer(null);
@@ -1057,13 +1078,32 @@ export default function AiDayTraderPixelMonitor({
       setAgentAnswerBusy(false);
       return;
     }
-    setAgentQuestion('');
-    setAgentAnswer({
-      question: '지금 뭐하고 있어?',
-      answer: buildActorStatusBrief(selectedActor, relatedEvents, relatedTrades, state),
-      source: 'SYSTEM',
-    });
-  }, [relatedEvents, relatedTrades, selectedActor, state]);
+    const selectedActorId = selectedActor.id;
+    const actorChanged = previousSelectedActorIdRef.current !== selectedActorId;
+    previousSelectedActorIdRef.current = selectedActorId;
+
+    if (actorChanged) {
+      setAgentQuestion('');
+      setAgentAnswer({
+        question: '지금 뭐하고 있어?',
+        answer: buildActorStatusBrief(selectedActor, relatedEvents, relatedTrades, state),
+        source: 'SYSTEM',
+      });
+      return;
+    }
+
+    if (
+      agentQuestion.trim().length === 0 &&
+      !agentAnswerBusy &&
+      (!agentAnswer || (agentAnswer.source === 'SYSTEM' && agentAnswer.question === '지금 뭐하고 있어?'))
+    ) {
+      setAgentAnswer({
+        question: '지금 뭐하고 있어?',
+        answer: buildActorStatusBrief(selectedActor, relatedEvents, relatedTrades, state),
+        source: 'SYSTEM',
+      });
+    }
+  }, [agentAnswer, agentAnswerBusy, agentQuestion, relatedEvents, relatedTrades, selectedActor, state]);
 
   useEffect(() => {
     if (!open) return;
@@ -1213,6 +1253,33 @@ export default function AiDayTraderPixelMonitor({
     centerOnSelection(nextSelection);
   };
 
+  const scheduleLayoutUpdate = (updater: (current: MonitorLayoutState) => MonitorLayoutState) => {
+    const base = pendingLayoutRef.current ?? layoutRef.current;
+    pendingLayoutRef.current = updater(base);
+    if (layoutFrameRef.current !== null) return;
+    layoutFrameRef.current = window.requestAnimationFrame(() => {
+      layoutFrameRef.current = null;
+      const next = pendingLayoutRef.current;
+      if (!next) return;
+      pendingLayoutRef.current = null;
+      layoutRef.current = next;
+      setLayout(next);
+    });
+  };
+
+  const pulseInteraction = () => {
+    if (!isInteracting) {
+      setIsInteracting(true);
+    }
+    if (interactionTimeoutRef.current !== null) {
+      window.clearTimeout(interactionTimeoutRef.current);
+    }
+    interactionTimeoutRef.current = window.setTimeout(() => {
+      setIsInteracting(false);
+      interactionTimeoutRef.current = null;
+    }, 160);
+  };
+
   const askSelectedActor = async (rawQuestion: string) => {
     if (!selectedActor) return;
     const question = rawQuestion.trim();
@@ -1263,7 +1330,8 @@ export default function AiDayTraderPixelMonitor({
   };
 
   const changeZoom = (delta: number) => {
-    setLayout((current) => ({
+    pulseInteraction();
+    scheduleLayoutUpdate((current) => ({
       ...current,
       zoom: clamp(Number((current.zoom + delta).toFixed(2)), 0.6, 1.4),
     }));
@@ -1312,6 +1380,7 @@ export default function AiDayTraderPixelMonitor({
       setBubbleOpen(false);
       setBubbleExpanded(false);
     }
+    pulseInteraction();
     dragRef.current = {
       kind: 'pan',
       startX: event.clientX,
@@ -1337,8 +1406,9 @@ export default function AiDayTraderPixelMonitor({
   const handlePointerMove = (event: React.PointerEvent<HTMLDivElement>) => {
     const drag = dragRef.current;
     if (!drag) return;
+    pulseInteraction();
     if (drag.kind === 'pan') {
-      setLayout((current) => ({
+      scheduleLayoutUpdate((current) => ({
         ...current,
         panX: drag.panX + (event.clientX - drag.startX),
         panY: drag.panY + (event.clientY - drag.startY),
@@ -1356,7 +1426,7 @@ export default function AiDayTraderPixelMonitor({
       0,
       WORLD_HEIGHT - room.height,
     );
-    setLayout((current) => ({
+    scheduleLayoutUpdate((current) => ({
       ...current,
       rooms: {
         ...current.rooms,
@@ -1371,6 +1441,11 @@ export default function AiDayTraderPixelMonitor({
 
   const endDrag = () => {
     dragRef.current = null;
+    if (interactionTimeoutRef.current !== null) {
+      window.clearTimeout(interactionTimeoutRef.current);
+      interactionTimeoutRef.current = null;
+    }
+    setIsInteracting(false);
   };
 
   const activeQueueMarkets = state.queue.slice(0, 6);
@@ -1392,15 +1467,16 @@ export default function AiDayTraderPixelMonitor({
 
   const handleViewportWheel = (event: React.WheelEvent<HTMLDivElement>) => {
     event.preventDefault();
+    pulseInteraction();
     const delta = event.deltaY > 0 ? -0.06 : 0.06;
-    setLayout((current) => ({
+    scheduleLayoutUpdate((current) => ({
       ...current,
       zoom: clamp(Number((current.zoom + delta).toFixed(2)), 0.6, 1.4),
     }));
   };
 
   return (
-    <div className="ai-pixel-monitor" onClick={onClose}>
+    <div className={`ai-pixel-monitor ${isInteracting ? 'is-interacting' : ''}`} onClick={onClose}>
       <div
         className="ai-pixel-monitor__dialog"
         onClick={(event) => event.stopPropagation()}
