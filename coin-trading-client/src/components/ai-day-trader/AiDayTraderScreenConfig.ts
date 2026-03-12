@@ -105,6 +105,14 @@ export function loadAiDayTraderPreferences(): AiDayTraderConfig {
       amountKrw: usesLegacyAmountDefault
         ? DEFAULT_AI_DAY_TRADER_CONFIG.amountKrw
         : parsed.amountKrw ?? DEFAULT_AI_DAY_TRADER_CONFIG.amountKrw,
+      selectedMarkets: Array.isArray(parsed.selectedMarkets)
+        ? parsed.selectedMarkets
+          .filter((value): value is string => typeof value === 'string')
+          .map((value) => value.trim().toUpperCase())
+          .filter((value) => value.startsWith('KRW-'))
+          .filter((value, index, values) => values.indexOf(value) === index)
+          .slice(0, 24)
+        : DEFAULT_AI_DAY_TRADER_CONFIG.selectedMarkets,
       strategyCode: DEFAULT_AI_DAY_TRADER_CONFIG.strategyCode,
     };
   } catch {

@@ -1,3 +1,4 @@
+import { useMemo, useState } from 'react';
 import type { GuidedClosedTradeView, GuidedDailyStats } from '../../api';
 import {
   AI_ENTRY_AGGRESSION_OPTIONS,
@@ -42,6 +43,7 @@ import type {
   AiDayTraderJournalView,
   AiDayTraderProviderView,
   AiDayTraderSessionView,
+  AiDayTraderWatchlistView,
 } from './useAiDayTraderScreen';
 import {
   ZAI_MODELS,
@@ -78,6 +80,21 @@ interface ConfigPanelProps {
   onSaveZaiKey: () => void;
   onClearZaiKey: () => void;
   onZaiApiKeyChange: (value: string) => void;
+}
+
+interface WatchlistPanelProps {
+  config: AiDayTraderConfig;
+  watchlist: AiDayTraderWatchlistView;
+  toggleSelectedMarket: (market: string) => void;
+  clearSelectedMarkets: () => void;
+  setSeedMarket: (market: string) => void;
+  setSeedOrderType: (orderType: 'MARKET' | 'LIMIT') => void;
+  setSeedLimitPrice: (value: string) => void;
+  setSeedStopLossPrice: (value: string) => void;
+  setSeedTakeProfitPrice: (value: string) => void;
+  setSeedMaxDcaCount: (value: number) => void;
+  setSeedDcaStepPercent: (value: number) => void;
+  startSeedPosition: () => void;
 }
 
 interface HistoryPanelProps {
@@ -117,6 +134,7 @@ export function AiDayTraderSessionBar({
           <span>상태 {statusLabel(state.status)}</span>
           <span>오픈 포지션 {state.positions.length}/{config.maxConcurrentPositions}</span>
           <span>신규 진입 {session.entryEnabled ? '활성' : '중지'}</span>
+          <span>감시 {config.selectedMarkets.length > 0 ? `${config.selectedMarkets.length}개 선택` : `상위 ${config.universeLimit}개 자동`}</span>
           <span>세션 실현 {formatKrw(state.dailyPnl)}</span>
           <span>최근 스캔 {session.lastScanLabel}</span>
           <span>일손실 한도 {formatKrw(config.dailyLossLimitKrw)}</span>
@@ -513,6 +531,227 @@ export function AiDayTraderPositionsPanel({
             <PositionCard key={position.tradeId} position={position} />
           ))
         )}
+      </div>
+    </section>
+  );
+}
+
+export function AiDayTraderWatchlistPanel({
+  config,
+  watchlist,
+  toggleSelectedMarket,
+  clearSelectedMarkets,
+  setSeedMarket,
+  setSeedOrderType,
+  setSeedLimitPrice,
+  setSeedStopLossPrice,
+  setSeedTakeProfitPrice,
+  setSeedMaxDcaCount,
+  setSeedDcaStepPercent,
+  startSeedPosition,
+}: WatchlistPanelProps) {
+  const [marketQuery, setMarketQuery] = useState('');
+  const normalizedQuery = marketQuery.trim().toUpperCase();
+  const selectedSet = useMemo(() => new Set(watchlist.selectedMarkets), [watchlist.selectedMarkets]);
+  const filteredMarkets = useMemo(() => {
+    const items = watchlist.catalog;
+    if (!normalizedQuery) {
+      return items.slice(0, 24);
+    }
+    return items
+      .filter((item) => {
+        const marketCode = item.market.toUpperCase();
+        const symbol = item.symbol.toUpperCase();
+        const koreanName = item.koreanName.toUpperCase();
+        const englishName = item.englishName?.toUpperCase() ?? '';
+        return marketCode.includes(normalizedQuery)
+          || symbol.includes(normalizedQuery)
+          || koreanName.includes(normalizedQuery)
+          || englishName.includes(normalizedQuery);
+      })
+      .slice(0, 24);
+  }, [normalizedQuery, watchlist.catalog]);
+
+  return (
+    <section className="ai-scalp-panel ai-scalp-panel--control">
+      <PanelHeader
+        title="감시 코인 / 시드 진입"
+        subtitle="선택한 코인만 감시하고 원하는 가격으로 포지션을 시작"
+        right={watchlist.selectedMarkets.length > 0 ? `${watchlist.selectedMarkets.length} selected` : '자동 유니버스'}
+      />
+      <div className="ai-scalp-panel__body ai-scalp-control">
+        <div className="ai-scalp-control__block">
+          <div className="ai-scalp-control__label-row">
+            <strong>감시 코인</strong>
+            <button
+              type="button"
+              className="ai-scalp-link-button"
+              onClick={clearSelectedMarkets}
+              disabled={watchlist.selectedMarkets.length === 0}
+            >
+              전체 해제
+            </button>
+          </div>
+          <p className="ai-scalp-control__hint">
+            선택하면 AI가 그 코인들만 숏리스트/진입 후보로 봅니다. 비워두면 기존처럼 유동성 상위 시장을 자동 스캔합니다.
+          </p>
+          <input
+            className="ai-scalp-control__search"
+            value={marketQuery}
+            onChange={(event) => setMarketQuery(event.target.value)}
+            placeholder="BTC, XRP, 비트코인"
+          />
+          <div className="ai-scalp-control__market-list">
+            {watchlist.isCatalogLoading ? (
+              <div className="ai-scalp-control__empty">시장 목록 불러오는 중...</div>
+            ) : filteredMarkets.length === 0 ? (
+              <div className="ai-scalp-control__empty">검색 결과가 없습니다.</div>
+            ) : (
+              filteredMarkets.map((item) => {
+                const selected = selectedSet.has(item.market);
+                const isSeed = watchlist.seedMarket === item.market;
+                return (
+                  <div
+                    key={item.market}
+                    className={`ai-scalp-control__market-row ${selected ? 'is-selected' : ''} ${isSeed ? 'is-seed' : ''}`}
+                  >
+                    <button
+                      type="button"
+                      className="ai-scalp-control__market-main"
+                      onClick={() => setSeedMarket(item.market)}
+                    >
+                      <strong>{item.market.replace('KRW-', '')}</strong>
+                      <span>{item.koreanName}</span>
+                      <em>{Math.round(item.tradePrice).toLocaleString()}원</em>
+                    </button>
+                    <button
+                      type="button"
+                      className={`ai-scalp-control__market-toggle ${selected ? 'active' : ''}`}
+                      onClick={() => toggleSelectedMarket(item.market)}
+                    >
+                      {selected ? '감시 중' : '감시 추가'}
+                    </button>
+                  </div>
+                );
+              })
+            )}
+          </div>
+          <div className="ai-scalp-strategy__chips">
+            {watchlist.selectedMarkets.length > 0
+              ? watchlist.selectedMarkets.map((market) => (
+                <button
+                  key={market}
+                  type="button"
+                  className="ai-scalp-control__selected-chip"
+                  onClick={() => toggleSelectedMarket(market)}
+                >
+                  {market.replace('KRW-', '')}
+                </button>
+              ))
+              : <span className="empty">현재는 자동 유니버스를 사용합니다.</span>}
+          </div>
+        </div>
+
+        <div className="ai-scalp-control__block">
+          <div className="ai-scalp-control__label-row">
+            <strong>수동 시드 진입</strong>
+            <span className="ai-scalp-control__seed-market">
+              {watchlist.selectedSeedMarket
+                ? `${watchlist.selectedSeedMarket.market.replace('KRW-', '')} · ${watchlist.selectedSeedMarket.koreanName}`
+                : '코인을 먼저 고르세요'}
+            </span>
+          </div>
+          <p className="ai-scalp-control__hint">
+            지정가나 시장가로 포지션을 먼저 시작한 뒤, 같은 전략코드로 AI가 계속 모니터링하며 익절/손절/DCA를 이어받습니다.
+          </p>
+          {watchlist.seedRecommendation && (
+            <div className="ai-scalp-control__seed-summary">
+              <span>추천 진입 {Math.round(watchlist.seedRecommendation.recommendedEntryPrice).toLocaleString()}</span>
+              <span>손절 {Math.round(watchlist.seedRecommendation.stopLossPrice).toLocaleString()}</span>
+              <span>익절 {Math.round(watchlist.seedRecommendation.takeProfitPrice).toLocaleString()}</span>
+              <span>RR {watchlist.seedRecommendation.riskRewardRatio.toFixed(2)}</span>
+            </div>
+          )}
+          <div className="ai-scalp-config ai-scalp-config--seed">
+            <ConfigField label="주문 방식">
+              <select
+                value={watchlist.seedOrderType}
+                onChange={(event) => setSeedOrderType(event.target.value as 'MARKET' | 'LIMIT')}
+              >
+                <option value="LIMIT">지정가 시작</option>
+                <option value="MARKET">시장가 시작</option>
+              </select>
+            </ConfigField>
+
+            <ConfigField label="진입가">
+              <input
+                type="number"
+                step="1"
+                value={watchlist.seedLimitPrice}
+                disabled={watchlist.seedOrderType !== 'LIMIT'}
+                onChange={(event) => setSeedLimitPrice(event.target.value)}
+              />
+            </ConfigField>
+
+            <ConfigField label="손절가">
+              <input
+                type="number"
+                step="1"
+                value={watchlist.seedStopLossPrice}
+                onChange={(event) => setSeedStopLossPrice(event.target.value)}
+              />
+            </ConfigField>
+
+            <ConfigField label="익절가">
+              <input
+                type="number"
+                step="1"
+                value={watchlist.seedTakeProfitPrice}
+                onChange={(event) => setSeedTakeProfitPrice(event.target.value)}
+              />
+            </ConfigField>
+
+            <ConfigField label="물타기 횟수">
+              <select
+                value={watchlist.seedMaxDcaCount}
+                onChange={(event) => setSeedMaxDcaCount(Number(event.target.value))}
+              >
+                <option value={0}>안 함</option>
+                <option value={1}>1회</option>
+                <option value={2}>2회</option>
+                <option value={3}>3회</option>
+              </select>
+            </ConfigField>
+
+            <ConfigField label="DCA 간격(%)">
+              <input
+                type="number"
+                min={0.5}
+                max={15}
+                step={0.1}
+                value={watchlist.seedDcaStepPercent}
+                disabled={watchlist.seedMaxDcaCount === 0}
+                onChange={(event) => setSeedDcaStepPercent(Number(event.target.value))}
+              />
+            </ConfigField>
+          </div>
+
+          <div className="ai-scalp-control__seed-footer">
+            <span>1회 금액 {formatKrw(config.amountKrw)} · 전략코드 {config.strategyCode}</span>
+            <button
+              type="button"
+              className="ai-scalp-action primary"
+              onClick={startSeedPosition}
+              disabled={!watchlist.seedMarket || watchlist.isSeedBusy}
+            >
+              {watchlist.isSeedBusy ? '시작 중...' : '이 코인으로 시작'}
+            </button>
+          </div>
+
+          {watchlist.seedMessage && (
+            <div className="ai-scalp-control__message">{watchlist.seedMessage}</div>
+          )}
+        </div>
       </div>
     </section>
   );

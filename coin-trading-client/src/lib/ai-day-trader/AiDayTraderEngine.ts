@@ -149,6 +149,14 @@ function normalizeStrategyPrefix(value: string): string {
   return normalized || 'AI_SCALP_TRADER';
 }
 
+function normalizeSelectedMarkets(markets: string[] | undefined): string[] {
+  return (markets ?? [])
+    .map((market) => market.trim().toUpperCase())
+    .filter((market) => market.startsWith('KRW-'))
+    .filter((market, index, values) => values.indexOf(market) === index)
+    .slice(0, 24);
+}
+
 function cloneState(state: AiTraderState): AiTraderState {
   return {
     ...state,
@@ -600,10 +608,19 @@ export class AiDayTraderEngine {
       this.setBlockedReason(null);
       this.state.lastScanAt = Date.now();
       this.setStatus('SCANNING');
-      this.setCoreActorState('SCAN', 'BUSY', { taskSummary: `유동성 상위 ${this.config.universeLimit}개 시장 스캔` });
-      this.pushEvent('SCAN', `유동성 상위 ${this.config.universeLimit}개 시장 스캔`);
+      const selectedMarkets = normalizeSelectedMarkets(this.config.selectedMarkets);
+      const scanLabel = selectedMarkets.length > 0
+        ? `선택 코인 ${selectedMarkets.length}개 스캔`
+        : `유동성 상위 ${this.config.universeLimit}개 시장 스캔`;
+      this.setCoreActorState('SCAN', 'BUSY', { taskSummary: scanLabel });
+      this.pushEvent('SCAN', scanLabel);
 
-      const scan = await guidedTradingApi.getAiScalpScan('minute1', this.config.universeLimit, this.config.strategyCode);
+      const scan = await guidedTradingApi.getAiScalpScan(
+        'minute1',
+        this.config.universeLimit,
+        this.config.strategyCode,
+        selectedMarkets,
+      );
       if (!this.state.running) return;
       this.setCoreActorState('SCAN', 'SUCCESS', {
         taskSummary: `스캔 완료 · ${scan.markets.length}개 시장`,
@@ -620,7 +637,10 @@ export class AiDayTraderEngine {
         this.state.queue = [];
         this.emit();
         this.setCoreActorState('ENTRY', 'WAITING', { taskSummary: '진입 가능한 후보 없음' });
-        this.pushEvent('STATUS', '현재 진입 가능한 후보가 없음');
+        this.pushEvent(
+          'STATUS',
+          selectedMarkets.length > 0 ? '선택 코인에서 현재 진입 가능한 후보가 없음' : '현재 진입 가능한 후보가 없음'
+        );
         return;
       }
 

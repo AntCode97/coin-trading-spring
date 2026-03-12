@@ -130,12 +130,17 @@ class GuidedTradingController(
     fun getAiScalpScan(
         @RequestParam(defaultValue = "minute1") interval: String,
         @RequestParam(defaultValue = "36") universeLimit: Int,
-        @RequestParam(defaultValue = "AI_SCALP_TRADER") strategyCodePrefix: String
+        @RequestParam(defaultValue = "AI_SCALP_TRADER") strategyCodePrefix: String,
+        @RequestParam(required = false) markets: String?
     ): GuidedAiScalpScanResponse {
         return guidedTradingService.getAiScalpScan(
             interval = interval,
             universeLimit = universeLimit,
-            strategyCodePrefix = strategyCodePrefix
+            strategyCodePrefix = strategyCodePrefix,
+            markets = markets
+                ?.split(',')
+                ?.map { it.trim() }
+                ?.filter { it.isNotEmpty() }
         )
     }
 

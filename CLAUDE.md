@@ -156,17 +156,20 @@ coin-trading-spring/
 
 - 데스크톱 기본 진입 화면을 `AiDayTraderScreen`으로 고정하고 기존 `ManualTraderWorkspace` 기반 분기 UI를 데스크톱 주 경로에서 제거.
 - 신규 API `GET /api/guided-trading/ai-scalp/scan` 추가.
+  - 쿼리: `interval`, `universeLimit`, `strategyCodePrefix`, optional `markets`
   - 응답: `generatedAt`, `interval`, `universeLimit`, `strategyCodePrefix`, `positions[]`, `markets[]`
   - `markets[]`는 `recommendation`, `featurePack`, optional `crowd`를 포함한 LLM shortlist 압축 데이터.
 - `AiDayTraderEngine` 재작성:
   - 스캔 루프: 상위 유동성 `36` -> LLM shortlist `12` -> finalist `4`
   - 진입 결정: `BUY | WAIT`
   - 보유 관리: `HOLD | SELL`
-  - 기본값: `scan 10초`, `manage 5초`, `max 5 positions`, `max holding 30분`, `reentry cooldown 60~120초`, `maxDcaCount=0`
+  - 기본값: `scan 1분`, `manage 10초`, `보수적 entry`, `amount 25,000원`, `max 5 positions`, `max holding 30분`
   - `stop()`은 신규 진입만 중지하고, 기존 포지션 관리는 계속 유지한 뒤 flat 상태에서 완전 종료
 - 데스크톱은 `AI_SCALP_TRADER` prefix 포지션만 관리하고 `/autopilot/opportunities` stage를 하드 게이트로 사용하지 않음.
 - 새 UI는 상단 세션 바, 좌측 기회 큐, 중앙 결정 저널, 우측 포지션/설정의 3열 터미널 구조.
 - 설정은 `스캔 주기/포지션 점검 최대 3분`, `1회 금액 5,000원 단위`, `오늘 거래내역 전체/코인별 필터`를 제공.
+- 사용자는 `감시 코인` 목록을 직접 고를 수 있고, 선택 시 `GET /api/guided-trading/ai-scalp/scan?markets=...`로 그 코인만 스캔한다.
+- `수동 시드 진입` 패널에서 특정 코인을 시장가/지정가로 먼저 진입시키고, 손절/익절/DCA(`maxDcaCount`, `dcaStepPercent`)를 설정해 AI가 이후 관리를 이어받게 할 수 있다.
 - `모니터 열기` 오버레이는 코어 에이전트(`SCAN/RANK/ENTRY/MANAGE/EXECUTION`)와 실제 delegate/tool 호출 기반 서브 에이전트를 도트 그래픽으로 보여주며, 클릭 상세 패널과 로컬 레이아웃 편집(방 이동/줌/팬/저장/리셋)을 지원.
 - 엔진은 `/stats/today` 거래를 계속 복기해 deterministic 전략 메모를 먼저 만들고, 일정 간격으로 `REVIEW` LLM 패스를 돌려 `집중 시장`, `회피 시장`, `선호/회피 셋업`, `confidence/spread/gap/max hold` 조정을 스스로 갱신한다. 이 상태는 세션 바와 `전략 복기` 패널에 표시된다.
 - 별도 `데스크톱 복기 에이전트`는 Electron 메인 프로세스의 MySQL IPC를 통해 `.mysql_info` 기반 DB에 직접 접속하고, 전일 `guided_trades`, `key_value_store`, `llm_prompts`, `audit_logs`를 읽어 복기한다.

@@ -230,19 +230,38 @@ class GuidedTradingService(
     fun getAiScalpScan(
         interval: String = "minute1",
         universeLimit: Int = 36,
-        strategyCodePrefix: String = AI_SCALP_TRADER_STRATEGY_CODE
+        strategyCodePrefix: String = AI_SCALP_TRADER_STRATEGY_CODE,
+        markets: List<String>? = null
     ): GuidedAiScalpScanResponse {
-        val effectiveUniverseLimit = universeLimit.coerceIn(12, 60)
+        val requestedMarkets = markets
+            .orEmpty()
+            .map { it.trim().uppercase() }
+            .filter { it.startsWith("KRW-") }
+            .distinct()
+            .take(24)
+        val effectiveUniverseLimit = if (requestedMarkets.isNotEmpty()) {
+            requestedMarkets.size
+        } else {
+            universeLimit.coerceIn(12, 60)
+        }
         val normalizedStrategyCodePrefix = normalizeStrategyCodePrefix(
             strategyCodePrefix,
             AI_SCALP_TRADER_STRATEGY_CODE
         )!!
-        val universe = getMarketBoard(
+        val marketBoard = getMarketBoard(
             sortBy = GuidedMarketSortBy.TURNOVER,
             sortDirection = GuidedSortDirection.DESC,
             interval = interval,
             mode = TradingMode.SCALP
-        ).take(effectiveUniverseLimit)
+        )
+        val requestedOrder = requestedMarkets.withIndex().associate { it.value to it.index }
+        val universe = if (requestedMarkets.isNotEmpty()) {
+            marketBoard
+                .filter { requestedOrder.containsKey(it.market) }
+                .sortedBy { requestedOrder[it.market] ?: Int.MAX_VALUE }
+        } else {
+            marketBoard.take(effectiveUniverseLimit)
+        }
         val recommendations = fetchRecommendationsWithCache(
             markets = universe.map { it.market },
             interval = interval,
@@ -263,7 +282,7 @@ class GuidedTradingService(
         return GuidedAiScalpScanResponse(
             generatedAt = Instant.now(),
             interval = interval.lowercase(),
-            universeLimit = effectiveUniverseLimit,
+            universeLimit = universe.size,
             strategyCodePrefix = normalizedStrategyCodePrefix,
             positions = positions,
             markets = markets

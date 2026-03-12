@@ -7,6 +7,7 @@ import {
   AiDayTraderReviewAgentPanel,
   AiDayTraderSessionBar,
   AiDayTraderStrategyPanel,
+  AiDayTraderWatchlistPanel,
 } from './AiDayTraderScreenSections';
 import AiDayTraderPixelMonitor from './AiDayTraderPixelMonitor';
 import { useAiDayTraderScreen } from './useAiDayTraderScreen';
@@ -40,6 +41,21 @@ export default function AiDayTraderScreen() {
         />
 
         <aside className="ai-scalp-side">
+          <AiDayTraderWatchlistPanel
+            config={screen.config}
+            watchlist={screen.watchlist}
+            toggleSelectedMarket={screen.toggleSelectedMarket}
+            clearSelectedMarkets={screen.clearSelectedMarkets}
+            setSeedMarket={screen.setSeedMarket}
+            setSeedOrderType={screen.setSeedOrderType}
+            setSeedLimitPrice={screen.setSeedLimitPrice}
+            setSeedStopLossPrice={screen.setSeedStopLossPrice}
+            setSeedTakeProfitPrice={screen.setSeedTakeProfitPrice}
+            setSeedMaxDcaCount={screen.setSeedMaxDcaCount}
+            setSeedDcaStepPercent={screen.setSeedDcaStepPercent}
+            startSeedPosition={() => void screen.startSeedPosition()}
+          />
+
           <AiDayTraderPositionsPanel
             positions={screen.state.positions}
             scanCycles={screen.state.scanCycles}

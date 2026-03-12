@@ -135,12 +135,13 @@ class GuidedTradingControllerTest {
                 )
             )
         )
-        whenever(guidedTradingService.getAiScalpScan(any(), any(), any())).thenReturn(expected)
+        whenever(guidedTradingService.getAiScalpScan(any(), any(), any(), anyOrNull())).thenReturn(expected)
 
         val actual = controller.getAiScalpScan(
             interval = "minute1",
             universeLimit = 36,
-            strategyCodePrefix = "AI_SCALP_TRADER"
+            strategyCodePrefix = "AI_SCALP_TRADER",
+            markets = null
         )
 
         kotlin.test.assertEquals(expected, actual)

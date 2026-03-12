@@ -11,6 +11,7 @@ export interface AiDayTraderConfig {
   provider: LlmProviderId;
   model: string;
   entryAggression: AiEntryAggression;
+  selectedMarkets: string[];
   zaiEndpointMode?: ZaiEndpointMode;
   delegationMode?: DelegationMode;
   zaiDelegateModel?: string;
@@ -151,6 +152,7 @@ export const DEFAULT_AI_DAY_TRADER_CONFIG: AiDayTraderConfig = {
   provider: 'openai',
   model: DEFAULT_OPENAI_MODEL,
   entryAggression: 'CONSERVATIVE',
+  selectedMarkets: [],
   zaiEndpointMode: 'coding',
   delegationMode: 'AUTO_AND_MANUAL',
   zaiDelegateModel: 'glm-5',

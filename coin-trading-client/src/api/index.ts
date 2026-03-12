@@ -1123,10 +1123,16 @@ export const guidedTradingApi = {
   getAiScalpScan: (
     interval = 'minute1',
     universeLimit = 36,
-    strategyCodePrefix = 'AI_SCALP_TRADER'
+    strategyCodePrefix = 'AI_SCALP_TRADER',
+    markets?: string[]
   ): Promise<AiScalpScanResponse> =>
     api.get('/guided-trading/ai-scalp/scan', {
-      params: { interval, universeLimit, strategyCodePrefix },
+      params: {
+        interval,
+        universeLimit,
+        strategyCodePrefix,
+        markets: markets && markets.length > 0 ? markets.join(',') : undefined,
+      },
     }).then((res) => res.data),
 
   getOpenPositions: (): Promise<GuidedTradePosition[]> =>

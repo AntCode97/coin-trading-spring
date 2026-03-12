@@ -339,6 +339,20 @@ class GuidedTradingServiceTest {
     }
 
     @Test
+    @DisplayName("ai-scalp scan은 선택한 시장만 반환한다")
+    fun aiScalpScanReturnsOnlyRequestedMarkets() {
+        val result = service.getAiScalpScan(
+            interval = "minute1",
+            universeLimit = 36,
+            strategyCodePrefix = "AI_SCALP_TRADER",
+            markets = listOf("krw-c003", "KRW-C010", "KRW-C099", "BTC")
+        )
+
+        assertEquals(2, result.universeLimit)
+        assertEquals(listOf("KRW-C003", "KRW-C010"), result.markets.map { it.market })
+    }
+
+    @Test
     @DisplayName("today stats는 strategyCodePrefix 기준으로 금일 거래/포지션을 분리 집계한다")
     fun todayStatsFilterByStrategyCodePrefix() {
         val now = Instant.now()
